@@ -1,8 +1,11 @@
+from types import MappingProxyType
+from typing import Final
 
 import pytest
-
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
     iter_client_callback_metadata_dicts,
 )
@@ -189,6 +192,20 @@ def test_empty_kwargs_returns_empty_params():
     assert dict(params) == {}
 
 
+@pytest.mark.parametrize("child_privacy", (False, True))
+def test_inherited_privacy_only_strengthens_child_and_resets(child_privacy: bool) -> None:
+    kwargs: Final = TypeAdapter(dict[str, object]).validate_python(
+        MappingProxyType({"turn_off_message_logging": child_privacy})
+    )
+    with inherit_message_logging_privacy(False):
+        assert initialize_standard_callback_dynamic_params(kwargs)["turn_off_message_logging"] is child_privacy
+        with inherit_message_logging_privacy(True), inherit_message_logging_privacy(False):
+            params: Final = initialize_standard_callback_dynamic_params(kwargs)
+        assert initialize_standard_callback_dynamic_params(kwargs)["turn_off_message_logging"] is child_privacy
+    assert params["turn_off_message_logging"] is True
+    assert initialize_standard_callback_dynamic_params().get("turn_off_message_logging") is None
+
+
 def test_newrelic_callback_params_are_not_extracted_from_request_kwargs():
     kwargs = {
         "newrelic_api_key": "caller-key",
@@ -228,8 +245,37 @@ def test_trusted_vars_overlay_uses_shared_parser_semantics():
     # datadog handler consumes, so values are str()-coerced identically.
     from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
 
-    params = initialize_standard_callback_dynamic_params(
-        {TRUSTED_CALLBACK_VARS_FIELD: {"newrelic_api_key": 12345}}
-    )
+    params = initialize_standard_callback_dynamic_params({TRUSTED_CALLBACK_VARS_FIELD: {"newrelic_api_key": 12345}})
 
     assert params.get("newrelic_api_key") == "12345"
+
+
+def test_validate_langfuse_environment_value():
+    import pytest
+
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_langfuse_environment_value,
+    )
+
+    validate_langfuse_environment_value("team-a-prod")
+    validate_langfuse_environment_value("staging_2")
+
+    for bad in ["Production", "langfuse-eu", "", "team a"]:
+        with pytest.raises(ValueError, match="langfuse_environment"):
+            validate_langfuse_environment_value(bad)
+
+
+def test_arize_sampling_rates_are_picked_up_from_metadata():
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "arize_success_sampling_rate": "0.5",
+                "arize_error_sampling_rate": "0.1",
+            }
+        }
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("arize_success_sampling_rate") == "0.5"
+    assert params.get("arize_error_sampling_rate") == "0.1"

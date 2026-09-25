@@ -43,6 +43,7 @@ class GenAIMapper:
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
         GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
+        GenAI.CONVERSATION_ID: lambda d: d.session_id,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,
@@ -62,6 +63,8 @@ class GenAIMapper:
         GenAI.RESPONSE_TIME_TO_FIRST_CHUNK: lambda d: d.time_to_first_chunk_seconds,
         GenAI.USAGE_INPUT_TOKENS: lambda d: d.usage.input_tokens,
         GenAI.USAGE_OUTPUT_TOKENS: lambda d: d.usage.output_tokens,
+        GenAI.USAGE_CACHE_CREATION_INPUT_TOKENS: lambda d: d.usage.cache_creation_input_tokens,
+        GenAI.USAGE_CACHE_READ_INPUT_TOKENS: lambda d: d.usage.cache_read_input_tokens,
         Error.TYPE: lambda d: d.error.error_type if d.error else None,
         Server.ADDRESS: lambda d: d.server.address if d.server else None,
         Server.PORT: lambda d: d.server.port if d.server else None,
@@ -87,6 +90,7 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
         f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
+        LiteLLM.REQUEST_ROUTE: lambda d: d.request_route,
     }
 
     _TOOL_ATTRS: dict[str, Callable[[ToolDefinition], AttrValue | None]] = {
@@ -136,6 +140,9 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
         LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,
         LiteLLM.GUARDRAIL_DETECTION_METHOD: lambda d: d.detection_method,
+        LiteLLM.GUARDRAIL_USAGE: lambda d: d.usage_json,
+        LiteLLM.GUARDRAIL_COST: lambda d: d.cost,
+        LiteLLM.GUARDRAIL_COST_IN_SPEND: lambda d: d.cost_in_spend,
     }
 
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {

@@ -15,8 +15,22 @@ import { TagUsage } from "../../types";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 
+export interface TopKeyItem {
+  api_key: string;
+  key_alias: string | null;
+  user?: string | null;
+  key_exists?: boolean | null;
+  tags?: TagUsage[] | null;
+  spend: number;
+}
+
+const KEY_NOT_IN_DATABASE_TOOLTIP =
+  "This key is no longer in the database (deleted, or a CLI/SSO session key), so its details can't be opened";
+
+const canOpenKeyInfo = (item: TopKeyItem) => item.key_exists !== false;
+
 interface TopKeyViewProps {
-  topKeys: any[];
+  topKeys: TopKeyItem[];
   teams: any[] | null;
   showTags?: boolean;
   topKeysLimit: number;
@@ -43,8 +57,8 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
-  const handleKeyClick = async (item: any) => {
-    if (!accessToken) return;
+  const handleKeyClick = async (item: TopKeyItem) => {
+    if (!accessToken || !canOpenKeyInfo(item)) return;
 
     try {
       const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
@@ -88,13 +102,27 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     {
       header: "Key ID",
       accessorKey: "api_key",
-      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />,
+      cell: (info: any) =>
+        canOpenKeyInfo(info.row.original) ? (
+          <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />
+        ) : (
+          <IdCell value={info.getValue()} variant="plain" tooltip={KEY_NOT_IN_DATABASE_TOOLTIP} />
+        ),
     },
     {
       header: "Key Alias",
       accessorKey: "key_alias",
       cell: (info: any) => info.getValue() || "-",
     },
+    ...(topKeys.some((k) => k.user)
+      ? [
+          {
+            header: "User",
+            accessorKey: "user",
+            cell: (info: any) => info.getValue() || "-",
+          },
+        ]
+      : []),
   ];
 
   const tagsColumn = {
@@ -221,7 +249,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             customTooltip={(props) => {
               const item = props.payload?.[0]?.payload;
               return (
-                <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
+                <div className="relative z-floating p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
                     <div className="text-sm">
                       <span className="text-muted-foreground">Key Alias: </span>
@@ -246,7 +274,10 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       )}
 
       {isModalOpen && selectedKey && keyData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay"
+          onClick={handleOutsideClick}
+        >
           <div className="bg-card rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button

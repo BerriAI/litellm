@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ArrowLeft, CircleHelp } from "lucide-react";
+import { ArrowLeft, CircleHelp, Lock } from "lucide-react";
 import { z } from "zod/v4";
 import {
   vectorStoreInfoCall,
@@ -15,6 +15,8 @@ import VectorStoreTester from "./VectorStoreTester";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -200,6 +202,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     return <div>Loading...</div>;
   }
 
+  const canEdit = is_admin && !vectorStoreDetails.is_config;
+  const showEditForm = isEditing && canEdit;
+
   return (
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
@@ -208,13 +213,30 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             <ArrowLeft />
             Back to Vector Stores
           </Button>
-          <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+            <StatusBadge
+              tone={vectorStoreDetails.is_config ? "neutral" : "info"}
+              label={vectorStoreDetails.is_config ? "Config" : "DB"}
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {vectorStoreDetails.vector_store_description || "No description"}
           </p>
         </div>
-        {is_admin && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
+        {canEdit && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
       </div>
+
+      {vectorStoreDetails.is_config && (
+        <Alert variant="info" className="mb-4">
+          <Lock className="size-4" aria-hidden />
+          <AlertTitle>Read only: defined in the config file</AlertTitle>
+          <AlertDescription>
+            This vector store comes from the proxy config YAML, so it cannot be edited or deleted on the dashboard.
+            Change or remove it in the config file and restart the proxy.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Tabs defaultValue="details">
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
@@ -227,7 +249,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         </TabsList>
 
         <TabsContent value="details" keepMounted>
-          {isEditing ? (
+          {showEditForm ? (
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Edit Vector Store</h3>
@@ -280,7 +302,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                                   }}
                                 </SelectValue>
                               </SelectTrigger>
-                              <SelectContent alignItemWithTrigger={false}>
+                              <SelectContent>
                                 {Object.entries(Providers)
                                   .filter(([providerEnum]) => providerEnum === "Bedrock")
                                   .map(([providerEnum, providerDisplayName]) => (
@@ -373,7 +395,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Vector Store Details</h3>
-                {is_admin && <Button onClick={startEditing}>Edit Vector Store</Button>}
+                {canEdit && <Button onClick={startEditing}>Edit Vector Store</Button>}
               </div>
               <Card>
                 <CardContent>

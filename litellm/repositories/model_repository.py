@@ -3,54 +3,36 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 """
 
 import json
-from collections.abc import Awaitable, Mapping, Sequence
-from typing import Any, Final, Protocol
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.repositories.base_repository import BaseRepository, DbRecord
+from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
-class _PrismaModelDb(Protocol):
-    litellm_proxymodeltable: object
-
-
-class _PrismaClientView(Protocol):
-    db: _PrismaModelDb
-
-
-class _ProxyModelActions(Protocol):
-    """Prisma table actions used by :class:`ModelRepository`."""
-
-    def find_many(self, *, where: Mapping[str, object] | None = None) -> Awaitable[Sequence[DbRecord]]: ...
-
-    def create(self, *, data: Mapping[str, object]) -> Awaitable[DbRecord]: ...
-
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[DbRecord | None]: ...
+class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ProxyModelTable"]):
+    table_name = "litellm_proxymodeltable"
 
 
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
     """Repository for proxy model database operations with encryption support."""
 
-    def __init__(self, prisma_client: object, encryption_key: str | None = None):
+    def __init__(self, prisma_client: object, encryption_key: str | None = None) -> None:
         super().__init__(prisma_client)
         self._encryption_key = encryption_key
 
     @property
-    def table(self) -> Any:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return wrap_table_actions_for_config_sync(
-            actions=client.db.litellm_proxymodeltable,
-            table_name="litellm_proxymodeltable",
-        )
-
-    @property
-    def _model_table(self) -> _ProxyModelActions:
-        return self.table
+    def table(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]:
+        return _ProxyModelTableRepository(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_ProxyModelTable]:
@@ -100,18 +82,25 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     async def find_by_name(self, model_name: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models by name."""
-        records: Final = await self._model_table.find_many(where={"model_name": model_name})
+        records: Final = await self.table.find_many(where={"model_name": model_name})
         return self._to_model_list(records)
 
     async def find_all(self) -> list[LiteLLM_ProxyModelTable]:
         """Find all models."""
-        records: Final = await self._model_table.find_many()
+        records: Final = await self.table.find_many()
         return self._to_model_list(records)
 
     async def find_unblocked(self) -> list[LiteLLM_ProxyModelTable]:
         """Find all models that are not blocked."""
-        records: Final = await self._model_table.find_many(where={"blocked": False})
+        records: Final = await self.table.find_many(where={"blocked": False})
         return self._to_model_list(records)
+
+    async def find_all_except(self, model_id: str) -> Sequence[LiteLLM_ProxyModelTable]:
+        """Find every model except the row currently being updated."""
+        records: Final = await self.table.find_many(
+            where={"model_id": {"not": model_id}}  # mutable-ok: Prisma requires plain dicts for query serialization
+        )
+        return tuple(self._to_model_list(records))
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models associated with a specific team.
@@ -147,7 +136,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         if model_info is not None:
             data["model_info"] = json.dumps(model_info)
 
-        record: Final = await self._model_table.create(data=data)
+        record: Final = await self.table.create(data=data)
         model: Final = self._to_model(record)
         assert model is not None
         return model
@@ -173,7 +162,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         if blocked is not None:
             data["blocked"] = blocked
 
-        record: Final = await self._model_table.update(where={"model_id": model_id}, data=data)
+        record: Final = await self.table.update(where={"model_id": model_id}, data=data)
         return self._to_model(record)
 
     async def delete_model(self, model_id: str) -> LiteLLM_ProxyModelTable | None:

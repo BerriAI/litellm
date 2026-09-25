@@ -6,7 +6,9 @@ from typing import Final
 
 import anyio
 
-ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_CHUNK
+
+ANTHROPIC_PING_SSE_CHUNK: Final = STREAM_SSE_KEEPALIVE_PING_CHUNK
 SSE_COMMENT_PING: Final = ": ping\n\n"
 SSE_COMMENT_PING_BYTES: Final = SSE_COMMENT_PING.encode()
 # The byte form of proxy_server._SSE_FRAME_DELIMITERS, CR-only included: SSE
@@ -63,9 +65,7 @@ async def _keepalive_ping_stream(
     ping_interval_seconds: float,
     ping_chunk: str,
 ) -> AsyncGenerator[str, None]:
-    pending = asyncio.ensure_future(
-        stream.__anext__()
-    )  # rebind-ok: re-armed with the next __anext__ after each delivered chunk
+    pending = asyncio.ensure_future(stream.__anext__())
     try:
         while True:
             await asyncio.wait({pending}, timeout=ping_interval_seconds)
@@ -87,6 +87,17 @@ async def _keepalive_ping_stream(
 
 def is_sse_content_type(content_type: str | None) -> bool:
     return content_type is not None and content_type.split(";", 1)[0].strip().lower() == _SSE_MEDIA_TYPE
+
+
+def split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
+    """Split buffered SSE bytes into ``(complete_frames, unterminated_tail)``."""
+    boundary_end: Final = max(
+        (pending.rfind(delimiter) + len(delimiter) for delimiter in _SSE_FRAME_DELIMITERS if delimiter in pending),
+        default=0,
+    )
+    if boundary_end == 0:
+        return b"", pending
+    return pending[:boundary_end], pending[boundary_end:]
 
 
 def wrap_passthrough_sse_bytes_with_keepalive_pings(
@@ -112,9 +123,7 @@ async def _keepalive_ping_byte_stream(
     stream: AsyncGenerator[bytes, None],
     ping_interval_seconds: float,
 ) -> AsyncGenerator[bytes, None]:
-    pending = asyncio.ensure_future(
-        stream.__anext__()
-    )  # rebind-ok: re-armed with the next __anext__ after each delivered chunk
+    pending = asyncio.ensure_future(stream.__anext__())
     # The tail of the bytes relayed so far, long enough to hold any delimiter.
     # Seeded as a delimiter because a stream starts at a frame boundary, and kept
     # across chunks because a delimiter can be split between two transport reads,

@@ -9,7 +9,7 @@ import functools
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -18,41 +18,88 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
+_ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+_OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
+
+
+def error_response_text(response: httpx.Response) -> str:
+    try:
+        return response.text
+    except httpx.ResponseNotRead:
+        return response.reason_phrase
+
+
+def _synthesize_error_response(
+    *, status_code: int, headers: dict[str, object] | httpx.Headers, request: httpx.Request | None
+) -> tuple[httpx.Request, httpx.Response]:
+    error_request: Final = request or httpx.Request(method="POST", url=_ERROR_REQUEST_URL)
+    safe_headers: Final = (
+        headers
+        if isinstance(headers, httpx.Headers)
+        else tuple((key, value) for key, value in headers.items() if isinstance(value, (str, bytes)))
+    )
+    return error_request, httpx.Response(status_code=status_code, headers=safe_headers, request=error_request)
+
+
 class BedrockError(BaseLLMException):
-    pass
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: dict[str, object] | httpx.Headers | None = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        body: dict[str, object] | None = None,
+        status_code_is_synthesized: bool = False,
+    ) -> None:
+        error_request, error_response = (
+            _synthesize_error_response(status_code=status_code, headers=headers, request=request)
+            if response is None and headers
+            else (request, response)
+        )
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            headers=headers,
+            request=error_request,
+            response=error_response,
+            body=body,
+            status_code_is_synthesized=status_code_is_synthesized,
+        )
 
 
-_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-)
+_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
+_STREAM_CHUNK_SIZE_VALIDATOR: Final[TypeAdapter[int | None]] = TypeAdapter(int | None, config=ConfigDict(strict=True))
+
+
+def stream_chunk_size_from(litellm_params: Mapping[str, object]) -> int | None:
+    raw: Final = litellm_params.get("stream_chunk_size")
+    try:
+        return _STREAM_CHUNK_SIZE_VALIDATOR.validate_python(raw)
+    except ValidationError as e:
+        raise BedrockError(status_code=400, message=f"Invalid stream_chunk_size={raw!r}. Expected int. Error: {e}")
 
 
 def merge_bedrock_aws_request_params(
-    litellm_params: Mapping[str, Any],
-    optional_params: Mapping[str, Any],
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object],
 ) -> dict[str, Any]:
     """Merge deployment and request parameters without allowing auth escalation.
 
@@ -72,6 +119,17 @@ def merge_bedrock_aws_request_params(
             if key not in litellm_params:
                 request_params.pop(key, None)
     return request_params
+
+
+def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
+    """The s3_access_key_id / s3_secret_access_key pair when both are set, otherwise None."""
+    s3_access_key_id: Final = params.get("s3_access_key_id")
+    s3_secret_access_key: Final = params.get("s3_secret_access_key")
+    if not isinstance(s3_access_key_id, str) or not s3_access_key_id:
+        return None
+    if not isinstance(s3_secret_access_key, str) or not s3_secret_access_key:
+        return None
+    return s3_access_key_id, s3_secret_access_key
 
 
 # Lazy import cache to avoid circular imports and performance impact
@@ -176,6 +234,95 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
+def _bedrock_model_supports(model: str, key: str) -> bool:
+    from litellm.utils import _supports_factory
+
+    return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+
+
+def apply_bedrock_invoke_structured_output(
+    model: str,
+    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+) -> None:
+    """
+    Route Anthropic structured-output params to what the Bedrock model supports.
+
+    Consumes the legacy top-level ``output_format`` and the newer
+    ``output_config.format``, keeping the pre-existing precedence of the legacy
+    field when a request carries both. Models flagged
+    ``supports_native_structured_output`` in the model map get the schema
+    forwarded as ``output_config.format``, which Bedrock relays to the model for
+    enforced structured output. For every other model the schema is inlined into
+    the last user message as best-effort text, with a warning because nothing
+    enforces it.
+    """
+    legacy_output_format: Final = request_body.pop("output_format", None)
+    output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
+    schema_format: Final = legacy_output_format if isinstance(legacy_output_format, dict) else output_config_format
+    if schema_format is None:
+        return
+
+    if _bedrock_model_supports(model, "supports_native_structured_output"):
+        existing_output_config: Final = request_body.get("output_config")
+        if isinstance(existing_output_config, dict):
+            existing_output_config["format"] = schema_format
+        else:
+            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param  # mutable-ok: json
+        return
+
+    verbose_logger.warning(
+        "Bedrock Invoke: model=%s does not advertise `supports_native_structured_output` "
+        "in model_prices_and_context_window.json, so the JSON schema was inlined into "
+        "the last user message and is NOT enforced by the model.",
+        model,
+    )
+    convert_bedrock_invoke_output_format_to_inline_schema(
+        output_format=schema_format,
+        request_body=request_body,
+    )
+
+
+def strip_unsupported_bedrock_invoke_output_config_keys(
+    model: str,
+    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+) -> None:
+    """
+    Drop ``output_config`` keys the Bedrock model does not accept.
+
+    ``format`` survives unconditionally: it is only attached for models whose map
+    entry advertises ``supports_native_structured_output``. Effort-bearing keys
+    survive only when the map flags ``supports_output_config`` or a
+    ``supports_*_reasoning_effort`` tier; otherwise they are dropped with a
+    warning so Bedrock does not reject the request.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    output_config: Final = request_body.get("output_config")
+    if not isinstance(output_config, dict):
+        return
+    if all(key == "format" for key in output_config):
+        return
+    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig._model_supports_effort_param(
+        model, "bedrock"
+    ):
+        return
+
+    verbose_logger.warning(
+        "Bedrock Invoke: stripping unsupported `output_config` keys for "
+        "model=%s: neither `supports_output_config` nor any "
+        "`supports_*_reasoning_effort` flag is set in "
+        "model_prices_and_context_window.json. Add the capability "
+        "flag to the model JSON entry if this model accepts "
+        "`output_config`.",
+        model,
+    )
+    preserved_format: Final = output_config.get("format")
+    if preserved_format is None:
+        request_body.pop("output_config", None)
+    else:
+        request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param  # mutable-ok: json
+
+
 def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
@@ -204,6 +351,17 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
             tool["defer_loading"] = deferred
 
 
+_TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> Sequence[object] | None:
+    try:
+        tools: Final = _TOOL_DICTS_ADAPTER.validate_python(request_body.get("tools"))
+    except ValidationError:
+        return None
+    return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
+
+
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     """
     In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
@@ -213,7 +371,7 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
 
     Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
     """
-    stack: Final[list[Any]] = [schema]
+    stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
         node = stack.pop()
@@ -434,15 +592,15 @@ def init_bedrock_client(
     ssl_verify: Final = _get_bedrock_client_ssl_verify()
 
     ### SET REGION NAME
-    if region_name:
-        pass
-    elif aws_region_name:
-        region_name = aws_region_name
-    elif litellm_aws_region_name:
-        region_name = litellm_aws_region_name
-    elif standard_aws_region_name:
-        region_name = standard_aws_region_name
-    else:
+    resolved_region_name: Final = next(
+        (
+            candidate
+            for candidate in (region_name, aws_region_name, litellm_aws_region_name, standard_aws_region_name)
+            if isinstance(candidate, str) and candidate
+        ),
+        None,
+    )
+    if resolved_region_name is None:
         raise BedrockError(
             message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
             status_code=401,
@@ -455,7 +613,7 @@ def init_bedrock_client(
     elif env_aws_bedrock_runtime_endpoint:
         endpoint_url = env_aws_bedrock_runtime_endpoint
     else:
-        endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+        endpoint_url = f"https://bedrock-runtime.{resolved_region_name}.{get_aws_dns_suffix(resolved_region_name)}"
 
     import boto3
 
@@ -492,7 +650,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -513,7 +671,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -526,7 +684,7 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -536,7 +694,7 @@ def init_bedrock_client(
 
         client = boto3.Session(profile_name=aws_profile_name).client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -547,7 +705,7 @@ def init_bedrock_client(
 
         client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -638,7 +796,7 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
 
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
+    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model
@@ -658,6 +816,37 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
 
 
 MANTLE_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+_MANTLE_OPENAI_BASE_SUFFIXES: Final = ("/openai/v1", "/v1")
+
+
+def _mantle_api_base_from_env() -> str | None:
+    env_base: Final = get_secret_str("BEDROCK_MANTLE_API_BASE")
+    if env_base is None:
+        return None
+    base: Final = env_base.rstrip("/")
+    return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
+
+
+def bedrock_supports_openai_responses(model: str | None, model_cost: Mapping[str, object]) -> bool:
+    """Whether a Bedrock model is served by bedrock-runtime's OpenAI Responses surface.
+
+    Purely data-driven from the model's price-map capability signal -- ``/v1/responses``
+    in ``supported_endpoints`` -- and overridable via ``register_model`` and proxy
+    ``model_info``, so onboarding a model is a JSON change, never a code change.
+    There is deliberately no model-name match: AWS exposes this surface per model,
+    not per family, and the two Bedrock endpoints do not agree with each other
+    (bedrock-runtime accepts Codex's ``additional_tools`` items where
+    bedrock-mantle rejects them), so a name-shaped gate would be wrong.
+    A model absent from ``model_cost`` has no signal and returns False, leaving the
+    chat-completions bridge in place exactly as before.
+    """
+    if not model:
+        return False
+    candidates: Final = (model_cost.get(key) for key in (model, f"bedrock/{model}"))
+    return any(
+        isinstance(entry, Mapping) and "/v1/responses" in (entry.get("supported_endpoints") or ())
+        for entry in candidates
+    )
 
 
 def build_mantle_messages_url(
@@ -668,12 +857,15 @@ def build_mantle_messages_url(
     """Build the bedrock-mantle Anthropic /messages URL.
 
     Honors an explicit endpoint override (``api_base``, then
-    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
-    endpoints are reachable; otherwise falls back to the public regional host.
+    ``aws_bedrock_runtime_endpoint``, then ``BEDROCK_MANTLE_API_BASE``) so
+    private VPC / VPCE / GovCloud Mantle endpoints are reachable; otherwise
+    falls back to the public regional host.
     The mantle messages path is appended unless the override already carries it,
-    so callers can pass either the host or the full messages URL.
+    so callers can pass either the host or the full messages URL. The env var is
+    shared with the OpenAI-surface ``bedrock_mantle/*`` routes, which need it to
+    carry their ``/v1`` or ``/openai/v1`` base, so that suffix is dropped first.
     """
-    override: Final = api_base or aws_bedrock_runtime_endpoint
+    override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
         base: Final = override.rstrip("/")
         if base.endswith(MANTLE_MESSAGES_PATH):
@@ -689,6 +881,7 @@ def get_bedrock_base_model(model: str) -> str:
     Handle model names like:
     - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     - "bedrock/converse/model" -> "model"
+    - "bedrock/mantle/anthropic.claude-sonnet-5" -> "anthropic.claude-sonnet-5"
     - "anthropic.claude-3-5-sonnet-20241022-v2:0:51k" -> "anthropic.claude-3-5-sonnet-20241022-v2:0"
     - "bedrock/nova-2/arn:aws:..." -> "amazon.nova-2-custom"
     - "bedrock/nova/arn:aws:..." -> "amazon.nova-custom"
@@ -724,6 +917,47 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+    """
+    Whether Converse ``cachePoint`` blocks may be sent to this model.
+
+    OpenAI-family models only support implicit caching and never accept explicit
+    ``cachePoint`` blocks. Bedrock rejects requests carrying cachePoint blocks for
+    models without prompt caching support ("You invoked an unsupported model or your
+    request did not allow prompt caching"), so a model whose cost-map entry does not declare
+    ``supports_prompt_caching`` must not receive them. A model absent from the map
+    (an application inference profile ARN, a model newer than the map) keeps emitting
+    so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
+    is not reusable here: it returns False for unmapped models, the opposite polarity.
+    """
+    if model is None:
+        return True
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
+    entries: Final = tuple(
+        entry
+        for candidate in (model, get_bedrock_base_model(model))
+        if (entry := litellm.model_cost.get(candidate)) is not None
+    )
+    if not entries:
+        return True
+    return any(entry.get("supports_prompt_caching") is True for entry in entries)
+
+
+def bedrock_supports_tool_search(model: str) -> bool:
+    """
+    Whether Bedrock InvokeModel admits the ``tool_search_tool_*`` tool types on ``model``.
+
+    Backed by the ``supports_tool_search`` flag in ``model_prices_and_context_window.json``,
+    an exact entry or the ``claude-tool-search`` fallback rule for Claude 4.5 and newer, so a
+    newly released Claude carries the flag with no code change. An explicit ``false`` on the
+    resolved entry wins over the rule.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -787,7 +1021,7 @@ def _get_bedrock_converse_strict_tools_flag(base_model: str) -> bool | None:
     return None
 
 
-def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
+def normalize_bedrock_opus_output_config_effort(model: str, output_config: object) -> None:
     """
     Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
 
@@ -983,6 +1217,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         base_model: Final = BedrockModelInfo.get_base_model(model)
         alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
+            return "converse"
+        if _OPENAI_FAMILY_MODEL_RE.search(base_model):
             return "converse"
         return "invoke"
 
@@ -1310,6 +1546,11 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()
 
 
+def _decoded_json_value(raw: str) -> object:
+    """Decode a JSON document into an opaque value for isinstance narrowing."""
+    return json.loads(raw)
+
+
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
@@ -1337,7 +1578,7 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
         anthropic_beta_header = anthropic_beta_header.strip()
         if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
-                parsed: Final = json.loads(anthropic_beta_header)
+                parsed: Final = _decoded_json_value(anthropic_beta_header)
                 if isinstance(parsed, list):
                     return [str(beta).strip() for beta in parsed]
             except json.JSONDecodeError:
@@ -1350,8 +1591,8 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
 
 
 def resolve_s3_encryption_key_id(
-    litellm_params: Mapping[str, Any],
-    optional_params: Mapping[str, Any] | None = None,
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Resolve the SSE-KMS key configured for Bedrock batch/file S3 objects.
@@ -1359,11 +1600,33 @@ def resolve_s3_encryption_key_id(
     Precedence: `s3_encryption_key_id` in litellm_params, then optional_params
     (client-side / request params), then the AWS_S3_ENCRYPTION_KEY_ID env var.
     """
+    return _resolve_s3_setting("s3_encryption_key_id", "AWS_S3_ENCRYPTION_KEY_ID", litellm_params, optional_params)
+
+
+def resolve_s3_bucket_owner(
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None = None,
+) -> str | None:
+    """
+    Resolve the AWS account id that owns the S3 buckets used by Bedrock batch jobs.
+
+    Precedence: `s3_bucket_owner` in litellm_params, then optional_params
+    (client-side / request params), then the AWS_S3_BUCKET_OWNER env var.
+    """
+    return _resolve_s3_setting("s3_bucket_owner", "AWS_S3_BUCKET_OWNER", litellm_params, optional_params)
+
+
+def _resolve_s3_setting(
+    param_name: str,
+    env_var: str,
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None,
+) -> str | None:
     candidates: Final = tuple(
-        source.get("s3_encryption_key_id") for source in (litellm_params, optional_params) if source is not None
+        source.get(param_name) for source in (litellm_params, optional_params) if source is not None
     )
     explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
-    return explicit or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
+    return explicit or get_secret_str(env_var) or None
 
 
 class CommonBatchFilesUtils:
@@ -1474,18 +1737,9 @@ class CommonBatchFilesUtils:
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        # Get AWS credentials using existing methods
         aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self._base_aws.get_credentials(
-            aws_access_key_id=optional_params.get("aws_access_key_id"),
-            aws_secret_access_key=optional_params.get("aws_secret_access_key"),
-            aws_session_token=optional_params.get("aws_session_token"),
-            aws_region_name=aws_region_name,
-            aws_session_name=optional_params.get("aws_session_name"),
-            aws_profile_name=optional_params.get("aws_profile_name"),
-            aws_role_name=optional_params.get("aws_role_name"),
-            aws_web_identity_token=optional_params.get("aws_web_identity_token"),
-            aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+        credentials: Final = self._base_aws.resolve_credentials(
+            AwsAuthParams.model_validate(optional_params), aws_region_name
         )
 
         # Prepare the request data

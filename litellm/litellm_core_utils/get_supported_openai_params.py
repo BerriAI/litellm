@@ -2,6 +2,7 @@ from typing import Final, Literal
 
 import litellm
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
@@ -30,6 +31,8 @@ def get_supported_openai_params(
     - List if custom_llm_provider is mapped
     - None if unmapped
     """
+    if not custom_llm_provider:
+        custom_llm_provider = declared_authenticating_provider(model)
     if not custom_llm_provider:
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
@@ -172,7 +175,7 @@ def get_supported_openai_params(
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "together_ai":
-        return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
+        return litellm.TogetherAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)
@@ -185,7 +188,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
             if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params(model=model)
+                return litellm.VertexAIMistralConfig().get_supported_openai_params(model=model)
             elif model.startswith("codestral"):
                 return litellm.CodestralTextCompletionConfig().get_supported_openai_params(model=model)
             elif model.startswith("claude"):

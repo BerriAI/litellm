@@ -1,17 +1,31 @@
 import asyncio
 import json
-import os
 import ssl
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Optional,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+    get_type_hints,
+)
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
+from typing_extensions import ReadOnly
 
 import litellm
 import litellm.litellm_core_utils
@@ -19,14 +33,26 @@ import litellm.types
 import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
+    SUBTITLE_RESPONSE_FORMATS,
+    synthesize_subtitle_document,
+)
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
-from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
+from litellm.litellm_core_utils.realtime_errors import (
+    close_after_upstream_handshake_refusal,
+    realtime_error_event,
+    websocket_close_reason,
+)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -40,7 +66,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
 )
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
@@ -55,7 +81,6 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -65,12 +90,16 @@ from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
+    BaseQueryEmbeddingVectorStoreConfig,
     BaseVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS, run_aws_signing, sign_request_off_loop_if_aws
+from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -93,9 +122,12 @@ from litellm.types.containers.main import (
 )
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
+    NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+    converted_stream_requested,
+    is_interception_internal_key,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -106,6 +138,7 @@ from litellm.types.llms.anthropic_skills import (
     Skill,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     CreateBatchRequest,
     CreateFileRequest,
     FileContentRequest,
@@ -118,6 +151,7 @@ from litellm.types.llms.openai import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
@@ -153,9 +187,12 @@ from litellm.utils import (
 
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
-    litellm_params: GenericLiteLLMParams,
 ) -> bool:
-    return custom_llm_provider == "openai" and litellm_params.get("rust") is True
+    from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, decision
+    from litellm.rust_bridge.configuration import Decision
+
+    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider, delivery=Delivery.WEBSOCKET)
+    return decision(context) is not Decision.PYTHON
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -166,13 +203,12 @@ if TYPE_CHECKING:
 
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-        AnthropicMessagesStreamingResponse,
-    )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -188,6 +224,21 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+
+class _RealtimeClientWebSocket(Protocol):
+    async def send_text(self, data: str) -> None: ...
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
+class _ResponsesClientWebSocket(Protocol):
+    async def send_text(self, data: str) -> None: ...
+
+    async def receive_text(self) -> str: ...
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
 _ResponseT = TypeVar("_ResponseT")
 
 
@@ -202,6 +253,17 @@ class _MediaUploadKwargs(TypedDict, total=False):
     headers: dict[str, str]
     content: Iterator[bytes] | AsyncIterator[bytes]
     timeout: float | httpx.Timeout
+
+
+class _SignedBodyKwargs(TypedDict, total=False):
+    data: ReadOnly[bytes]
+    json: ReadOnly[dict[str, object]]
+
+
+def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -> _SignedBodyKwargs:
+    if signed_body is not None:
+        return {"data": signed_body}
+    return {"json": data}
 
 
 def _google_genai_streaming_hidden_params(
@@ -263,6 +325,71 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
             return True
     return False
+
+
+def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+    """A pre-signed request carries its auth inside its own ``headers`` key, which
+    logging treats as request body (only the top-level headers channel gets masked),
+    so mask it here before the request is handed to ``pre_call``."""
+    if not isinstance(transformed_request, dict):
+        return transformed_request
+    request_headers: Final = transformed_request.get("headers")
+    if not isinstance(request_headers, dict):
+        return transformed_request
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+    )
+
+    return {  # mutable-ok: logging's curl and raw-request builders take dict
+        **transformed_request,
+        "headers": _get_masked_values(request_headers),
+    }
+
+
+def _aws_signing_overrides(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: litellm_params[key]
+            for key in AWS_CREDENTIAL_KWARGS_KEYS
+            if optional_params.get(key) is None and litellm_params.get(key) is not None
+        }
+    )
+
+
+class _PreparedFileContentRequest(NamedTuple):
+    url: str
+    params: dict
+    headers: dict
+
+
+async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) -> AsyncGenerator[bytes, None]:
+    try:
+        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+            yield chunk
+    finally:
+        await response.aclose()
+
+
+_DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
+
+
+def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
+    """
+    `aiter_bytes` yields the decoded body, so the upstream transfer headers only
+    describe the bytes on the wire when no content-encoding was applied.
+    """
+    if response.headers.get("content-encoding", "identity").lower() == "identity":
+        return response.headers
+    return httpx.Headers(
+        [
+            (name, value)
+            for name, value in response.headers.multi_items()
+            if name.lower() not in _DECODED_BODY_STALE_HEADERS
+        ]
+    )
 
 
 def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
@@ -401,7 +528,7 @@ class BaseLLMHTTPHandler:
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        encoding: object,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool = False,
@@ -463,11 +590,11 @@ class BaseLLMHTTPHandler:
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str | None,
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding: object,
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
@@ -482,7 +609,7 @@ class BaseLLMHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
     ):
         json_mode: Final[bool] = optional_params.pop("json_mode", False)
-        extra_body: Final[dict | None] = optional_params.pop("extra_body", None)
+        extra_body: Final[Mapping[str, object] | None] = optional_params.pop("extra_body", None)
 
         provider_config = provider_config or ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -497,14 +624,17 @@ class BaseLLMHTTPHandler:
         )
 
         # get config from model, custom llm provider
-        headers = provider_config.validate_environment(
-            api_key=api_key,
-            headers=headers or {},
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_base=api_base,
-            litellm_params=litellm_params,
+        request_headers: Final = cast(  # cast-ok: validate_environment is declared as a bare dict
+            "dict[str, object]",
+            provider_config.validate_environment(
+                api_key=api_key,
+                headers=headers or {},
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_base=api_base,
+                litellm_params=litellm_params,
+            ),
         )
 
         api_base = provider_config.get_complete_url(
@@ -516,90 +646,122 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-        data: dict[str, object] = provider_config.transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-
-        if extra_body is not None:
-            data = {**data, **extra_body}
-
-        headers, signed_json_body = provider_config.sign_request(
-            headers=headers,
-            optional_params=optional_params,
-            request_data=data,
-            api_base=api_base,
-            api_key=api_key,
-            stream=stream,
-            fake_stream=fake_stream,
-            model=model,
-        )
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
-
-        # Check if stream was converted for WebSearch interception
-        # This is set by the async_pre_request_hook in WebSearchInterceptionLogger
-        if litellm_params.get("_websearch_interception_converted_stream", False):
-            logging_obj.model_call_details["websearch_interception_converted_stream"] = True
-
-        if acompletion is True:
-            if stream is True:
-                data = self._add_stream_param_to_request_body(
-                    data=data,
-                    provider_config=provider_config,
+        def sign_and_log(
+            transformed: dict[str, object],  # mutable-ok: async_completion takes dict
+        ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
+            data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
+                "tuple[dict[str, object], bytes | None]",
+                provider_config.sign_request(
+                    headers=request_headers,
+                    optional_params={
+                        **optional_params,
+                        **_aws_signing_overrides(optional_params, litellm_params),
+                    },
+                    request_data=data,
+                    api_base=api_base,
+                    api_key=api_key,
+                    stream=stream,
                     fake_stream=fake_stream,
-                )
+                    model=model,
+                ),
+            )
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": api_base,
+                    "headers": signed[0],
+                },
+            )
+            if litellm_params.get("_websearch_interception_converted_stream", False):
+                logging_obj.model_call_details["websearch_interception_converted_stream"] = True
+            return data, signed[0], signed[1]
+
+        def dispatch_async(
+            data: dict[str, object],  # mutable-ok: async_completion takes dict
+            signed_headers: dict[str, object],  # mutable-ok: async_completion takes dict
+            signed_json_body: bytes | None,
+        ) -> Coroutine[object, object, ModelResponse | CustomStreamWrapper]:
+            async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
+            if stream is True:
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
                     api_base=api_base,
-                    headers=headers,
+                    headers=signed_headers,
                     custom_llm_provider=custom_llm_provider,
                     provider_config=provider_config,
                     timeout=timeout,
                     logging_obj=logging_obj,
-                    data=data,
+                    data=self._add_stream_param_to_request_body(
+                        data=data,
+                        provider_config=provider_config,
+                        fake_stream=fake_stream,
+                    ),
                     fake_stream=fake_stream,
-                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+                    client=async_client,
                     litellm_params=litellm_params,
                     json_mode=json_mode,
                     optional_params=optional_params,
                     signed_json_body=signed_json_body,
                 )
+            return self.async_completion(
+                custom_llm_provider=custom_llm_provider,
+                provider_config=provider_config,
+                api_base=api_base,
+                headers=signed_headers,
+                data=data,
+                timeout=timeout,
+                model=model,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                client=async_client,
+                json_mode=json_mode,
+                signed_json_body=signed_json_body,
+                shared_session=shared_session,
+            )
 
-            else:
-                return self.async_completion(
-                    custom_llm_provider=custom_llm_provider,
-                    provider_config=provider_config,
-                    api_base=api_base,
-                    headers=headers,
-                    data=data,
-                    timeout=timeout,
-                    model=model,
-                    model_response=model_response,
-                    logging_obj=logging_obj,
-                    api_key=api_key,
-                    messages=messages,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    encoding=encoding,
-                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                    json_mode=json_mode,
-                    signed_json_body=signed_json_body,
-                    shared_session=shared_session,
+        if acompletion is True and provider_config.uses_async_transform_request:
+
+            async def transform_then_dispatch() -> ModelResponse | CustomStreamWrapper:
+                transformed: Final = cast(  # cast-ok: async_transform_request is declared as a bare dict
+                    "dict[str, object]",
+                    await provider_config.async_transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        headers=request_headers,
+                    ),
                 )
+                signed_request: Final = await (
+                    run_aws_signing(sign_and_log, transformed)
+                    if isinstance(provider_config, SignsRequestsWithAWS)
+                    else asyncio.to_thread(sign_and_log, transformed)
+                )
+                return await dispatch_async(*signed_request)
+
+            return transform_then_dispatch()
+
+        data, signed_headers, signed_json_body = sign_and_log(
+            provider_config.transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=request_headers,
+            )
+        )
+
+        if acompletion is True:
+            return dispatch_async(data, signed_headers, signed_json_body)
 
         if stream is True:
             data = self._add_stream_param_to_request_body(
@@ -613,7 +775,7 @@ class BaseLLMHTTPHandler:
                     custom_llm_provider=custom_llm_provider,
                     logging_obj=logging_obj,
                     api_base=api_base,
-                    headers=headers,
+                    headers=signed_headers,
                     data=data,
                     signed_json_body=signed_json_body,
                     messages=messages,
@@ -623,7 +785,7 @@ class BaseLLMHTTPHandler:
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
-                headers=headers,
+                headers=signed_headers,
                 data=data,
                 signed_json_body=signed_json_body,
                 original_data=data,
@@ -656,7 +818,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client=sync_httpx_client,
             provider_config=provider_config,
             api_base=api_base,
-            headers=headers,
+            headers=signed_headers,
             data=data,
             signed_json_body=signed_json_body,
             timeout=timeout,
@@ -1203,6 +1365,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=json.dumps(request_data),
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
@@ -1295,9 +1458,24 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
     ) -> TranscriptionResponse:
         """Shared logic for transforming audio transcription responses."""
-        return provider_config.transform_audio_transcription_response(
+        transformed: Final = provider_config.transform_audio_transcription_response(
             raw_response=response,
         )
+        set_provider_response_headers_in_hidden_params(transformed, response.headers)
+        if not provider_config.supports_subtitle_synthesis:
+            return transformed
+        requested_format: Final = optional_params.get("response_format")
+        if not isinstance(requested_format, str) or requested_format not in SUBTITLE_RESPONSE_FORMATS:
+            return transformed
+        document: Final = synthesize_subtitle_document(
+            words=transformed.get("words"),
+            response_format=requested_format,
+        )
+        if document is not None:
+            transformed.text = document
+        if "words" in transformed:
+            delattr(transformed, "words")
+        return transformed
 
     def audio_transcriptions(
         self,
@@ -1457,293 +1635,6 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
-    def _prepare_ocr_request(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict[str, object] | None,
-        provider_config: BaseOCRConfig,
-        litellm_params: dict,
-    ) -> tuple[dict[str, object], str, dict[str, object], None]:
-        """
-        Shared logic for preparing OCR requests.
-        Returns: (headers, complete_url, data, files)
-        """
-        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
-        headers = provider_config.validate_environment(
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        complete_url: Final = provider_config.get_complete_url(
-            api_base=api_base,
-            model=model,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        # Transform the request to get data and files
-        transformed_result: Final = provider_config.transform_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-        )
-
-        # All providers return OCRRequestData
-        if not isinstance(transformed_result, OCRRequestData):
-            raise ValueError(f"Provider {provider_config.__class__.__name__} must return OCRRequestData")
-
-        # Data is always a dict for Mistral OCR format
-        if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-
-        data: Final = transformed_result.data
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input="OCR document processing",
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": complete_url,
-                "headers": headers,
-            },
-        )
-
-        return headers, complete_url, data, None
-
-    async def _async_prepare_ocr_request(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict[str, object] | None,
-        provider_config: BaseOCRConfig,
-        litellm_params: dict,
-    ) -> tuple[dict[str, object], str, dict[str, object], None]:
-        """
-        Async version of _prepare_ocr_request for providers that need async transforms.
-        Returns: (headers, complete_url, data, files)
-        """
-        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
-        headers = provider_config.validate_environment(
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        complete_url: Final = provider_config.get_complete_url(
-            api_base=api_base,
-            model=model,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        # Use async transform (providers can override this method if they need async operations)
-        transformed_result: Final = await provider_config.async_transform_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-        )
-
-        # All providers return OCRRequestData
-        if not isinstance(transformed_result, OCRRequestData):
-            raise ValueError(f"Provider {provider_config.__class__.__name__} must return OCRRequestData")
-
-        # Data is always a dict for Mistral OCR format
-        if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-
-        data: Final = transformed_result.data
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input="OCR document processing",
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": complete_url,
-                "headers": headers,
-            },
-        )
-
-        return headers, complete_url, data, None
-
-    def _transform_ocr_response(
-        self,
-        provider_config: BaseOCRConfig,
-        model: str,
-        response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-        optional_params: Mapping[str, object],
-    ) -> OCRResponse:
-        """Shared logic for transforming OCR responses."""
-        return provider_config.transform_ocr_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-        )
-
-    def ocr(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        timeout: float | httpx.Timeout,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
-        aocr: bool = False,
-        headers: dict[str, object] | None = None,
-        provider_config: BaseOCRConfig | None = None,
-        litellm_params: dict | None = None,
-    ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-        """
-        Sync OCR handler.
-        """
-        if provider_config is None:
-            raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
-
-        if litellm_params is None:
-            litellm_params = {}
-
-        if aocr is True:
-            return self.async_ocr(
-                model=model,
-                document=document,
-                optional_params=optional_params,
-                timeout=timeout,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                client=client,
-                headers=headers,
-                provider_config=provider_config,
-                litellm_params=litellm_params,
-            )
-
-        # Prepare the request
-        headers, complete_url, data, files = self._prepare_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            provider_config=provider_config,
-            litellm_params=litellm_params,
-        )
-
-        if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
-
-        try:
-            # Make the POST request with JSON data (Mistral format)
-            response: Final = client.post(
-                url=complete_url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
-
-        return self._transform_ocr_response(
-            provider_config=provider_config,
-            model=model,
-            response=response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-        )
-
-    async def async_ocr(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        timeout: float | httpx.Timeout,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
-        headers: dict[str, object] | None = None,
-        provider_config: BaseOCRConfig | None = None,
-        litellm_params: dict | None = None,
-    ) -> OCRResponse:
-        """
-        Async OCR handler.
-        """
-        if provider_config is None:
-            raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
-
-        if litellm_params is None:
-            litellm_params = {}
-
-        # Prepare the request using async prepare method
-        headers, complete_url, data, files = await self._async_prepare_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            provider_config=provider_config,
-            litellm_params=litellm_params,
-        )
-
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-            )
-        else:
-            async_httpx_client = client
-
-        try:
-            # Make the async POST request with JSON data (Mistral format)
-            response: Final = await async_httpx_client.post(
-                url=complete_url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
-
-        # Use async response transform for async operations
-        return await provider_config.async_transform_ocr_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-        )
-
     def search(
         self,
         query: str | list[str],
@@ -1832,6 +1723,7 @@ class BaseLLMHTTPHandler:
                     url=complete_url,
                     headers=signed_headers,
                 )
+                response.raise_for_status()
             else:
                 # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = client.post(
@@ -1841,6 +1733,8 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+        except httpx.HTTPStatusError as e:
+            raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -1893,7 +1787,9 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
-        signed_headers, signed_json_body = provider_config.sign_request(
+        signed_headers, signed_json_body = await sign_request_off_loop_if_aws(
+            provider_config,
+            provider_config.sign_request,
             headers=headers,
             optional_params=optional_params,
             request_data=data,
@@ -1931,6 +1827,7 @@ class BaseLLMHTTPHandler:
                     url=complete_url,
                     headers=signed_headers,
                 )
+                response.raise_for_status()
             else:
                 # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = await async_httpx_client.post(
@@ -1940,6 +1837,8 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+        except httpx.HTTPStatusError as e:
+            raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -1987,6 +1886,8 @@ class BaseLLMHTTPHandler:
                     e=e, litellm_params=litellm_params_dict
                 )
                 if should_retry and not hit_max_attempt:
+                    if logging_obj.baseline_cache_context is not None:
+                        await logging_obj.invalidate_baseline_cache_estimate("retried_request")
                     verbose_logger.debug(
                         "Anthropic /v1/messages: invalid thinking signature; "
                         "stripping thinking blocks and retrying (attempt %s/%s).",
@@ -1994,7 +1895,9 @@ class BaseLLMHTTPHandler:
                         max_attempts,
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
-                    headers, signed_json_body = provider_config.sign_request(
+                    headers, signed_json_body = await sign_request_off_loop_if_aws(
+                        provider_config,
+                        provider_config.sign_request,
                         headers=headers,
                         optional_params=optional_params_dict,
                         request_data=request_body,
@@ -2065,6 +1968,7 @@ class BaseLLMHTTPHandler:
 
         # Prepare headers
         kwargs = kwargs or {}
+        kwargs_for_agentic: Final = self._agentic_hook_kwargs(kwargs=kwargs, api_key=api_key, api_base=api_base)
         provider_specific_header: Final = cast(
             litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
@@ -2154,7 +2058,9 @@ class BaseLLMHTTPHandler:
             stream=stream,
         )
 
-        headers, signed_json_body = anthropic_messages_provider_config.sign_request(
+        headers, signed_json_body = await sign_request_off_loop_if_aws(
+            anthropic_messages_provider_config,
+            anthropic_messages_provider_config.sign_request,
             headers=headers,
             optional_params=dict(litellm_params),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
@@ -2184,36 +2090,6 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
-
-        rust_messages_response: Final = await self._maybe_rust_anthropic_messages(
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            has_agentic_hook=self._has_agentic_completion_hook(logging_obj),
-            model=model,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            request_body=request_body,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
-        )
-        if rust_messages_response is not None:
-            if stream:
-                return self._rust_anthropic_messages_fake_stream(rust_messages_response)
-            return await self._finalize_anthropic_messages_response(
-                initial_response=rust_messages_response,
-                model=model,
-                messages=messages,
-                anthropic_messages_provider_config=anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                kwargs=kwargs,
-            )
 
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
@@ -2267,6 +2143,10 @@ class BaseLLMHTTPHandler:
                 AgenticAnthropicStreamingIterator,
             )
 
+            held_back_tool_names: Final = self._server_fulfilled_tools_in_request(
+                logging_obj=logging_obj,
+                tools=anthropic_messages_optional_request_params.get("tools"),
+            )
             initial_response = AgenticAnthropicStreamingIterator(
                 completion_stream=completion_stream,
                 http_handler=self,
@@ -2276,7 +2156,9 @@ class BaseLLMHTTPHandler:
                 anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
-                kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
+                kwargs=kwargs_for_agentic,
+                hold_back=bool(held_back_tool_names),
+                server_fulfilled_tool_names=held_back_tool_names,
             )
             return AnthropicMessagesStreamingResponse(
                 completion_stream=initial_response,
@@ -2297,8 +2179,7 @@ class BaseLLMHTTPHandler:
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
-            api_key=api_key,
-            kwargs=kwargs,
+            kwargs=kwargs_for_agentic,
         )
 
     async def _finalize_anthropic_messages_response(
@@ -2311,14 +2192,8 @@ class BaseLLMHTTPHandler:
         anthropic_messages_optional_request_params: dict,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
-        api_key: str | None,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AnthropicMessagesResponse | AsyncIterator:
-        # Inject api_key into kwargs so follow-up calls in agentic hooks can
-        # authenticate. api_key is a named param here (not in kwargs), so
-        # _prepare_followup_kwargs would miss it otherwise.
-        kwargs_for_agentic: Final = {**kwargs, "api_key": api_key} if api_key else kwargs
-        # Call agentic completion hooks (non-streaming path only)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -2328,82 +2203,13 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             stream=False,
             custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs_for_agentic,
+            kwargs=kwargs,
         )
 
         return self._maybe_wrap_in_fake_stream(
             final_response if final_response is not None else initial_response,
             logging_obj,
             "anthropic_messages",
-        )
-
-    @staticmethod
-    def _rust_env_enabled() -> bool:
-        return os.getenv("LITELLM_RUST", "").strip().lower() in {"1", "true", "yes", "on"}
-
-    @staticmethod
-    async def _maybe_rust_anthropic_messages(
-        *,
-        custom_llm_provider: str,
-        litellm_params: GenericLiteLLMParams,
-        has_agentic_hook: bool,
-        model: str,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict,
-        request_body: dict,
-        timeout: float | httpx.Timeout | None,
-    ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
-            return None
-        if litellm_params.get("rust") is not True and not BaseLLMHTTPHandler._rust_env_enabled():
-            return None
-        if has_agentic_hook:
-            return None
-
-        from litellm.rust_bridge import messages as rust_messages_bridge
-
-        upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        try:
-            rust_response: Final = await rust_messages_bridge.amessages(
-                model=model,
-                body=upstream_body,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-            )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-            verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
-            )
-            return None
-        if rust_response is None:
-            return None
-
-        response_obj: Final = cast(AnthropicMessagesResponse, dict(rust_response))
-        response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
-        return response_obj
-
-    @staticmethod
-    def _rust_anthropic_messages_fake_stream(
-        rust_response: AnthropicMessagesResponse,
-    ) -> "AnthropicMessagesStreamingResponse":
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-            AnthropicMessagesStreamHiddenParams,
-            AnthropicMessagesStreamingResponse,
-        )
-
-        completion_stream = cast(AsyncIterator[bytes], FakeAnthropicMessagesStreamIterator(response=rust_response))
-        hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers={"x-litellm-rust": "true"})
-        return AnthropicMessagesStreamingResponse(
-            completion_stream=completion_stream,
-            hidden_params=hidden_params,
         )
 
     def anthropic_messages_handler(
@@ -2651,7 +2457,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2715,6 +2521,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
+            agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -2725,10 +2532,19 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 stream=False,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=dict(litellm_params),
+                kwargs=agentic_kwargs,
                 api_surface="responses",
             )
-            return final_response if final_response is not None else initial_response
+            result: Final = final_response if final_response is not None else initial_response
+            if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
+                return self._wrap_responses_response_as_fake_stream(
+                    result=result,
+                    model=model,
+                    responses_api_provider_config=responses_api_provider_config,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            return result
 
         return initial_response
 
@@ -2759,7 +2575,7 @@ class BaseLLMHTTPHandler:
                 id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
                 shared_session=shared_session,
             )
@@ -2783,7 +2599,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = responses_api_provider_config.transform_responses_api_request(
+        data = await responses_api_provider_config.async_transform_responses_api_request(
             model=model,
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
@@ -2816,7 +2632,9 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
             )
 
-        headers, signed_body = responses_api_provider_config.sign_request(
+        headers, signed_body = await sign_request_off_loop_if_aws(
+            responses_api_provider_config,
+            responses_api_provider_config.sign_request,
             headers=headers,
             optional_params=dict(litellm_params),
             request_data=data,
@@ -2826,7 +2644,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2846,6 +2664,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    logging_obj=logging_obj,
                     **body_kwargs,
                 )
 
@@ -2877,6 +2696,7 @@ class BaseLLMHTTPHandler:
                     url=api_base,
                     headers=headers,
                     timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
+                    logging_obj=logging_obj,
                     **body_kwargs,
                 )
 
@@ -2892,24 +2712,22 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+        agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
-            messages=(input if isinstance(input, list) else [{"role": "user", "content": input}]),
+            messages=(input if isinstance(input, list) else [{"role": "user", "content": input}]),  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; the hook accepts response input items at runtime
             anthropic_messages_provider_config=responses_api_provider_config,
             anthropic_messages_optional_request_params=response_api_optional_request_params,
             logging_obj=logging_obj,
             stream=False,
             custom_llm_provider=custom_llm_provider,
-            kwargs=dict(litellm_params),
+            kwargs=agentic_kwargs,
             api_surface="responses",
         )
 
         result: Final = final_response if final_response is not None else initial_response
-        interception_converted_stream: Final = litellm_params.get(
-            "_code_interpreter_interception_converted_stream"
-        ) or litellm_params.get("_websearch_interception_converted_stream")
-        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
+        if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -3661,7 +3479,7 @@ class BaseLLMHTTPHandler:
                 "complete_input_dict": (
                     "<streaming media upload>"
                     if isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request
-                    else transformed_request
+                    else _mask_presigned_request_headers(transformed_request)
                 ),
                 "api_base": api_base,
                 "headers": headers,
@@ -4084,7 +3902,7 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                "complete_input_dict": _mask_presigned_request_headers(transformed_request),
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -4163,7 +3981,7 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                "complete_input_dict": _mask_presigned_request_headers(transformed_request),
                 "api_base": api_base,
                 "headers": headers,
                 "batch_id": batch_id,
@@ -4440,7 +4258,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4524,7 +4342,9 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        headers, signed_body = responses_api_provider_config.sign_request(
+        headers, signed_body = await sign_request_off_loop_if_aws(
+            responses_api_provider_config,
+            responses_api_provider_config.sign_request,
             headers=headers,
             optional_params=dict(litellm_params),
             request_data=data,
@@ -4532,7 +4352,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4865,15 +4685,16 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_list_files_response(
-            raw_response=response,
-            logging_obj=logging_obj,
-            litellm_params=litellm_params,
+        files_per_page: Final = self._files_per_listing_page(
+            response, provider_config, logging_obj, litellm_params, headers, sync_httpx_client, timeout
         )
+        return [  # mutable-ok: the files contract returns the listing as a list
+            listed_file for page_files in files_per_page for listed_file in page_files
+        ]
 
     async def async_list_files(
         self,
@@ -4921,14 +4742,99 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return provider_config.transform_list_files_response(
-            raw_response=response,
-            logging_obj=logging_obj,
+        files_per_page: Final = self._files_per_async_listing_page(
+            response, provider_config, logging_obj, litellm_params, headers, async_httpx_client, timeout
+        )
+        return [  # mutable-ok: the files contract returns the listing as a list
+            listed_file async for page_files in files_per_page for listed_file in page_files
+        ]
+
+    def _files_per_listing_page(
+        self,
+        first_page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        client: HTTPHandler,
+        timeout: float | httpx.Timeout | None,
+    ) -> Iterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
+        latest_page = first_page  # rebind-ok: advances one page per loop turn
+        listed_count = 0  # rebind-ok: grows per page so the listing stops at MAX_FILE_LIST_LIMIT, OpenAI's ceiling
+        while True:
+            page_files = provider_config.transform_list_files_response(
+                raw_response=latest_page, logging_obj=logging_obj, litellm_params=litellm_params
+            )
+            yield page_files[: MAX_FILE_LIST_LIMIT - listed_count]
+            listed_count += len(page_files)
+            next_request = self._next_listing_request(latest_page, provider_config, litellm_params, listed_count)
+            if next_request is None:
+                return
+            url, params = next_request
+            next_headers = self._next_listing_page_headers(provider_config, headers, litellm_params)
+            try:
+                latest_page = client.get(url=url, headers=next_headers, params=params, timeout=timeout)
+            except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+    async def _files_per_async_listing_page(
+        self,
+        first_page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        client: AsyncHTTPHandler,
+        timeout: float | httpx.Timeout | None,
+    ) -> AsyncIterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
+        latest_page = first_page  # rebind-ok: advances one page per loop turn
+        listed_count = 0  # rebind-ok: grows per page so the listing stops at MAX_FILE_LIST_LIMIT, OpenAI's ceiling
+        while True:
+            page_files = provider_config.transform_list_files_response(
+                raw_response=latest_page, logging_obj=logging_obj, litellm_params=litellm_params
+            )
+            yield page_files[: MAX_FILE_LIST_LIMIT - listed_count]
+            listed_count += len(page_files)
+            next_request = self._next_listing_request(latest_page, provider_config, litellm_params, listed_count)
+            if next_request is None:
+                return
+            url, params = next_request
+            next_headers = self._next_listing_page_headers(provider_config, headers, litellm_params)
+            try:
+                latest_page = await client.get(url=url, headers=next_headers, params=params, timeout=timeout)
+            except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the first page's fetch
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+    def _next_listing_page_headers(
+        self,
+        provider_config: BaseFilesConfig,
+        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+        return provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
             litellm_params=litellm_params,
+        )
+
+    def _next_listing_request(
+        self,
+        latest_page: httpx.Response,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        listed_count: int,
+    ) -> tuple[str, dict[str, str]] | None:  # mutable-ok: the base files contract returns the query as a dict
+        if listed_count >= MAX_FILE_LIST_LIMIT:
+            return None
+        return provider_config.transform_list_files_next_request(
+            raw_response=latest_page, optional_params={}, litellm_params=litellm_params
         )
 
     def retrieve_file_content(
@@ -4961,35 +4867,16 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        # Get URL and params from provider config
-        url, params = provider_config.transform_file_content_request(
+        prepared: Final = self._prepare_file_content_request(
             file_content_request=file_content_request,
-            optional_params={},
+            provider_config=provider_config,
             litellm_params=litellm_params,
-        )
-
-        # Validate environment and get headers
-        headers = provider_config.validate_environment(
-            api_key=litellm_params.get("api_key"),
             headers=headers,
-            model="",
-            messages=[],
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        logging_obj.pre_call(
-            input="",
-            api_key="",
-            additional_args={
-                "api_base": url,
-                "headers": headers,
-                "file_id": file_content_request.get("file_id"),
-            },
+            logging_obj=logging_obj,
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = sync_httpx_client.get(url=prepared.url, headers=prepared.headers, params=prepared.params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -5024,35 +4911,18 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        # Get URL and params from provider config
-        url, params = provider_config.transform_file_content_request(
+        prepared: Final = self._prepare_file_content_request(
             file_content_request=file_content_request,
-            optional_params={},
+            provider_config=provider_config,
             litellm_params=litellm_params,
-        )
-
-        # Validate environment and get headers
-        headers = provider_config.validate_environment(
-            api_key=litellm_params.get("api_key"),
             headers=headers,
-            model="",
-            messages=[],
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        logging_obj.pre_call(
-            input="",
-            api_key="",
-            additional_args={
-                "api_base": url,
-                "headers": headers,
-                "file_id": file_content_request.get("file_id"),
-            },
+            logging_obj=logging_obj,
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = await async_httpx_client.get(
+                url=prepared.url, headers=prepared.headers, params=prepared.params
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -5068,6 +4938,93 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    async def async_retrieve_file_content_streaming(
+        self,
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        chunk_size: int,
+        client: AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> FileContentStreamingResult:
+        """
+        Async retrieve file content by ID as a byte stream, without buffering the body.
+        """
+        async_httpx_client: Final = (
+            client if client is not None else get_async_httpx_client(llm_provider=provider_config.custom_llm_provider)
+        )
+
+        prepared: Final = self._prepare_file_content_request(
+            file_content_request=file_content_request,
+            provider_config=provider_config,
+            litellm_params=litellm_params,
+            headers=headers,
+            logging_obj=logging_obj,
+        )
+
+        request: Final = async_httpx_client.client.build_request(
+            "GET",
+            prepared.url,
+            headers=prepared.headers,
+            params=httpx.QueryParams(HTTPHandler.extract_query_params(prepared.url)).merge(prepared.params),
+            timeout=USE_CLIENT_DEFAULT if timeout is None else httpx.Timeout(timeout),
+        )
+        try:
+            response: Final = await async_httpx_client.client.send(request, stream=True)
+        except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the buffered fetch
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        if response.status_code >= 400:
+            error_body: Final = await response.aread()
+            await response.aclose()
+            raise provider_config.get_error_class(
+                error_message=error_body.decode("utf-8", errors="replace"),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+        return await provider_config.transform_file_content_stream(
+            stream_iterator=_aiter_bytes_then_close(response, chunk_size=chunk_size),
+            headers=_decoded_body_headers(response),
+            request_url=str(response.request.url),
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    @staticmethod
+    def _prepare_file_content_request(
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> "_PreparedFileContentRequest":
+        url, params = provider_config.transform_file_content_request(
+            file_content_request=file_content_request,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        request_headers: Final = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": request_headers,
+                "file_id": file_content_request.get("file_id"),
+            },
+        )
+        return _PreparedFileContentRequest(url=url, params=params, headers=request_headers)
 
     def _prepare_fake_stream_request(
         self,
@@ -5093,6 +5050,15 @@ class BaseLLMHTTPHandler:
         max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
         fingerprints: Final = list(kwargs.get("_agentic_loop_fingerprints", []) or [])
         return depth, max_loops, fingerprints
+
+    @staticmethod
+    def _agentic_hook_kwargs(
+        kwargs: Mapping[str, object], api_key: str | None, api_base: str | None
+    ) -> dict[str, object]:
+        """``api_key`` and ``api_base`` are named parameters of ``anthropic_messages`` rather than kwargs, so the
+        follow-up call an agentic hook makes only reaches the same deployment if they are re-added here."""
+        deployment_params: Final = {"api_key": api_key, "api_base": api_base}
+        return {**kwargs, **{key: value for key, value in deployment_params.items() if value}}
 
     @staticmethod
     def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
@@ -5123,6 +5089,20 @@ class BaseLLMHTTPHandler:
             if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
                 return True
         return False
+
+    @staticmethod
+    def _server_fulfilled_tools_in_request(logging_obj: LiteLLMLoggingObj, tools: object) -> frozenset[str]:
+        """The request's tools that a registered callback fulfills server-side (e.g. ``headroom_retrieve``)."""
+        if not isinstance(tools, list) or not tools:
+            return frozenset()
+        from litellm.litellm_core_utils.prompt_templates.factory import has_tool_with_name
+
+        return frozenset(
+            name
+            for cb in _custom_logger_callbacks(logging_obj)
+            for name in getattr(cb, "server_fulfilled_tool_names", frozenset())
+            if has_tool_with_name(tools, name)
+        )
 
     @staticmethod
     def _check_agentic_loop_safety(
@@ -5356,24 +5336,28 @@ class BaseLLMHTTPHandler:
         }
 
         internal_keys: Final = {"litellm_logging_obj"}
-        kwargs_for_followup: Final = {
-            k: v
-            for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
-            and k != "_code_interpreter_interception_converted_stream"
-            and k not in internal_keys
-            and k not in optional_params
-        }
-        kwargs_for_followup.update(patch.kwargs)
-        kwargs_for_followup["_agentic_loop_depth"] = depth + 1
-        kwargs_for_followup["max_agentic_loops"] = max_loops
-        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        kwargs_for_followup: Final = build_agentic_followup_kwargs(
+            request_kwargs=MappingProxyType(
+                {
+                    k: v
+                    for k, v in kwargs.items()
+                    if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
+                    and k != "_code_interpreter_interception_converted_stream"
+                    and k not in internal_keys
+                }
+            ),
+            patch_kwargs=patch.kwargs,
+            request_params=frozenset((*optional_params, "model", "input")),
+            depth=depth,
+            max_loops=max_loops,
+            fingerprints=fingerprints,
+            fingerprint=fingerprint,
+        )
 
         try:
             response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
                 model=patch.model or model,
-                input=patch.messages,
+                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
                 **optional_params,
                 **kwargs_for_followup,
             )
@@ -5488,17 +5472,23 @@ class BaseLLMHTTPHandler:
             "stream_response",
             "custom_prompt_dict",
         }
-        kwargs_for_followup: Final = {
-            k: v
-            for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception")
-            and not k.startswith("_compression_interception")
-            and k not in internal_params
-        }
-        kwargs_for_followup.update(patch.kwargs)
-        kwargs_for_followup["_agentic_loop_depth"] = depth + 1
-        kwargs_for_followup["max_agentic_loops"] = max_loops
-        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        kwargs_for_followup: Final = build_agentic_followup_kwargs(
+            request_kwargs=MappingProxyType(
+                {
+                    k: v
+                    for k, v in kwargs.items()
+                    if not k.startswith("_websearch_interception")
+                    and not k.startswith("_compression_interception")
+                    and k not in internal_params
+                }
+            ),
+            patch_kwargs=patch.kwargs,
+            request_params=frozenset((*optional_params_for_followup, "model", "messages")),
+            depth=depth,
+            max_loops=max_loops,
+            fingerprints=fingerprints,
+            fingerprint=fingerprint,
+        )
 
         return await litellm.acompletion(
             model=full_model_name,
@@ -5599,10 +5589,9 @@ class BaseLLMHTTPHandler:
                     kwargs=hook_kwargs,
                 )
             except Exception as e:
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
                     "LiteLLM.AgenticHookError: Exception in async_should_run_agentic_loop [call_id=%s model=%s]: %s",
-                    _call_id,
+                    logging_obj.litellm_call_id,
                     model,
                     str(e),
                 )
@@ -5624,10 +5613,9 @@ class BaseLLMHTTPHandler:
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
                     raise
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.warning(
                     "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
-                    _call_id,
+                    logging_obj.litellm_call_id,
                     model,
                     str(e),
                 )
@@ -5677,7 +5665,15 @@ class BaseLLMHTTPHandler:
                         callback.__class__.__name__,
                         plan.stop_reason,
                     )
-                    return self._maybe_wrap_in_fake_stream(response, logging_obj, api_surface)
+                    return self._maybe_wrap_in_fake_stream(
+                        await callback.async_post_agentic_loop_response_hook(
+                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                            plan=plan,
+                            kwargs=kwargs_with_provider,
+                        ),
+                        logging_obj,
+                        api_surface,
+                    )
                 if not plan.run_agentic_loop:
                     continue
 
@@ -5900,7 +5896,6 @@ class BaseLLMHTTPHandler:
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
-            BaseOCRConfig,
             BaseVideoConfig,
             BaseSearchConfig,
             BaseTextToSpeechConfig,
@@ -5908,13 +5903,16 @@ class BaseLLMHTTPHandler:
             "BasePassthroughConfig",
             "BaseContainerConfig",
             BaseEvalsAPIConfig,
+            BaseRealtimeHTTPConfig,
         ],
     ):
-        status_code = getattr(e, "status_code", 500)
+        received_status_code: Final = (
+            e.response.status_code if isinstance(e, httpx.HTTPStatusError) else getattr(e, "status_code", None)
+        )
+        status_code = received_status_code if isinstance(received_status_code, int) else 500
         error_headers = getattr(e, "headers", None)
         if isinstance(e, httpx.HTTPStatusError):
             error_text = e.response.text
-            status_code = e.response.status_code
         else:
             error_text = getattr(e, "text", str(e))
         error_response: Final = getattr(e, "response", None)
@@ -5928,19 +5926,21 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
             raise BaseLLMException(
                 status_code=status_code,
                 message=error_text,
                 headers=error_headers,
+                status_code_is_synthesized=not isinstance(received_status_code, int),
             )
 
-        raise provider_config.get_error_class(
+        provider_error: Final = provider_config.get_error_class(
             error_message=error_text,
             status_code=status_code,
             headers=error_headers,
         )
+        if not isinstance(received_status_code, int):
+            provider_error.status_code_is_synthesized = True
+        raise provider_error
 
     @staticmethod
     def _append_query_params(url: str, query_params: RealtimeQueryParams | None) -> str:
@@ -6012,7 +6012,7 @@ class BaseLLMHTTPHandler:
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: _RealtimeClientWebSocket,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRealtimeConfig,
         headers: dict,
@@ -6020,7 +6020,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         client: Any | None = None,
         timeout: float | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         litellm_metadata: dict[str, object] | None = None,
         query_params: RealtimeQueryParams | None = None,
     ):
@@ -6040,7 +6040,12 @@ class BaseLLMHTTPHandler:
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-            backend_ws: Final = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
+            provider_backend: Final = await provider_config.open_backend(url, headers)
+            backend_ws: Final = (
+                provider_backend
+                if provider_backend is not None
+                else await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
+            )
             async with backend_ws:
                 _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:
@@ -6095,9 +6100,9 @@ class BaseLLMHTTPHandler:
 
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:
+        except websockets.exceptions.InvalidStatus as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
             redacted_error: Final = _redact_string(str(e))
@@ -6190,7 +6195,7 @@ class BaseLLMHTTPHandler:
         request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -6262,7 +6267,7 @@ class BaseLLMHTTPHandler:
         sdp_body: bytes,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         session_config: dict[str, object] | None = None,
         extra_headers: dict[str, object] | None = None,
@@ -6340,18 +6345,19 @@ class BaseLLMHTTPHandler:
     async def async_responses_websocket(
         self,
         model: str,
-        websocket: Any,
+        websocket: _ResponsesClientWebSocket,
         logging_obj: LiteLLMLoggingObj,
         responses_api_provider_config: BaseResponsesAPIConfig | None,
         api_base: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
+        request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         **kwargs: Any,
-    ):
+    ) -> Exception | None:
         """
         Handles Responses API WebSocket mode.
 
@@ -6385,7 +6391,7 @@ class BaseLLMHTTPHandler:
                 **kwargs,
             )
             await handler.run()
-            return
+            return None
 
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -6438,8 +6444,8 @@ class BaseLLMHTTPHandler:
 
             @asynccontextmanager
             async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
-                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+                if _rust_responses_websocket_enabled(custom_llm_provider):
+                    from litellm.rust_bridge.responses import websocket as rust_responses_websocket
 
                     rust_backend: Final = await rust_responses_websocket.connect(
                         url=ws_url,
@@ -6504,12 +6510,14 @@ class BaseLLMHTTPHandler:
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    request_defaults=request_defaults,
                 )
-                await streaming.bidirectional_forward()
+                return await streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:
+        except websockets.exceptions.InvalidStatus as e:
             verbose_logger.exception("Error connecting to responses WS backend: %s", e)
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             verbose_logger.exception("Error in responses WS: %s", e)
             try:
@@ -6519,6 +6527,7 @@ class BaseLLMHTTPHandler:
                     pass
                 else:
                     raise Exception(f"Unexpected error while closing WebSocket: {close_error}")
+        return None
 
     def image_edit_handler(
         self,
@@ -6631,11 +6640,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
+        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        return image_edit_response
 
     async def async_image_edit_handler(
         self,
@@ -6683,7 +6694,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files = image_edit_provider_config.transform_image_edit_request(
+        data, files = await image_edit_provider_config.async_transform_image_edit_request(
             model=model,
             image=image,
             prompt=prompt,
@@ -6730,11 +6741,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
+        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        return image_edit_response
 
     def image_generation_handler(
         self,
@@ -6857,6 +6870,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             encoding=None,
         )
+        set_provider_response_headers_in_hidden_params(model_response, response.headers)
 
         return model_response
 
@@ -6964,6 +6978,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             encoding=None,
         )
+        set_provider_response_headers_in_hidden_params(model_response, response.headers)
 
         return model_response
 
@@ -7553,7 +7568,7 @@ class BaseLLMHTTPHandler:
     def video_create_character_handler(
         self,
         name: str,
-        video: Any,
+        video: FileTypes,
         video_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -7637,7 +7652,7 @@ class BaseLLMHTTPHandler:
     async def async_video_create_character_handler(
         self,
         name: str,
-        video: Any,
+        video: FileTypes,
         video_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -8515,6 +8530,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -8600,10 +8616,11 @@ class BaseLLMHTTPHandler:
                     url=url,
                     headers=headers,
                 )
-            return video_status_provider_config.transform_video_status_retrieve_response(
+            return await video_status_provider_config.async_transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                client=async_httpx_client,
             )
 
         except Exception as e:
@@ -8688,17 +8705,19 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
-
-            return container_provider_config.transform_container_create_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_create_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_create_handler(
         self,
@@ -8764,17 +8783,19 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
-
-            return container_provider_config.transform_container_create_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_create_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_list_handler(
         self,
@@ -8854,17 +8875,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_list_handler(
         self,
@@ -8931,17 +8954,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_retrieve_handler(
         self,
@@ -9019,17 +9044,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_retrieve_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_retrieve_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_retrieve_handler(
         self,
@@ -9096,17 +9123,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_retrieve_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_retrieve_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_delete_handler(
         self,
@@ -9184,17 +9213,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_delete_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_delete_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_delete_handler(
         self,
@@ -9261,17 +9292,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_delete_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_delete_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_file_list_handler(
         self,
@@ -9353,17 +9386,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_file_list_handler(
         self,
@@ -9432,17 +9467,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_list_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_list_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     def container_file_content_handler(
         self,
@@ -9518,17 +9555,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_content_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     async def async_container_file_content_handler(
         self,
@@ -9594,17 +9633,19 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params or None,
             )
-
-            return container_provider_config.transform_container_file_content_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
-
         except Exception as e:
             raise self._handle_error(
                 e=e,
                 provider_config=container_provider_config,
             )
+        raise_for_error_status(
+            response=response,
+            container_provider_config=container_provider_config,
+        )
+        return container_provider_config.transform_container_file_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     ###### VECTOR STORE HANDLER ######
     @staticmethod
@@ -9637,6 +9678,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
@@ -9656,6 +9698,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                embedding_executor=embedding_executor,
                 timeout=timeout,
             )
 
@@ -9679,8 +9722,21 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        # Check if provider has async transform method
-        if hasattr(vector_store_provider_config, "atransform_search_vector_store_request"):
+        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
+            (
+                url,
+                request_body,
+            ) = await vector_store_provider_config.atransform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
+                extra_body=extra_body,
+                embedding_executor=embedding_executor,
+            )
+        else:
             (
                 url,
                 request_body,
@@ -9693,22 +9749,11 @@ class BaseLLMHTTPHandler:
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
             )
-        else:
-            (
-                url,
-                request_body,
-            ) = vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-                extra_body=extra_body,
-            )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
-        headers, signed_json_body = vector_store_provider_config.sign_request(
+        headers, signed_json_body = await sign_request_off_loop_if_aws(
+            vector_store_provider_config,
+            vector_store_provider_config.sign_request,
             headers=headers,
             optional_params=all_optional_params,
             request_data=request_body,
@@ -9734,6 +9779,12 @@ class BaseLLMHTTPHandler:
                 data=request_data,
                 timeout=timeout,
             )
+        except httpx.TimeoutException:
+            raise vector_store_provider_config.get_error_class(
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
+            ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -9751,6 +9802,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
@@ -9766,6 +9818,7 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                embedding_executor=embedding_executor,
                 extra_headers=extra_headers,
                 extra_body=extra_body,
                 timeout=timeout,
@@ -9785,6 +9838,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                embedding_executor=embedding_executor,
                 timeout=timeout,
             )
 
@@ -9805,18 +9859,33 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        (
-            url,
-            request_body,
-        ) = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
-            litellm_logging_obj=logging_obj,
-            litellm_params=dict(litellm_params),
-            extra_body=extra_body,
-        )
+        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
+                extra_body=extra_body,
+                embedding_executor=embedding_executor,
+            )
+        else:
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+                extra_body=extra_body,
+            )
 
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -9845,7 +9914,14 @@ class BaseLLMHTTPHandler:
                 url=url,
                 headers=headers,
                 data=request_data,
+                timeout=timeout,
             )
+        except httpx.TimeoutException:
+            raise vector_store_provider_config.get_error_class(
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
+            ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -9874,6 +9950,8 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+
+        vector_store_provider_config.validate_create_vector_store()
 
         headers: Final = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
@@ -9944,6 +10022,8 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
+
+        vector_store_provider_config.validate_create_vector_store()
 
         headers: Final = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
@@ -11683,11 +11763,13 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        return text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        return speech_response
 
     async def async_text_to_speech_handler(
         self,
@@ -11782,11 +11864,13 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        return text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        return speech_response
 
     #########################################################
     ########## SKILLS API HANDLERS ##########################

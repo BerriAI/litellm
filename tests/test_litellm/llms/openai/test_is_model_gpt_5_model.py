@@ -41,6 +41,8 @@ from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 # Models that MUST be classified as GPT-5 (routed through GPT-5 reasoning path)
 GPT5_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
     "gpt-5",
     "gpt-5.1",
     "gpt-5.2",
@@ -120,6 +122,8 @@ class TestOpenAIGPT5ConfigIsModelGpt5Model:
 # /v1/responses bridge (when reasoning_effort is set and tools are passed) on
 # is_model_gpt_5_4_plus_model, so the gpt-5.6 family must land on the True side.
 GPT5_4_PLUS_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
     "gpt-5.4",
     "gpt-5.5",
     "gpt-5.5-pro",
@@ -153,6 +157,58 @@ class TestOpenAIGPT5ConfigIsModelGpt54PlusModel:
         assert not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
             model
         ), f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
+
+
+GPT5_6_PLUS_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.10-preview",
+]
+
+GPT5_PRE_5_6_MODELS = [
+    "gpt-5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-4o",
+]
+
+GPT6_PLUS_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
+    "gpt-6",
+    "gpt-6.1-preview",
+]
+
+GPT_PRE_6_MODELS = [
+    "gpt-5.6-sol",
+    "gpt-5.5",
+    "gpt-5",
+    "gpt-4o",
+]
+
+
+class TestOpenAIGPT5ConfigSeriesBoundaries:
+
+    @pytest.mark.parametrize("model", GPT5_6_PLUS_MODELS)
+    def test_gpt5_6_plus_models_are_classified_as_5_6_plus(self, model: str):
+        assert OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT5_PRE_5_6_MODELS)
+    def test_pre_5_6_models_are_not_classified_as_5_6_plus(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT6_PLUS_MODELS)
+    def test_gpt6_plus_models_are_classified_as_6_plus(self, model: str):
+        assert OpenAIGPT5Config.is_model_gpt_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT_PRE_6_MODELS)
+    def test_pre_6_models_are_not_classified_as_6_plus(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_6_plus_model(model)
 
 
 # ---------------------------------------------------------------------------

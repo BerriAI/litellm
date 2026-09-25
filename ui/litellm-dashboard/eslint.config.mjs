@@ -83,18 +83,34 @@ const eslintConfig = [
     },
   },
   {
+    files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    rules: { "local/no-ad-hoc-z-index": "error" },
+  },
+  {
+    files: [
+      "src/components/ui/**/*.{ts,tsx}",
+      "src/components/shared/DataTable/**/*.{ts,tsx}",
+      "src/**/*.test.{ts,tsx}",
+      "tests/**/*.{ts,tsx}",
+    ],
+    rules: { "local/no-ad-hoc-z-index": ["error", { allowPopupLayer: true }] },
+  },
+  {
     files: ["tests/eslint-rules/**/*.{ts,tsx}"],
-    rules: { "local/no-noop-hover-variant": "off" },
+    rules: { "local/no-noop-hover-variant": "off", "local/no-ad-hoc-z-index": "off" },
   },
   {
     files: ["src/**/*.test.{ts,tsx}", "tests/**/*.{ts,tsx}"],
     plugins: { "testing-library": testingLibrary, "jest-dom": jestDom },
     rules: {
       "testing-library/await-async-queries": "error",
+      "testing-library/no-container": "warn",
+      "testing-library/no-node-access": "warn",
       "testing-library/no-wait-for-multiple-assertions": "error",
       "testing-library/no-wait-for-side-effects": "error",
       "testing-library/prefer-find-by": "error",
       "testing-library/prefer-presence-queries": "error",
+      "testing-library/prefer-screen-queries": "warn",
       "jest-dom/prefer-checked": "error",
       "jest-dom/prefer-empty": "error",
       "jest-dom/prefer-enabled-disabled": "error",

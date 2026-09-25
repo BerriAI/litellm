@@ -1,7 +1,13 @@
+<!-- The whole description's target audience is humans, not AI agents: write it in plain, simple,
+     everyday engineering language, extremely parsable and readable at a glance. This goes double for
+     the TLDR, User Flow, and Caveats sections
+     Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
+     "## Affected release" with nothing under it must not appear in the final description -->
+
 ## TLDR
 
 <!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
-     This section must be extremely human parsable, comprehensible, and readable: its target audience is humans, not AI agents -->
+     If the PR intentionally changes what existing users see or how a screen behaves, add a line under the bullets that starts "Intentional product change:" describing what changes, why, and what users lose. Reviewers must never have to infer a deliberate UX change from the diff -->
 
 Problem this solves:
 
@@ -18,11 +24,13 @@ How it solves it:
 <!-- Two ordered lists, Before and After, walking the same end user through the same task, written strictly from that user's seat
      Read the linked issue, ticket, or customer thread first so the flow reflects the real application and the routes its users actually hit; don't invent a generic scenario
      Lead each list with one plain sentence saying where the flow fails (Before) or succeeds (After), then number the steps
+     Keep it tight: aim for 3 to 5 steps per list, one line each, roughly 20 words max, and never pad a shorter flow with filler steps to hit the count. Cover the one path the PR changes and fold variants (case, other field, second endpoint) into a clause on the step they belong to rather than their own steps. The example below is the target length
      Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
      No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
      Keep the two lists step-for-step identical until they diverge, so the changed step is obvious
      If the bug had a security or authorization consequence, end each list with what another user could or could no longer do
-     Regenerate this section whenever new commits change the PR's behavior, so it never describes an older revision
+     Regenerate this section, screenshots included, whenever new commits change the PR's behavior, so it never describes an older revision
+     If the PR changes what an Admin UI page shows, embed a before and an after screenshot of that page right after its list, taken at the same URL on the same data, with the rows, fields, or controls that changed boxed in red so a reader spots the difference without reading the steps. These are the UI screenshots for Screenshots / Proof of Fix too: embed them once here and have that section's Before and After steps point back to them instead of repeating the images
 
 Example:
 
@@ -42,11 +50,15 @@ After: the same request comes back with real token counts, so the dashboard show
 
 ## Relevant issues
 
-<!-- e.g., "Fixes #000" -->
+<!-- e.g., "Fixes #000". Drop the section if there is none -->
+
+## Affected release
+
+<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Drop the section otherwise -->
 
 ## Linear ticket
 
-<!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, leave the section blank rather than guessing -->
+<!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, drop the section rather than guessing -->
 
 ## Pre-Submission checklist
 
@@ -94,7 +106,8 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      For bug fixes: Before shows the reproduction, After shows the same steps passing
      For new features: Before shows the capability missing, After shows it working end-to-end
      If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), make each endpoint its own case, not just one
-     For UI changes: before/after screenshots under the same headings -->
+     For UI changes: before/after screenshots under the same headings
+     If the main use case runs through a coding tool like Claude Code or Codex, drive that tool interactively the way the user does (never `claude -p`, `codex exec`, or curl on its own) and embed before/after screenshots of its pane under the same headings; curl replays and headless runs can follow as extra cases, never as the only proof -->
 
 ## Type
 
@@ -110,9 +123,23 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## Caveats (if any)
 
-<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
+     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
-     Leave this section empty if there are none -->
+     Include only the tiers that have caveats; drop the empty ones
+     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
+       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
+       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
+       operator must plan around it before rollout
+     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
+       unsafe to ship as is
+     - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
+     - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
+     Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
+     human reader
+     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
+     user-observable behavior difference", list it here too with what breaks if it is wrong
+     Drop this section if there are none -->
 
 ## QA runbook
 
@@ -134,6 +161,7 @@ Example checklists:
   - [ ] Sanity check: this test makes sense to add and is not hand-wavey (e.g., assert actual expected spend instead of just spend > 0) or potentially flaky
 -->
 
-### Final Attestation
+## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+

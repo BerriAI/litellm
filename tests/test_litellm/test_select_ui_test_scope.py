@@ -29,7 +29,7 @@ SCOPE_SCRIPT = REPO_ROOT / ".github" / "scripts" / "select_ui_test_scope.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-litellm-ui-unit.yml"
 STEP_NAME = "Run UI unit tests (Vitest)"
 
-FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--poolOptions.forks.maxForks=14"]
+FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--maxWorkers=14"]
 
 NON_SRC_FILES = [
     "package.json",
@@ -108,7 +108,7 @@ def _run_step(tmp_path: Path, changed: list[str], base_sha: str = "basesha") -> 
     env["BASE_SHA"] = base_sha
     env["HEAD_SHA"] = "headsha"
     env["GITHUB_WORKSPACE"] = str(REPO_ROOT)
-    env["GITHUB_REF_NAME"] = "litellm_internal_staging"
+    env["GITHUB_REF_NAME"] = "release_branch"
     env["CHANGED_FILES"] = str(changed_file)
     env["NPM_LOG"] = str(npm_log)
 
@@ -135,7 +135,7 @@ def _related_argv(changed: list[str]) -> list[str]:
         "--passWithNoTests",
         "--pool",
         "forks",
-        "--poolOptions.forks.maxForks=14",
+        "--maxWorkers=14",
     ]
 
 

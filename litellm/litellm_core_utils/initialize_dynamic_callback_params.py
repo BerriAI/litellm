@@ -1,9 +1,24 @@
-from collections.abc import Iterator, Mapping
+import re
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Final
 
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
+_inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
+    "inherited_message_logging_disabled", default=False
+)
+
+
+@contextmanager
+def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
+    token: Final = _inherited_message_logging_disabled.set(_inherited_message_logging_disabled.get() or disabled)
+    try:
+        yield
+    finally:
+        _inherited_message_logging_disabled.reset(token)
 
 
 def iter_client_callback_metadata_dicts(
@@ -45,12 +60,34 @@ def validate_no_callback_env_reference(param: str, value: object, *, source: str
         _raise_env_reference_error(param, source=source)
 
 
+# Langfuse rejects events whose environment does not match this pattern
+# (lowercase alphanumerics, hyphens, underscores; no "langfuse" prefix).
+# Validating here fails fast at config/init time instead of silently
+# dropping every trace server-side.
+LANGFUSE_ENVIRONMENT_PATTERN: Final = r"^(?!langfuse)[a-z0-9-_]+$"
+
+
+def validate_langfuse_environment_value(value: str) -> None:
+    if not re.match(LANGFUSE_ENVIRONMENT_PATTERN, value):
+        raise ValueError(
+            f"Invalid langfuse_environment {value!r}: must be lowercase "
+            "alphanumerics/hyphens/underscores and must not start with "
+            f"'langfuse' (pattern {LANGFUSE_ENVIRONMENT_PATTERN})"
+        )
+
+
+def validate_langfuse_span_scope_value(value: str) -> None:
+    if value not in OTEL_SPAN_SCOPES:
+        raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
     "langfuse_secret",
     "langfuse_secret_key",
     "langfuse_host",
+    "langfuse_environment",
     "langfuse_prompt_version",
     "langsmith_api_key",
     "langsmith_project",
@@ -61,6 +98,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "arize_api_key",
     "arize_space_key",
     "arize_space_id",
+    "arize_success_sampling_rate",
+    "arize_error_sampling_rate",
     "posthog_api_key",
     "posthog_host",
     "braintrust_api_key",
@@ -120,7 +159,7 @@ def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple
 
 
 def initialize_standard_callback_dynamic_params(
-    kwargs: dict | None = None,
+    kwargs: dict[str, object] | None = None,
 ) -> StandardCallbackDynamicParams:
     """
     Initialize the standard callback dynamic params from the kwargs
@@ -156,4 +195,10 @@ def initialize_standard_callback_dynamic_params(
             if param in _trusted_overlay_callback_params:
                 standard_callback_dynamic_params[param] = trusted_value
 
+    if _inherited_message_logging_disabled.get():
+        private_params: Final[StandardCallbackDynamicParams] = {
+            **standard_callback_dynamic_params,
+            "turn_off_message_logging": True,
+        }
+        return private_params
     return standard_callback_dynamic_params

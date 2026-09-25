@@ -138,6 +138,22 @@ class TestCheckModelAccess:
         assert "claude-3-opus-20240229" in result.message
 
     @pytest.mark.asyncio
+    async def test_should_log_internal_denial_reason_and_hide_allowlist_from_client(self, caplog):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
+
+        auth = UserAPIKeyAuth(api_key="sk-test-key", models=["gpt-3.5-turbo"])
+
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            result = await _check_model_access("gpt-4o\r\nforged", user_api_key_auth=auth)
+
+        assert result is not None
+        assert result.message == model_access_denied_client_message(model="gpt-4o\r\nforged")
+        denial_records = [r for r in caplog.records if "gpt-3.5-turbo" in r.getMessage()]
+        assert len(denial_records) == 1
+        assert "Tried to access gpt-4oforged" in denial_records[0].getMessage()
+
+    @pytest.mark.asyncio
     async def test_should_deny_empty_oauth_passthrough_placeholder(self):
         """Regression: process_mcp_request() returns an empty UserAPIKeyAuth()
         for OAuth2 upstream-token passthrough.  The None check alone is not
@@ -196,14 +212,14 @@ class TestSamplingAuthAndBudgetGating:
         )
 
         params = MagicMock()
-        params.modelPreferences = None
+        params.model_preferences = None
         params.messages = []
         params.systemPrompt = None
-        params.maxTokens = 100
+        params.max_tokens = 100
         params.temperature = None
-        params.stopSequences = None
+        params.stop_sequences = None
         params.tools = None
-        params.toolChoice = None
+        params.tool_choice = None
         params.metadata = None
 
         result = await handle_sampling_create_message(
@@ -226,14 +242,14 @@ class TestSamplingAuthAndBudgetGating:
 
         auth = _make_user_api_key_auth(models=["gpt-4o"])
         params = MagicMock()
-        params.modelPreferences = None
+        params.model_preferences = None
         params.messages = []
         params.systemPrompt = None
-        params.maxTokens = 100
+        params.max_tokens = 100
         params.temperature = None
-        params.stopSequences = None
+        params.stop_sequences = None
         params.tools = None
-        params.toolChoice = None
+        params.tool_choice = None
         params.metadata = None
 
         with (
@@ -288,14 +304,14 @@ class TestSamplingAuthAndBudgetGating:
 
         auth = _make_user_api_key_auth(models=["gpt-4o"])
         params = MagicMock()
-        params.modelPreferences = None
+        params.model_preferences = None
         params.messages = []
         params.systemPrompt = None
-        params.maxTokens = 100
+        params.max_tokens = 100
         params.temperature = None
-        params.stopSequences = None
+        params.stop_sequences = None
         params.tools = None
-        params.toolChoice = None
+        params.tool_choice = None
         params.metadata = None
 
         budget_error = ErrorData(code=-1, message="ExceededBudget: over limit")

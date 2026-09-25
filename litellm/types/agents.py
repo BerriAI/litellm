@@ -1,8 +1,10 @@
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, PrivateAttr, StrictInt
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, field_validator
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -25,7 +27,7 @@ class AgentExtension(TypedDict, total=False):
     uri: str  # required
     description: str | None
     required: bool | None
-    params: dict[str, Any] | None
+    params: dict[str, object] | None
 
 
 # AgentCapabilities
@@ -70,10 +72,10 @@ class MutualTLSSecurityScheme(SecuritySchemeBase, total=False):
 class OAuthFlows(TypedDict, total=False):
     """Defines the configuration for the supported OAuth 2.0 flows."""
 
-    authorizationCode: dict[str, Any] | None
-    clientCredentials: dict[str, Any] | None
-    implicit: dict[str, Any] | None
-    password: dict[str, Any] | None
+    authorizationCode: dict[str, object] | None
+    clientCredentials: dict[str, object] | None
+    implicit: dict[str, object] | None
+    password: dict[str, object] | None
 
 
 class OAuth2SecurityScheme(SecuritySchemeBase, total=False):
@@ -129,7 +131,7 @@ class AgentCardSignature(TypedDict, total=False):
 
     protected: str  # required
     signature: str  # required
-    header: dict[str, Any] | None
+    header: dict[str, object] | None
 
 
 # AgentCard
@@ -171,15 +173,84 @@ class AugmentedAgentCard(AgentCard):
 class AgentObjectPermission(TypedDict, total=False):
     mcp_servers: list[str] | None
     mcp_access_groups: list[str] | None
+    mcp_toolsets: ReadOnly[Sequence[str] | None]
     mcp_tool_permissions: dict[str, list[str]] | None
     models: list[str] | None
     agents: list[str] | None
 
 
+class AgentKillSwitchBearerAuth(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["bearer"]
+    token: str
+
+
+class AgentKillSwitchApiKeyAuth(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["api_key"]
+    header_name: str = "x-api-key"
+    api_key: str
+
+
+class AgentKillSwitchBasicAuth(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["basic"]
+    username: str
+    password: str
+
+
+AgentKillSwitchAuth: TypeAlias = Annotated[
+    AgentKillSwitchBearerAuth | AgentKillSwitchApiKeyAuth | AgentKillSwitchBasicAuth,
+    Field(discriminator="type"),
+]
+
+AgentKillSwitchMethod: TypeAlias = Literal["POST", "PUT", "PATCH", "DELETE", "GET"]
+
+
+class AgentKillSwitchConfig(BaseModel):
+    """Webhook an admin fires to shut an agent down out of band. LiteLLM only
+    makes the call; whatever the endpoint does with it is the agent's business."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    url: str
+    method: AgentKillSwitchMethod = "POST"
+    headers: Mapping[str, str] = Field(default_factory=dict)
+    query_params: Mapping[str, str] = Field(default_factory=dict)
+    body: Mapping[str, object] | None = None
+    auth: AgentKillSwitchAuth | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _require_absolute_http_url(cls, value: str) -> str:
+        parts: Final = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise ValueError("kill_switch.url must be an absolute http(s) URL")
+        return value
+
+
+class AgentKillSwitchResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: str
+    url: str
+    method: AgentKillSwitchMethod
+    status_code: int | None = None
+    response_body: str | None = None
+    error: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status_code is not None and 200 <= self.status_code < 300
+
+
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
-    litellm_params: dict[str, Any]  # allow for any future litellm params
+    litellm_params: dict[str, object]  # allow for any future litellm params
     object_permission: AgentObjectPermission
     tpm_limit: int | None
     rpm_limit: int | None
@@ -187,12 +258,14 @@ class AgentConfig(TypedDict, total=False):
     session_rpm_limit: int | None
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    access_group_ids: ReadOnly[Sequence[str] | None]
+    kill_switch: ReadOnly[AgentKillSwitchConfig | None]
 
 
 class PatchAgentRequest(TypedDict, total=False):
     agent_name: str
     agent_card_params: AgentCard
-    litellm_params: dict[str, Any]
+    litellm_params: dict[str, object]
     object_permission: AgentObjectPermission
     tpm_limit: int | None
     rpm_limit: int | None
@@ -200,6 +273,22 @@ class PatchAgentRequest(TypedDict, total=False):
     session_rpm_limit: int | None
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    access_group_ids: ReadOnly[Sequence[str] | None]
+    kill_switch: ReadOnly[AgentKillSwitchConfig | None]
+
+
+AGENT_CALLER_USER_ID_HEADER: Final = "x-litellm-user-id"
+AGENT_CALLER_TEAM_ID_HEADER: Final = "x-litellm-team-id"
+
+
+class AgentCaller(BaseModel):
+    """The user and team that invoked an agent, echoed back by the agent on its own proxy calls.
+    Only ever narrows what the agent's key may do."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str | None = None
+    team_id: str | None = None
 
 
 # Request/Response models for CRUD endpoints
@@ -214,9 +303,9 @@ class AgentKeySummary(BaseModel):
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
-    litellm_params: dict[str, Any] | None = None
+    litellm_params: dict[str, object] | None = None
     agent_card_params: dict[str, Any]
-    object_permission: dict[str, Any] | None = None
+    object_permission: dict[str, object] | None = None
     spend: float | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -224,7 +313,10 @@ class AgentResponse(BaseModel):
     session_rpm_limit: int | None = None
     static_headers: dict[str, str] | None = None
     extra_headers: list[str] | None = None
+    access_group_ids: Sequence[str] | None = None
+    kill_switch: AgentKillSwitchConfig | None = None
     keys: list[AgentKeySummary] | None = None
+    search_score: float | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by: str | None = None
@@ -250,7 +342,7 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
     name: str | None = None
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentDeleteResult(LiteLLMPydanticObjectBase):
@@ -264,7 +356,7 @@ class AgentDeleteResult(LiteLLMPydanticObjectBase):
     deleted: bool = True
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentListResponse(LiteLLMPydanticObjectBase):
@@ -274,11 +366,11 @@ class AgentListResponse(LiteLLMPydanticObjectBase):
     a plain dict so no fields are silently dropped.
     """
 
-    agents: list[dict[str, Any]] = []
+    agents: list[dict[str, object]] = []
     next_page_token: str | None = None
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentVersionsResponse(LiteLLMPydanticObjectBase):
@@ -288,11 +380,11 @@ class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     field of the form ``agents/{agent_id}/versions/{uuid}``.
     """
 
-    agent_versions: list[dict[str, Any]] = []
+    agent_versions: list[dict[str, object]] = []
     next_page_token: str | None = None
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentMakePublicResponse(BaseModel):
@@ -306,9 +398,9 @@ class MakeAgentsPublicRequest(BaseModel):
 
 
 def _normalize_a2a_jsonrpc_response(
-    response_dict: dict[str, Any],
-    request_id: Any | None = None,
-) -> dict[str, Any]:
+    response_dict: Mapping[str, object],
+    request_id: object | None = None,
+) -> dict[str, object]:
     """
     Ensure JSON-RPC responses include ``id`` when the caller supplied one.
 
@@ -346,22 +438,22 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     # A2A response fields
     id: str | StrictInt | None = None
     jsonrpc: str = "2.0"
-    result: dict[str, Any] | None = None
-    error: dict[str, Any] | None = None
+    result: dict[str, object] | None = None
+    error: dict[str, object] | None = None
 
     # LiteLLM usage tracking
-    usage: dict[str, Any] | None = None
+    usage: dict[str, object] | None = None
 
     model_config = {"extra": "allow"}
 
     # LiteLLM private attributes for logging/cost tracking
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def from_a2a_response(
         cls,
         response: "SendMessageResponse",
-        request_id: Any | None = None,
+        request_id: object | None = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
@@ -376,13 +468,13 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         response_dict: Final = _normalize_a2a_jsonrpc_response(
             response.model_dump(mode="json", exclude_none=True), request_id=request_id
         )
-        return cls(**response_dict)
+        return cls.model_validate(response_dict)
 
     @classmethod
     def from_dict(
         cls,
-        response_dict: dict[str, Any],
-        request_id: Any | None = None,
+        response_dict: Mapping[str, object],
+        request_id: object | None = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from a dict.
@@ -394,4 +486,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
+        return cls.model_validate(_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

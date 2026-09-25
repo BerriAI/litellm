@@ -4,8 +4,19 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, get_args, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+    get_args,
+    runtime_checkable,
+)
 
+from litellm.batches.batch_utils import batch_cost_is_final
+from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -24,9 +35,10 @@ if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
 
-MAX_FILE_LIST_LIMIT: Final = 10000
-
 FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
+
+BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
+LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -166,6 +178,11 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     else:
         batch_id = file_id.split("generic_response_id:", 1)[1]
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
+
+
+def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
+    _, marker, batch_id = decoded_unified_batch_id.partition("llm_batch_id:")
+    return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
 def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
@@ -339,6 +356,10 @@ def get_credentials_for_model(
     """
     Retrieve API credentials for a model from the LLM Router.
 
+    Does not check whether the caller may use ``model_id``; use
+    ``get_authorized_credentials_for_model`` for anything driven by a caller-supplied
+    model name (request body, header, query param, or a model-encoded resource id).
+
     Args:
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
@@ -352,6 +373,8 @@ def get_credentials_for_model(
     """
     from fastapi import HTTPException
 
+    from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
     if llm_router is None:
         raise HTTPException(
             status_code=500,
@@ -361,12 +384,53 @@ def get_credentials_for_model(
     credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
 
     if credentials is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
+        raise ProxyModelNotFoundError(
+            route=operation_context, model_name=model_id, retryable_with_model_read_through=False
         )
 
     return credentials
+
+
+async def authorize_model_for_key(
+    model_id: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> None:
+    """
+    Enforce the caller's model grants on a model name the auth layer never saw.
+
+    The files and batches routes carry their model in a header, query param, or a
+    model-encoded resource id rather than the request body, so ``user_api_key_auth``
+    cannot check it. Run the same key, team (incl. team-member and access-group
+    fallbacks), org and project allowlist checks a chat request would get, so a
+    restricted key cannot borrow another deployment's server-side credentials.
+
+    Raises:
+        ProxyException (403): the caller is not allowed to use ``model_id``
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    await can_key_call_resolved_model(
+        model=model_id,
+        llm_model_list=None,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+
+
+async def get_authorized_credentials_for_model(
+    llm_router: Optional["Router"],
+    model_id: str,
+    user_api_key_dict: "UserAPIKeyAuth",
+    operation_context: str = "file operation",
+) -> dict:  # mutable-ok: same contract as get_credentials_for_model, callers merge it into request data
+    """``get_credentials_for_model`` gated by ``authorize_model_for_key``."""
+    await authorize_model_for_key(model_id=model_id, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+    return get_credentials_for_model(
+        llm_router=llm_router,
+        model_id=model_id,
+        operation_context=operation_context,
+    )
 
 
 def get_team_provider_credentials(
@@ -536,6 +600,25 @@ def add_internal_model_credentials(
     data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
 
 
+def add_deployment_model_info(
+    data: dict,
+    llm_router: Optional["Router"],
+    model_id: str,
+) -> None:
+    """
+    Stamp the resolved deployment's `model_info` onto a direct (non-router) batch call
+    (in-place), the way the router does for routed calls, so the completed batch is
+    priced by its deployment id instead of the published model rate.
+    """
+    deployment: Final = llm_router.get_credential_deployment(model_id=model_id) if llm_router is not None else None
+    if deployment is None:
+        return
+    data["litellm_metadata"] = {
+        **(data.get("litellm_metadata") or {}),
+        "model_info": deployment.model_info.model_dump(),
+    }
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
@@ -561,21 +644,27 @@ def prepare_data_with_credentials(
         data["file_id"] = file_id
 
 
-def handle_model_based_routing(
+async def handle_model_based_routing(
     file_id: str,
     request,  # FastAPI Request object
     llm_router,  # Router instance
     data: dict,
+    user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
+
+    The model name comes from the caller (embedded in the file id, or a header, query
+    param or body field), so it is authorized against the caller's key, team, org and
+    project grants before any deployment credentials are resolved.
 
     Args:
         file_id: File ID (may contain embedded model info)
         request: FastAPI request object
         llm_router: LiteLLM Router instance
         data: Request data dictionary
+        user_api_key_dict: The authenticated caller
         check_file_id_encoding: Whether to check for embedded model in file_id
 
     Returns:
@@ -587,6 +676,7 @@ def handle_model_based_routing(
 
     Raises:
         HTTPException: If router unavailable or model not found
+        ProxyException: If the caller is not allowed to use the model
     """
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
@@ -596,19 +686,21 @@ def handle_model_based_routing(
 
     # Priority 1: Model embedded in file_id
     if check_file_id_encoding and model_from_id is not None:
-        credentials = get_credentials_for_model(
+        credentials = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model_from_id,
-            operation_context=f"file operation (file created with model '{model_from_id}')",
+            user_api_key_dict=user_api_key_dict,
+            operation_context="file operation (file created with model)",
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials
 
     # Priority 2: Model from header/query/body
     elif model_from_param is not None:
-        credentials = get_credentials_for_model(
+        credentials = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model_from_param,
+            user_api_key_dict=user_api_key_dict,
             operation_context="file operation",
         )
         return True, model_from_param, None, credentials
@@ -1183,7 +1275,7 @@ async def ensure_batch_response_managed_file_ids(
     prisma_client,
     verbose_proxy_logger,
     user_api_key_dict=None,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
@@ -1270,11 +1362,10 @@ async def get_batch_from_database(
             return None, None
 
         # Parse the batch object from database
-        batch_data: Final = (
-            json.loads(db_batch_object.file_object)
-            if isinstance(db_batch_object.file_object, str)
-            else db_batch_object.file_object
+        file_object: Final = cast(  # cast-ok: prisma types the Json column as str; reads return the decoded value
+            "Mapping[str, object] | str", db_batch_object.file_object
         )
+        batch_data: Final = json.loads(file_object) if isinstance(file_object, str) else file_object
         response: Final = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
@@ -1343,14 +1434,11 @@ def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     provider response briefly lags before the output id populates). Retiring in that
     window loses the spend record forever. Retire only once we can prove there is
     nothing left to recover: the output file has actually arrived, or the provider
-    reports no successful request lines. When counts are unknown, stay eligible so
-    the next poller pass revisits it. (#37713)
+    reported a positive total with zero successful request lines, proving it
+    enumerated the batch and none succeeded. A zero or unknown total means counts
+    are unreported, so stay eligible and let the next poller pass revisit it. (#37713)
     """
-    if getattr(response, "output_file_id", None) is not None:
-        return True
-    request_counts = getattr(response, "request_counts", None)
-    completed = getattr(request_counts, "completed", None)
-    return completed == 0
+    return batch_cost_is_final(response)
 
 
 async def update_batch_in_database(
@@ -1360,7 +1448,7 @@ async def update_batch_in_database(
     managed_files_obj,
     prisma_client,
     verbose_proxy_logger,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
     user_api_key_dict=None,
     poller_owns_accounting: bool | None = None,
@@ -1427,7 +1515,7 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status: Final = response.status if response.status != "completed" else "complete"
 
-        update_data: Final[dict] = {
+        update_data: Final[dict[str, object]] = {
             "status": db_status,
             "file_object": response.model_dump_json(),
             "updated_at": litellm.utils.get_utc_datetime(),

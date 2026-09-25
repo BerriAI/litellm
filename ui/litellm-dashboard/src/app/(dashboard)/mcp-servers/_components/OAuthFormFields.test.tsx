@@ -286,4 +286,42 @@ describe("OAuthFormFields", () => {
       });
     });
   });
+
+  describe("token header field", () => {
+    it("renders on the M2M flow", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      expect(screen.getByPlaceholderText("Authorization")).toBeInTheDocument();
+    });
+
+    it("renders on the interactive flow", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      expect(screen.getByPlaceholderText("Authorization")).toBeInTheDocument();
+    });
+
+    it("submits its value under credentials.upstream_token_header", async () => {
+      const onFinish = vi.fn();
+      render(
+        <WithForm onFinish={onFinish}>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      fireEvent.change(screen.getByPlaceholderText("Authorization"), { target: { value: "esb-oauth" } });
+      fireEvent.click(screen.getByText("Submit"));
+      await waitFor(() => {
+        expect(onFinish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            credentials: expect.objectContaining({ upstream_token_header: "esb-oauth" }),
+          }),
+        );
+      });
+    });
+  });
 });

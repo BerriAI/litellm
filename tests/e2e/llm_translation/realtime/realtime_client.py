@@ -38,7 +38,7 @@ class RealtimeProvider:
     the suite registers through /model/new (the gateway resolves the os.environ/*
     credential refs), so the suite is self-contained and never depends on a static
     gateway model_list. Every provider here is provisioned and asserted: per
-    tests/e2e/CLAUDE.md the suite never skips a provider, so a provider whose
+    tests/e2e/AGENTS.md the suite never skips a provider, so a provider whose
     credentials or upstream realtime model are missing on the gateway is a hard
     failure, not a skip."""
 
@@ -78,7 +78,7 @@ PROVIDERS = (
         "vertex_ai",
         "vertex-realtime",
         LiteLLMParamsBody(
-            model="vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025",
+            model="vertex_ai/gemini-live-2.5-flash-native-audio",
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
@@ -98,7 +98,7 @@ PROVIDERS = (
 def realtime_model(provider: RealtimeProvider, provisioned: Mapping[str, str]) -> str:
     """Return the provisioned deployment name for this provider. Every provider in
     PROVIDERS is provisioned at session start, so a missing entry is a harness bug,
-    never an environment skip - the suite hard-fails instead (see tests/e2e/CLAUDE.md)."""
+    never an environment skip - the suite hard-fails instead (see tests/e2e/AGENTS.md)."""
     model = provisioned.get(provider.id)
     assert model is not None, (
         f"{provider.id} was not provisioned; the realtime_models fixture is broken"
@@ -286,7 +286,7 @@ def function_call_item(events: tuple[ReceivedEvent, ...]) -> OutputItem | None:
 # ---- session + client --------------------------------------------------
 
 
-def _as_text(message: str | bytes) -> str:
+def as_text(message: str | bytes) -> str:
     return message.decode("utf-8") if isinstance(message, bytes) else message
 
 
@@ -304,7 +304,7 @@ class RealtimeSession:
         collected: list[ReceivedEvent] = []
         while time.monotonic() < deadline:
             try:
-                text = _as_text(
+                text = as_text(
                     self.connection.recv(timeout=deadline - time.monotonic())
                 )
             except TimeoutError:

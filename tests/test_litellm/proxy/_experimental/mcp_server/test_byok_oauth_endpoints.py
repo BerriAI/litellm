@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 """
 Unit tests for the BYOK OAuth 2.1 authorization server endpoints.
 
@@ -97,6 +98,88 @@ def unauthenticated_client():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("byok_first", [True, False])
+def test_byok_challenge_discovers_api_key_flow(monkeypatch, byok_first):
+    from litellm.proxy._experimental.mcp_server import byok_oauth_endpoints, discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_byok_www_authenticate
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    app = FastAPI()
+    routers = (byok_oauth_endpoints.router, discoverable_endpoints.router)
+    for item in routers if byok_first else reversed(routers):
+        app.include_router(item)
+    with TestClient(app) as session:
+        challenge = get_byok_www_authenticate()
+        assert challenge == 'Bearer resource_metadata="/v1/mcp/oauth/protected-resource"'
+        response = session.get(challenge.split('"')[1])
+        assert response.status_code == 200
+        assert response.json() == {
+            "resource": "http://testserver",
+            "authorization_servers": ["http://testserver/v1/mcp/oauth"],
+        }
+        authorization = session.get("/.well-known/oauth-authorization-server/v1/mcp/oauth")
+        assert authorization.status_code == 200
+        metadata = authorization.json()
+        assert metadata["issuer"] == response.json()["authorization_servers"][0]
+        assert metadata["authorization_endpoint"] == "http://testserver/v1/mcp/oauth/authorize"
+        assert metadata["token_endpoint"] == "http://testserver/v1/mcp/oauth/token"
+        assert metadata["code_challenge_methods_supported"] == ["S256"]
+
+
+@pytest.mark.parametrize(
+    ("base_url", "root_path", "expected"),
+    [
+        ("", "", "/v1/mcp/oauth/protected-resource"),
+        ("", "/proxy", "/proxy/v1/mcp/oauth/protected-resource"),
+        ("https://gateway.example.com/proxy", "/proxy", "https://gateway.example.com/proxy/v1/mcp/oauth/protected-resource"),
+    ],
+)
+def test_byok_challenge_preserves_external_base(monkeypatch, base_url, root_path, expected):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_byok_www_authenticate
+
+    monkeypatch.setenv("PROXY_BASE_URL", base_url)
+    monkeypatch.setenv("SERVER_ROOT_PATH", root_path)
+    assert get_byok_www_authenticate() == f'Bearer resource_metadata="{expected}"'
+
+
+def test_byok_discovery_preserves_per_request_prefixes(monkeypatch):
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.server import _check_byok_credential
+    from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setenv("SERVER_ROOT_PATHS", "/tenant-a,/tenant-b")
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(PerRequestRootPathMiddleware, root_paths=("/tenant-a", "/tenant-b"))
+    server = MCPServer(server_id="byok-prefix", name="byok-prefix", transport=MCPTransport.http, is_byok=True)
+
+    @app.get("/challenge")
+    async def challenge():
+        await _check_byok_credential(server, None)
+
+    with TestClient(app) as client:
+        for prefix in ("/tenant-a", "/tenant-b", ""):
+            challenge_response = client.get(f"{prefix}/challenge")
+            assert challenge_response.status_code == 401
+            metadata_path = f"{prefix}/v1/mcp/oauth/protected-resource"
+            assert challenge_response.headers["www-authenticate"] == f'Bearer resource_metadata="{metadata_path}"'
+            prm = client.get(metadata_path)
+            assert prm.status_code == 200
+            issuer = f"http://testserver{prefix}/v1/mcp/oauth"
+            assert prm.json()["authorization_servers"] == [issuer]
+            asm = client.get(f"/.well-known/oauth-authorization-server{prefix}/v1/mcp/oauth")
+            assert asm.status_code == 200
+            assert asm.json()["issuer"] == issuer
+            assert asm.json()["authorization_endpoint"] == f"{issuer}/authorize"
+            assert asm.json()["token_endpoint"] == f"{issuer}/token"
+        assert client.get("/.well-known/oauth-authorization-server/unknown/v1/mcp/oauth").status_code == 404
+
+
 def test_oauth_authorization_server_metadata(client):
     resp = client.get("/.well-known/oauth-authorization-server")
     assert resp.status_code == 200
@@ -105,15 +188,6 @@ def test_oauth_authorization_server_metadata(client):
     assert data["authorization_endpoint"].endswith("/v1/mcp/oauth/authorize")
     assert data["token_endpoint"].endswith("/v1/mcp/oauth/token")
     assert "S256" in data["code_challenge_methods_supported"]
-
-
-def test_oauth_protected_resource_metadata(client):
-    resp = client.get("/.well-known/oauth-protected-resource")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "resource" in data
-    assert "authorization_servers" in data
-    assert len(data["authorization_servers"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +575,7 @@ async def test_check_byok_credential_no_user_id():
 
 
 @pytest.mark.asyncio
-async def test_check_byok_credential_missing_credential():
+async def test_check_byok_credential_missing_credential(monkeypatch):
     """BYOK server with a known user but no stored credential → 401."""
     from litellm.proxy._experimental.mcp_server.server import _check_byok_credential
     from litellm.proxy._types import UserAPIKeyAuth
@@ -515,6 +589,11 @@ async def test_check_byok_credential_missing_credential():
     )
     user_auth = UserAPIKeyAuth(user_id="user-99", api_key="sk-test")
 
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    mcp_operations.byok_credential_cache.flush_cache()
     mock_prisma = MagicMock()
 
     with (
@@ -526,6 +605,10 @@ async def test_check_byok_credential_missing_credential():
     ):
         with pytest.raises(HTTPException) as exc_info:
             await _check_byok_credential(server, user_auth)
+        with pytest.raises(HTTPException) as cached_exc:
+            await _check_byok_credential(server, user_auth)
+        assert cached_exc.value.status_code == 401
+        assert cached_exc.value.headers == exc_info.value.headers
 
     assert exc_info.value.status_code == 401
     detail: Any = exc_info.value.detail
@@ -533,7 +616,38 @@ async def test_check_byok_credential_missing_credential():
     assert detail["server_id"] == "byok-2"
     headers = exc_info.value.headers or {}
     assert "WWW-Authenticate" in headers  # type: ignore[operator]
-    assert "oauth-protected-resource" in headers["WWW-Authenticate"]  # type: ignore[index]
+    assert headers["WWW-Authenticate"] == 'Bearer resource_metadata="/v1/mcp/oauth/protected-resource"'
+
+
+@pytest.mark.asyncio
+async def test_execute_byok_tool_missing_credential_advertises_api_key_flow(monkeypatch):
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
+    mcp_operations.byok_credential_cache.flush_cache()
+    server = MCPServer(server_id="byok-discovery", name="byok-discovery", transport=MCPTransport.http, is_byok=True)
+    prisma = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    with pytest.raises(HTTPException) as exc_info:
+        await mcp_operations.execute_mcp_tool(
+            name="list_regions",
+            arguments={},
+            allowed_mcp_servers=[server],
+            requested_server_id=server.server_id,
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=UserAPIKeyAuth(user_id="byok-discovery-user"),
+        )
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["server_id"] == server.server_id
+    assert exc_info.value.headers == {
+        "WWW-Authenticate": 'Bearer resource_metadata="https://gateway.example.com/proxy/v1/mcp/oauth/protected-resource"'
+    }
 
 
 @pytest.mark.asyncio
@@ -562,6 +676,40 @@ async def test_check_byok_credential_has_credential():
     ):
         # Should not raise
         await _check_byok_credential(server, user_auth)
+
+
+@pytest.mark.asyncio
+async def test_invalidate_byok_cred_cache_evicts_locally_and_broadcasts_the_same_key():
+    """A revoked credential must stop being served here and on every peer worker within the TTL."""
+    from litellm.proxy._experimental.mcp_server import server as server_module
+    from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache_key
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(server_id="byok-revoke", name="byok-server", transport=MCPTransport.http, is_byok=True)
+    user_auth = UserAPIKeyAuth(user_id="mallory", api_key="sk-test")
+    mcp_operations.byok_credential_cache.flush_cache()
+    db_lookup = AsyncMock(side_effect=["sk-before-revoke", None])
+    publish = AsyncMock()
+
+    with (
+        patch(  # test-quality-ok: the DB row lookup is the only seam below the credential resolver; no Prisma fake exists
+            "litellm.proxy._experimental.mcp_server.db.get_user_credential", new=db_lookup
+        ),
+        patch(  # test-quality-ok: the resolver reads the module-level prisma_client singleton; the suite's only seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch.object(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
+            mcp_operations, "publish_auth_cache_invalidation", new=publish
+        ),
+    ):
+        assert await mcp_operations._get_byok_credential(server, user_auth) == "sk-before-revoke"
+        assert await mcp_operations._get_byok_credential(server, user_auth) == "sk-before-revoke"
+        await mcp_operations._invalidate_byok_cred_cache("mallory", "byok-revoke")
+        assert await mcp_operations._get_byok_credential(server, user_auth) is None
+
+    assert db_lookup.await_count == 2
+    publish.assert_awaited_once_with(cache_key=byok_credential_cache_key("mallory", "byok-revoke"))
 
 
 @pytest.mark.asyncio
@@ -753,6 +901,61 @@ def test_authorize_post_accepts_ui_session_cookie(unauthenticated_client):
     qs = parse_qs(urlparse(resp.headers["location"]).query)
     code = qs["code"][0]
     assert _byok_auth_codes[code]["user_id"] == "browser-user-42"
+
+
+def test_authorize_post_rejects_cookie_with_revoked_session_key(unauthenticated_client):
+    """The cookie JWT stays signature-valid until ``exp``, but logout /
+    password-change revocation deletes the DB-backed session key sealed
+    inside it. A cookie whose embedded key no longer resolves must not
+    authorize BYOK writes."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_key_object",
+            new=AsyncMock(side_effect=Exception("key not found")),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-revoked-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, cookie_jwt)
+    assert resp.status_code == 401
+
+
+def test_authorize_post_accepts_cookie_with_live_session_key(unauthenticated_client):
+    """A cookie whose embedded session key still resolves keeps working."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_key_object",
+            new=AsyncMock(return_value=UserAPIKeyAuth(user_id="browser-user-42")),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-live-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, cookie_jwt)
+    assert resp.status_code == 302
 
 
 def test_authorize_post_rejects_cookie_signed_with_wrong_key(unauthenticated_client):

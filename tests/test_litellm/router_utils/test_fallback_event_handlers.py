@@ -1,17 +1,22 @@
 import json
-from typing import NoReturn
+from datetime import datetime, timedelta
+from typing import Final, NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
     _trigger_cooldown_for_failed_deployment,
     fallback_attempt_key,
+    clear_pre_routing_selection,
     get_fallback_model_group,
+    get_pre_routing_selection,
+    record_pre_routing_selection,
     run_async_fallback,
 )
 
@@ -22,6 +27,9 @@ class StreamingWrapper:
 
 
 class FakeRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
     def log_retry(self, kwargs, e):
         return kwargs
 
@@ -30,6 +38,9 @@ class FakeRouter:
 
 
 class AlwaysFailRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
     def log_retry(self, kwargs, e):
         return kwargs
 
@@ -92,6 +103,9 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 
 class RecordingRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
     def __init__(self):
         self.received_kwargs = None
 
@@ -151,6 +165,9 @@ async def test_run_async_fallback_skips_original_model_group():
 
 
 class AttemptRecordingRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
     def __init__(self):
         self.attempted_model_groups = []
         self.received_kwargs = None
@@ -169,6 +186,30 @@ async def _acreate_batch(*args, **kwargs):
 
 
 async def _acreate_file(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def _acancel_batch(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def _acompletion(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def _ageneric_api_call_with_fallbacks_helper(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def acreate_fine_tuning_job(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def aretrieve_fine_tuning_job(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+async def afile_content(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("only used for its __name__")
 
 
@@ -209,6 +250,8 @@ async def test_run_async_fallback_keeps_fine_tuning_requests_in_their_model_grou
             fallback_depth=0,
             model="openai-group",
             training_file="file-owned-by-openai",
+            original_function=_ageneric_api_call_with_fallbacks_helper,
+            original_generic_function=acreate_fine_tuning_job,
         )
 
     assert router.attempted_model_groups == []
@@ -292,6 +335,94 @@ async def test_run_async_fallback_still_crosses_model_groups_without_an_uploaded
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource_key", "handler_kwargs"),
+    [
+        ("batch_id", {"original_function": _acancel_batch}),
+        (
+            "file_id",
+            {
+                "original_function": _ageneric_api_call_with_fallbacks_helper,
+                "original_generic_function": afile_content,
+            },
+        ),
+        (
+            "fine_tuning_job_id",
+            {
+                "original_function": _ageneric_api_call_with_fallbacks_helper,
+                "original_generic_function": aretrieve_fine_tuning_job,
+            },
+        ),
+    ],
+)
+async def test_run_async_fallback_keeps_provider_scoped_ids_in_their_model_group(
+    resource_key: str, handler_kwargs: dict
+):
+    """A batch, file, or fine-tuning job id only exists under the credentials of the group
+    that issued it, so a cross-group fallback asks a provider about an id it never saw.
+    Generic API calls carry the real handler in original_generic_function, so the pin
+    must recognize it there too."""
+    router = AttemptRecordingRouter()
+
+    with pytest.raises(RuntimeError, match="openai connection error"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["azure-group"],
+            original_model_group="openai-group",
+            original_exception=RuntimeError("openai connection error"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="openai-group",
+            **{resource_key: "owned-by-openai"},
+            **handler_kwargs,
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource_key", ["batch_id", "file_id", "fine_tuning_job_id"])
+async def test_run_async_fallback_ignores_stray_resource_ids_on_completion_calls(resource_key: str):
+    """A caller-supplied top-level field like file_id on a chat completion is application
+    data, never a provider resource reference, so it must not cost the request its
+    cross-group fallbacks."""
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["azure-group"],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("openai connection error"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        original_function=_acompletion,
+        **{resource_key: "caller-app-data"},
+    )
+
+    assert router.attempted_model_groups == ["azure-group"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_allows_same_model_group_retry_for_batch_cancel():
+    router = AttemptRecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
+        original_model_group="openai-group",
+        original_exception=RuntimeError("first deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="openai-group",
+        batch_id="owned-by-openai",
+        original_function=_acancel_batch,
+    )
+
+    assert router.attempted_model_groups == ["openai-group"]
+
+
+@pytest.mark.asyncio
 async def test_run_async_fallback_handles_explicitly_none_metadata():
     """/v1/batches always sets `metadata`, and sets it to None when the caller sent
     none, so setdefault() on it hands back None instead of a dict."""
@@ -308,7 +439,11 @@ async def test_run_async_fallback_handles_explicitly_none_metadata():
         metadata=None,
     )
 
-    assert router.received_kwargs["metadata"] == {"model_group": "azure-group"}
+    assert router.received_kwargs["metadata"] == {
+        "model_group": "azure-group",
+        "attempted_fallbacks": 1,
+        "original_model_group": "openai-group",
+    }
 
 
 @pytest.mark.asyncio
@@ -335,7 +470,87 @@ async def test_run_async_fallback_records_batch_model_group_outside_provider_met
     assert router.received_kwargs["litellm_metadata"]["model_group"] == "openai-group"
 
 
+class AccessCheckedRouter(AttemptRecordingRouter):
+    def __init__(self, allowed_models: frozenset[str]):
+        super().__init__()
+        self.allowed_models = allowed_models
+        self.access_checks = []
+
+    fallback_budget_check = None
+
+    async def fallback_access_check(self, *, model, request_kwargs, llm_router):
+        self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
+        return model in self.allowed_models
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_targets_the_access_check_rejects():
+    router = AccessCheckedRouter(allowed_models=frozenset({"allowed-model"}))
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[
+            {"model": "secret-model", "messages": [{"role": "user", "content": "hi"}]},
+            "allowed-model",
+        ],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("primary failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="primary-model",
+        metadata={"user_api_key": "hashed"},
+    )
+
+    assert router.attempted_model_groups == ["allowed-model"]
+    assert router.access_checks == [
+        ("secret-model", "hashed", True),
+        ("allowed-model", "hashed", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_raises_original_error_when_no_target_is_authorized():
+    router = AccessCheckedRouter(allowed_models=frozenset())
+
+    with pytest.raises(RuntimeError, match="primary failed"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["secret-model", "other-secret-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="primary-model",
+            metadata={"user_api_key": "hashed"},
+        )
+
+    assert router.attempted_model_groups == []
+    assert [model for model, _, _ in router.access_checks] == ["secret-model", "other-secret-model"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_consult_access_check_for_same_model_group_retries():
+    router = AccessCheckedRouter(allowed_models=frozenset())
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "primary-model", "_target_order": 2}],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("first order level failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="primary-model",
+        metadata={"user_api_key": "hashed"},
+    )
+
+    assert router.attempted_model_groups == ["primary-model"]
+    assert router.access_checks == []
+
+
 class RecordingFailRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
     def __init__(self):
         self.attempted_models = []
 
@@ -406,6 +621,27 @@ async def test_run_async_fallback_forwards_attempted_model_groups_to_nested_call
     assert router.received_kwargs["attempted_targets"].keys == frozenset(
         {"earlier-model", "primary-model", "fallback-model"}
     )
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_can_target_the_requested_group_when_a_pre_router_replaced_it():
+    """The requested group was never called when a pre-router selected a tier, so a
+    tier fallback may legitimately target that originally requested group."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["requested-model"],
+        original_model_group="requested-model",
+        original_exception=RuntimeError("selected tier failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="requested-model",
+        metadata={"pre_routing_selected_model": "selected-tier"},
+    )
+
+    assert router.received_kwargs["model"] == "requested-model"
+    assert router.received_kwargs["attempted_targets"].keys == frozenset({"selected-tier", "requested-model"})
 
 
 @pytest.mark.asyncio
@@ -728,7 +964,11 @@ class TestTriggerCooldownForFailedDeployment:
         """The proxy's x-litellm-timeout header lets a caller set an arbitrarily short
         timeout, which litellm.Timeout reports as status 408 regardless of the
         deployment's actual health. Without this guard, a caller could force a 408 on
-        every deployment in the fallback chain from a single request."""
+        every deployment in the fallback chain from a single request.
+
+        The failure logger never stamps end_time for a fallback hop (has_logged_async_failure
+        is already set), so model_call_details still carries the previous hop's end_time, which
+        predates this hop's api_call_start_time. The guard must not trust it."""
         mock_router = MagicMock()
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
@@ -746,10 +986,60 @@ class TestTriggerCooldownForFailedDeployment:
                 litellm_router=mock_router,
                 kwargs={"client_side_timeout": True},
                 exception=exc,
+                model_call_details={
+                    "litellm_params": {"client_side_timeout": True, "timeout": 0.5},
+                    "api_call_start_time": datetime.now() - timedelta(seconds=1),
+                    "end_time": datetime.now() - timedelta(seconds=5),
+                },
             )
 
             mock_set_cooldown.assert_not_called()
             mock_increment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_still_cools_down_provider_408_before_caller_deadline(self):
+        """client_side_timeout only records that the caller configured a timeout. A 408
+        that comes back before that deadline was raised by the provider itself, so it is
+        a real health signal and must still cool the deployment down."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=60,
+            num_retries=0,
+        )
+        exc = litellm.Timeout(message="timeout", model="gpt-5.6", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+        started = datetime.now()
+
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router,
+            kwargs={"client_side_timeout": True},
+            exception=exc,
+            model_call_details={
+                "litellm_params": {"client_side_timeout": True, "timeout": 30},
+                "api_call_start_time": started,
+                "end_time": started + timedelta(seconds=1),
+            },
+        )
+
+        assert (
+            get_deployment_failures_for_current_minute(
+                litellm_router_instance=router, deployment_id="fallback-deployment"
+            )
+            == 1
+        )
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
+        assert [entry[0] for entry in active] == ["fallback-deployment"]
 
     def test_still_cools_down_408_without_client_side_timeout_flag(self):
         """The client-side-timeout guard is scoped to caller-supplied timeouts only: a
@@ -770,6 +1060,9 @@ class TestTriggerCooldownForFailedDeployment:
 
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
+        fallback_access_check = None
+        fallback_budget_check = None
+
         def __init__(self):
             self.cooldown_time = 60.0
 
@@ -843,3 +1136,266 @@ class TestRunAsyncFallbackTriggersCooldown:
                 )
 
             mock_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_stamps_fallback_info_into_metadata():
+    """Spend logs are built from the request metadata of the nested call, so the
+    fallback signal has to be stamped there before recursing."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("original failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+    )
+
+    metadata = router.received_kwargs["metadata"]
+    assert metadata["attempted_fallbacks"] == 1
+    assert metadata["original_model_group"] == "primary-model"
+    assert metadata["model_group"] == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_preserves_original_model_group_on_nested_fallback():
+    """A second-level fallback receives the first fallback target as its
+    original_model_group argument, so the first-stamped value must survive the hop."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["second-fallback"],
+        original_model_group="first-fallback",
+        original_exception=RuntimeError("first fallback failed"),
+        max_fallbacks=3,
+        fallback_depth=1,
+        metadata={"attempted_fallbacks": 1, "original_model_group": "primary-model"},
+    )
+
+    metadata = router.received_kwargs["metadata"]
+    assert metadata["attempted_fallbacks"] == 2
+    assert metadata["original_model_group"] == "primary-model"
+
+
+class TestPreRoutingSelectionCarriesToFallbacks:
+    """#38832: a complexity/auto router picks a tier behind the router name, but fallback
+    lookup kept using the router name, so the tier's configured chain never ran."""
+
+    def test_selection_is_recorded_in_the_metadata_bucket(self):
+        kwargs = {"model": "smart-router", "metadata": {}}
+        record_pre_routing_selection(kwargs, "tier1")
+        assert kwargs["metadata"]["pre_routing_selected_model"] == "tier1"
+        assert get_pre_routing_selection(kwargs) == "tier1"
+
+    def test_selection_is_recorded_in_the_litellm_metadata_bucket(self):
+        kwargs = {"model": "smart-router", "litellm_metadata": {}}
+        record_pre_routing_selection(kwargs, "tier2")
+        assert get_pre_routing_selection(kwargs) == "tier2"
+
+    def test_a_bucket_survives_the_kwargs_copy_that_fallbacks_run_on(self):
+        """The bucket is shared by reference, which is the whole reason this works."""
+        outer = {"model": "smart-router", "metadata": {}}
+        inner = {**outer}
+        record_pre_routing_selection(inner, "tier1")
+        assert get_pre_routing_selection(outer) == "tier1"
+
+    def test_no_selection_reads_as_none(self):
+        assert get_pre_routing_selection({"model": "smart-router", "metadata": {}}) is None
+        assert get_pre_routing_selection({"model": "smart-router"}) is None
+
+    def test_missing_kwargs_is_a_no_op(self):
+        """A caller with no kwargs must not raise, and must not leak the selection anywhere."""
+        record_pre_routing_selection(None, "tier1")
+
+        assert get_pre_routing_selection({}) is None
+
+    def test_a_non_dict_bucket_is_ignored(self):
+        kwargs = {"model": "smart-router", "metadata": "not-a-dict"}
+        record_pre_routing_selection(kwargs, "tier1")
+        assert get_pre_routing_selection(kwargs) is None
+
+    def test_fallbacks_resolve_against_the_selected_tier(self):
+        """The lookup the router performs, keyed on the tier rather than the router name."""
+        fallbacks = [{"tier1": ["backup-a", "backup-b"]}, {"tier2": ["backup-c"]}]
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="tier1")[0] == ["backup-a", "backup-b"]
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="smart-router")[0] is None
+
+
+class TestPreRoutingSelectionIsPerHop:
+    """#38832 review: the buckets also carry whatever the caller sent, and a fallback hop
+    inherits the previous hop's tier, so a hop must start without a selection."""
+
+    def test_a_caller_supplied_selection_is_dropped(self):
+        kwargs = {"model": "plain", "metadata": {"pre_routing_selected_model": "tier1"}}
+
+        clear_pre_routing_selection(kwargs)
+
+        assert get_pre_routing_selection(kwargs) is None
+        assert "pre_routing_selected_model" not in kwargs["metadata"]
+
+    def test_both_buckets_are_cleared(self):
+        kwargs = {
+            "metadata": {"pre_routing_selected_model": "tier1"},
+            "litellm_metadata": {"pre_routing_selected_model": "tier2"},
+        }
+
+        clear_pre_routing_selection(kwargs)
+
+        assert get_pre_routing_selection(kwargs) is None
+
+    def test_the_rest_of_the_bucket_is_left_alone(self):
+        kwargs = {"metadata": {"pre_routing_selected_model": "tier1", "tags": ["a"]}}
+
+        clear_pre_routing_selection(kwargs)
+
+        assert kwargs["metadata"] == {"tags": ["a"]}
+
+    def test_clearing_is_a_no_op_without_a_usable_bucket(self):
+        kwargs = {"model": "plain", "metadata": "not-a-dict"}
+
+        clear_pre_routing_selection(None)
+        clear_pre_routing_selection(kwargs)
+
+        assert kwargs == {"model": "plain", "metadata": "not-a-dict"}
+
+    def test_a_selection_recorded_after_clearing_is_kept(self):
+        """Clearing runs before routing, so the hook's own write must survive it."""
+        kwargs = {"model": "smart-router", "metadata": {"pre_routing_selected_model": "stale"}}
+
+        clear_pre_routing_selection(kwargs)
+        record_pre_routing_selection(kwargs, "tier1")
+
+        assert get_pre_routing_selection(kwargs) == "tier1"
+
+
+class TestOrderedFallbackLookupGroups:
+    def test_tier_first_then_requested_group_deduped(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {"litellm_metadata": {PRE_ROUTING_SELECTED_MODEL_KEY: "tier1"}}
+        assert fallback_lookup_groups(kwargs, "smart-router") == ("tier1", "smart-router")
+        assert fallback_lookup_groups(kwargs, "tier1") == ("tier1",)
+        assert fallback_lookup_groups({}, "smart-router") == ("smart-router",)
+        assert fallback_lookup_groups({}, None) == ()
+
+    def test_session_remap_keeps_the_bound_router_between_tier_and_requested_group(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {
+            "litellm_metadata": {
+                PRE_ROUTING_SELECTED_MODEL_KEY: "tier1",
+                "model_group": "smart-router",
+            }
+        }
+
+        assert fallback_lookup_groups(kwargs, "requested-model") == (
+            "tier1",
+            "smart-router",
+            "requested-model",
+        )
+        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == (
+            "requested-model",
+        )
+
+    def test_fallback_hop_resumes_the_original_groups_chain_last(self):
+        from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
+
+        kwargs = {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+
+        assert fallback_lookup_groups(kwargs, "fb1") == ("fb1", "primary")
+        assert fallback_lookup_groups({"metadata": {"original_model_group": 42}}, "fb1") == ("fb1",)
+
+    def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}, {"*": ["backup-c"]}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier1", "smart-router")) == (["backup-a"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
+        assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
+
+
+class TestHasUnattemptedFallbackTarget:
+    def test_exhausted_chain_is_not_recoverable_but_a_fresh_entry_is(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            has_unattempted_fallback_target,
+        )
+
+        attempted: Final = AttemptedFallbackTargets()
+        attempted.record("primary")
+        attempted.record("fb1")
+        attempted.record("fb2")
+
+        assert has_unattempted_fallback_target(["fb1", "fb2"], {"attempted_targets": attempted}) is False
+        assert has_unattempted_fallback_target(["fb1", "fb3"], {"attempted_targets": attempted}) is True
+        assert has_unattempted_fallback_target(["fb1"], {}) is True
+        assert has_unattempted_fallback_target(None, {}) is False
+
+
+def test_get_fallback_model_group_matches_provider_prefixed_key():
+    """A bare model group routed via a wildcard (e.g. "gpt-4o" through
+    "openai/*") must match a fallback keyed on the provider-prefixed name,
+    which is the form the Admin UI offers for wildcard routes."""
+    fallbacks = [{"openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_get_fallback_model_group_exact_match_beats_prefixed_match():
+    fallbacks = [
+        {"openai/gpt-4o": ["claude-3-haiku"]},
+        {"gpt-4o": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_ignores_unknown_models():
+    """Provider inference fails for unknown bare names - the lookup must not
+    raise and must fall through to the generic fallback."""
+    fallbacks = [
+        {"openai/some-model": ["claude-3-haiku"]},
+        {"*": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="some-unknown-model-xyz")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_skips_prefixed_model_group():
+    """An already-prefixed model group must not double-prefix."""
+    fallbacks = [{"openai/openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
+
+    assert fallback_model_group is None
+
+
+def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias-style group name has no provider, and resolving it prints the SDK's provider-list banner,
+    so the lookup only infers a provider when some key is spelled <provider>/<group>."""
+
+    resolver: Final = MagicMock(return_value=("my-alias", "openai", None, None))
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", resolver)
+    fallbacks: Final = [{"gpt-5.5-pro": ["claude-sonnet-4-6"]}, {"*": ["gpt-5.5-mini"]}]
+
+    assert get_fallback_model_group(fallbacks=fallbacks, model_group="my-alias") == (["gpt-5.5-mini"], 1)
+    resolver.assert_not_called()

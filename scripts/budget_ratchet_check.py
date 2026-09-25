@@ -7,13 +7,17 @@ driven DOWN over time. This check compares every budget file against its own
 content at the merge-base with the target branch and fails (exits 1, red) if:
 
   * a rule's `limit` went up,
-  * a rule was dropped from a budget (its ceiling effectively became infinite), or
+  * a rule was dropped from a budget (its ceiling effectively became infinite) while
+    its checker still emits it, or
   * an entire budget file was deleted.
 
 New rules and lowered/equal limits are fine. So is a rule that graduated: once a
 paired config (ruff.toml for the ruff-strict budget) selects the rule outright it
 hard-fails at the first violation, which is stricter than any ceiling the budget
 could hold, so dropping its entry tightens the guard rather than removing it.
+Likewise a retired rule: once the paired checker (check_test_quality.py for the
+test-quality budget) no longer emits a code, its entry has no ceiling left to
+loosen.
 
 This is deliberately NOT a gating check. It should turn the run red so that a
 loosening is impossible to miss in review, but it must stay OUT of the
@@ -24,22 +28,25 @@ seen the red and accepted it.
 Usage:
     python scripts/budget_ratchet_check.py [--base REF] [budget.json ...]
 
-Stdlib only.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
-from types import MappingProxyType
-from typing import NamedTuple
+from types import MappingProxyType, ModuleType
+from typing import Final, NamedTuple
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_BASE = "origin/litellm_internal_staging"
 DEFAULT_BUDGETS: tuple[str, ...] = (
     "ruff-strict-budget.json",
     "type-discipline-budget.json",
@@ -47,6 +54,7 @@ DEFAULT_BUDGETS: tuple[str, ...] = (
     "test-quality-budget.json",
 )
 GRADUATION_CONFIGS = MappingProxyType({"ruff-strict-budget.json": "ruff.toml"})
+RETIREMENT_SOURCES = MappingProxyType({"test-quality-budget.json": "check_test_quality"})
 
 
 class Regression(NamedTuple):
@@ -137,20 +145,40 @@ def graduated_selectors(rel: str) -> tuple[str, ...]:
     )
 
 
+def _load_script(name: str) -> ModuleType:
+    if name in sys.modules:
+        return sys.modules[name]
+    spec: Final = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    module: Final = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def retired_rules(rel: str, base: dict[str, object]) -> frozenset[str]:
+    """Rules in the base budget that the paired checker can no longer emit, so there is no ceiling to loosen."""
+    source: Final = RETIREMENT_SOURCES.get(rel)
+    if source is None:
+        return frozenset()
+    return frozenset(_limits(base)) - _load_script(source).RULE_CODES
+
+
 def _regression_detail(
     rule: str,
     base_limits: dict[str, int],
     head_limits: dict[str, int],
     graduated: tuple[str, ...],
+    retired: frozenset[str] = frozenset(),
 ) -> str | None:
-    """Why `rule` regressed vs base, or None when it held flat, fell, or graduated.
+    """Why `rule` regressed vs base, or None when it held flat, fell, or left the budget legitimately.
 
-    A dropped rule is terminal unless it graduated; otherwise the only loosening
-    left is a raised limit.
+    A dropped rule is terminal unless it graduated or retired; otherwise the only
+    loosening left is a raised limit.
     """
     base_limit = base_limits[rule]
     if rule not in head_limits:
-        if graduated and rule.startswith(graduated):
+        if rule in retired or (graduated and rule.startswith(graduated)):
             return None
         return f"rule dropped (limit {base_limit} -> removed)"
     if head_limits[rule] > base_limit:
@@ -163,6 +191,7 @@ def regressions_for(
     base: dict | None,
     head: dict | None,
     graduated: tuple[str, ...] = (),
+    retired: frozenset[str] = frozenset(),
 ) -> list[Regression]:
     if base is None:
         return []  # new budget file: nothing to ratchet against yet
@@ -173,18 +202,21 @@ def regressions_for(
     return [
         Regression(rel, rule, detail)
         for rule in sorted(base_limits)
-        if (detail := _regression_detail(rule, base_limits, head_limits, graduated)) is not None
+        if (detail := _regression_detail(rule, base_limits, head_limits, graduated, retired)) is not None
     ]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("budgets", nargs="*", help="budget files to check")
     args = parser.parse_args()
+    from default_branch import resolve_base_ref
+
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
     budgets = args.budgets or list(DEFAULT_BUDGETS)
 
-    ref = _merge_base(args.base)
+    ref = _merge_base(base_ref)
     if not _ref_is_commit(ref):
         print(
             f"FAIL: base ref {ref!r} does not resolve to a commit, so the ratchet has nothing "
@@ -201,14 +233,14 @@ def main() -> int:
         if base is None and head is None:
             continue
         if base is None:
-            print(f"skip {rel}: new file (no base at {args.base} to ratchet against)")
+            print(f"skip {rel}: new file (no base at {base_ref} to ratchet against)")
             continue
         checked.append(rel)
-        regressions.extend(regressions_for(rel, base, head, graduated_selectors(rel)))
+        regressions.extend(regressions_for(rel, base, head, graduated_selectors(rel), retired_rules(rel, base)))
 
     if regressions:
         print(
-            f"FAIL: budget limit(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
+            f"FAIL: budget limit(s) loosened vs base {base_ref} (merge-base {ref[:12]}):"
         )
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
@@ -220,7 +252,7 @@ def main() -> int:
         return 1
 
     suffix = f" ({', '.join(checked)})" if checked else ""
-    print(f"OK: no budget limit increased vs base {args.base}{suffix}")
+    print(f"OK: no budget limit increased vs base {base_ref}{suffix}")
     return 0
 
 

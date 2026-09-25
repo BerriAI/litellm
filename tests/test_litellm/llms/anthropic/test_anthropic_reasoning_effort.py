@@ -5,6 +5,8 @@ Verifies that reasoning_effort=None returns None for all models,
 including Claude Opus 4.6.
 """
 
+import pytest
+
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
@@ -34,6 +36,16 @@ class TestMapReasoningEffort:
             reasoning_effort="high", model="claude-opus-4-6", custom_llm_provider="anthropic"
         )
         assert result["type"] == "adaptive"
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
+    def test_adaptive_mapping_requests_summarized_display(self, effort):
+        """Regression LIT-5714: adaptive thinking without ``display`` makes Anthropic
+        return a blank thinking block, so reasoning_effort callers always got
+        ``reasoning_content: ""``."""
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort=effort, model="claude-opus-4-6", custom_llm_provider="anthropic"
+        )
+        assert result["display"] == "summarized"
 
     def test_other_model_low_returns_enabled_with_budget(self):
         result = AnthropicConfig._map_reasoning_effort(
