@@ -17,6 +17,7 @@ use litellm_types::llms::anthropic_messages::{
     anthropic_request::AnthropicMessagesRequest,
     anthropic_response::AnthropicMessagesResponse,
 };
+use reqwest::header::HeaderMap;
 use serde_json::{Map, Value};
 
 use super::{
@@ -25,6 +26,7 @@ use super::{
     prepare::{prepare, resolve_provider},
 };
 
+/// The request fields a callback's pre-request patch may set.
 pub const BODY_FIELDS: [&str; 23] = [
     "messages",
     "max_tokens",
@@ -59,7 +61,7 @@ pub enum MessagesOutput {
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
-    pub headers: Vec<(String, String)>,
+    pub headers: HeaderMap,
 }
 
 pub struct Messages;
@@ -96,7 +98,7 @@ impl Host<Messages> for LocalMessagesHost {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+            .ok_or(Error::AlreadyProjected)
     }
 
     async fn open(&self, _: MessagesStreamHead) -> Result<Demand, Error> {
@@ -122,8 +124,10 @@ pub fn messages_machine(
     }))
 }
 
-/// The call as its host sees it: projection first, then the same prepare and execute as
-/// [`super::messages`], with each chunk of a stream handed over as it arrives.
+/// The call as its host sees it: projection, a pre-request hook that may patch the
+/// body, then prepare and execute per attempt — each retry re-prepares so a patch
+/// can swap the provider or its credentials, and a stream hands each chunk to the
+/// host as it arrives.
 async fn drive(
     host: MessagesHost,
     http: Client,
@@ -200,10 +204,16 @@ async fn drive(
                     Verdict::Resend(patch) => body = patched(&body, patch),
                 }
             }
-            MessagesResponse::Stream {
-                headers,
-                mut chunks,
-            } => {
+            MessagesResponse::Stream { headers, mut chunks } => {
+                let headers = headers
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        Some((
+                            reqwest::header::HeaderName::try_from(name.as_str()).ok()?,
+                            reqwest::header::HeaderValue::from_str(value).ok()?,
+                        ))
+                    })
+                    .collect();
                 if host.open(MessagesStreamHead { headers }).await? == Demand::Detached {
                     return Ok(MessagesOutput::Streamed);
                 }
@@ -232,7 +242,5 @@ fn patched(body: &Map<String, Value>, patch: Map<String, Value>) -> Map<String, 
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!(
-        "failed to serialize Anthropic messages request: {err}"
-    ))
+    Error::RequestEncoding(err.into())
 }

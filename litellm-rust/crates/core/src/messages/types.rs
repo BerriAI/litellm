@@ -26,11 +26,7 @@ pub struct MessagesCall {
 }
 
 pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesRequest, Error> {
-    serde_json::from_value(Value::Object(body)).map_err(invalid_request)
-}
-
-pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    serde_json::from_value(Value::Object(body)).map_err(|e| Error::RequestDecoding(e.into()))
 }
 
 pub enum MessagesResponse {
@@ -59,7 +55,23 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
+    use super::super::common_utils::MessagesProvider;
     use super::*;
+
+    #[rstest]
+    #[case::anthropic("anthropic", Some(MessagesProvider::Anthropic))]
+    #[case::azure_ai("azure_ai", Some(MessagesProvider::AzureAi))]
+    #[case::case_sensitive("Anthropic", None)]
+    #[case::unsupported("openai", None)]
+    fn provider_parses_from_its_name(
+        #[case] name: &str,
+        #[case] expected: Option<MessagesProvider>,
+    ) {
+        assert_eq!(name.parse::<MessagesProvider>().ok(), expected);
+        if let Some(provider) = expected {
+            assert_eq!(provider.as_str(), name);
+        }
+    }
 
     #[rstest]
     #[case::nothing_projected(json!({}), MessagesShaping::default())]

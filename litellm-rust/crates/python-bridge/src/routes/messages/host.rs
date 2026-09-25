@@ -14,6 +14,7 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict},
 };
+use reqwest::header::HeaderMap;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -34,6 +35,13 @@ fn merge_headers(
         .chain(extra_headers.into_iter().flatten())
         .collect();
     (!merged.is_empty()).then_some(merged)
+}
+
+fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .collect()
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -229,7 +237,7 @@ impl ProtocolHost for MessagesPythonHost {
     fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))
+            .call1((to_py(py, &header_pairs(&head.headers))?,))
             .map(Bound::unbind)
     }
 
@@ -303,6 +311,24 @@ mod tests {
         assert_eq!(
             merge_headers(forwarded.map(map), extra_headers.map(map)),
             expected.map(map)
+        );
+    }
+
+    #[test]
+    fn header_pairs_drop_opaque_values_and_keep_duplicates() {
+        let mut headers = HeaderMap::new();
+        headers.append("X-Multi", "a".parse().unwrap());
+        headers.append("X-Multi", "b".parse().unwrap());
+        headers.append(
+            "x-opaque",
+            reqwest::header::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        assert_eq!(
+            header_pairs(&headers),
+            vec![
+                ("x-multi".to_string(), "a".to_string()),
+                ("x-multi".to_string(), "b".to_string())
+            ]
         );
     }
 

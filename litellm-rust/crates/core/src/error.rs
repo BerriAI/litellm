@@ -23,8 +23,17 @@ pub enum RouteError {
     InvalidProvider(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// The call's projection was consumed already.
+    #[error("request was already projected")]
+    AlreadyProjected,
+    #[error("invalid Anthropic messages request: {0}")]
+    RequestDecoding(#[source] JsonError),
+    #[error("failed to serialize Anthropic messages request: {0}")]
+    RequestEncoding(#[source] JsonError),
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+    #[error("invalid messages response JSON: {0}")]
+    ResponseDecoding(#[source] JsonError),
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
@@ -53,6 +62,7 @@ impl RouteError {
     pub fn phase(&self) -> Phase {
         match self {
             Self::InvalidResponse(_)
+            | Self::ResponseDecoding(_)
             | Self::Transport(TransportError::Http { .. } | TransportError::Network(_)) => {
                 Phase::AfterSend
             }
@@ -61,6 +71,9 @@ impl RouteError {
             | Self::MissingField(_)
             | Self::InvalidProvider(_)
             | Self::InvalidRequest(_)
+            | Self::AlreadyProjected
+            | Self::RequestDecoding(_)
+            | Self::RequestEncoding(_)
             | Self::Unsupported(_)
             | Self::Auth(_)
             | Self::Headers(_)
@@ -78,15 +91,24 @@ impl RouteError {
             | Self::MissingField(_)
             | Self::InvalidProvider(_)
             | Self::InvalidRequest(_)
+            | Self::AlreadyProjected
+            | Self::RequestDecoding(_)
+            | Self::RequestEncoding(_)
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
             Self::InvalidResponse(_)
+            | Self::ResponseDecoding(_)
             | Self::Transport(_)
             | Self::Http(_)
             | Self::Secret(_)
             | Self::HostFault(_) => false,
         }
+    }
+
+    /// The provider's answer is what is wrong, as opposed to the request or the wire.
+    pub fn is_response(&self) -> bool {
+        matches!(self, Self::InvalidResponse(_) | Self::ResponseDecoding(_))
     }
 }
 
@@ -126,6 +148,30 @@ impl PartialEq for SecretError {
 }
 
 impl Eq for SecretError {}
+
+#[derive(Clone, Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct JsonError(Arc<serde_json::Error>);
+
+impl JsonError {
+    pub fn source_error(&self) -> &serde_json::Error {
+        &self.0
+    }
+}
+
+impl From<serde_json::Error> for JsonError {
+    fn from(error: serde_json::Error) -> Self {
+        Self(Arc::new(error))
+    }
+}
+
+impl PartialEq for JsonError {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for JsonError {}
 
 #[cfg(test)]
 mod tests {

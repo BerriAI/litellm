@@ -1,7 +1,10 @@
 use std::sync::Mutex;
 
 use bytes::Bytes;
-use litellm_core::messages::route::{Messages, MessagesStreamHead};
+use litellm_core::messages::{
+    messages_body,
+    route::{Messages, MessagesStreamHead},
+};
 use litellm_host::{
     event::{PublicRequest, RequestContext, WireRequest},
     host::{Demand, Host, Verdict},
@@ -171,8 +174,7 @@ fn text_of(message: &AnthropicMessagesResponse) -> String {
 
 /// The fixture call against `api_base`, authenticated, carrying one tool and `extra`.
 fn hooked(call: MessagesCall, api_base: String, extra: Value) -> MessagesCall {
-    let body: Map<String, Value> = call
-        .body
+    let body: Map<String, Value> = object(serde_json::to_value(&call.body).unwrap())
         .into_iter()
         .chain(object(json!({"tools": [original_tool()]})))
         .chain(object(extra))
@@ -180,13 +182,13 @@ fn hooked(call: MessagesCall, api_base: String, extra: Value) -> MessagesCall {
     MessagesCall {
         api_key: Some("sk-ant".into()),
         api_base: Some(api_base),
-        body,
+        body: messages_body(body).expect("a well-formed messages body"),
         ..call
     }
 }
 
 async fn run_hooked(host: &HookingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
 async fn message_through(host: &HookingHost) -> AnthropicMessagesResponse {
@@ -527,4 +529,47 @@ async fn synthetic_thinking_emits_a_signature_delta_only_for_a_nonempty_string(
             )
             .collect();
     assert_eq!(deltas, expected);
+}
+
+#[rstest]
+#[case::text_with_citations(
+    json!({"type": "text", "text": "cited", "citations": [{"type": "char_location", "cited_text": "c"}]}),
+    json!({"type": "text", "text": "", "citations": [{"type": "char_location", "cited_text": "c"}]}),
+    json!({"type": "text_delta", "text": "cited"}),
+)]
+#[case::server_tool_use(
+    json!({"type": "server_tool_use", "id": "srv-1", "name": "web_search", "input": {"query": "rust"}}),
+    json!({"type": "server_tool_use", "id": "srv-1", "name": "web_search", "input": {}}),
+    json!({"type": "input_json_delta", "partial_json": "{\"query\":\"rust\"}"}),
+)]
+#[tokio::test]
+async fn synthetic_events_keep_block_fields_and_stream_one_delta(
+    call: MessagesCall,
+    #[case] block: Value,
+    #[case] expected_start: Value,
+    #[case] expected_delta: Value,
+) {
+    let body = Value::Object(
+        object(message_body())
+            .into_iter()
+            .chain([("content".into(), json!([block]))])
+            .collect(),
+    );
+    let upstream = upstream([json_response(body)]).await;
+    let host = HookingHost::new(hooked(call, upstream.uri(), json!({"stream": true})))
+        .editing(json!({"stream": false}));
+
+    assert!(matches!(
+        run_hooked(&host).await.unwrap(),
+        MessagesOutput::Streamed
+    ));
+
+    let events: Vec<Value> = host
+        .delivered_text()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert_eq!(events[1]["content_block"], expected_start);
+    assert_eq!(events[2]["delta"], expected_delta);
 }

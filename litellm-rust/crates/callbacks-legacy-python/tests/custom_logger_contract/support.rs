@@ -11,12 +11,15 @@ use bytes::Bytes;
 use litellm_callbacks_legacy_python::{
     LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
 };
-use litellm_core::messages::{
-    Error,
-    route::{
-        BODY_FIELDS, Messages, MessagesCall, MessagesOutput, MessagesStreamHead, messages_machine,
+use litellm_core::{
+    messages::{
+        Error, MessagesCall, MessagesShaping,
+        route::{BODY_FIELDS, Messages, MessagesOutput, MessagesStreamHead, messages_machine},
     },
-    types::MessagesShaping,
+    resources::CoreResources,
+};
+use litellm_http::{
+    HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
 use litellm_host_python::{InvokeError, ProtocolHost, json_fields, to_py};
 use litellm_secrets::{SecretValue, source::SecretSource};
@@ -99,11 +102,12 @@ impl ProtocolHost for MessagesHost {
         _py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<MessagesCall, InvokeError<Error>> {
-        let body = json_fields(["model"].into_iter().chain(BODY_FIELDS), |name| {
-            arguments.get_item(name)
-        })?;
+        let body = litellm_core::messages::messages_body(json_fields(
+            ["model"].into_iter().chain(BODY_FIELDS),
+            |name| arguments.get_item(name),
+        )?)
+        .map_err(InvokeError::Native)?;
         Ok(MessagesCall {
-            model: arguments.get_item("model")?.unwrap().extract()?,
             body,
             api_key: Some("contract-key".into()),
             api_base: Some(arguments.get_item("api_base")?.unwrap().extract()?),
@@ -165,10 +169,18 @@ impl Invoke {
                 &PyTuple::empty(py),
                 self.kwargs.bind(py),
             )?,
-            messages_machine(Arc::new(NoSecrets)),
+            messages_machine(
+                &CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
+                    PublicDnsResolver,
+                )))),
+                &Resolution::from(&HttpSettings::default()).config,
+                Arc::new(NoSecrets),
+            )
+            .expect("default HTTP settings build a client"),
             MessagesHost {
                 error: self.error.clone_ref(py),
             },
+            |_, _| Ok(()),
             self.asynchronous,
         )
     }
