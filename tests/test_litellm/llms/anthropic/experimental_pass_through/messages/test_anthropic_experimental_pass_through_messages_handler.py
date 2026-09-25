@@ -137,6 +137,50 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
+@pytest.mark.parametrize(
+    "api_base, expected",
+    [
+        (None, True),
+        ("https://api.openai.com/v1", True),
+        ("api.openai.com", True),
+        ("HTTPS://API.OPENAI.COM/v1", True),
+        ("http://localhost:8000/v1", False),
+        ("http://vllm-host:8000/v1", False),
+        ("https://my-org.privatelink.openai.com/v1", True),
+        ("https://api.openai.com.evil.example/v1", False),
+        ("https://not-api.openai.com.internal/v1", False),
+    ],
+)
+def test_should_route_to_responses_api_considers_api_base_for_openai(api_base, expected):
+    """Regression test for #40780: openai/ with a custom api_base routes to chat/completions, real OpenAI hosts keep Responses."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    assert _should_route_to_responses_api("openai", "openai/model", "model", api_base) is expected
+
+
+def test_openai_custom_api_base_forwards_messages_to_chat_completions():
+    """Regression test for #40780: the full handler forwards a custom-api_base openai/ request to litellm.completion."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch("litellm.completion") as mock_completion:  # test-quality-ok: routes via real handler; no injection seam
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="openai/my-local-model",
+                api_base="http://localhost:8000/v1",
+                api_key="sk-noauth",
+            )
+        except (ValueError, TypeError, AttributeError) as e:
+            print(f"Error: {e}")
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["api_base"] == "http://localhost:8000/v1"
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     """Regression test for #22930.  The unified /v1/messages path must
