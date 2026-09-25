@@ -398,7 +398,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
-                    capabilities: capabilities.clone(),
+                    capabilities: capabilities,
                     drop_params,
                     ..MessagesShaping::default()
                 },
