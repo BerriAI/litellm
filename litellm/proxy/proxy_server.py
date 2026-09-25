@@ -7498,20 +7498,20 @@ class ProxyConfig:
         if not isinstance(retention_interval, str):
             verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
             return None
-        try:
-            interval_seconds: Final = duration_in_seconds(retention_interval)
-        except ValueError:
-            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
-            return None
         # this runs against a started scheduler, which the startup stagger sweep
         # cannot reach, so the offset is applied here or the job reconverges across
         # replicas the first time an admin edits the retention settings
-        return stagger_trigger(
-            job_id="spend_log_cleanup_job",
-            trigger=IntervalTrigger(seconds=interval_seconds),
-            period_seconds=interval_seconds,
-            settings=parse_stagger_settings(general_settings),
-        )
+        try:
+            interval_seconds: Final = duration_in_seconds(retention_interval)
+            return stagger_trigger(
+                job_id="spend_log_cleanup_job",
+                trigger=IntervalTrigger(seconds=interval_seconds),
+                period_seconds=interval_seconds,
+                settings=parse_stagger_settings(general_settings),
+            )
+        except (ValueError, OverflowError):
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
         global general_settings
@@ -10539,16 +10539,18 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
+        # the DB sync above may have rebound the global, so the parameter can be stale here
+        cleanup_settings: Final = _current_general_settings()
         if (
-            general_settings.get("maximum_spend_logs_retention_period") is not None
-            or general_settings.get("maximum_autorouter_session_retention_period") is not None
-            or general_settings.get("maximum_health_check_retention_period") is not None
-            or general_settings.get("maximum_daily_tag_spend_retention_period") is not None
+            cleanup_settings.get("maximum_spend_logs_retention_period") is not None
+            or cleanup_settings.get("maximum_autorouter_session_retention_period") is not None
+            or cleanup_settings.get("maximum_health_check_retention_period") is not None
+            or cleanup_settings.get("maximum_daily_tag_spend_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+            cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
 
-            if cleanup_cron:
+            if isinstance(cleanup_cron, str) and cleanup_cron:
                 from apscheduler.triggers.cron import CronTrigger
 
                 try:
@@ -10566,8 +10568,10 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
             else:
                 # Interval-based scheduling (existing behavior)
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+                retention_interval: Final = cleanup_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
+                    if not isinstance(retention_interval, str):
+                        raise ValueError(retention_interval)
                     interval_seconds: Final = duration_in_seconds(retention_interval)
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
@@ -10578,8 +10582,10 @@ class ProxyStartupEvent:
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+                except (ValueError, OverflowError):
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
+                    )
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:

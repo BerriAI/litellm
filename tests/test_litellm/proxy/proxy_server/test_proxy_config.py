@@ -4078,6 +4078,35 @@ async def test_ProxyConfig__update_general_settings_keeps_the_live_cleanup_job_w
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_logs_an_overflowing_interval_once(monkeypatch, caplog):
+    """An interval that parses but overflows the trigger must keep the live job and log one
+    error, not a traceback on every sync."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    real_scheduler = AsyncIOScheduler()
+    real_scheduler.start(paused=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+    try:
+        await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
+        old_trigger = real_scheduler.get_job("spend_log_cleanup_job").trigger
+        overflowing = {
+            "maximum_daily_tag_spend_retention_period": "90d",
+            "maximum_spend_logs_retention_interval": "99999999999d",
+        }
+        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            for _ in range(5):
+                await pc._update_general_settings(overflowing)
+        errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+        assert len(errors) == 1, [record.getMessage() for record in errors]
+        assert real_scheduler.get_job("spend_log_cleanup_job").trigger is old_trigger
+    finally:
+        real_scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_reschedules_when_only_the_cron_changes(monkeypatch):
     fake_scheduler = MagicMock()
     fake_scheduler.get_job.return_value = MagicMock()
