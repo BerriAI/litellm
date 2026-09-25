@@ -27,6 +27,7 @@ _SECRET_COLUMNS: Final = (
     _SecretColumn("LiteLLM_ProxyModelTable", "model_id", "litellm_params"),
     _SecretColumn("LiteLLM_CredentialsTable", "credential_id", "credential_values"),
     _SecretColumn("LiteLLM_Config", "param_name", "param_value"),
+    _SecretColumn("LiteLLM_GuardrailsTable", "guardrail_id", "litellm_params"),
     _SecretColumn("LiteLLM_SSOConfig", "id", "sso_settings"),
     _SecretColumn("LiteLLM_CacheConfig", "id", "cache_settings"),
     _SecretColumn("LiteLLM_ConfigOverrides", "config_type", "config_value"),

@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
+    decrypt_json_strings,
+    encrypt_json_strings,
+    json_value,
 )
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -39,26 +40,13 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         return LiteLLM_ProxyModelTable
 
     def _encrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        """Encrypt sensitive values in litellm_params."""
-        encrypted: Final = {}
-        for key, value in litellm_params.items():
-            if isinstance(value, str):
-                encrypted[key] = encrypt_value_helper(value, new_encryption_key=self._encryption_key)
-            else:
-                encrypted[key] = value
-        return encrypted
+        return {
+            key: encrypt_json_strings(json_value(value), new_encryption_key=self._encryption_key)
+            for key, value in litellm_params.items()
+        }
 
     def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        """Decrypt sensitive values in litellm_params."""
-        decrypted: Final = {}
-        for key, value in litellm_params.items():
-            if isinstance(value, str):
-                decrypted[key] = decrypt_value_helper(
-                    value, key=key, exception_type="debug", return_original_value=True
-                )
-            else:
-                decrypted[key] = value
-        return decrypted
+        return {key: decrypt_json_strings(json_value(value)) for key, value in litellm_params.items()}
 
     def _to_model(self, record: Any) -> LiteLLM_ProxyModelTable | None:
         """Convert a database record to a Model with decryption."""

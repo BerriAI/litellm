@@ -184,6 +184,28 @@ async def test_detail_db_row_still_resolves():
     assert resp.type == "ContentSafety"
 
 
+@pytest.mark.asyncio
+async def test_detail_encrypted_db_row_resolves_its_provider(monkeypatch):
+    import json
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.guardrails.guardrail_registry import encrypted_guardrail_litellm_params
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-usage-salt-1234")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    row = _db_row(guardrail_id="db-encrypted", provider="aim")
+    row.litellm_params = json.loads(encrypted_guardrail_litellm_params({"guardrail": "aim", "mode": "pre_call"}))
+    assert row.litellm_params["guardrail"] != "aim"
+    prisma = _prisma(find_unique=row)
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_detail(
+            guardrail_id="db-encrypted", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert resp.provider == "aim"
+
+
 # ---- overview ---------------------------------------------------------------
 
 

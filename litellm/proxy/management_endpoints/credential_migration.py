@@ -457,6 +457,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 _COVERED_TABLE_SPECS: Final = [
     ("model_table", "litellm_proxymodeltable", ("litellm_params",), ()),
     ("credentials", "litellm_credentialstable", ("credential_values",), ()),
+    ("guardrails", "litellm_guardrailstable", ("litellm_params",), ()),
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),

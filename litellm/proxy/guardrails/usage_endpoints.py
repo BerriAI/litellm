@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_stored_json_object
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -429,6 +430,13 @@ def _to_dict(value: object) -> dict[str, Any]:
     return {}
 
 
+def _guardrail_litellm_params(g: "_DbOrConfigGuardrail") -> Mapping[str, object]:
+    value: Final = _get_guardrail_field(g, "litellm_params")
+    if isinstance(value, dict):
+        return decrypt_stored_json_object(value)
+    return _to_dict(value)
+
+
 def _field_str(mapping: Mapping[str, object], key: str, default: str) -> str:
     """Stringify `mapping[key]`, falling back to `default` when the key is absent."""
     return str(mapping.get(key, default))
@@ -463,7 +471,7 @@ def _guardrail_overview_rows(
                 break
         req, blocked = a["requests"], a["blocked"]
         fail_rate = (100.0 * blocked / req) if req else 0.0
-        litellm_params = _to_dict(_get_guardrail_field(g, "litellm_params"))
+        litellm_params = _guardrail_litellm_params(g)
         provider = _field_str(litellm_params, "guardrail", "Unknown")
         guardrail_info = _to_dict(_get_guardrail_field(g, "guardrail_info"))
         gtype = _field_str(guardrail_info, "type", "Guardrail")
@@ -703,7 +711,7 @@ async def guardrails_usage_detail(
         {"date": d, "passed": v["passed"], "blocked": v["blocked"], "score": None}
         for d, v in sorted(ts_by_date.items())
     ]
-    litellm_params: Final = _to_dict(_get_guardrail_field(guardrail, "litellm_params"))
+    litellm_params: Final = _guardrail_litellm_params(guardrail)
     guardrail_info: Final = _to_dict(_get_guardrail_field(guardrail, "guardrail_info"))
     _guardrail_name: Final = _get_guardrail_field(guardrail, "guardrail_name")
     daily_unit_sums: Final = sorted(_by(units_rows, lambda r: r.date, _sum_counter_units).items())

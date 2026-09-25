@@ -300,6 +300,45 @@ async def test_get_guardrail_with_read_through_recovers_guardrail_created_on_sib
         IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(guardrail_id)
 
 
+class EncryptedGuardrailRow(FakeGuardrailRow):
+    def __iter__(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_json_strings
+
+        plaintext_row: Final = dict(super().__iter__())
+        return iter({**plaintext_row, "litellm_params": encrypt_json_strings(plaintext_row["litellm_params"])}.items())
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_with_read_through_decrypts_an_encrypted_db_row(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_initialized_guardrail_with_read_through,
+    )
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter import ContentFilterGuardrail
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-read-through-salt-1234")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    guardrail_id: Final = "read-through-encrypted-guardrail-id"
+    guardrail_name: Final = "read-through-encrypted-guardrail"
+    row: Final = EncryptedGuardrailRow(guardrail_id, guardrail_name)
+    assert dict(row)["litellm_params"]["blocked_words"][0]["keyword"] != "secret"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    try:
+        guardrail: Final = await get_initialized_guardrail_with_read_through(guardrail_name=guardrail_name)
+        assert isinstance(guardrail, ContentFilterGuardrail)
+        assert guardrail.guardrail_name == guardrail_name
+        assert guardrail._check_blocked_words("this holds a SECRET word") is not None
+    finally:
+        IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(guardrail_id)
+
+
 @pytest.mark.asyncio
 async def test_get_guardrail_with_read_through_returns_none_for_unknown_guardrail(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock

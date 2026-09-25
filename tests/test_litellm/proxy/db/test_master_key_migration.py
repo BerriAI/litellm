@@ -98,9 +98,21 @@ def _seeded_tables() -> Tables:
                     "rpm": 10,
                     "use_in_pass_through": False,
                     "api_base": None,
+                    "extra_headers": {"Authorization": _encrypted("Bearer nested-secret"), "X-Trace": "plain"},
                 },
             },
             {"model_id": "model-2", "litellm_params": {"api_key": _encrypted("other-deployment", UNRELATED_KEY)}},
+        ],
+        "LiteLLM_GuardrailsTable": [
+            {
+                "guardrail_id": "guardrail-1",
+                "litellm_params": {
+                    "guardrail": _encrypted("openai_moderation"),
+                    "api_key": _encrypted("guardrail-key"),
+                    "default_on": False,
+                },
+            },
+            {"guardrail_id": "guardrail-plain", "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"}},
         ],
         "LiteLLM_Config": [
             {"param_name": "environment_variables", "param_value": {"LANGFUSE_SECRET_KEY": _encrypted("env-secret")}},
@@ -140,14 +152,19 @@ def _seeded_tables() -> Tables:
     }
 
 
-_VALUES_UNDER_THE_PREVIOUS_KEY = 8
+_VALUES_UNDER_THE_PREVIOUS_KEY = 11
 
 
 @pytest.mark.asyncio
 async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_else():
     tables = _seeded_tables()
     untouched_before = json.dumps(
-        [tables["LiteLLM_ProxyModelTable"][1], tables["LiteLLM_Config"][1:], tables["LiteLLM_TeamTable"][1]]
+        [
+            tables["LiteLLM_ProxyModelTable"][1],
+            tables["LiteLLM_Config"][1:],
+            tables["LiteLLM_TeamTable"][1],
+            tables["LiteLLM_GuardrailsTable"][1],
+        ]
     )
 
     migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
@@ -159,6 +176,13 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
     assert decrypt_if_encrypted_with(model_params["model"], NEW_KEY) == "openai/gpt-5.4-mini"
     assert decrypt_if_encrypted_with(model_params["api_key"], PREVIOUS_KEY) is None
     assert (model_params["rpm"], model_params["use_in_pass_through"], model_params["api_base"]) == (10, False, None)
+    assert decrypt_if_encrypted_with(model_params["extra_headers"]["Authorization"], NEW_KEY) == "Bearer nested-secret"
+    assert model_params["extra_headers"]["X-Trace"] == "plain"
+    guardrail_params = tables["LiteLLM_GuardrailsTable"][0]["litellm_params"]
+    assert isinstance(guardrail_params, dict)
+    assert decrypt_if_encrypted_with(guardrail_params["api_key"], NEW_KEY) == "guardrail-key"
+    assert decrypt_if_encrypted_with(guardrail_params["guardrail"], NEW_KEY) == "openai_moderation"
+    assert guardrail_params["default_on"] is False
     mcp_server = tables["LiteLLM_MCPServerTable"][0]
     assert decrypt_if_encrypted_with(mcp_server["static_headers"], NEW_KEY) == '{"X-Api-Key": "header-secret"}'
     assert mcp_server["credentials"]["aws_region_name"] == "us-east-1"
@@ -171,7 +195,12 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
     assert callback_secret.startswith("litellm_enc::")
     assert decrypt_if_encrypted_with(callback_secret.removeprefix("litellm_enc::"), NEW_KEY) == "team-callback-secret"
     assert untouched_before == json.dumps(
-        [tables["LiteLLM_ProxyModelTable"][1], tables["LiteLLM_Config"][1:], tables["LiteLLM_TeamTable"][1]]
+        [
+            tables["LiteLLM_ProxyModelTable"][1],
+            tables["LiteLLM_Config"][1:],
+            tables["LiteLLM_TeamTable"][1],
+            tables["LiteLLM_GuardrailsTable"][1],
+        ]
     )
 
 
@@ -197,6 +226,7 @@ async def test_only_rows_holding_values_under_the_previous_key_are_written():
 
     assert sorted(database.writes) == [
         ("LiteLLM_Config", "param_value", "environment_variables"),
+        ("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1"),
         ("LiteLLM_MCPServerTable", "credentials", "mcp-1"),
         ("LiteLLM_MCPServerTable", "env_vars", "mcp-1"),
         ("LiteLLM_MCPServerTable", "static_headers", "mcp-1"),

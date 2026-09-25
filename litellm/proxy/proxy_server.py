@@ -404,8 +404,13 @@ from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    ENCRYPTED_CONFIG_SECTIONS,
+    decrypt_config_section,
+    decrypt_json_strings,
     decrypt_value_helper,
+    encrypt_config_section,
     encrypt_value_helper,
+    json_value,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.healthy_model_filter import (
@@ -5382,10 +5387,8 @@ class ProxyConfig:
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
             existing_value: Final[object] = cast(object, existing_row.param_value) if existing_row is not None else None
             existing_section: Final[Mapping[str, JsonValue]] = (
-                _CONFIG_SECTION_VALUES.validate_json(existing_value)
-                if isinstance(existing_value, str)
-                else _CONFIG_SECTION_VALUES.validate_python(existing_value)
-                if isinstance(existing_value, Mapping)
+                decrypt_config_section(section_name, existing_value)
+                if isinstance(existing_value, (str, Mapping))
                 else MappingProxyType({})
             )
             merged_section: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -5399,7 +5402,7 @@ class ProxyConfig:
             )
             if merged_section == existing_section:
                 return None
-            serialized_section: Final = json.dumps(dict(merged_section))  # mutable-ok: JSON encoder requires a dict
+            serialized_section: Final = json.dumps(encrypt_config_section(section_name, merged_section))
             config_data: Final[_ConfigParamUpsert] = {
                 "create": {"param_name": section_name, "param_value": serialized_section},
                 "update": {"param_value": serialized_section},
@@ -7051,6 +7054,8 @@ class ProxyConfig:
         return frozenset(combined_id_list) | kept_config_ids
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
+        if isinstance(value, (dict, list)):
+            return decrypt_json_strings(json_value(value))
         if not isinstance(value, str):
             return value
 
@@ -7419,7 +7424,7 @@ class ProxyConfig:
             where={"param_name": "router_settings"}
         )
         db_values: Final = (
-            _as_settings_mapping(db_router_settings.param_value)
+            _as_settings_mapping(decrypt_config_section("router_settings", db_router_settings.param_value))
             if db_router_settings is not None and db_router_settings.param_value is not None
             else _EMPTY_SETTINGS_MAPPING
         )
@@ -7715,7 +7720,8 @@ class ProxyConfig:
                 os.environ[key] = decrypted_value
             return _as_settings_mapping(normalized)
 
-        scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
+        db_value: Final = decrypt_config_section(section, value) if section in ENCRYPTED_CONFIG_SECTIONS else value
+        scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=db_value)
         return _as_settings_mapping(scrubbed)
 
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
@@ -17744,10 +17750,10 @@ async def update_config(
             )
             if row is None or row.param_value is None:
                 return {}
-            return dict(row.param_value)
+            return decrypt_config_section(param_name, row.param_value)
 
         async def _upsert_section(param_name: str, value: dict) -> None:
-            serialized: Final = json.dumps(value)
+            serialized: Final = json.dumps(encrypt_config_section(param_name, value))
             await ConfigRepository(prisma_client).table.upsert(
                 where={"param_name": param_name},
                 data={

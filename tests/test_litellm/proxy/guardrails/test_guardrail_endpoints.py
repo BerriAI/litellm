@@ -2725,3 +2725,116 @@ def test_field_type_inference_handles_pep604_unions():
     assert _get_field_type_from_annotation(list[str] | None) == "array"
     assert _get_field_type_from_annotation(bool | None) == "boolean"
     assert _unwrap_optional_type(str | None) is str
+
+
+ENDPOINT_SALT_KEY = "sk-endpoint-salt-1234"
+
+
+@pytest.fixture
+def endpoint_salt_key(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", ENDPOINT_SALT_KEY)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    return ENDPOINT_SALT_KEY
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_stores_litellm_params_as_ciphertext(mocker, endpoint_salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_guardrailstable.create = AsyncMock(
+        return_value=mocker.Mock(
+            guardrail_id="reg-encrypted",
+            guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
+            status="pending_review",
+            submitted_at=datetime.now(),
+        )
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_id="u1", user_email="alice@co.com", team_id="team-1")
+
+    await register_guardrail(MOCK_REGISTER_REQUEST, user)
+
+    stored_text = mock_prisma.db.litellm_guardrailstable.create.call_args[1]["data"]["litellm_params"]
+    assert "guardrails.example.com" not in stored_text
+    stored = json.loads(stored_text)
+    assert decrypt_if_encrypted_with(stored["api_base"], endpoint_salt_key) == "https://guardrails.example.com/validate"
+    assert decrypt_if_encrypted_with(stored["guardrail"], endpoint_salt_key) == "generic_guardrail_api"
+
+
+@pytest.mark.asyncio
+async def test_approve_guardrail_submission_initializes_the_decrypted_params(mocker, endpoint_salt_key):
+    from litellm.proxy.guardrails.guardrail_registry import encrypted_guardrail_litellm_params
+
+    plaintext_params = {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "api_base": "https://g.com",
+        "api_key": "vendor-secret",
+    }
+    stored_params = json.loads(encrypted_guardrail_litellm_params(plaintext_params))
+    assert stored_params["api_key"] != "vendor-secret"
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="approve-encrypted",
+        guardrail_name="my-guard",
+        status="pending_review",
+        litellm_params=stored_params,
+        guardrail_info={},
+        team_id="team-1",
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_handler = mocker.Mock()
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_handler)
+
+    await approve_guardrail_submission("approve-encrypted", UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    initialized = mock_handler.initialize_guardrail.call_args.kwargs["guardrail"]
+    assert initialized["litellm_params"] == plaintext_params
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_decrypts_a_stored_row_before_masking(mocker, endpoint_salt_key):
+    from litellm.proxy.guardrails.guardrail_registry import encrypted_guardrail_litellm_params
+
+    stored_params = json.loads(
+        encrypted_guardrail_litellm_params(
+            {
+                "guardrail": "azure/text_moderations",
+                "mode": "pre_call",
+                "api_key": "sk-1234567890abcdef",
+                "api_base": "https://api.secret.example.com",
+            }
+        )
+    )
+    assert stored_params["guardrail"] != "azure/text_moderations"
+    db_row = {
+        "guardrail_id": "encrypted-db-guardrail",
+        "guardrail_name": "Encrypted DB Guardrail",
+        "litellm_params": stored_params,
+        "guardrail_info": {"description": "Test guardrail"},
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[db_row])
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+
+    response = await list_guardrails_v2(user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    assert len(response.guardrails) == 1
+    litellm_params = response.guardrails[0].litellm_params
+    params = litellm_params if isinstance(litellm_params, dict) else litellm_params.model_dump()
+    assert params["api_key"] != "sk-1234567890abcdef"
+    assert "****" in str(params["api_key"])
+    assert params["guardrail"] == "azure/text_moderations"
+    assert params["mode"] == "pre_call"
+    assert params["api_base"] == "https://api.secret.example.com"

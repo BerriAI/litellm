@@ -459,6 +459,27 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_scan_covered_tables_reads_nested_guardrail_params(salt_key, monkeypatch):
+    legacy = _legacy_ct("guardrail-secret", monkeypatch)
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                litellm_params={"guardrail": "openai_moderation", "api_key": legacy, "extra": {"nested": legacy}}
+            )
+        ]
+    )
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+
+    assert by_loc["guardrails"].legacy == 2
+    assert by_loc["guardrails"].plaintext == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("column", ("static_headers", "env"))
 @pytest.mark.parametrize("algorithm", ("xsalsa20-poly1305", "aes-256-gcm"))
 @pytest.mark.parametrize("as_json", (False, True))

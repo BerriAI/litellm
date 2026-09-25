@@ -1,11 +1,16 @@
-from collections.abc import Iterable
+import json
+from collections.abc import Iterable, Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy import proxy_server
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from litellm.proxy.guardrails.guardrail_registry import (
+    encrypted_guardrail_litellm_params,
     get_guardrail_initializer_from_hooks,
+    guardrail_from_row,
     GuardrailRegistry,
     InMemoryGuardrailHandler,
 )
@@ -1084,3 +1089,114 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+GUARDRAIL_SALT_KEY = "sk-guardrail-salt-1234"
+
+
+class _StoredGuardrailRow:
+    def __init__(self, **fields: object) -> None:
+        self._fields = fields
+
+    def __getattr__(self, name: str) -> object:
+        try:
+            return self._fields[name]
+        except KeyError as e:
+            raise AttributeError(name) from e
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        return iter(self._fields.items())
+
+
+@pytest.fixture
+def guardrail_salt_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", GUARDRAIL_SALT_KEY)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    return GUARDRAIL_SALT_KEY
+
+
+def _vendor_params() -> LitellmParams:
+    return LitellmParams(
+        guardrail="openai_moderation", mode="pre_call", api_key="vendor-secret", api_base="https://vendor.example"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_to_db_stores_every_litellm_params_string_as_ciphertext(guardrail_salt_key):
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.create = AsyncMock(return_value=_StoredGuardrailRow(guardrail_id="g-1"))
+    guardrail = Guardrail(guardrail_name="moderation", litellm_params=_vendor_params())
+
+    created = await GuardrailRegistry().add_guardrail_to_db(guardrail=guardrail, prisma_client=prisma_client)
+
+    stored_text = prisma_client.db.litellm_guardrailstable.create.call_args.kwargs["data"]["litellm_params"]
+    assert "vendor-secret" not in stored_text
+    assert "vendor.example" not in stored_text
+    stored = json.loads(stored_text)
+    assert decrypt_if_encrypted_with(stored["api_key"], guardrail_salt_key) == "vendor-secret"
+    assert decrypt_if_encrypted_with(stored["guardrail"], guardrail_salt_key) == "openai_moderation"
+    assert stored["default_on"] is False
+    assert created["guardrail_id"] == "g-1"
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_stores_ciphertext_and_returns_the_decrypted_guardrail(guardrail_salt_key):
+    prisma_client = MagicMock()
+
+    async def _update(where: dict, data: dict) -> _StoredGuardrailRow:
+        return _StoredGuardrailRow(
+            guardrail_id=where["guardrail_id"],
+            guardrail_name=data["guardrail_name"],
+            litellm_params=json.loads(data["litellm_params"]),
+            guardrail_info={},
+            status="active",
+        )
+
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(side_effect=_update)
+    guardrail = Guardrail(guardrail_name="moderation", litellm_params=_vendor_params())
+
+    updated = await GuardrailRegistry().update_guardrail_in_db(
+        guardrail_id="g-1", guardrail=guardrail, prisma_client=prisma_client
+    )
+
+    stored = json.loads(prisma_client.db.litellm_guardrailstable.update.call_args.kwargs["data"]["litellm_params"])
+    assert decrypt_if_encrypted_with(stored["api_key"], guardrail_salt_key) == "vendor-secret"
+    assert updated["litellm_params"]["api_key"] == "vendor-secret"
+    assert updated["litellm_params"]["guardrail"] == "openai_moderation"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_by_id_from_db_decrypts_encrypted_rows_and_reads_legacy_plaintext_rows(
+    guardrail_salt_key,
+):
+    plaintext_params = {"guardrail": "openai_moderation", "mode": "pre_call", "api_key": "vendor-secret"}
+    encrypted_row = _StoredGuardrailRow(
+        guardrail_id="g-encrypted",
+        guardrail_name="encrypted",
+        litellm_params=json.loads(encrypted_guardrail_litellm_params(plaintext_params)),
+        guardrail_info={},
+        status="active",
+    )
+    legacy_row = _StoredGuardrailRow(
+        guardrail_id="g-legacy",
+        guardrail_name="legacy",
+        litellm_params={**plaintext_params, "api_key": "legacy-secret"},
+        guardrail_info={},
+        status="active",
+    )
+    assert encrypted_row.litellm_params["api_key"] != "vendor-secret"
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(side_effect=[encrypted_row, legacy_row])
+    registry = GuardrailRegistry()
+
+    encrypted = await registry.get_guardrail_by_id_from_db(guardrail_id="g-encrypted", prisma_client=prisma_client)
+    legacy = await registry.get_guardrail_by_id_from_db(guardrail_id="g-legacy", prisma_client=prisma_client)
+
+    assert encrypted is not None and encrypted["litellm_params"] == plaintext_params
+    assert legacy is not None and legacy["litellm_params"]["api_key"] == "legacy-secret"
+
+
+def test_guardrail_from_row_keeps_a_row_without_litellm_params(guardrail_salt_key):
+    row = _StoredGuardrailRow(guardrail_id="g-empty", guardrail_name="empty", litellm_params=None, guardrail_info=None)
+
+    assert guardrail_from_row(row)["litellm_params"] is None

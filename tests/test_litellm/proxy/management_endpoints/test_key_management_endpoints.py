@@ -21093,3 +21093,66 @@ class TestTeamAdminMemberKeyBudgetUpdate:
             )
         assert exc.value.status_code == 403
         assert "member_key_budgets" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
+async def test_rotate_master_key_rekeys_router_settings_and_guardrail_params(mock_rotate_mcp, monkeypatch):
+    import prisma
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_json_strings
+    from litellm.proxy.management_endpoints.key_management_endpoints import _rotate_master_key
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    stored_router_settings = encrypt_json_strings({"redis_password": "redis-pw", "num_retries": 2})
+    stored_guardrail_params = encrypt_json_strings(
+        {"guardrail": "openai_moderation", "api_key": "vendor-secret", "default_on": False}
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.tx = MagicMock(
+        return_value=AsyncMock(__aenter__=AsyncMock(return_value=AsyncMock()), __aexit__=AsyncMock(return_value=False))
+    )
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[SimpleNamespace(param_name="router_settings", param_value=stored_router_settings)]
+    )
+    mock_prisma_client.db.litellm_config.update = AsyncMock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(guardrail_id="guardrail-1", litellm_params=stored_guardrail_params)]
+    )
+    mock_prisma_client.db.litellm_guardrailstable.update = AsyncMock()
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    mock_rotate_mcp.return_value = None
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.decrypt_model_list_from_db.return_value = []
+
+    with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="test-user"
+            ),
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    router_update = mock_prisma_client.db.litellm_config.update.call_args
+    assert router_update.kwargs["where"] == {"param_name": "router_settings"}
+    assert isinstance(router_update.kwargs["data"]["param_value"], prisma.Json)
+    rotated_router_settings = router_update.kwargs["data"]["param_value"].data
+    assert decrypt_if_encrypted_with(rotated_router_settings["redis_password"], "sk-new-master-key") == "redis-pw"
+    assert decrypt_if_encrypted_with(rotated_router_settings["redis_password"], "sk-old-master-key") is None
+    assert rotated_router_settings["num_retries"] == 2
+
+    guardrail_update = mock_prisma_client.db.litellm_guardrailstable.update.call_args
+    assert guardrail_update.kwargs["where"] == {"guardrail_id": "guardrail-1"}
+    assert isinstance(guardrail_update.kwargs["data"]["litellm_params"], prisma.Json)
+    rotated_guardrail_params = guardrail_update.kwargs["data"]["litellm_params"].data
+    assert decrypt_if_encrypted_with(rotated_guardrail_params["api_key"], "sk-new-master-key") == "vendor-secret"
+    assert decrypt_if_encrypted_with(rotated_guardrail_params["guardrail"], "sk-new-master-key") == "openai_moderation"
+    assert rotated_guardrail_params["default_on"] is False

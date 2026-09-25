@@ -80,6 +80,12 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    ENCRYPTED_CONFIG_SECTIONS,
+    encrypt_config_section,
+    encrypt_json_strings,
+    json_value,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -142,6 +148,7 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
+    GuardrailsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -5216,6 +5223,13 @@ async def delete_key_aliases(
     )
 
 
+async def _guardrail_rows(prisma_client: PrismaClient) -> "Sequence[prisma_models.LiteLLM_GuardrailsTable]":
+    try:
+        return await GuardrailsRepository(prisma_client).table.find_many()
+    except Exception:  # noqa: BLE001  # a deployment without the guardrails table still rotates every other store
+        return ()
+
+
 async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5300,6 +5314,30 @@ async def _rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
+
+        for c in config:
+            if c.param_name in ENCRYPTED_CONFIG_SECTIONS and c.param_value is not None:
+                await _config_table(prisma_client).update(
+                    where={"param_name": c.param_name},
+                    data={
+                        "param_value": prisma.Json(
+                            encrypt_config_section(c.param_name, c.param_value, new_encryption_key=new_master_key)
+                        )
+                    },
+                )
+
+    # 3b. process guardrails table
+    for guardrail_row in await _guardrail_rows(prisma_client):
+        if guardrail_row.litellm_params is None:
+            continue
+        await GuardrailsRepository(prisma_client).table.update(
+            where={"guardrail_id": guardrail_row.guardrail_id},
+            data={
+                "litellm_params": prisma.Json(
+                    encrypt_json_strings(json_value(guardrail_row.litellm_params), new_encryption_key=new_master_key)
+                )
+            },
+        )
 
     # 4. process MCP server table
     try:

@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -64,7 +64,8 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
-    encrypt_value_helper,
+    encrypt_json_strings,
+    json_value,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -433,6 +434,33 @@ def _effective_complexity_router_config(
             **transport,
             **supplied,
         },
+    }
+
+
+def _encrypted_complexity_router_config(config: object, new_encryption_key: str | None = None) -> JsonValue:
+    value: Final = json_value(config)
+    if not isinstance(value, dict):
+        return value
+    jev: Final = value.get("jev_classifier_config")
+    if not isinstance(jev, dict):
+        return value
+    api_key: Final = jev.get("api_key")
+    if not isinstance(api_key, str):
+        return value
+    encrypted_api_key: Final = encrypt_json_strings(api_key, new_encryption_key=new_encryption_key)
+    return {**value, "jev_classifier_config": {**jev, "api_key": encrypted_api_key}}
+
+
+def _encrypted_litellm_params(
+    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
+) -> dict[str, JsonValue]:
+    return {
+        key: (
+            _encrypted_complexity_router_config(value, new_encryption_key)
+            if key == "complexity_router_config"
+            else encrypt_json_strings(json_value(value), new_encryption_key=new_encryption_key)
+        )
+        for key, value in litellm_params.items()
     }
 
 
@@ -986,19 +1014,16 @@ def update_db_model(
         k: v for k, v in stored_model_info.items() if k not in echoed_pricing
     }
 
-    # update litellm params
     if updated_patch.litellm_params:
-        # Encrypt any sensitive values
-        encrypted_params: Final = {
+        patched_params: Final = {
             k: (
                 _effective_complexity_router_config(updated_patch.litellm_params, db_model.litellm_params)
                 if k == "complexity_router_config"
-                else encrypt_value_helper(v)
+                else v
             )
             for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
         }
-
-        merged_litellm_params.update(encrypted_params)
+        merged_litellm_params.update(_encrypted_litellm_params({**merged_litellm_params, **patched_params}))
 
     # update model info
     if updated_patch.model_info:
@@ -1502,9 +1527,8 @@ async def _add_model_to_db(
     # encrypt litellm params #
     _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
     _original_litellm_model_name: Final = model_params.litellm_params.model
-    for k, v in _litellm_params_dict.items():
-        encrypted_value = encrypt_value_helper(value=v, new_encryption_key=new_encryption_key)
-        model_params.litellm_params[k] = encrypted_value
+    for k, v in _encrypted_litellm_params(_litellm_params_dict, new_encryption_key).items():
+        model_params.litellm_params[k] = v
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
@@ -2659,25 +2683,25 @@ async def update_model(
 
             _new_litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
 
-            ### ENCRYPT PARAMS ###
-            encrypted_params: Final = MappingProxyType(
+            requested_params: Final = MappingProxyType(
                 {
                     k: (
                         _effective_complexity_router_config(model_params.litellm_params, deployment.litellm_params)
                         if k == "complexity_router_config"
-                        else encrypt_value_helper(value=v)
+                        else v
                     )
                     for k, v in _new_litellm_params_dict.items()
                 }
             )
 
-            ### MERGE WITH EXISTING DATA ###
             _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
-            merged_dictionary: Final = {
-                key: _existing_litellm_params_dict[key] if value is None else encrypted_params[key]
-                for key, value in _mp.items()
-                if value is not None or _existing_litellm_params_dict.get(key) is not None
-            }
+            merged_dictionary: Final = _encrypted_litellm_params(
+                {
+                    key: _existing_litellm_params_dict[key] if value is None else requested_params[key]
+                    for key, value in _mp.items()
+                    if value is not None or _existing_litellm_params_dict.get(key) is not None
+                }
+            )
 
             renamed_to: Final = (
                 model_params.model_name

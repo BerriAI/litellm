@@ -136,9 +136,9 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
     from litellm.proxy.guardrails.guardrail_registry import (
         GUARDRAIL_RECONCILE_LOCK,
         IN_MEMORY_GUARDRAIL_HANDLER,
+        guardrail_from_row,
     )
     from litellm.repositories.table_repositories import GuardrailsRepository
-    from litellm.types.guardrails import Guardrail
 
     if not _db_backed_registries_enabled("guardrails"):
         return False
@@ -152,7 +152,7 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
     if row is None:
         return False
     async with GUARDRAIL_RECONCILE_LOCK:
-        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=Guardrail(**dict(row)))
+        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=guardrail_from_row(row))
     return _initialized_guardrail(guardrail_name) is not None
 
 
