@@ -207,18 +207,9 @@ def _reload_mcp_manager_module():
     manager_module = sys.modules["litellm.proxy._experimental.mcp_server.mcp_server_manager"]
     importlib.reload(utils_module)
     reloaded = importlib.reload(manager_module)
-    # After reload, server.py still holds a stale reference to the old
-    # global_mcp_server_manager. Update it so tests that exercise server.py
-    # functions (e.g. _get_tools_from_mcp_servers) use the fresh instance.
-    server_module = sys.modules.get("litellm.proxy._experimental.mcp_server.server")
-    if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
-        server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
-    operations_module = sys.modules.get("litellm.proxy._experimental.mcp_server.operations")
-    if operations_module is not None:
-        operations_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
-    rest_module: Final = sys.modules.get("litellm.proxy._experimental.mcp_server.rest_endpoints")
-    if rest_module is not None:
-        rest_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
+    for name, module in tuple(sys.modules.items()):
+        if name.startswith("litellm.proxy._experimental.mcp_server.") and hasattr(module, "global_mcp_server_manager"):
+            module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
 
 

@@ -166,8 +166,13 @@ async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
 @pytest.mark.parametrize("role", ["proxy_admin", "proxy_admin_viewer", "internal_user"])
 @pytest.mark.parametrize("open_channel", ["none", "operator", "submitted"])
 @pytest.mark.parametrize("has_grant", [True, False])
+@pytest.mark.parametrize("agent_tools", [("read", "write"), None])
 async def test_delegated_mcp_uses_explicit_team_grants_even_for_dashboard_admins(
-    monkeypatch: pytest.MonkeyPatch, role: str, open_channel: str, has_grant: bool
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    open_channel: str,
+    has_grant: bool,
+    agent_tools: tuple[str, ...] | None,
 ) -> None:
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -207,7 +212,7 @@ async def test_delegated_mcp_uses_explicit_team_grants_even_for_dashboard_admins
     client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
-    auth: Final = actor(("read", "write"), delegated=True)
+    auth: Final = actor(agent_tools, delegated=True)
     assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == (["slack"] if has_grant else [])
     assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (["read"] if has_grant else [])
     assert await MCPRequestHandler.get_allowed_tools_for_server("linear", auth) == []
