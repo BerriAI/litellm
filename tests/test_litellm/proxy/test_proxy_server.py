@@ -11891,6 +11891,42 @@ def test_fairness_settings_propagate_on_config_reload(monkeypatch):
     assert "dynamic_rate_limiter_v3" in litellm.callbacks
 
 
+@pytest.mark.asyncio
+async def test_disabling_fairness_keeps_a_limiter_configured_after_fairness_settings_in_yaml(tmp_path, monkeypatch):
+    """The config file lists fairness_settings above callbacks, so if fairness were applied in
+    key order it would register the limiter first and later remove the one the config asked for."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.hooks.fairness_settings import _CONFIG_RESERVATION
+    from litellm.types.proxy.fairness import FairnessSettings
+
+    monkeypatch.setattr(litellm, "fairness_settings", None)
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm, "priority_reservation_settings", None)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(_CONFIG_RESERVATION, "limiter_added_by_fairness", False)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}],
+                "litellm_settings": {
+                    "fairness_settings": {
+                        "enabled": True,
+                        "workload_classes": [{"name": "prod", "reserved_share": 0.5}],
+                    },
+                    "callbacks": ["dynamic_rate_limiter_v3"],
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+    router, _, _ = await ps.ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+    ps.ProxyConfig._apply_fairness_settings_value(FairnessSettings(enabled=False), router)
+
+    assert "dynamic_rate_limiter_v3" in litellm.callbacks, litellm.callbacks
+
+
 def test_invalid_fairness_settings_row_is_ignored_on_config_reload(monkeypatch):
     """A malformed row must not take down the reload or half-apply."""
     import litellm.proxy.proxy_server as ps

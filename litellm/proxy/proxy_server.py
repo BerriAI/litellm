@@ -6112,8 +6112,8 @@ class ProxyConfig:
                     from litellm.types.utils import PriorityReservationSettings
 
                     litellm.priority_reservation_settings = PriorityReservationSettings(**value)
-                elif key == "fairness_settings":
-                    self._apply_fairness_settings_value(value, router)
+                elif key == FAIRNESS_SETTINGS_KEY:
+                    continue
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -6337,6 +6337,9 @@ class ProxyConfig:
 
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
+            fairness_value: Final = litellm_settings.get(FAIRNESS_SETTINGS_KEY)
+            if fairness_value is not None:
+                self._apply_fairness_settings_value(fairness_value, router)
 
         if redis_usage_cache is None:
             env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(
