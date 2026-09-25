@@ -3,6 +3,7 @@ models and KWARG_ARTIFACTS into all_litellm_params."""
 
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
@@ -359,6 +360,6 @@ def owned_wire_names(root: type) -> tuple[str, ...]:
     return tuple(names())
 
 
-OWNED_KWARG_NAMES: Final = tuple(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
+OWNED_KWARG_NAMES: Final = tuple(chain.from_iterable(owned_wire_names(root) for root in LITELLM_OWNED_ROOTS))
 AGENTIC_LOOP_KWARG_NAMES: Final = (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
 BEDROCK_BATCH_KWARG_NAMES: Final = wire_names(BedrockBatchConnection)

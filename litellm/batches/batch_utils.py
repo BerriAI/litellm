@@ -43,7 +43,7 @@ def _uses_native_vertex_output(
 ) -> bool:
     if custom_llm_provider != "vertex_ai":
         return False
-    if model_name and getattr(litellm, "disable_vertex_batch_output_transformation", False):
+    if model_name and litellm.disable_vertex_batch_output_transformation:
         return True
     return first_row is not None and is_native_vertex_batch_output_row(first_row)
 
