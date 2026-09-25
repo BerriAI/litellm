@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from functools import lru_cache, partial, wraps
+from functools import lru_cache, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -5715,6 +5715,8 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     combined_stripped_model_name: str
     provider_prefixed_model_name: ReadOnly[str]
     custom_llm_provider: str
+    vendor: ReadOnly[str | None]
+    vendor_model_name: ReadOnly[str | None]
 
 
 def _get_model_info_from_generalization(
@@ -5755,55 +5757,7 @@ def _get_model_info_from_generalization(
     return None
 
 
-_BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
 _BEDROCK_VENDOR_ALIAS_FIELDS: Final = frozenset({"mode", "max_tokens", "max_input_tokens", "max_output_tokens"})
-
-
-def _resolve_vendor_alias_key(candidate: str, litellm_provider: str) -> tuple[str, dict] | None:
-    cost_key: Final = _get_model_cost_key(candidate)
-    if cost_key is None:
-        return None
-    info: Final = _get_model_info_from_model_cost(key=cost_key)
-    if info.get("litellm_provider") != litellm_provider:
-        return None
-    return cost_key, info
-
-
-def _get_model_info_from_bedrock_vendor_alias(
-    split_model: str, custom_llm_provider: str | None
-) -> tuple[str, dict] | None:
-    """Price an unmapped Bedrock ``<vendor>.<model>`` id off the vendor's own catalog row for ``<model>``."""
-    if custom_llm_provider not in _BEDROCK_PROVIDERS:
-        return None
-    from litellm.llms.bedrock.common_utils import get_bedrock_vendor_alias
-
-    alias: Final = get_bedrock_vendor_alias(split_model)
-    if alias is None:
-        return None
-    resolved: Final = next(
-        (
-            r
-            for r in map(
-                partial(_resolve_vendor_alias_key, litellm_provider=alias.litellm_provider), alias.candidate_keys
-            )
-            if r is not None
-        ),
-        None,
-    )
-    if resolved is None:
-        return None
-    vendor_key, vendor_info = resolved
-    verbose_logger.debug(
-        "bedrock vendor alias: pricing model=%s provider=%s off %s cost-map key=%s",
-        split_model,
-        custom_llm_provider,
-        alias.litellm_provider,
-        vendor_key,
-    )
-    return vendor_key, {
-        **{k: v for k, v in vendor_info.items() if k in _BEDROCK_VENDOR_ALIAS_FIELDS or "cost" in k},
-        "litellm_provider": custom_llm_provider,
-    }
 
 
 def _strip_mantle_region_prefix(model: str) -> str:
@@ -5852,6 +5806,14 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         if custom_llm_provider == "bedrock_mantle"
         else combined_stripped_model_name
     )
+    if custom_llm_provider in ("bedrock", "bedrock_converse", "bedrock_mantle"):
+        from litellm.llms.bedrock.common_utils import split_bedrock_vendor_model
+
+    vendor_model: Final = (
+        split_bedrock_vendor_model(region_free_split_model)
+        if custom_llm_provider in ("bedrock", "bedrock_converse", "bedrock_mantle")
+        else None
+    )
     provider_model_info: Final = (
         ProviderConfigManager.get_provider_model_info(
             model=region_free_split_model, provider=LlmProviders(custom_llm_provider)
@@ -5870,6 +5832,8 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_stripped_model_name=region_free_combined_stripped_model_name,
         provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
+        vendor=vendor_model[0] if vendor_model else None,
+        vendor_model_name=vendor_model[1] if vendor_model else None,
     )
 
 
@@ -5990,6 +5954,8 @@ def _get_model_info_helper(
         combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
         provider_prefixed_model_name: Final = potential_model_names["provider_prefixed_model_name"]
         split_model: Final = potential_model_names["split_model"]
+        vendor: Final = potential_model_names["vendor"]
+        vendor_model_name: Final = potential_model_names["vendor_model_name"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
@@ -6052,6 +6018,9 @@ def _get_model_info_helper(
                litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
                custom_llm_provider="perplexity", where 1-5 all read the leading "perplexity/" as the litellm prefix
                and strip it. Tried last so no model that already resolves through 1-5 can change.
+            7. 'vendor_model_name' for Bedrock ids with no row of their own: `bedrock/us.openai.gpt-6-sol` is
+               billed off the `gpt-6-sol` row when that row's litellm_provider is `openai`, the Bedrock vendor
+               prefix. Only price and token-limit fields are copied, so capability flags stay Bedrock's.
             """
 
             _model_info: dict[str, Any] | None = None
@@ -6117,6 +6086,18 @@ def _get_model_info_helper(
                         custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
+            if _model_info is None and vendor_model_name is not None:
+                _matched_key = _get_model_cost_key(vendor_model_name)
+                if _matched_key is not None:
+                    vendor_info: Final = _get_model_info_from_model_cost(key=_matched_key)
+                    if vendor_info.get("litellm_provider") == vendor:
+                        key = _matched_key
+                        _model_info = {
+                            **{
+                                k: v for k, v in vendor_info.items() if k in _BEDROCK_VENDOR_ALIAS_FIELDS or "cost" in k
+                            },
+                            "litellm_provider": custom_llm_provider,
+                        }
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
@@ -6125,13 +6106,6 @@ def _get_model_info_helper(
                         **{k: v for k, v in fill_missing.items() if k not in _model_info},
                         **_model_info,
                     }
-
-            if _model_info is None:
-                vendor_alias: Final = _get_model_info_from_bedrock_vendor_alias(
-                    split_model=split_model, custom_llm_provider=custom_llm_provider
-                )
-                if vendor_alias is not None:
-                    key, _model_info = vendor_alias
 
             if _model_info is None:
                 generalization: Final = _get_model_info_from_generalization(

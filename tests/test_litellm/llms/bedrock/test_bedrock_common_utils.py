@@ -967,31 +967,19 @@ def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
 
 
 @pytest.mark.parametrize(
-    ("model", "expected_provider", "expected_keys"),
+    ("model", "expected"),
     [
-        ("us.openai.fake-model", "openai", ("fake-model",)),
-        ("bedrock/global.openai.fake-model", "openai", ("fake-model",)),
-        ("openai.fake-model", "openai", ("fake-model",)),
-        (
-            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "anthropic",
-            ("claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5-20250929"),
-        ),
-        ("us.anthropic.claude-sonnet-4-5-20250929", "anthropic", ("claude-sonnet-4-5-20250929",)),
-        ("meta.llama4-x-v1:0", None, None),
-        ("us.meta.llama4-x-v1:0", None, None),
+        ("us.anthropic.claude-x-20260101-v1:0", ("anthropic", "claude-x-20260101")),
+        ("openai.gpt-6-sol", ("openai", "gpt-6-sol")),
+        ("meta.llama4-x-v1:0", ("meta", "llama4-x")),
+        ("bedrock/global.openai.fake-model", ("openai", "fake-model")),
+        ("nodot", None),
     ],
 )
-def test_get_bedrock_vendor_alias(model, expected_provider, expected_keys):
-    from litellm.llms.bedrock.common_utils import get_bedrock_vendor_alias
+def test_split_bedrock_vendor_model(model, expected):
+    from litellm.llms.bedrock.common_utils import split_bedrock_vendor_model
 
-    alias = get_bedrock_vendor_alias(model)
-    if expected_provider is None:
-        assert alias is None
-    else:
-        assert alias is not None
-        assert alias.litellm_provider == expected_provider
-        assert alias.candidate_keys == expected_keys
+    assert split_bedrock_vendor_model(model) == expected
 
 
 def test_unmapped_openai_family_model_routes_to_converse():
