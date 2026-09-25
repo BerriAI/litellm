@@ -1422,6 +1422,18 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    prompt_cache_key_as_session_id: bool = Field(
+        default=False,
+        description=(
+            "Use the OpenAI-compatible prompt_cache_key as a fallback session identity when no explicit, "
+            "client-supplied session_id is available. Disabled by default because a prompt-cache bucket is "
+            "not universally a conversation identifier. Explicit session metadata/headers always win. The "
+            "fallback accepts non-empty values up to OpenAI's 64-character limit and namespaces them under a "
+            "'prompt-cache:' prefix in router cache keys. This enables session_affinity and classification_mode='user_turn' for "
+            "clients that expose a stable conversation key only through the standard prompt_cache_key field."
+        ),
+    )
+
     # Session affinity: pin the first turn's routed model for the rest of the session
     session_affinity: bool = Field(
         default=False,

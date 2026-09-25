@@ -4071,32 +4071,28 @@ class ComplexityRouter(CustomLogger):
             if isinstance(metadata := request_kwargs.get(metadata_key), dict)
         ]
 
-    @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve a client-supplied session_id."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
+    def _get_session_id_from_request_kwargs(self, request_kwargs: dict) -> str | None:
+        """Resolve explicit session identity, then the opt-in prompt-cache fallback."""
+        for metadata in self._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
             if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
-        return None
-
-    @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve the proxy-derived API key hash, the same trust boundary
-        DeploymentAffinityCheck uses for its own key-based affinity (not the
-        client-supplied OpenAI `user` param, which isn't authenticated)."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            user_key = metadata.get("user_api_key_hash")
-            if user_key is not None:
-                return str(user_key)
+        if self.config.prompt_cache_key_as_session_id:
+            prompt_cache_key = request_kwargs.get("prompt_cache_key")
+            if isinstance(prompt_cache_key, str) and 0 < len(prompt_cache_key) <= 64:
+                # Namespaced, not hashed: prompt_cache_key is an opaque caller-chosen
+                # bucket label, not a credential, and explicit session_id is likewise
+                # used verbatim. The prefix keeps the two identity sources from
+                # colliding in the affinity cache keyspace.
+                return f"prompt-cache:{prompt_cache_key}"
         return None
 
     def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
-        # Namespace by the caller's API key hash so two different callers reusing the
-        # same client-supplied session_id can't poison each other's routing pin. Falls
-        # back to "unscoped" only when there's no authenticated caller to scope by
-        # (e.g. direct Router usage without the proxy layer).
-        caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
+        # Namespace by the proxy-derived caller identity so two callers reusing the same
+        # session identity cannot poison each other's routing pin. The shared resolver
+        # uses the API-key hash for virtual keys and the authenticated user ID for JWTs;
+        # it deliberately ignores the client-supplied OpenAI `user` parameter.
+        caller_scope: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
     @property

@@ -7309,6 +7309,38 @@ class TestSessionAffinity:
         assert result_for_b.model == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    async def test_prompt_cache_key_does_not_share_pin_between_jwt_callers(
+        self, mock_router_instance, session_affinity_config
+    ):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **session_affinity_config,
+                "prompt_cache_key_as_session_id": True,
+            },
+        )
+        caller_a_kwargs = {
+            "prompt_cache_key": "shared-prompt-bucket",
+            "metadata": {"user_api_key_user_id": "jwt-user-a"},
+        }
+        caller_b_kwargs = {
+            "prompt_cache_key": "shared-prompt-bucket",
+            "metadata": {"user_api_key_user_id": "jwt-user-b"},
+        }
+
+        pinned_for_a = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=caller_a_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert pinned_for_a.model == "o1-preview"
+
+        result_for_b = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=caller_b_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert result_for_b.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_no_session_id_falls_back_to_reclassify(self, mock_router_instance, session_affinity_config):
         cache = AsyncMock()
         mock_router_instance.cache = cache
@@ -7480,6 +7512,56 @@ class TestClassificationMode:
         assert spy.call_count == 3
         assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
         assert all(r.routing_decision["cause"] != "user_turn_continuation" for r in responses)
+
+    @pytest.mark.asyncio
+    async def test_prompt_cache_key_opt_in_holds_tool_loop_decision(self, mock_router_instance, user_turn_config):
+        """An OpenAI-compatible client may expose only its stable prompt-cache bucket. The
+        explicit opt-in lets that key hold a continuation decision without trusting generated IDs."""
+        router = self._router(
+            mock_router_instance,
+            {**user_turn_config, "prompt_cache_key_as_session_id": True},
+        )
+        request_kwargs = {
+            "prompt_cache_key": "opaque-thread-123",
+            "metadata": {
+                "session_id": "per-request-generated-id",
+                SESSION_ID_GENERATED_METADATA_KEY: True,
+            },
+        }
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            responses = [
+                await router.async_pre_routing_hook(
+                    model="test-model", request_kwargs=deepcopy(request_kwargs), messages=turn
+                )
+                for turn in self._tool_loop_turns()
+            ]
+        assert spy.call_count == 1
+        assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
+
+    def test_prompt_cache_key_affinity_is_explicit_bounded_and_lower_precedence(
+        self, mock_router_instance, user_turn_config
+    ):
+        disabled = self._router(mock_router_instance, user_turn_config)
+        assert disabled._get_session_id_from_request_kwargs({"prompt_cache_key": "opaque-thread-123"}) is None
+
+        enabled = self._router(
+            mock_router_instance,
+            {**user_turn_config, "prompt_cache_key_as_session_id": True},
+        )
+        fallback = enabled._get_session_id_from_request_kwargs({"prompt_cache_key": "opaque-thread-123"})
+        assert fallback == "prompt-cache:opaque-thread-123"
+        assert enabled._get_session_id_from_request_kwargs({"session_id": "opaque-thread-123"}) is None
+        assert enabled._get_session_id_from_request_kwargs({"prompt_cache_key": ""}) is None
+        assert enabled._get_session_id_from_request_kwargs({"prompt_cache_key": "x" * 65}) is None
+        assert (
+            enabled._get_session_id_from_request_kwargs(
+                {
+                    "prompt_cache_key": "opaque-thread-123",
+                    "metadata": {"session_id": "explicit-session"},
+                }
+            )
+            == "explicit-session"
+        )
 
     @pytest.mark.asyncio
     async def test_plugins_suppress_user_turn_gate(self, mock_router_instance, basic_config):
