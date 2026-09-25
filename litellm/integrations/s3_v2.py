@@ -640,9 +640,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.max_queue_size,
                 overflow,
             )
-        self.log_queue = [*requeued, *arrivals][
-            overflow:
-        ]  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+            *requeued,
+            *arrivals,
+        ][overflow:]
         self._requeued_count = max(0, len(requeued) - overflow)
         raise S3BatchUploadError(failed=len(failed), total=len(uploads))
 
