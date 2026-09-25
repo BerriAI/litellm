@@ -14,12 +14,13 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypedDict, overload
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
@@ -28,6 +29,18 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
+    get_daily_activity_aggregated,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    DailyActivityExportLabels,
+    build_daily_activity_export_response,
+    search_daily_activity_key_tokens,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    aggregated_date_range_error as _aggregated_date_range_error,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    daily_activity_error as _daily_activity_error,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.repositories.model_repository import ModelRepository
@@ -37,6 +50,12 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
+)
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportFormat,
+    DailyActivityExportResponse,
+    DailyActivityExportType,
+    DailySpendMetadata,
 )
 from litellm.types.tag_management import (
     TagConfig,
@@ -785,4 +804,198 @@ async def get_tag_daily_activity(
         # multiple tags are present.  The panel is primarily used to inspect
         # individual tags, making this trade-off acceptable.
         metadata_metrics_func=None,
+    )
+
+
+class _TagDailyActivityScope(NamedTuple):
+    tag_ids: list[str] | None  # mutable-ok: get_daily_activity's entity_id filter accepts list[str]
+    api_key_filter: str | list[str] | None  # mutable-ok: get_daily_activity's api_key filter accepts list[str]
+
+
+async def _resolve_tag_daily_activity_scope(
+    prisma_client: "PrismaClient",
+    tags: str | None,
+    api_key: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _TagDailyActivityScope:
+    """Shared scoping for all /tag/daily/activity routes so authorization is identical
+    across paginated, aggregated, search and export. An empty api_key_filter means a
+    scoped caller with no keys, which every route answers with an empty result."""
+    tag_list: Final = tags.split(",") if tags else None
+    api_key_filter: Final = await _get_tag_daily_activity_api_key_filter(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        requested_api_key=api_key,
+    )
+    return _TagDailyActivityScope(tag_ids=tag_list, api_key_filter=api_key_filter)
+
+
+@router.get(
+    "/tag/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def get_tag_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tags: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    exclude_tags: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Aggregated daily activity for tags without pagination.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_tag_daily_activity_scope(
+        prisma_client=prisma_client,
+        tags=tags,
+        api_key=api_key,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if scope.api_key_filter == []:
+        return SpendAnalyticsPaginatedResponse(results=[])
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=scope.tag_ids,
+        entity_metadata_field=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=scope.api_key_filter,
+        exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/tag/daily/activity/aggregated/search",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def search_tag_daily_activity_keys(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    search: str = Query(..., description="Search term matching key hash, key alias or user id"),
+    tags: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_tags: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Key search over aggregated tag daily activity. Returns the aggregated
+    response restricted to the top-spend matching keys.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_tag_daily_activity_scope(
+        prisma_client=prisma_client,
+        tags=tags,
+        api_key=None,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    own_keys: Final = scope.api_key_filter if isinstance(scope.api_key_filter, list) else None
+    key_filter: Final = await search_daily_activity_key_tokens(
+        prisma_client=prisma_client,
+        search=search,
+        own_keys=own_keys,
+    )
+    if not key_filter:
+        return SpendAnalyticsPaginatedResponse(
+            results=[],
+            metadata=DailySpendMetadata(api_key_limit=USAGE_TOP_API_KEYS_LIMIT, total_api_keys=0),
+        )
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=scope.tag_ids,
+        entity_metadata_field=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=None,
+        api_key=list(key_filter),  # mutable-ok: api_key filter accepts list[str]
+        exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/tag/daily/activity/export",
+    response_model=DailyActivityExportResponse,
+    responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
+    tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def get_tag_daily_activity_export(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    export_type: DailyActivityExportType = "daily",
+    format: DailyActivityExportFormat = "csv",
+    tags: str | None = None,
+    exclude_tags: str | None = None,
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
+) -> Response:
+    """
+    Export daily activity for tags as CSV or JSON, uncapped.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    if start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message="Please provide start_date and end_date")
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_tag_daily_activity_scope(
+        prisma_client=prisma_client,
+        tags=tags,
+        api_key=None,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    return await build_daily_activity_export_response(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=scope.tag_ids,
+        entity_metadata_field=None,
+        alias_metadata_key=None,
+        api_key=scope.api_key_filter,
+        exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone_offset,
+        export_type=export_type,
+        format=format,
+        labels=DailyActivityExportLabels(alias_header=None, id_header="Tag"),
+        filename_prefix="tag",
     )

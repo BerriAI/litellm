@@ -2777,7 +2777,16 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-@pytest.mark.parametrize("route", ["/tag/list", "/tag/daily/activity"])
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/tag/list",
+        "/tag/daily/activity",
+        "/tag/daily/activity/aggregated",
+        "/tag/daily/activity/aggregated/search",
+        "/tag/daily/activity/export",
+    ],
+)
 def test_internal_users_can_access_scoped_tag_usage_routes(user_role, route):
     """
     Internal users can read tag usage endpoints because the endpoint handlers
@@ -3658,7 +3667,16 @@ def test_team_daily_activity_routes_reachable_by_non_admin(route, user_role):
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-def test_organization_daily_activity_reachable_by_non_admin_roles(user_role):
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/organization/daily/activity",
+        "/organization/daily/activity/aggregated",
+        "/organization/daily/activity/aggregated/search",
+        "/organization/daily/activity/export",
+    ],
+)
+def test_organization_daily_activity_reachable_by_non_admin_roles(user_role, route):
     """The Organization Usage dashboard calls /organization/daily/activity, whose
     handler restricts results to organizations the caller is ORG_ADMIN of (and
     403s on any other org). That scoping is unreachable unless the route layer
@@ -3679,7 +3697,7 @@ def test_organization_daily_activity_reachable_by_non_admin_roles(user_role):
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=user_obj,
         _user_role=user_role,
-        route="/organization/daily/activity",
+        route=route,
         request=request,
         valid_token=valid_token,
         request_data={},

@@ -118,6 +118,51 @@ class SpendAnalyticsPaginatedResponse(BaseModel):
     metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
 
 
+DailyActivityExportType = Literal["daily", "daily_with_keys", "daily_with_users", "daily_with_models"]
+DailyActivityExportFormat = Literal["csv", "json"]
+
+
+class DailyActivityExportRow(BaseModel):
+    date: str
+    entity_id: str
+    entity_alias: str | None = None
+    api_key: str | None = None
+    key_alias: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    keys: int | None = None
+    model: str | None = None
+    spend: float
+    flat_cost: float = 0.0
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+
+class DailyActivityExportMetadata(BaseModel):
+    export_date: str
+    export_type: DailyActivityExportType
+    start_date: str
+    end_date: str
+    entity_ids: list[str] | None
+    total_spend: float
+    total_flat_cost: float = 0.0
+    total_api_requests: int
+    total_successful_requests: int
+    total_failed_requests: int
+    total_tokens: int
+
+
+class DailyActivityExportResponse(BaseModel):
+    metadata: DailyActivityExportMetadata
+    data: list[DailyActivityExportRow]
+
+
 class LiteLLM_DailyUserSpend(BaseModel):
     id: str
     user_id: str

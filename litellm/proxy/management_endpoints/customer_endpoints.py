@@ -12,10 +12,10 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -33,7 +34,21 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    DailyActivityExportLabels,
+    build_daily_activity_export_response,
+    search_daily_activity_key_tokens,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    aggregated_date_range_error as _aggregated_date_range_error,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    daily_activity_error as _daily_activity_error,
+)
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -43,6 +58,10 @@ from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportFormat,
+    DailyActivityExportResponse,
+    DailyActivityExportType,
+    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.customer_endpoints import (
@@ -888,9 +907,9 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         raise HTTPException(
             status_code=401,
@@ -931,4 +950,244 @@ async def get_customer_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+    )
+
+
+class _CustomerDailyActivityScope(NamedTuple):
+    end_user_ids: list[str] | None  # mutable-ok: get_daily_activity's entity_id filter accepts list[str]
+    exclude_end_user_ids: list[str] | None  # mutable-ok: exclude filter accepts list[str]
+    end_user_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field accepts dict
+
+
+async def _resolve_customer_daily_activity_scope(
+    prisma_client: "PrismaClient",
+    end_user_ids: str | None,
+    exclude_end_user_ids: str | None,
+) -> _CustomerDailyActivityScope:
+    """Shared id parsing and alias metadata for all /customer/daily/activity routes."""
+    end_user_ids_list: Final = end_user_ids.split(",") if end_user_ids else None
+    exclude_end_user_ids_list: Final = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
+
+    where_condition: Final = dict[str, object]()
+    if end_user_ids_list:
+        where_condition["user_id"] = {"in": list(end_user_ids_list)}
+    end_user_aliases: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(where=where_condition)
+
+    return _CustomerDailyActivityScope(
+        end_user_ids=end_user_ids_list,
+        exclude_end_user_ids=exclude_end_user_ids_list,
+        end_user_alias_metadata={e.user_id: {"alias": e.alias} for e in end_user_aliases},
+    )
+
+
+@router.get(
+    "/customer/daily/activity/aggregated",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@router.get(
+    "/end_user/daily/activity/aggregated",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_customer_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    end_user_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    exclude_end_user_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Aggregated daily activity for customers without pagination, including
+    per-customer breakdown.
+    """
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+        )
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_customer_daily_activity_scope(
+        prisma_client=prisma_client,
+        end_user_ids=end_user_ids,
+        exclude_end_user_ids=exclude_end_user_ids,
+    )
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=scope.end_user_ids,
+        entity_metadata_field=scope.end_user_alias_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        exclude_entity_ids=scope.exclude_end_user_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/customer/daily/activity/aggregated/search",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@router.get(
+    "/end_user/daily/activity/aggregated/search",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def search_customer_daily_activity_keys(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    search: str = Query(..., description="Search term matching key hash, key alias or user id"),
+    end_user_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_end_user_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Key search over aggregated customer daily activity.
+    """
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+        )
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_customer_daily_activity_scope(
+        prisma_client=prisma_client,
+        end_user_ids=end_user_ids,
+        exclude_end_user_ids=exclude_end_user_ids,
+    )
+
+    key_filter: Final = await search_daily_activity_key_tokens(
+        prisma_client=prisma_client,
+        search=search,
+        own_keys=None,
+    )
+    if not key_filter:
+        return SpendAnalyticsPaginatedResponse(
+            results=[],
+            metadata=DailySpendMetadata(api_key_limit=USAGE_TOP_API_KEYS_LIMIT, total_api_keys=0),
+        )
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=scope.end_user_ids,
+        entity_metadata_field=scope.end_user_alias_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        model=None,
+        api_key=list(key_filter),  # mutable-ok: api_key filter accepts list[str]
+        exclude_entity_ids=scope.exclude_end_user_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/customer/daily/activity/export",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=DailyActivityExportResponse,
+    responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
+)
+@router.get(
+    "/end_user/daily/activity/export",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_customer_daily_activity_export(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    export_type: DailyActivityExportType = "daily",
+    format: DailyActivityExportFormat = "csv",
+    end_user_ids: str | None = None,
+    exclude_end_user_ids: str | None = None,
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
+) -> Response:
+    """
+    Export daily activity for customers as CSV or JSON, uncapped.
+    """
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+        )
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    if start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message="Please provide start_date and end_date")
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_customer_daily_activity_scope(
+        prisma_client=prisma_client,
+        end_user_ids=end_user_ids,
+        exclude_end_user_ids=exclude_end_user_ids,
+    )
+
+    return await build_daily_activity_export_response(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=scope.end_user_ids,
+        entity_metadata_field=scope.end_user_alias_metadata,
+        alias_metadata_key="alias",
+        api_key=None,
+        exclude_entity_ids=scope.exclude_end_user_ids,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone_offset,
+        export_type=export_type,
+        format=format,
+        labels=DailyActivityExportLabels(alias_header="Customer", id_header="Customer ID"),
+        filename_prefix="customer",
     )
