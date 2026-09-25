@@ -1440,7 +1440,94 @@ async def test_managed_budget_uses_the_delegated_model_group(monkeypatch, backen
     assert await live._managed_member_budget(auth, model="backend") is blocked
     assert await live._managed_member_budget(auth, model="backend") is blocked
     db.litellm_modelaccessgroupbudgettable.find_many.assert_awaited_once()
-    assert cache.async_set_cache.await_args.kwargs["key"] == "model_access_group:backend-group"
+    assert cache.async_set_cache.await_args.kwargs["key"] == "live:model_access_group_limits:backend-group"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["rpm_limit", "tpm_limit"])
+async def test_managed_budget_blocks_a_delegated_group_rate_limit_without_a_budget(monkeypatch, limit_field):
+    from litellm.proxy import proxy_server
+
+    group_budget = SimpleNamespace(max_budget=None, rpm_limit=None, tpm_limit=None)
+    setattr(group_budget, limit_field, 100)
+    db = SimpleNamespace(
+        litellm_modelaccessgroupbudgettable=SimpleNamespace(
+            find_many=AsyncMock(
+                return_value=[SimpleNamespace(access_group_name="voice-group", litellm_budget_table=group_budget)]
+            )
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache())
+    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace())
+    monkeypatch.setattr(live, "collect_matched_model_access_groups", AsyncMock(return_value=("voice-group",)))
+
+    assert await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", models=["voice"]), model="backend") is True
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_fails_closed_when_the_team_row_is_unreadable(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(side_effect=RuntimeError("Database unavailable"))),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", team_id="team", user_id="member"))
+
+    assert rejected.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_fails_closed_when_the_default_budget_is_unreadable(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    team = LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "budget-1"})
+    db = SimpleNamespace(
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+        litellm_budgettable=SimpleNamespace(find_unique=AsyncMock(side_effect=RuntimeError("Database unavailable"))),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _auth_cache())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", team_id="team", user_id="member"))
+
+    assert rejected.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_caches_the_team_and_its_default_budget(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    team = LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "budget-1"})
+    budget = LiteLLM_BudgetTable(max_budget=5)
+    team_lookup = AsyncMock(return_value=team)
+    budget_lookup = AsyncMock(return_value=budget)
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        litellm_teamtable=SimpleNamespace(find_unique=team_lookup),
+        litellm_budgettable=SimpleNamespace(find_unique=budget_lookup),
+    )
+    cache = _auth_cache()
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    auth = UserAPIKeyAuth(api_key="owner", team_id="team", user_id="member")
+
+    assert await live._managed_member_budget(auth) is True
+    assert await live._managed_member_budget(auth) is True
+
+    team_lookup.assert_awaited_once()
+    budget_lookup.assert_awaited_once()
+    cached_keys: set[str] = {call.kwargs["key"] for call in cache.async_set_cache.await_args_list}
+    assert {"team_id:team", "team_member_default_budget:budget-1"} <= cached_keys
 
 
 @pytest.mark.asyncio
