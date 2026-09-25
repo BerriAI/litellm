@@ -517,12 +517,6 @@ class TestMCPRequestHandler:
 
         assert result is None
 
-    # ------------------------------------------------------------------
-    # mcp_tool_permissions ["*"] wildcard semantics live in one seam:
-    # _union_tool_grants returns None (unrestricted at that level) when the
-    # level's direct grants carry the wildcard, whatever its toolsets grant
-    # ------------------------------------------------------------------
-
     @pytest.mark.parametrize(
         "direct,via_toolsets,expected",
         [
