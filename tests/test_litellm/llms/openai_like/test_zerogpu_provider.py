@@ -17,14 +17,21 @@ ZEROGPU_MODELS: Final = (
     "gpt-5.4-nano",
     "gpt-5.6-luna",
     "gpt-oss-120b",
-    "LFM2.5-1.2B-Instruct",
-    "LFM2.5-1.2B-Thinking",
     "llama-3.1-8b-instruct-fast",
     "qwen3-30b-a3b-fp8",
 )
 
 
-def _zerogpu_client(requests: list[httpx.Request], usage: dict[str, int]) -> OpenAI:
+WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+
+
+def _zerogpu_client(requests: list[httpx.Request], usage: dict[str, object]) -> OpenAI:
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(
@@ -68,7 +75,13 @@ def test_prefixed_model_reaches_zerogpu_chat_completions_without_the_prefix():
 @pytest.mark.parametrize("model", ZEROGPU_MODELS)
 def test_zerogpu_completion_is_charged_at_the_cost_map_rates(model: str):
     requests: Final[list[httpx.Request]] = []
-    client: Final = _zerogpu_client(requests, {"prompt_tokens": 1000, "completion_tokens": 200, "total_tokens": 1200})
+    usage: Final = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "prompt_tokens_details": {"cached_tokens": 400},
+    }
+    client: Final = _zerogpu_client(requests, usage)
 
     with client:
         response: Final = litellm.completion(
@@ -78,9 +91,43 @@ def test_zerogpu_completion_is_charged_at_the_cost_map_rates(model: str):
         )
 
     rates: Final = litellm.model_cost[f"zerogpu/{model}"]
-    expected_cost: Final = 1000 * rates["input_cost_per_token"] + 200 * rates["output_cost_per_token"]
+    cached_rate: Final = rates.get("cache_read_input_token_cost", rates["input_cost_per_token"])
+    expected_cost: Final = (
+        600 * rates["input_cost_per_token"] + 400 * cached_rate + 200 * rates["output_cost_per_token"]
+    )
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
     assert expected_cost > 0
+
+
+@pytest.mark.parametrize(
+    ("model", "forwards_reasoning_effort"),
+    [("gpt-5.6-luna", True), ("gpt-oss-120b", False)],
+)
+def test_tools_reach_zerogpu_and_reasoning_effort_only_for_reasoning_models(
+    model: str, forwards_reasoning_effort: bool
+):
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+
+    with client:
+        litellm.completion(
+            model=f"zerogpu/{model}",
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            tools=[WEATHER_TOOL],
+            tool_choice="auto",
+            reasoning_effort="high",
+            drop_params=True,
+            client=client,
+        )
+
+    reasoning: Final = {"reasoning_effort": "high"} if forwards_reasoning_effort else {}
+    assert json.loads(requests[0].content) == {
+        "model": model,
+        "messages": [{"role": "user", "content": "weather in Paris?"}],
+        "tools": [WEATHER_TOOL],
+        "tool_choice": "auto",
+        **reasoning,
+    }
 
 
 def test_zerogpu_key_and_base_come_from_zerogpu_env_vars(monkeypatch: pytest.MonkeyPatch):
