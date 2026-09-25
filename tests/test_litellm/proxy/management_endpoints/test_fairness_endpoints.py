@@ -10,6 +10,7 @@ from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.fairness_settings import apply_fairness_settings
 from litellm.proxy.management_endpoints.fairness_endpoints import (
     get_fairness_settings,
     get_fairness_status,
@@ -154,7 +155,7 @@ async def test_update_persists_applies_and_audits(
 
 
 @pytest.mark.asyncio
-async def test_second_update_reports_previous_value_in_audit(
+async def test_disabling_after_enabling_clears_mirrored_reservations_and_audits_previous_value(
     isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     audit_calls: list[dict[str, object]] = []
@@ -169,14 +170,26 @@ async def test_second_update_reports_previous_value_in_audit(
     second: Final = first.model_copy(update={"enabled": False})
 
     await update_fairness_settings(settings=first, user_api_key_dict=admin)
+    assert litellm.priority_reservation == {"production": 0.6, "batch": 0.1}
     await update_fairness_settings(settings=second, user_api_key_dict=admin)
     for _ in range(3):
         await asyncio.sleep(0)
 
     assert [call["before_value"] for call in audit_calls] == [None, first.model_dump(mode="json")]
     assert litellm.fairness_settings == second
+    assert litellm.priority_reservation is None
+    assert litellm.priority_reservation_settings is not None
+    assert litellm.priority_reservation_settings.saturation_threshold != first.saturation_threshold
     status: Final = await get_fairness_status(user_api_key_dict=admin)
     assert status.enabled is False
+
+
+def test_disabled_settings_leave_config_file_reservations_alone(
+    isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "priority_reservation", {"legacy": 0.5})
+    apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
+    assert litellm.priority_reservation == {"legacy": 0.5}
 
 
 def test_settings_reject_duplicate_and_reserved_class_names() -> None:

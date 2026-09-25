@@ -49,8 +49,12 @@ def apply_fairness_settings(
     internal_usage_cache: DualCache | None,
     llm_router: Router | None,
 ) -> None:
+    previous: Final = litellm.fairness_settings
     litellm.fairness_settings = settings
     if not settings.enabled:
+        if previous is not None and previous.enabled:
+            litellm.priority_reservation = None
+            litellm.priority_reservation_settings = PriorityReservationSettings()
         return
     litellm.priority_reservation = settings.reserved_shares()
     litellm.priority_reservation_settings = PriorityReservationSettings(
