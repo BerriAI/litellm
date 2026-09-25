@@ -1455,6 +1455,30 @@ describe("EntityUsage", () => {
 
       expect(await screen.findByText("server-export:true")).toBeInTheDocument();
     });
+
+    it("offers a server export for user even without truncation since the rollup is key-free", async () => {
+      const untruncatedData = {
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, api_key_limit: 10, total_api_keys: 4 },
+      };
+      mockUserDailyActivityAggregatedCall.mockResolvedValue(untruncatedData);
+
+      render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+
+      expect(await screen.findByText("server-export:true")).toBeInTheDocument();
+    });
+
+    it("keeps client-side export for a non-user entity without truncation", async () => {
+      const untruncatedData = {
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, api_key_limit: 10, total_api_keys: 4 },
+      };
+      mockTagDailyActivityAggregatedCall.mockResolvedValue(untruncatedData);
+
+      render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+      expect(await screen.findByText("server-export:false")).toBeInTheDocument();
+    });
   });
 
   describe("model top api keys", () => {

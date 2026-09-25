@@ -696,8 +696,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const exportFn = ENTITY_EXPORT_FNS[entityType];
   const exportTimesReady = accessToken && startTime && endTime;
+  // User rollups are key-free server-side, so only the export route can produce key/model rows
+  const exportsNeedServerRoute = entityType === "user" || apiKeyTruncation !== undefined;
   const serverExport: ServerExport | undefined =
-    exportFn !== undefined && apiKeyTruncation !== undefined && exportTimesReady
+    exportFn !== undefined && exportsNeedServerRoute && exportTimesReady
       ? (scope, format) => {
           const exportArgs = {
             accessToken,
