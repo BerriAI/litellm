@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Final, NamedTuple
 from unittest.mock import AsyncMock
 
@@ -159,6 +159,40 @@ class _FakeModel:
         return _tool_call(responses_api) if kind == "initial" else _final_answer(responses_api)
 
 
+class _StreamBrokenBeforeFirstChunk(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        raise httpx.ReadError("connection dropped before the first chunk")
+        yield b""
+
+
+def _chat_tool_call_stream() -> httpx.Response:
+    tool_call: Final = {
+        "index": 0,
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": _TOOL_NAME, "arguments": json.dumps({"entry": "alpha"})},
+    }
+    chunks: Final = (
+        {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+        {},
+    )
+    body: Final = "".join(
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": None if delta else "tool_calls"}],
+            }
+        )
+        + "\n\n"
+        for delta in chunks
+    )
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=f"{body}data: [DONE]\n\n")
+
+
 def _serve(model: _FakeModel) -> None:
     respx.post(f"{_UPSTREAM}/chat/completions").mock(side_effect=model)
     respx.post(f"{_UPSTREAM}/responses").mock(side_effect=model)
@@ -311,6 +345,44 @@ async def test_router_does_not_replay_a_tool_call_that_failed_after_it_was_sent(
 
     assert ledger_gateway.tool.await_count == 1
     assert model.calls == ["initial", "follow_up"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_router_does_not_fall_back_when_a_streamed_follow_up_breaks_after_a_tool_ran(
+    ledger_gateway: _LedgerGateway,
+):
+    """
+    Given: A streaming Chat Completions request whose tool ran
+    When:  The follow-up stream breaks before its first chunk and a fallback group is configured
+    Then:  The client gets the error instead of a fallback that runs the tool again
+    """
+    calls: Final[list[str]] = []
+
+    def stream_model(request: httpx.Request) -> httpx.Response:
+        kind: Final = "follow_up" if _is_follow_up(request) else "initial"
+        calls.append(kind)
+        if kind == "follow_up":
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=_StreamBrokenBeforeFirstChunk()
+            )
+        return _chat_tool_call_stream()
+
+    respx.post(f"{_UPSTREAM}/chat/completions").mock(side_effect=stream_model)
+    stream: Final = await _router(num_retries=0, fallbacks=[{"repro-model": ["backup-model"]}]).acompletion(
+        model="repro-model",
+        messages=[{"role": "user", "content": "Record entry alpha"}],
+        tools=_ledger_tools(),
+        metadata={"user_api_key_auth": _ledger_caller()},
+        stream=True,
+    )
+
+    with pytest.raises(litellm.APIConnectionError):
+        async for _ in stream:
+            pass
+
+    assert ledger_gateway.tool.await_count == 1
+    assert calls == ["initial", "follow_up"]
 
 
 @pytest.mark.asyncio
