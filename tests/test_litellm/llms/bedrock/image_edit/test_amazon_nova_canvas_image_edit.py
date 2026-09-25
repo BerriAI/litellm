@@ -651,6 +651,46 @@ async def test_aimage_edit_image_less_condition_image_reaches_transform(monkeypa
     assert response.data[0].b64_json == "aGk="
 
 
+def test_aimage_edit_positional_arguments_still_work(monkeypatch):
+    """The pre-existing positional call form litellm.aimage_edit(image, model, prompt)
+    must keep working now that image is optional: the sync image_edit signature keeps
+    model/prompt defaulted and positional (no keyword-only marker), and aimage_edit
+    mirrors that compatibility profile while keeping its own parameter order."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    posted: dict[str, object] = {}
+
+    class _FakeAsyncClient:
+        async def post(self, url, headers, data):
+            posted["url"] = url
+            posted["body"] = json.loads(data)
+            return httpx.Response(200, json={"images": ["aGk="]}, request=httpx.Request("POST", url))
+
+    import litellm.llms.bedrock.image_edit.handler as bedrock_image_edit_handler
+
+    with patch.object(
+        bedrock_image_edit_handler,
+        "get_async_httpx_client",
+        lambda **kwargs: _FakeAsyncClient(),
+    ):
+        response = asyncio.run(
+            litellm.aimage_edit(
+                io.BytesIO(b"img-bytes"),
+                f"bedrock/{TEST_MODEL}",
+                "same layout",
+                taskType="TEXT_IMAGE",
+            )
+        )
+    # Positional 2nd/3rd args landed on model/prompt respectively (the
+    # historical order), not swapped as sync's (image, prompt, model) order.
+    body = posted["body"]
+    assert isinstance(body, dict)
+    assert body["taskType"] == "TEXT_IMAGE"
+    assert body["textToImageParams"]["text"] == "same layout"
+    assert body["textToImageParams"]["conditionImage"] == base64.b64encode(b"img-bytes").decode("utf-8")
+    assert response.data is not None
+    assert response.data[0].b64_json == "aGk="
+
+
 def test_aimage_edit_none_image_builds_empty_list(monkeypatch):
     """An omitted image must arrive at the handler as [] (empty list), not [None]."""
     import litellm.images.main as images_main

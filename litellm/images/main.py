@@ -976,9 +976,8 @@ def image_edit(
 @client
 async def aimage_edit(
     image: FileTypes | list[FileTypes] | None = None,
-    *,
-    model: str,
-    prompt: str,
+    model: str | None = None,
+    prompt: str | None = None,
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
@@ -1013,7 +1012,8 @@ async def aimage_edit(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
+                api_base=local_vars.get("base_url", None),
             )
 
         images: Final = (
