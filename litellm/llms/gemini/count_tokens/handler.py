@@ -67,8 +67,6 @@ class GoogleAIStudioTokenCounter:
         """
         import copy
 
-        from google.genai.types import FunctionResponse
-
         # Handle None or empty contents
         if not contents:
             return contents
@@ -79,6 +77,8 @@ class GoogleAIStudioTokenCounter:
             parts = content["parts"]
             for part in parts:
                 if "functionResponse" in part:
+                    from google.genai.types import FunctionResponse
+
                     function_response_data = part["functionResponse"]
                     function_response_part = FunctionResponse(**function_response_data)
                     function_response_part.id = None

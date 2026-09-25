@@ -1,4 +1,5 @@
 import json
+import sys
 
 import httpx
 import pytest
@@ -169,3 +170,28 @@ async def test_acount_tokens_wraps_malformed_contents_error_in_api_error():
             api_key="test-key",
             client=client,
         )
+
+
+@pytest.mark.asyncio
+async def test_acount_tokens_reaches_gemini_without_google_genai_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "google.genai.types", None)
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"totalTokens": 7})
+
+    contents = [
+        {"role": "model", "parts": [{"function_call": {"name": "Bash", "args": {"command": "ls"}}}]},
+        {"role": "user", "parts": [{"function_response": {"name": "Bash", "response": {"content": "a.txt"}}}]},
+    ]
+
+    result = await GoogleAIStudioTokenCounter().acount_tokens(
+        model="gemini-2.5-flash",
+        contents=contents,
+        api_key="test-key",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    assert result == {"totalTokens": 7}
+    assert json.loads(recorded[-1].content) == {"contents": contents}
