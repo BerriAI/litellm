@@ -31,21 +31,7 @@ jobs:
 
       - name: Read release version
         id: version
-        run: |
-          python3 - <<'SCRIPT' >> "$GITHUB_OUTPUT"
-          import re
-          import sys
-          import tomllib
-
-          with open("pyproject.toml", "rb") as f:
-              version = tomllib.load(f)["project"]["version"]
-
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.0", version):
-              print(f"::error::pyproject.toml version {version} is not an X.Y.0 release version", file=sys.stderr)
-              sys.exit(1)
-
-          print(f"version={version}")
-          SCRIPT
+        run: python3 .github/scripts/read_rc_version.py >> "$GITHUB_OUTPUT"
 
       - name: Create rc branch
         env:
