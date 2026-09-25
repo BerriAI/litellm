@@ -1523,6 +1523,256 @@ export const teamDailyActivityKeySearchCall = async (
   }
 };
 
+const entityDailyActivityAggregatedCall = async ({
+  accessToken,
+  startTime,
+  endTime,
+  path,
+  idsParam,
+  ids,
+}: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  path: string;
+  idsParam: string;
+  ids: string[] | null;
+}) => {
+  try {
+    return await apiClient.get(`/${path}/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        [idsParam]: ids && ids.length > 0 ? ids.join(",") : undefined,
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to fetch aggregated ${path} daily activity:`, error);
+    throw error;
+  }
+};
+
+const entityDailyActivityKeySearchCall = async ({
+  accessToken,
+  startTime,
+  endTime,
+  path,
+  idsParam,
+  search,
+  ids,
+}: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  path: string;
+  idsParam: string;
+  search: string;
+  ids: string[] | null;
+}) => {
+  try {
+    return await apiClient.get(`/${path}/daily/activity/aggregated/search`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        search,
+        [idsParam]: ids && ids.length > 0 ? ids.join(",") : undefined,
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to search ${path} daily activity keys:`, error);
+    throw error;
+  }
+};
+
+const entityDailyActivityExportCall = async ({
+  accessToken,
+  startTime,
+  endTime,
+  entityIds,
+  exportType,
+  format,
+  path,
+  idsParam,
+}: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+  path: string;
+  idsParam: string;
+}): Promise<Blob> => {
+  return apiClient.get<Blob>(`/${path}/daily/activity/export`, {
+    accessToken,
+    responseType: "blob",
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      timezone: new Date().getTimezoneOffset().toString(),
+      export_type: exportType,
+      format,
+      [idsParam]: entityIds && entityIds.length > 0 ? entityIds.join(",") : undefined,
+    },
+  });
+};
+
+export const tagDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  tags: string[] | null = null,
+) => entityDailyActivityAggregatedCall({ accessToken, startTime, endTime, path: "tag", idsParam: "tags", ids: tags });
+
+export const tagDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, tags?: string[] | null]
+) => {
+  const [search, tags = null] = options;
+  return entityDailyActivityKeySearchCall({
+    accessToken,
+    startTime,
+    endTime,
+    path: "tag",
+    idsParam: "tags",
+    search,
+    ids: tags,
+  });
+};
+
+export const tagDailyActivityExportCall = async (options: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}): Promise<Blob> => entityDailyActivityExportCall({ ...options, path: "tag", idsParam: "tags" });
+
+export const organizationDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  organizationIds: string[] | null = null,
+) =>
+  entityDailyActivityAggregatedCall({
+    accessToken,
+    startTime,
+    endTime,
+    path: "organization",
+    idsParam: "organization_ids",
+    ids: organizationIds,
+  });
+
+export const organizationDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, organizationIds?: string[] | null]
+) => {
+  const [search, organizationIds = null] = options;
+  return entityDailyActivityKeySearchCall({
+    accessToken,
+    startTime,
+    endTime,
+    path: "organization",
+    idsParam: "organization_ids",
+    search,
+    ids: organizationIds,
+  });
+};
+
+export const organizationDailyActivityExportCall = async (options: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}): Promise<Blob> => entityDailyActivityExportCall({ ...options, path: "organization", idsParam: "organization_ids" });
+
+export const customerDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  customerIds: string[] | null = null,
+) =>
+  entityDailyActivityAggregatedCall({
+    accessToken,
+    startTime,
+    endTime,
+    path: "customer",
+    idsParam: "end_user_ids",
+    ids: customerIds,
+  });
+
+export const customerDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, customerIds?: string[] | null]
+) => {
+  const [search, customerIds = null] = options;
+  return entityDailyActivityKeySearchCall({
+    accessToken,
+    startTime,
+    endTime,
+    path: "customer",
+    idsParam: "end_user_ids",
+    search,
+    ids: customerIds,
+  });
+};
+
+export const customerDailyActivityExportCall = async (options: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}): Promise<Blob> => entityDailyActivityExportCall({ ...options, path: "customer", idsParam: "end_user_ids" });
+
+export const agentDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  agentIds: string[] | null = null,
+) =>
+  entityDailyActivityAggregatedCall({
+    accessToken,
+    startTime,
+    endTime,
+    path: "agent",
+    idsParam: "agent_ids",
+    ids: agentIds,
+  });
+
+export const agentDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, agentIds?: string[] | null]
+) => {
+  const [search, agentIds = null] = options;
+  return entityDailyActivityKeySearchCall({ accessToken, startTime, endTime, path: "agent", idsParam: "agent_ids", search, ids: agentIds });
+};
+
+export const agentDailyActivityExportCall = async (options: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}): Promise<Blob> => entityDailyActivityExportCall({ ...options, path: "agent", idsParam: "agent_ids" });
+
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (
