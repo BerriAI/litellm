@@ -59,6 +59,7 @@
 - {id: mgmt.model.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "model_management_endpoints.py:1358", rationale: "Pricing/concurrency persist"}
 - {id: mgmt.model.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "model_management_endpoints.py:1045", rationale: "Removes from registry"}
 - {id: mgmt.model.block.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "model_management_endpoints.py", rationale: "Blocked model stays blocked"}
+- {id: mgmt.model.info.capability_flags, module: mgmt, tier: P1, surface: api, assertions: [capability_flags], source: "model_management_endpoints.py", rationale: "/model/info resolves a deployment's supports_* flags from the cost map"}
 - {id: mgmt.access_group.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:450", rationale: "Model permissioning group"}
 - {id: mgmt.access_group.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:600", rationale: "Access group membership query"}
 - {id: mgmt.mcp_server.register.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "mcp_management_endpoints.py:880", rationale: "MCP server registration"}

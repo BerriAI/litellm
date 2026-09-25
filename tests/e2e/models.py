@@ -1104,6 +1104,10 @@ class CustomPricing(BaseModel):
         return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
+class ResolvedModelInfo(CustomPricing):
+    supports_video_input: bool | None = None
+
+
 class ModelInfoEntry(BaseModel):
     """One /model/info row. `litellm_params` is the configured deployment (carries
     any custom-pricing override); `model_info` is the price the proxy resolved for
@@ -1112,7 +1116,7 @@ class ModelInfoEntry(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
     litellm_params: CustomPricing = CustomPricing()
-    model_info: CustomPricing = CustomPricing()
+    model_info: ResolvedModelInfo = ResolvedModelInfo()
 
 
 class ModelInfoResponse(BaseModel):
@@ -1158,6 +1162,7 @@ class CostMapEntry(BaseModel):
     supports_function_calling: bool | None = None
     supports_reasoning: bool | None = None
     supports_response_schema: bool | None = None
+    supports_video_input: bool | None = None
 
 
 class CostMap(RootModel[dict[str, CostMapEntry]]):

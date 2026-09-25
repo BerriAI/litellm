@@ -6277,6 +6277,7 @@ def _get_model_info_helper(
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
+                supports_video_input=_model_info.get("supports_video_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
                 supports_native_streaming=_model_info.get("supports_native_streaming", None),
                 supports_native_structured_output=_model_info.get("supports_native_structured_output", None),
@@ -6423,6 +6424,7 @@ def get_model_info(
             supports_audio_input: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
+            supports_video_input: Optional[bool]
             supports_web_search: Optional[bool]
             supports_url_context: Optional[bool]
             supports_reasoning: Optional[bool]

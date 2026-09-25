@@ -197,6 +197,13 @@ def test_get_model_info_anthropic_compaction(
     assert litellm.get_model_info("claude-sonnet-5")["supports_anthropic_compaction"] is capability
 
 
+def test_get_model_info_surfaces_supports_video_input(local_model_cost_map: None) -> None:
+    model: Final = "gemini/gemini-2.5-pro"
+    expected = litellm.model_cost[model].get("supports_video_input")
+    assert expected is not None, f"cost map no longer declares supports_video_input for {model}"
+    assert litellm.get_model_info(model)["supports_video_input"] == expected
+
+
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
