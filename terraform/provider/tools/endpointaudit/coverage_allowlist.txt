@@ -28,6 +28,7 @@ GET /tag/user-agent/per-user-analytics
 GET /tag/wau
 GET /team/daily/activity
 GET /team/daily/activity/aggregated
+GET /team/daily/activity/export
 GET /team/daily/activity/aggregated/search
 GET /team/spend/by_user
 GET /team/spend/report
@@ -96,7 +97,6 @@ GET /guardrails/{guardrail_id}
 GET /prompts/{prompt_id}
 GET /prompts/{prompt_id}/versions
 PATCH /guardrails/{guardrail_id}
-PATCH /model/{model_id}/update
 PATCH /prompts/{prompt_id}
 PATCH /team/{team_id}
 POST /team/model/add

@@ -46,6 +46,8 @@ def aocr(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
+def ocr_health_check_document(model: str, custom_llm_provider: str | None) -> dict[str, object]: ...
+def ocr_passthrough_response(model: str, endpoint: str, body: bytes) -> dict[str, object] | None: ...
 def embedding(
     request: LiteLLMEmbeddingRequest,
     args: tuple[object, ...],
@@ -417,6 +419,8 @@ __all__ = [
     "gil_stats",
     "messages",
     "ocr",
+    "ocr_health_check_document",
+    "ocr_passthrough_response",
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
