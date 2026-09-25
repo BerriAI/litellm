@@ -2269,13 +2269,13 @@ class MCPRequestHandler:
             team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
 
             # Apply same inheritance logic as get_allowed_mcp_servers
-            if team_tools:
-                if key_tools:
+            if team_tools is not None:
+                if key_tools is not None:
                     # Both have restrictions → intersection
                     allowed_tools = list(set(team_tools) & set(key_tools))
                 else:
                     # Only team has restrictions → inherit from team
-                    allowed_tools = team_tools
+                    allowed_tools = _as_list(team_tools)
             else:
                 # No team restrictions → use key restrictions
                 allowed_tools = cast(list[str], key_tools)
