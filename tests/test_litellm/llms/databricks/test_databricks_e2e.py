@@ -240,9 +240,330 @@ def test_token_redaction():
     print("  ✓ All redaction tests passed!")
 
 
+def test_chat_completion(config: dict):
+    """Test chat completion with Databricks."""
+    print("\n" + "=" * 60)
+    print("TEST: Chat Completion")
+    print("=" * 60)
+
+    import litellm
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    print(f"  Model: {full_model}")
+    print(f"  API Base: {os.environ.get('DATABRICKS_API_BASE', 'Not set')}")
+
+    try:
+        response = litellm.completion(
+            model=full_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Say 'Hello, LiteLLM test!' in exactly those words.",
+                }
+            ],
+            max_tokens=50,
+            temperature=0.1,
+        )
+
+        content = response.choices[0].message.content
+        print(f"  Response: {content[:100]}...")
+        print(f"  Model returned: {response.model}")
+        print(f"  Usage: {response.usage}")
+        print("  ✓ Chat completion test passed!")
+        return True
+
+    except Exception as e:
+        print(f"  ✗ Chat completion failed: {e}")
+        return False
+
+
+def test_chat_completion_default_user_agent(config: dict):
+    """Test chat completion with default user agent (no custom agent)."""
+    print("\n" + "=" * 60)
+    print("TEST: Chat Completion with DEFAULT User-Agent")
+    print("=" * 60)
+
+    import litellm
+
+    # Clear any custom user agent from environment
+    saved_user_agent = os.environ.pop("DATABRICKS_USER_AGENT", None)
+    saved_litellm_ua = os.environ.pop("LITELLM_USER_AGENT", None)
+
+    try:
+        from litellm._version import version
+    except Exception:
+        version = "unknown"
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    print(f"  Model: {full_model}")
+    print(f"  Expected User-Agent: litellm/{version}")
+    print(f"  (No custom user agent set)")
+
+    try:
+        response = litellm.completion(
+            model=full_model,
+            messages=[{"role": "user", "content": "Say 'default' only."}],
+            max_tokens=10,
+            # Note: NOT passing user_agent parameter
+        )
+
+        print(f"  Response: {response.choices[0].message.content}")
+        print("  ✓ Default user-agent test passed!")
+        print(
+            f"  Note: Check Databricks Query History to verify User-Agent is 'litellm/{version}'"
+        )
+        return True
+
+    except Exception as e:
+        print(f"  ✗ Default user-agent test failed: {e}")
+        return False
+
+    finally:
+        # Restore environment variables
+        if saved_user_agent:
+            os.environ["DATABRICKS_USER_AGENT"] = saved_user_agent
+        if saved_litellm_ua:
+            os.environ["LITELLM_USER_AGENT"] = saved_litellm_ua
+
+
+def test_chat_completion_with_custom_user_agent(config: dict):
+    """Test chat completion with custom user agent passed as parameter."""
+    print("\n" + "=" * 60)
+    print("TEST: Chat Completion with Custom User-Agent (parameter)")
+    print("=" * 60)
+
+    import litellm
+
+    # Clear any env user agent to ensure parameter takes precedence
+    saved_user_agent = os.environ.pop("DATABRICKS_USER_AGENT", None)
+    saved_litellm_ua = os.environ.pop("LITELLM_USER_AGENT", None)
+
+    try:
+        from litellm._version import version
+    except Exception:
+        version = "unknown"
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    print(f"  Model: {full_model}")
+    print(f"  Custom User-Agent param: testpartner/2.0.0")
+    print(f"  Expected User-Agent: testpartner_litellm/{version}")
+
+    try:
+        response = litellm.completion(
+            model=full_model,
+            messages=[{"role": "user", "content": "Say 'test' only."}],
+            max_tokens=10,
+            user_agent="testpartner/2.0.0",  # This should result in testpartner_litellm/{version}
+        )
+
+        print(f"  Response: {response.choices[0].message.content}")
+        print("  ✓ Custom user-agent test passed!")
+        print(
+            f"  Note: Check Databricks Query History to verify User-Agent is 'testpartner_litellm/{version}'"
+        )
+        return True
+
+    except Exception as e:
+        print(f"  ✗ Custom user-agent test failed: {e}")
+        return False
+
+    finally:
+        # Restore environment variables
+        if saved_user_agent:
+            os.environ["DATABRICKS_USER_AGENT"] = saved_user_agent
+        if saved_litellm_ua:
+            os.environ["LITELLM_USER_AGENT"] = saved_litellm_ua
+
+
+def test_chat_completion_with_env_user_agent(config: dict):
+    """Test chat completion with user agent set via environment variable."""
+    print("\n" + "=" * 60)
+    print("TEST: Chat Completion with User-Agent from ENV VAR")
+    print("=" * 60)
+
+    import litellm
+
+    # Set a specific user agent via environment
+    test_partner = "envpartner"
+    os.environ["DATABRICKS_USER_AGENT"] = test_partner
+
+    try:
+        from litellm._version import version
+    except Exception:
+        version = "unknown"
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    print(f"  Model: {full_model}")
+    print(f"  DATABRICKS_USER_AGENT env var: {test_partner}")
+    print(f"  Expected User-Agent: {test_partner}_litellm/{version}")
+
+    try:
+        response = litellm.completion(
+            model=full_model,
+            messages=[{"role": "user", "content": "Say 'env' only."}],
+            max_tokens=10,
+            # Note: NOT passing user_agent parameter - should use env var
+        )
+
+        print(f"  Response: {response.choices[0].message.content}")
+        print("  ✓ Env var user-agent test passed!")
+        print(
+            f"  Note: Check Databricks Query History to verify User-Agent is '{test_partner}_litellm/{version}'"
+        )
+        return True
+
+    except Exception as e:
+        print(f"  ✗ Env var user-agent test failed: {e}")
+        return False
+
+    finally:
+        # Clean up
+        os.environ.pop("DATABRICKS_USER_AGENT", None)
+
+
+def test_embedding(config: dict):
+    """Test embeddings with Databricks."""
+    print("\n" + "=" * 60)
+    print("TEST: Embeddings")
+    print("=" * 60)
+
+    import litellm
+
+    model = config.get("TEST_EMBEDDING_MODEL", "databricks-bge-large-en")
+    full_model = f"databricks/{model}"
+
+    print(f"  Model: {full_model}")
+
+    try:
+        response = litellm.embedding(
+            model=full_model,
+            input=["Hello, world!"],
+        )
+
+        # Handle both object and dict response formats
+        if hasattr(response, "data"):
+            data = response.data
+        else:
+            data = response.get("data", [])
+
+        if data:
+            first_item = data[0]
+            if hasattr(first_item, "embedding"):
+                embedding = first_item.embedding
+            else:
+                embedding = first_item.get("embedding", [])
+
+            print(f"  Embedding dimensions: {len(embedding)}")
+            print(f"  First 5 values: {embedding[:5]}")
+            print("  ✓ Embedding test passed!")
+            return True
+        else:
+            print("  ✗ Embedding test failed: No data in response")
+            return False
+
+    except Exception as e:
+        print(f"  ✗ Embedding test failed: {e}")
+        print("  (This is expected if embedding model is not available)")
+        return False
+
+
+def test_oauth_token_retrieval(config: dict):
+    """Test OAuth M2M token retrieval."""
+    print("\n" + "=" * 60)
+    print("TEST: OAuth M2M Token Retrieval")
+    print("=" * 60)
+
+    if "DATABRICKS_CLIENT_ID" not in config or "DATABRICKS_CLIENT_SECRET" not in config:
+        print("  Skipped: OAuth credentials not configured")
+        return None
+
+    from litellm.llms.databricks.common_utils import DatabricksBase
+
+    try:
+        db = DatabricksBase()
+        token = db._get_oauth_m2m_token(
+            api_base=config["DATABRICKS_API_BASE"],
+            client_id=config["DATABRICKS_CLIENT_ID"],
+            client_secret=config["DATABRICKS_CLIENT_SECRET"],
+        )
+
+        # Redact token for display
+        redacted_token = (
+            f"{token[:10]}...[REDACTED]" if len(token) > 10 else "[REDACTED]"
+        )
+        print(f"  Token obtained: {redacted_token}")
+        print("  ✓ OAuth M2M token retrieval passed!")
+        return True
+
+    except Exception as e:
+        print(f"  ✗ OAuth token retrieval failed: {e}")
+        return False
+
+
 # ==============================================================================
 # SDK INTEGRATION TESTS - Different ways of calling Databricks via LiteLLM
 # ==============================================================================
+
+
+def test_litellm_sdk_with_config_user_agent(config: dict):
+    """
+    Test 1: LiteLLM SDK with custom user agent from config file.
+
+    This test uses the LiteLLM SDK directly with the CUSTOM_USER_AGENT
+    specified in the databricks config file.
+    """
+    print("\n" + "=" * 60)
+    print("TEST: LiteLLM SDK with Config User-Agent")
+    print("=" * 60)
+
+    import litellm
+    from litellm.llms.databricks.common_utils import DatabricksBase
+
+    custom_ua = config.get("CUSTOM_USER_AGENT")
+    if not custom_ua:
+        print("  Skipped: CUSTOM_USER_AGENT not set in config")
+        return None
+
+    try:
+        from litellm._version import version
+    except Exception:
+        version = "unknown"
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    # Build and display the final User-Agent that will be sent
+    final_user_agent = DatabricksBase._build_user_agent(custom_ua)
+
+    print(f"  Model: {full_model}")
+    print(f"  Custom User-Agent from config: {custom_ua}")
+    print(f"  >>> Final User-Agent sent: {final_user_agent}")
+
+    try:
+        response = litellm.completion(
+            model=full_model,
+            messages=[{"role": "user", "content": "Say 'LiteLLM SDK test' only."}],
+            max_tokens=20,
+            temperature=0.1,
+            user_agent=custom_ua,  # Use config user agent
+        )
+
+        content = response.choices[0].message.content
+        print(f"  Response: {content}")
+        print("  ✓ LiteLLM SDK with config user-agent test passed!")
+        return True
+
+    except Exception as e:
+        print(f"  ✗ LiteLLM SDK test failed: {e}")
+        return False
 
 
 def test_langchain_litellm_with_user_agent(config: dict):
@@ -332,6 +653,122 @@ def test_langchain_litellm_with_user_agent(config: dict):
         os.environ.pop("DATABRICKS_USER_AGENT", None)
 
 
+def test_litellm_async_completion(config: dict):
+    """
+    Test 3: LiteLLM Async Completion API with custom User-Agent.
+
+    This test uses LiteLLM's async completion API (acompletion) to call
+    Databricks with custom user agent from config.
+    """
+    print("\n" + "=" * 60)
+    print("TEST: LiteLLM Async Completion with Config User-Agent")
+    print("=" * 60)
+
+    import asyncio
+    import litellm
+    from litellm.llms.databricks.common_utils import DatabricksBase
+
+    custom_ua = config.get("CUSTOM_USER_AGENT")
+    if not custom_ua:
+        print("  Skipped: CUSTOM_USER_AGENT not set in config")
+        return None
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    # Build and display the final User-Agent that will be sent
+    final_user_agent = DatabricksBase._build_user_agent(custom_ua)
+
+    print(f"  Model: {full_model}")
+    print(f"  Custom User-Agent from config: {custom_ua}")
+    print(f"  >>> Final User-Agent sent: {final_user_agent}")
+
+    async def run_async_completion():
+        response = await litellm.acompletion(
+            model=full_model,
+            messages=[{"role": "user", "content": "Say 'LiteLLM async test' only."}],
+            max_tokens=20,
+            temperature=0.1,
+            user_agent=custom_ua,
+        )
+        return response
+
+    try:
+        response = asyncio.run(run_async_completion())
+
+        content = response.choices[0].message.content
+        print(f"  Response: {content}")
+        print("  ✓ LiteLLM async completion with config user-agent test passed!")
+        return True
+
+    except Exception as e:
+        print(f"  ✗ LiteLLM async completion test failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
+def test_litellm_streaming_completion(config: dict):
+    """
+    Test 4: LiteLLM Streaming Completion with custom User-Agent.
+
+    This test uses LiteLLM's streaming completion API to call
+    Databricks with custom user agent from config.
+    """
+    print("\n" + "=" * 60)
+    print("TEST: LiteLLM Streaming Completion with Config User-Agent")
+    print("=" * 60)
+
+    import litellm
+    from litellm.llms.databricks.common_utils import DatabricksBase
+
+    custom_ua = config.get("CUSTOM_USER_AGENT")
+    if not custom_ua:
+        print("  Skipped: CUSTOM_USER_AGENT not set in config")
+        return None
+
+    model = config.get("TEST_CHAT_MODEL", "databricks-gpt-oss-120b")
+    full_model = f"databricks/{model}"
+
+    # Build and display the final User-Agent that will be sent
+    final_user_agent = DatabricksBase._build_user_agent(custom_ua)
+
+    print(f"  Model: {full_model}")
+    print(f"  Custom User-Agent from config: {custom_ua}")
+    print(f"  >>> Final User-Agent sent: {final_user_agent}")
+
+    try:
+        # Use streaming completion
+        response = litellm.completion(
+            model=full_model,
+            messages=[
+                {"role": "user", "content": "Say 'LiteLLM streaming test' only."}
+            ],
+            max_tokens=20,
+            temperature=0.1,
+            user_agent=custom_ua,
+            stream=True,
+        )
+
+        # Collect streamed content
+        collected_content = ""
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                collected_content += chunk.choices[0].delta.content
+
+        print(f"  Response (streamed): {collected_content}")
+        print("  ✓ LiteLLM streaming completion with config user-agent test passed!")
+        return True
+
+    except Exception as e:
+        print(f"  ✗ LiteLLM streaming completion test failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
 def test_litellm_embedding_with_user_agent(config: dict):
     """
     Test 5: LiteLLM Embedding API with custom User-Agent.
@@ -396,3 +833,197 @@ def test_litellm_embedding_with_user_agent(config: dict):
 
         traceback.print_exc()
         return False
+
+
+def run_integration_tests_for_auth_method(config: dict, auth_method: str) -> list:
+    """Run integration tests for a specific auth method. Returns list of (name, result) tuples."""
+    results = []
+
+    print("\n" + "=" * 60)
+    print(f"INTEGRATION TESTS - {auth_method.upper()} Authentication")
+    print("=" * 60)
+
+    # Setup environment for this auth method
+    try:
+        setup_environment(config, auth_method)
+    except ValueError as e:
+        print(f"  ✗ Setup failed: {e}")
+        return [(f"[{auth_method.upper()}] Setup", False)]
+
+    # Test OAuth token retrieval (only for oauth method)
+    if auth_method == "oauth":
+        results.append(
+            (
+                f"[{auth_method.upper()}] OAuth Token Retrieval",
+                test_oauth_token_retrieval(config),
+            )
+        )
+
+    # Test chat completion
+    results.append(
+        (f"[{auth_method.upper()}] Chat Completion", test_chat_completion(config))
+    )
+
+    # Test embeddings
+    results.append((f"[{auth_method.upper()}] Embeddings", test_embedding(config)))
+
+    return results
+
+
+def main():
+    print("=" * 60)
+    print("DATABRICKS LITELLM INTEGRATION TESTS")
+    print("=" * 60)
+
+    # Load config
+    print(f"\nLoading config from: {CONFIG_FILE}")
+    try:
+        config = load_config(CONFIG_FILE)
+        print(f"  Loaded {len(config)} configuration values")
+    except FileNotFoundError as e:
+        print(f"\nERROR: {e}")
+        return 1
+
+    # Validate required config
+    if "DATABRICKS_API_BASE" not in config:
+        print("\nERROR: DATABRICKS_API_BASE is required in config file")
+        return 1
+
+    auth_method = config.get("TEST_AUTH_METHOD", "pat").lower()
+    print(f"\nTest Configuration:")
+    print(f"  API Base: {config['DATABRICKS_API_BASE']}")
+    print(f"  Auth Method: {auth_method}")
+
+    # Run unit tests (no credentials needed)
+    print("\n" + "=" * 60)
+    print("UNIT TESTS (No credentials needed)")
+    print("=" * 60)
+
+    test_user_agent_building()
+    test_token_redaction()
+
+    all_results = []
+
+    # Determine which auth methods to test
+    if auth_method == "all":
+        auth_methods_to_test = ["oauth", "pat", "sdk"]
+        print("\n" + "#" * 60)
+        print("# TESTING ALL AUTHENTICATION METHODS")
+        print("#" * 60)
+    else:
+        auth_methods_to_test = [auth_method]
+
+    # Run integration tests for each auth method
+    for method in auth_methods_to_test:
+        results = run_integration_tests_for_auth_method(config, method)
+        all_results.extend(results)
+
+    # Run User-Agent tests (only once, using the last auth method or 'pat' for 'all')
+    print("\n" + "-" * 60)
+    print("USER-AGENT INTEGRATION TESTS")
+    print("-" * 60)
+
+    # Setup environment for user-agent tests (use 'pat' as it's simplest)
+    if auth_method == "all":
+        setup_environment(config, "pat")
+
+    # Test 1: Default user agent (no custom agent set)
+    all_results.append(
+        (
+            "Chat with DEFAULT User-Agent",
+            test_chat_completion_default_user_agent(config),
+        )
+    )
+
+    # Test 2: Custom user agent passed as parameter
+    all_results.append(
+        (
+            "Chat with Custom User-Agent (param)",
+            test_chat_completion_with_custom_user_agent(config),
+        )
+    )
+
+    # Test 3: User agent from environment variable
+    all_results.append(
+        (
+            "Chat with User-Agent from ENV",
+            test_chat_completion_with_env_user_agent(config),
+        )
+    )
+
+    # Run SDK Integration Tests with different calling methods
+    print("\n" + "#" * 60)
+    print("# SDK INTEGRATION TESTS - DIFFERENT CALLING METHODS")
+    print("# Using CUSTOM_USER_AGENT from config file")
+    print("#" * 60)
+
+    # Setup environment for SDK tests (use 'pat' as it's most compatible)
+    setup_environment(config, "pat")
+
+    # Test 1: LiteLLM SDK with config user agent
+    all_results.append(
+        (
+            "LiteLLM SDK with Config User-Agent",
+            test_litellm_sdk_with_config_user_agent(config),
+        )
+    )
+
+    # Test 2: LangChain + LiteLLM with config user agent
+    all_results.append(
+        (
+            "LangChain + LiteLLM with Config User-Agent",
+            test_langchain_litellm_with_user_agent(config),
+        )
+    )
+
+    # Test 3: LiteLLM Async Completion with config user agent
+    all_results.append(
+        (
+            "LiteLLM Async Completion with Config User-Agent",
+            test_litellm_async_completion(config),
+        )
+    )
+
+    # Test 4: LiteLLM Streaming Completion with config user agent
+    all_results.append(
+        (
+            "LiteLLM Streaming Completion with Config User-Agent",
+            test_litellm_streaming_completion(config),
+        )
+    )
+
+    # Test 5: LiteLLM Embedding with config user agent
+    all_results.append(
+        (
+            "LiteLLM Embedding with Config User-Agent",
+            test_litellm_embedding_with_user_agent(config),
+        )
+    )
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("TEST SUMMARY")
+    print("=" * 60)
+
+    passed = sum(1 for _, r in all_results if r is True)
+    failed = sum(1 for _, r in all_results if r is False)
+    skipped = sum(1 for _, r in all_results if r is None)
+
+    for name, result in all_results:
+        status = (
+            "✓ PASSED"
+            if result is True
+            else ("✗ FAILED" if result is False else "○ SKIPPED")
+        )
+        print(f"  {status}: {name}")
+
+    print(f"\n  Total: {passed} passed, {failed} failed, {skipped} skipped")
+
+    if auth_method == "all":
+        print(f"\n  Auth methods tested: {', '.join(auth_methods_to_test)}")
+
+    return 0 if failed == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
