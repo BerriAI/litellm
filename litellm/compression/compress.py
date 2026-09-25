@@ -229,7 +229,9 @@ def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[in
     row is marked, use the previous breakpoint if one exists; if it is the only
     breakpoint, it does not establish a stable cached prefix yet, so return empty.
     """
-    breakpoints: Final = tuple(index for index, msg in enumerate(messages) if _message_has_cache_control(msg))
+    breakpoints: Final = [  # mutable-ok: preserve indices for trailing-marker handling
+        index for index, msg in enumerate(messages) if _message_has_cache_control(msg)
+    ]
     if not breakpoints:
         return ()
     prefix_end: Final = (
