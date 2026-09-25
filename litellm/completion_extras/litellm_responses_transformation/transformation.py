@@ -384,13 +384,30 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tool_call_id = msg.get("tool_call_id")
 
             if role == "system":
-                # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                # Extract system message as instructions, but only within the leading run of
+                # system messages: a later one stays a positioned input item so its bytes don't
+                # unsettle the prompt-cache-stable prefix (#40269).
+                extracted_instructions: str | None = None
+                if index < leading_system_count:
+                    if isinstance(content, str):
+                        extracted_instructions = content
+                    elif isinstance(content, list) and all(
+                        isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
+                        for block in content
+                    ):
+                        # Every block is plain text (a bare string or a `{"type": "text", ...}`
+                        # dict), the same shape a client attaching cache_control sends; a
+                        # non-text block (an image, say) fails the `all()` above and falls
+                        # through to the input-item branch below instead of losing it silently.
+                        extracted_instructions = " ".join(
+                            block if isinstance(block, str) else block.get("text", "") for block in content
+                        )
+                if extracted_instructions is not None:
                     if instructions:
                         # Concatenate multiple system prompts with a space
-                        instructions = f"{instructions} {content}"
+                        instructions = f"{instructions} {extracted_instructions}"
                     else:
-                        instructions = content
+                        instructions = extracted_instructions
                 else:
                     input_items.append(
                         {

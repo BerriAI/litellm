@@ -4294,9 +4294,15 @@ def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requ
         litellm_logging_obj=Mock(),
     )
 
-    assert "instructions" not in first_request
-    assert "instructions" not in second_request
-    assert first_request["input"][0] == _system_input_item("You are Claude Code.")
+    # The leading, list-format top-level system prompt folds into `instructions` (#42171)
+    # and stays byte-identical across requests, rather than occupying `input[0]`.
+    assert first_request["instructions"] == "You are Claude Code."
+    assert second_request["instructions"] == first_request["instructions"]
+    assert first_request["input"][0] == {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Read inventory.py."}],
+    }
     assert json.dumps(second_request["input"][: len(first_request["input"])]) == json.dumps(first_request["input"])
     assert second_request["input"][len(first_request["input"]) :] == [
         {"type": "function_call", "call_id": "call_1", "name": "Read", "arguments": '{"file_path": "inventory.py"}'},
@@ -4319,6 +4325,98 @@ def test_system_string_after_a_developer_message_stays_in_input_in_client_order(
     assert instructions is None
     assert [item["role"] for item in input_items] == ["developer", "system", "user"]
     assert input_items[1] == _system_input_item("Be brief.")
+
+
+def test_leading_system_list_content_folds_into_instructions():
+    """A leading system message whose content is a list of text blocks (how a client
+    attaching cache_control sends it) folds into `instructions` exactly like a plain string
+    one, instead of surfacing as a `system` input item that some Responses backends reject
+    outright (#42171)."""
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant.", "cache_control": {"type": "ephemeral"}}
+                ],
+            },
+            {"role": "user", "content": "hi"},
+        ]
+    )
+
+    assert instructions == "You are a helpful assistant."
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+def test_leading_system_messages_mixed_str_and_list_concatenate_in_order():
+    """Several leading system messages, some string and some list content, concatenate in
+    order the same way an all-string leading run does."""
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": [{"type": "text", "text": "Answer in French."}]},
+            {"role": "system", "content": "Never use emoji."},
+            {"role": "user", "content": "Bonjour"},
+        ]
+    )
+
+    assert instructions == "Be brief. Answer in French. Never use emoji."
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Bonjour"}]},
+    ]
+
+
+def test_mid_conversation_system_list_content_stays_in_input_after_a_user_turn():
+    """Only the leading run folds (#40269): a list-content system message after the first
+    non-system message stays a positioned input item."""
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "Read the file."},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "<total_tokens>14982391 tokens left</total_tokens>"}],
+            },
+        ]
+    )
+
+    assert instructions is None
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read the file."}]},
+        _system_input_item("<total_tokens>14982391 tokens left</total_tokens>"),
+    ]
+
+
+def test_leading_system_list_with_a_non_text_block_stays_an_input_item():
+    """A non-text block (e.g. an image) in a leading system message's list content is never
+    silently dropped: the whole message stays an input item."""
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant."},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/logo.png"}},
+                ],
+            },
+            {"role": "user", "content": "hi"},
+        ]
+    )
+
+    assert instructions is None
+    assert len(input_items) == 2
+    assert input_items[0]["role"] == "system"
+    assert input_items[0]["content"][0] == {"type": "input_text", "text": "You are a helpful assistant."}
+    assert input_items[0]["content"][1]["type"] == "input_image"
 
 
 def test_map_optional_params_verbosity_merges_into_text():
