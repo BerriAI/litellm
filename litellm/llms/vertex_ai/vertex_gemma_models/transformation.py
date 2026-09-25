@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -21,13 +22,20 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai_gemma import parse_vertex_gemma_container_error
+from litellm.types.llms.vertex_ai_gemma import VertexGemmaContainerError
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
+
+def parse_vertex_gemma_container_error(predictions: object) -> VertexGemmaContainerError | None:
+    try:
+        return VertexGemmaContainerError.model_validate(predictions)
+    except ValidationError:
+        return None
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
