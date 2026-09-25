@@ -268,3 +268,13 @@ def test_signoz_preset_endpoint_passed_through_verbatim(monkeypatch):
     spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
     assert spec.endpoint == "https://ingest.us.signoz.cloud:443/v1/traces"
     assert _otlp_traces_endpoint(spec.endpoint) == "https://ingest.us.signoz.cloud:443/v1/traces"
+
+
+def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://127.0.0.1:1")
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    cfg = PRESET_BY_CALLBACK["signoz"](allow_missing_credentials=True)
+    assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)
