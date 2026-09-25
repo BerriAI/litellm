@@ -790,9 +790,13 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+_NON_TOKEN_RATE_FIELDS: Final = frozenset({"input_cost_per_second", "input_cost_per_query", "tiered_pricing"})
+
+
 def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
-    return any("cost_per" in field and value is not None for field, value in entry.items()) or (
-        entry.get("tiered_pricing") is not None
+    return any(
+        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        for field, value in entry.items()
     )
 
 
