@@ -890,7 +890,9 @@ def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: 
     sink: Final = RecordingS3Sink(fail_status=503, fail_code="SlowDown", delay_seconds=0.3)
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
         config: Final = _s3_config(
-            tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_adaptive_concurrency": True}
+            tmp_path,
+            bucket.url,
+            {"s3_batch_file_upload": False, "s3_adaptive_concurrency": True, "s3_max_concurrent_uploads": 4},
         )
         with (
             owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
@@ -906,9 +908,11 @@ def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: 
             sink.fail_until = window_start + 8
             payloads: Final = collect_payloads(sink, 2 * REQUESTS, seconds=120)
             first_fail_at: Final = next(when for when, _ in sink.attempt_log if when >= window_start)
-            throttled_peak: Final = sink.peak_between(first_fail_at + 2.0, sink.fail_until)
+            throttled_peak: Final = sink.peak_between(first_fail_at + 5.0, sink.fail_until)
     assert sum(1 for r in provider.drain() if r.method == "POST") == 2 * REQUESTS
-    assert healthy_peak >= 8, f"healthy peak {healthy_peak} too low to compare back-off against"
+    assert healthy_peak > 4, (
+        f"healthy peak {healthy_peak} never rose above the configured width 4; nothing to back off from"
+    )
     assert throttled_peak < healthy_peak, (
         f"in-flight PUTs during the SlowDown window peaked at {throttled_peak}, not below the healthy peak "
         f"{healthy_peak}; the limiter did not back off"

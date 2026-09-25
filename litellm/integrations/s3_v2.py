@@ -648,7 +648,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         if overflow:
             for _ in range(overflow):
                 self.handle_callback_failure(callback_name="S3Logger")
-            self._dropped_at_enqueue += overflow
             verbose_logger.warning(
                 "s3 logging: queue exceeded max_queue_size=%s after a failed flush, dropped %s oldest events",
                 self.max_queue_size,
