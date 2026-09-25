@@ -197,7 +197,15 @@ class OCIRegionMetadata(BaseModel):
     realm_domain_component: str = Field(alias="realmDomainComponent", pattern=_OCI_REALM_DOMAIN_PATTERN)
 
 
-_OCI_REGION_METADATA_LIST: Final = TypeAdapter(tuple[OCIRegionMetadata, ...])
+_JSON_ARRAY: Final = TypeAdapter(tuple[JsonValue, ...])
+
+
+def _validated_region_metadata(raw: JsonValue, source: str) -> OCIRegionMetadata | None:
+    try:
+        return OCIRegionMetadata.model_validate(raw)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring OCI region metadata entry in %s: %s", source, e)
+        return None
 
 
 def _region_metadata_from_file() -> tuple[OCIRegionMetadata, ...]:
@@ -205,10 +213,12 @@ def _region_metadata_from_file() -> tuple[OCIRegionMetadata, ...]:
     if not path.is_file():
         return ()
     try:
-        return _OCI_REGION_METADATA_LIST.validate_json(path.read_text())
+        raw_entries: Final = _JSON_ARRAY.validate_json(path.read_bytes())
     except (OSError, ValidationError) as e:
         verbose_logger.warning("Ignoring OCI region metadata in %s: %s", path, e)
         return ()
+    candidates: Final = (_validated_region_metadata(raw, str(path)) for raw in raw_entries)
+    return tuple(entry for entry in candidates if entry is not None)
 
 
 def _region_metadata_from_env() -> tuple[OCIRegionMetadata, ...]:
