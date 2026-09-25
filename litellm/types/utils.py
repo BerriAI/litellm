@@ -300,8 +300,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
@@ -328,8 +330,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
@@ -3730,8 +3734,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_token_cost_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
     cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
@@ -3743,6 +3749,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
+    input_cost_per_token_above_200k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
     input_cost_per_image_above_128k_tokens: float | None = None
@@ -3767,6 +3774,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
+    output_cost_per_token_above_200k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
