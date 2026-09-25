@@ -1,29 +1,28 @@
 use std::{process::Command, task::Poll};
 
 use litellm_host::{
-    host::HostResult,
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
-    route::Route,
+    protocol::Protocol,
 };
 
 use pyo3::{prelude::*, types::PyDict};
 
 struct DiagnosticMachine;
 
-impl Route for DiagnosticMachine {
+impl Protocol for DiagnosticMachine {
     type Response = ();
     type Error = String;
+    type Projection = ();
     type Op = ();
-    type OpResult = ();
     type Chunk = ();
     type StreamHead = ();
 }
 
 impl Machine for DiagnosticMachine {
-    type Route = Self;
+    type Protocol = Self;
     type Complete = ();
 
-    fn resume(&mut self, _: Option<HostResult<Self>>) -> Step<'_, Self> {
+    fn resume(&mut self) -> Step<'_, Self> {
         litellm_tracing::warn!("machine started");
         Box::pin(async {
             tokio::task::yield_now().await;
@@ -45,7 +44,7 @@ fn machine_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     let mut machine = super::LoggedMachine::new(DiagnosticMachine);
     let mut future = Box::pin(async move {
         machine
-            .resume(None)
+            .resume()
             .await
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         machine

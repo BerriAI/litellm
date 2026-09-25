@@ -1,6 +1,6 @@
 mod host;
 
-use host::MessagesRouteHost;
+use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::{
     LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
 };
@@ -45,7 +45,7 @@ fn run_messages(
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
         crate::logger::LoggedMachine::new(messages_machine(secrets)),
-        MessagesRouteHost::new(request.unbind()),
+        MessagesPythonHost::new(request.unbind()),
         asynchronous,
     )
 }

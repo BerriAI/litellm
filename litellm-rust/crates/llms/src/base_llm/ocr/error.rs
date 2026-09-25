@@ -118,7 +118,6 @@ impl From<litellm_host::machine::MachineFault> for Error {
         Self::InvalidRequest(match fault {
             MachineFault::Abandoned => "OCR host driver was abandoned".into(),
             MachineFault::Protocol(message) => format!("OCR {message}"),
-            MachineFault::Mismatch => "invalid OCR host operation result".into(),
         })
     }
 }

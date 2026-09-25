@@ -8,19 +8,15 @@ use litellm_llms::base_llm::ocr::error::Error;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
-use super::{
-    document::{FileDocumentInput, PythonFileReader},
-    errors::to_pyerr as ocr_error_to_pyerr,
-};
+use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
     credentials::{self, CallerTokenProvider},
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
 };
 
-/// What the host keeps after projection: the caller's callables that answer the document
-/// read and token operations, and the provider name the failure mapping reports.
+/// What the host keeps after projection: the caller's token callable that answers the
+/// token operation, and the provider name the failure mapping reports.
 pub(super) struct OcrHostHandles {
-    pub reader: Option<PythonFileReader>,
     pub azure_ad_token_provider: Option<CallerTokenProvider>,
     pub provider: &'static str,
 }
@@ -104,13 +100,11 @@ impl ProjectedDocument {
         Ok(Self::File(document.extract()?))
     }
 
-    fn into_parts(self) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
+    /// Reads a file-like document now, so it runs after every other argument was read.
+    fn resolve(self, py: Python<'_>) -> PyResult<OcrDocumentInput> {
         match self {
-            Self::File(FileDocumentInput { input, reader }) => Ok((input, reader)),
-            Self::Other(wire) => Ok((
-                decode_document(wire).map_err(ocr_error_to_pyerr)?.into(),
-                None,
-            )),
+            Self::File(file) => file.resolve(py),
+            Self::Other(wire) => Ok(decode_document(wire).map_err(ocr_error_to_pyerr)?.into()),
         }
     }
 }
@@ -136,24 +130,25 @@ pub(super) fn project_request(
             .chain(["api_key", "api_base", "extra_headers"]),
     )?;
     let azure_ad_token_provider = credentials::azure_ad_token_provider(kwargs)?;
-    let (document, reader) = document.into_parts()?;
+    let api_base = arguments.api_base()?;
+    let extra_headers = arguments.extra_headers()?;
+    let timeout_seconds = arguments.timeout_seconds()?;
     let wire = OcrWireRequest {
         model,
-        document,
+        document: document.resolve(request.py())?,
         api_key,
-        api_base: arguments.api_base()?,
+        api_base,
         custom_llm_provider,
-        extra_headers: arguments.extra_headers()?,
+        extra_headers,
         optional_params,
         input_sources,
-        timeout_seconds: arguments.timeout_seconds()?,
+        timeout_seconds,
     };
     let request = decode_request_input(wire).map_err(ocr_error_to_pyerr)?;
     let provider = request.provider_name();
     Ok((
         request,
         OcrHostHandles {
-            reader,
             azure_ad_token_provider,
             provider,
         },
@@ -180,10 +175,8 @@ mod tests {
         OcrArguments { request, kwargs }
     }
 
-    fn project_document(
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
-        ProjectedDocument::project(document)?.into_parts()
+    fn project_document(document: &Bound<'_, PyAny>) -> PyResult<OcrDocumentInput> {
+        ProjectedDocument::project(document)?.resolve(document.py())
     }
 
     fn url_document(url: &str) -> OcrDocumentInput {
@@ -342,8 +335,11 @@ kwargs = {}
         });
     }
 
+    /// A reader that rewrites the request while it runs shows which arguments projection
+    /// read before it and which after: every other argument is read first, and the read
+    /// happens exactly once.
     #[test]
-    fn document_readers_are_not_consumed_during_projection() {
+    fn document_readers_are_read_once_after_every_other_argument() {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
@@ -351,17 +347,24 @@ kwargs = {}
                 py,
                 c"
 class Request:
-    api_base = 'original'
+    model = 'mistral/mistral-ocr-latest'
+    custom_llm_provider = None
+    api_key = None
+    api_base = 'https://original.example.com'
+    extra_headers = {'x-source': 'original'}
     timeout = 1
     @property
     def document(self):
         return document
 class Reader:
+    reads = 0
     def read(self):
-        Request.api_base = 'mutated'
+        Reader.reads += 1
+        Request.api_base = 'https://mutated.example.com'
+        Request.extra_headers = {'x-source': 'mutated'}
         Request.timeout = 9
         return b'abc'
-document = {'type': 'file', 'file': Reader()}
+document = {'type': 'file', 'file': Reader(), 'mime_type': 'application/pdf'}
 request = Request()
 kwargs = {}
 ",
@@ -373,15 +376,38 @@ kwargs = {}
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let arguments = arguments(&request, &kwargs);
-            let document = arguments.document().unwrap();
-            let (input, reader) = project_document(&document).unwrap();
-            assert_eq!(input, OcrDocumentInput::HostReader { mime_type: None });
-            assert_eq!(arguments.api_base().unwrap().as_deref(), Some("original"));
-            assert_eq!(arguments.timeout_seconds().unwrap(), Some(1.0));
-            reader.unwrap().read(py).unwrap();
-            assert_eq!(arguments.api_base().unwrap().as_deref(), Some("mutated"));
-            assert_eq!(arguments.timeout_seconds().unwrap(), Some(9.0));
+            let (projected, _) = project_request(&request, &kwargs).unwrap();
+            assert_eq!(
+                py.eval(c"Reader.reads", Some(&locals), Some(&locals))
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                projected.document,
+                OcrDocumentInput::Bytes {
+                    bytes: b"abc".as_slice().into(),
+                    file_name: None,
+                    mime_type: Some("application/pdf".into()),
+                }
+            );
+            assert_eq!(
+                projected
+                    .credentials
+                    .api_base
+                    .as_ref()
+                    .map(|base| base.value().as_str()),
+                Some("https://original.example.com")
+            );
+            assert_eq!(
+                projected.transport.extra_headers,
+                [("x-source".to_string(), "original".to_string())]
+            );
+            assert_eq!(
+                projected.transport.timeout,
+                Some(std::time::Duration::from_secs(1))
+            );
         });
     }
 
@@ -396,16 +422,14 @@ kwargs = {}
                     None,
                 )
                 .unwrap();
-            let (input, reader) = project_document(&file).unwrap();
             assert_eq!(
-                input,
+                project_document(&file).unwrap(),
                 OcrDocumentInput::Bytes {
                     bytes: b"%PDF-1.4".as_slice().into(),
                     file_name: None,
                     mime_type: Some("application/pdf".into()),
                 }
             );
-            assert!(reader.is_none());
 
             let original = py
                 .eval(
@@ -414,8 +438,10 @@ kwargs = {}
                     None,
                 )
                 .unwrap();
-            let (input, _) = project_document(&original).unwrap();
-            assert_eq!(input, url_document("https://example.com/a.pdf"));
+            assert_eq!(
+                project_document(&original).unwrap(),
+                url_document("https://example.com/a.pdf")
+            );
         });
     }
 
@@ -617,7 +643,7 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let (input, _) = project_document(&document).unwrap();
+            let input = project_document(&document).unwrap();
             assert!(matches!(input, OcrDocumentInput::Bytes { .. }));
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytes.workspace = true
 futures-util.workspace = true
 litellm-host.workspace = true
 pyo3.workspace = true

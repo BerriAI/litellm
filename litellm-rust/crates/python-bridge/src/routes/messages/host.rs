@@ -1,10 +1,12 @@
+use std::convert::Infallible;
+
 use bytes::Bytes;
 use litellm_core::messages::{
     Error,
-    route::{Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput},
+    route::{Messages, MessagesCall, MessagesOutput},
     types::MessagesShaping,
 };
-use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_types::utils::ProviderSpecificHeaders;
 use pyo3::{
@@ -80,16 +82,16 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
-pub(super) struct MessagesRouteHost {
+pub(super) struct MessagesPythonHost {
     request: Py<PyAny>,
 }
 
-impl MessagesRouteHost {
+impl MessagesPythonHost {
     pub(super) fn new(request: Py<PyAny>) -> Self {
         Self { request }
     }
 
-    fn project(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesCall> {
+    fn projection(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesCall> {
         let request = self.request.bind(py);
         let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
             Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
@@ -208,22 +210,21 @@ impl MessagesRouteHost {
     }
 }
 
-impl RouteHost for MessagesRouteHost {
-    type Route = Messages;
+impl ProtocolHost for MessagesPythonHost {
+    type Protocol = Messages;
     type Failure = PyErr;
 
-    fn invoke(
+    fn project(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-        op: MessagesOp,
-    ) -> Result<MessagesOpResult, InvokeError<Error>> {
-        match op {
-            MessagesOp::ProjectRequest => self
-                .project(py, arguments)
-                .map(|call| MessagesOpResult::Request(Box::new(call)))
-                .map_err(|error| InvokeError::Python(self.map_failure(py, error))),
-        }
+    ) -> Result<MessagesCall, InvokeError<Error>> {
+        self.projection(py, arguments)
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
+    }
+
+    fn invoke(&mut self, _: Python<'_>, op: Infallible) -> Result<(), InvokeError<Error>> {
+        match op {}
     }
 
     fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
