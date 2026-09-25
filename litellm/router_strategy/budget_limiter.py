@@ -407,8 +407,6 @@ class RouterBudgetLimiting(CustomLogger):
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
-        # litellm_params only carries the provider on chat completions; the payload carries it on every
-        # surface, so read it from there instead of skipping the budget for responses, messages and embeddings.
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
         budget_config: Final = (

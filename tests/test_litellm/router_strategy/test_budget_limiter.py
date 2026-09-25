@@ -6,6 +6,8 @@ anthropic_messages, embedding and rerank surfaces leave it unset, which used to 
 the callback raise before any spend was recorded, so those budgets never moved.
 """
 
+from typing import Final
+
 import pytest
 
 from litellm.caching.caching import DualCache
@@ -30,10 +32,11 @@ def _success_kwargs(
     call_type: str = "aresponses",
     response_cost: float = 0.25,
     model_id: str = "deployment-1",
-) -> dict:
-    litellm_params = {"model": "openai/gpt-4o"}
-    if provider_in_litellm_params is not None:
-        litellm_params["custom_llm_provider"] = provider_in_litellm_params
+) -> dict[str, object]:
+    provider_params: Final[dict[str, str]] = (
+        {} if provider_in_litellm_params is None else {"custom_llm_provider": provider_in_litellm_params}
+    )
+    litellm_params: Final[dict[str, str]] = {"model": "openai/gpt-4o", **provider_params}
 
     return {
         "call_type": call_type,
@@ -46,7 +49,7 @@ def _success_kwargs(
     }
 
 
-async def _log_success(limiter: RouterBudgetLimiting, kwargs: dict) -> None:
+async def _log_success(limiter: RouterBudgetLimiting, kwargs: dict[str, object]) -> None:
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
 
 
