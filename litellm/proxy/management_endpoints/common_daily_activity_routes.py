@@ -113,7 +113,7 @@ def _csv_safe(value: str) -> str:
 def _export_csv_record(row: DailyActivityExportRow, labels: DailyActivityExportLabels) -> dict[str, object]:
     record: Final[dict[str, object]] = {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
-        labels.id_header: row.entity_id,
+        labels.id_header: _csv_safe(row.entity_id),
         "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
         "User ID": _csv_safe(row.user_id) if row.user_id else "-",

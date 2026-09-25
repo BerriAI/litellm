@@ -1756,6 +1756,68 @@ async def test_get_tag_daily_activity_export_json_and_csv_headers():
         assert call_kwargs["alias_metadata_key"] is None
 
 
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_export_csv_escapes_formula_tag_ids():
+    """A requester-supplied tag id starting with `=` must be apostrophe-prefixed
+    in the CSV so spreadsheet apps cannot evaluate it; plain ids pass through."""
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_export,
+    )
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        DailyActivityExportRow,
+    )
+
+    rows = tuple(
+        DailyActivityExportRow(
+            date="2024-01-02",
+            entity_id=entity_id,
+            api_key="key-1",
+            key_alias=None,
+            user_id=None,
+            user_email=None,
+            keys=1,
+            model=None,
+            spend=1.5,
+            api_requests=1,
+            successful_requests=1,
+            failed_requests=0,
+            total_tokens=10,
+            prompt_tokens=5,
+            completion_tokens=5,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        for entity_id in ('=HYPERLINK("x")', "prod")
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+            new_callable=AsyncMock,
+            return_value=rows,
+        ),
+    ):
+        csv_response = await get_tag_daily_activity_export(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            export_type="daily_with_keys",
+            format="csv",
+            tags=None,
+            exclude_tags=None,
+            timezone_offset=None,
+        )
+
+    import csv
+    import io
+
+    parsed = list(csv.reader(io.StringIO(csv_response.body.decode())))
+    tag_column = parsed[0].index("Tag")
+    tag_values = [line[tag_column] for line in parsed[1:]]
+    assert tag_values == ['\'=HYPERLINK("x")', "prod"]
+
+
 def test_tag_daily_activity_export_reads_timezone_query_param():
     """The frontend sends `timezone` (the team-route convention); a route that
     listens for `timezone_offset_minutes` instead silently drops it and exports
