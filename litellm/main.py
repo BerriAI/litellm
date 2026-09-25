@@ -8669,6 +8669,50 @@ def speech(
             api_key=api_key,
             **kwargs,
         )
+    elif custom_llm_provider == "openrouter":
+        if voice is None or not (isinstance(voice, str)):
+            raise litellm.BadRequestError(
+                message="'voice' is required to be passed as a string for OpenRouter TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        openrouter_api_base: Final = (
+            api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+        )
+        # set API KEY
+        openrouter_api_key: Final = (
+            api_key or litellm.api_key or litellm.openrouter_key or get_secret_str("OPENROUTER_API_KEY")
+        )
+
+        OPENROUTER_DEFAULT_SITE_URL: Final = "https://litellm.ai"
+        OPENROUTER_DEFAULT_APP_NAME: Final = "liteLLM"
+        openrouter_site_url: Final = get_secret("OR_SITE_URL") or OPENROUTER_DEFAULT_SITE_URL
+        openrouter_app_name: Final = get_secret("OR_APP_NAME") or OPENROUTER_DEFAULT_APP_NAME
+        openrouter_headers: Final = {
+            "HTTP-Referer": openrouter_site_url,
+            "X-Title": openrouter_app_name,
+        }
+        if extra_headers:
+            openrouter_headers.update(extra_headers)
+        optional_params["extra_headers"] = openrouter_headers
+
+        openrouter_response: Final = openai_chat_completions.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=openrouter_api_key,
+            api_base=openrouter_api_base,
+            organization=organization,
+            project=project,
+            max_retries=max_retries,
+            timeout=timeout,
+            logging_obj=logging_obj,
+            client=client,
+            aspeech=aspeech,
+            shared_session=shared_session,
+        )
+        return openrouter_response
 
     if response is None:
         raise Exception(
