@@ -2622,9 +2622,6 @@ class TestBatchCostAttribution:
 
     @pytest.mark.asyncio
     async def test_cli_session_batch_keeps_its_alias_without_a_key_row(self):
-        """A batch created from a CLI session stores the per-user cli-session alias as its api_key.
-        No verification token row exists for that alias, so the alias is its own key_alias; without
-        it the spend log redaction would hash the alias back into an unrecoverable value."""
         instance = self._instance(key_row=None)
 
         metadata = await instance._build_creator_attribution_metadata(
@@ -2636,9 +2633,6 @@ class TestBatchCostAttribution:
 
     @pytest.mark.asyncio
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
-        """A batch row written by an older build stores the raw per-login session token, which shares
-        the cli-session- prefix with the alias. Only the exact cli-session-<created_by> value is the
-        alias; anything else stays a secret so redaction hashes it instead of persisting the token."""
         instance = self._instance(key_row=None)
 
         metadata = await instance._build_creator_attribution_metadata(

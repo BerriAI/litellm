@@ -552,7 +552,7 @@ async def get_api_key_metadata(
                 e,
             )
 
-    from_session_keys: Final = recover_cli_session_key_metadata(api_keys - frozenset(result))
+    from_session_keys: Final = await recover_cli_session_key_metadata(prisma_client, api_keys - frozenset(result))
     still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
     from_reverse_hash: Final = (
         await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA

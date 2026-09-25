@@ -235,12 +235,21 @@ async def attach_user_details(
     )
 
 
-def recover_cli_session_key_metadata(missing_keys: AbstractSet[str]) -> Mapping[str, KeyMetadataDict]:
+async def recover_cli_session_key_metadata(
+    prisma_client: PrismaClient,
+    missing_keys: AbstractSet[str],
+) -> Mapping[str, KeyMetadataDict]:
+    candidates: Final = MappingProxyType(
+        {key: key.removeprefix(_CLI_SESSION_KEY_PREFIX) for key in missing_keys if _is_cli_session_key(key)}
+    )
+    if not candidates:
+        return _EMPTY_KEY_METADATA
+    known_users: Final = await _details_for_user_ids(prisma_client, frozenset(candidates.values()))
     return MappingProxyType(
         {
-            key: KeyMetadataDict(key_alias=key, user_id=key.removeprefix(_CLI_SESSION_KEY_PREFIX))
-            for key in missing_keys
-            if _is_cli_session_key(key)
+            key: KeyMetadataDict(key_alias=key, user_id=user_id)
+            for key, user_id in candidates.items()
+            if user_id in known_users
         }
     )
 
@@ -430,7 +439,7 @@ async def fill_missing_api_key_aliases(
     if not missing_keys:
         return tuple(rows)
 
-    from_session_keys: Final = recover_cli_session_key_metadata(missing_keys)
+    from_session_keys: Final = await recover_cli_session_key_metadata(prisma_client, missing_keys)
     recovered: Final = await attach_user_details(
         prisma_client,
         MappingProxyType(

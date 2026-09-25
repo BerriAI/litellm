@@ -7420,8 +7420,6 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
 
 
 def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token():
-    """A pass-through request signed with a CLI session token must stamp the same stable per-user alias the
-    unified routes do, so every login rolls up to one key and the token itself never reaches a spend row."""
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
 
     mock_request = MagicMock(spec=Request)

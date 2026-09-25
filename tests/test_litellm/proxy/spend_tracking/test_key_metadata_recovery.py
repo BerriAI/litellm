@@ -592,10 +592,23 @@ async def test_recover_key_metadata_from_spend_logs_bounds_the_scan_with_a_state
     )
 
 
-def test_recover_cli_session_key_metadata_names_the_alias_and_owner_from_the_key():
-    result = recover_cli_session_key_metadata({"cli-session-alice", hash_token("sk-other"), "cli-session-", "sk-raw"})
+@pytest.mark.asyncio
+async def test_recover_cli_session_key_metadata_names_the_owner_only_when_the_suffix_is_a_real_user():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=[])]
+    )
+    raw_login_token = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
+
+    result = await recover_cli_session_key_metadata(
+        mock_prisma, {"cli-session-alice", raw_login_token, hash_token("sk-other"), "cli-session-", "sk-raw"}
+    )
 
     assert dict(result) == {"cli-session-alice": {"key_alias": "cli-session-alice", "user_id": "alice"}}
+    assert sorted(mock_prisma.db.litellm_usertable.find_many.call_args.kwargs["where"]["user_id"]["in"]) == [
+        "Qm7xJ2kP9sLw4vT1nR8yAa",
+        "alice",
+    ]
 
 
 @pytest.mark.asyncio
