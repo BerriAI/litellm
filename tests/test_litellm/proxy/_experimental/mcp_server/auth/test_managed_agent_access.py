@@ -237,3 +237,25 @@ async def test_explicit_grants_never_fall_back_to_open_servers_on_resolution_fai
         assert await manager.get_allowed_mcp_servers(auth) == []
         auth.mcp_explicit_grants_only = False
         assert await manager.get_allowed_mcp_servers(auth) == ["slack"]
+
+
+@pytest.mark.asyncio
+async def test_absent_agent_policy_and_missing_delegated_subject_grant_no_servers() -> None:
+    from litellm.proxy._experimental.mcp_server.auth.managed_agent_access import managed_agent_servers
+
+    assert await managed_agent_servers(UserAPIKeyAuth()) == ()
+    auth: Final = actor(None, delegated=True)
+    assert auth.managed_agent_context is not None
+    auth.managed_agent_context = auth.managed_agent_context.model_copy(update={"user_id": None})
+    assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == []
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == []
+
+
+@pytest.mark.asyncio
+async def test_tool_policy_outage_after_server_admission_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="human-grant", mcp_servers=["slack"])
+    user: Final = LiteLLM_UserTable(user_id="human", teams=[], object_permission=permission)
+    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(side_effect=[user, RuntimeError("tool lookup unavailable")]))
+    with pytest.raises(HTTPException) as failure:
+        await MCPRequestHandler.get_allowed_tools_for_server("slack", actor(None, delegated=True))
+    assert failure.value.status_code == 503
