@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
@@ -387,8 +388,10 @@ async def test_async_upload_retries_on_s3_503():
     # First call returns 503, second call returns 200
     response_503 = MagicMock()
     response_503.status_code = 503
+    response_503.text = ""
     response_200 = MagicMock()
     response_200.status_code = 200
+    response_200.text = ""
     response_200.raise_for_status = MagicMock()
 
     logger.async_httpx_client = AsyncMock()
@@ -427,8 +430,10 @@ async def test_async_upload_retries_on_s3_500():
 
     response_500 = MagicMock()
     response_500.status_code = 500
+    response_500.text = ""
     response_200 = MagicMock()
     response_200.status_code = 200
+    response_200.text = ""
     response_200.raise_for_status = MagicMock()
 
     logger.async_httpx_client = AsyncMock()
@@ -467,6 +472,7 @@ async def test_async_upload_exhausts_retries_on_persistent_503():
     # All 3 attempts return 503
     response_503 = MagicMock()
     response_503.status_code = 503
+    response_503.text = ""
     response_503.raise_for_status = MagicMock(side_effect=Exception("503 Service Unavailable"))
 
     logger.async_httpx_client = AsyncMock()

@@ -10,7 +10,8 @@ def _limiter(initial: int = 4, ceiling: int = 16) -> AdaptiveConcurrencyLimiter:
     return AdaptiveConcurrencyLimiter(initial=initial, floor=1, ceiling=ceiling)
 
 
-def test_limit_grows_after_limit_clean_samples() -> None:
+@pytest.mark.asyncio
+async def test_limit_grows_after_limit_clean_samples() -> None:
     limiter: Final = _limiter(initial=4)
     for _ in range(4):
         limiter.record(PutSample(rtt_seconds=0.1, throttled=False))
@@ -44,7 +45,8 @@ def test_limit_clamps_at_the_floor() -> None:
     assert limiter.limit == 1
 
 
-def test_limit_clamps_at_the_ceiling() -> None:
+@pytest.mark.asyncio
+async def test_limit_clamps_at_the_ceiling() -> None:
     limiter: Final = _limiter(initial=15, ceiling=16)
     for _ in range(1000):
         limiter.record(PutSample(rtt_seconds=0.1, throttled=False))

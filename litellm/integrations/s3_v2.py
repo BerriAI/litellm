@@ -74,8 +74,7 @@ _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
 
 
 def _s3_error_code(response: httpx.Response) -> str | None:
-    text: Final = response.text if isinstance(response.text, str) else ""
-    match: Final = _S3_ERROR_CODE.search(text)
+    match: Final = _S3_ERROR_CODE.search(response.text)
     return match.group(1) if match else None
 
 
@@ -598,7 +597,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         async with self._upload_limiter:
             return await self.async_upload_data_to_s3(element)
 
-    async def _timed_put(self, signed_put: "Callable[[], Awaitable[httpx.Response]]") -> httpx.Response:
+    async def _timed_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
         started: Final = time.monotonic()
         try:
             response: Final = await signed_put()

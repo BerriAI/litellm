@@ -13,7 +13,7 @@ from typing import Final
 @dataclass(frozen=True, slots=True)
 class PutSample:
     rtt_seconds: float
-    throttled: bool  # 429, 503, any body <Code>SlowDown</Code>, or transport error/timeout
+    throttled: bool
 
 
 class AdaptiveConcurrencyLimiter:
@@ -71,10 +71,7 @@ class AdaptiveConcurrencyLimiter:
         if self._clean_streak >= self._limit and self._limit < self._ceiling:
             self._limit += 1
             self._clean_streak = 0
-            try:
-                asyncio.get_running_loop().create_task(self._wake_waiters())
-            except RuntimeError:
-                pass
+            asyncio.get_running_loop().create_task(self._wake_waiters())
 
     async def _wake_waiters(self) -> None:
         async with self._condition:
