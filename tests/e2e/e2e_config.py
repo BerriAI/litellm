@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
-from fixture_mode import deterministic_marker, parse_fixture_mode
+from fixture_mode import deterministic_marker, parse_fixture_mode, registration_owner
 from provider_edge import provider_edge_api_base
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
@@ -34,7 +34,7 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 
 
 def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
-    urls: Final = tuple(url.strip().rstrip("/") for url in raw.split(",") if url.strip())
+    urls: Final = tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
     return urls or (fallback,)
 
 
@@ -52,11 +52,13 @@ CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 
 LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
 LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
+LINEAR_READONLY_TOOL: Final = "list_teams"  # as listed by tools/list on mcp.linear.app when PR #33787 landed
 
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.
 OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
+OTEL_EXPORTER_ENDPOINT = os.environ.get("E2E_OTEL_EXPORTER_ENDPOINT", "")
 
 # Real-DataDog read-back (no local sink - destination fakes cannot be deployed
 # on the cluster): the proxy delivers with DD_API_KEY as in production, and the
@@ -101,8 +103,6 @@ SLOW_PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("E2E_SLOW_PROVIDER_TIMEOUT"
 # fresh connection and the next call re-rolls. See ProxyClient._await_model_servable.
 PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
-EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
-
 # Record/replay fixture selection (see fixture_mode.py and provider_edge.py).
 # The raw mode value is parsed and validated there; "live" (the default, also
 # for empty values) means the harness behaves exactly as before this knob
@@ -143,7 +143,14 @@ LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
+PROMPT_CACHING_OPT_IN_ENV = "E2E_PROMPT_CACHING_STACK"
 REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
+CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
+MCP_OAUTH_LIVE_OPT_IN_ENV: Final = "E2E_MCP_OAUTH_LIVE"
+PROVIDER_EDGE_HOST_OPT_IN_ENV: Final = "E2E_PROVIDER_EDGE_HOST_REACHABLE"
+OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
+OTEL_TLS_OPT_IN_ENV: Final = "E2E_OTEL_EXPORTER_ENDPOINT"
+SECRET_MANAGER_OPT_IN_ENV: Final = "E2E_SECRET_MANAGER"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -167,6 +174,7 @@ MEMORY_CONCURRENCY = int(os.environ.get("E2E_MEMORY_CONCURRENCY", "4"))
 MEMORY_RSS_SETTLE_SAMPLES = int(os.environ.get("E2E_MEMORY_RSS_SETTLE_SAMPLES", "15"))
 MEMORY_RSS_SAMPLE_INTERVAL_SECONDS = float(os.environ.get("E2E_MEMORY_RSS_SAMPLE_INTERVAL_SECONDS", "1"))
 MEMORY_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_RSS_BUDGET_MB", "48"))
+MEMORY_IDLE_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_IDLE_RSS_BUDGET_MB", "768"))
 MEMORY_STORED_REQUEST_BUDGET_KB = float(os.environ.get("E2E_MEMORY_STORED_REQUEST_BUDGET_KB", "64"))
 
 
@@ -198,13 +206,17 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
 def provider_edge_base(mount: str) -> str | None:
     """The api_base an edge-wired deployment should register with, using this
     process's fixture-mode and edge-host configuration: None in live mode, the
-    shared edge server's mount URL in record and replay."""
+    shared edge server's mount URL in record and replay, and with the shared
+    cache on, the cache edge's mount URL scoped to the node that owns the
+    deployment: the running test, or the module or class whose fixture is
+    setting it up."""
     return provider_edge_api_base(
         mount,
         mode_raw=FIXTURE_MODE_RAW,
         bundle_dir=FIXTURE_DIR,
         bind_host=PROVIDER_EDGE_BIND_HOST,
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+        test_key=registration_owner(),
         forward_timeout=REQUEST_TIMEOUT,
     )
 

@@ -1,6 +1,7 @@
 """Resolve how many retries a RetryPolicy grants for a given exception."""
 
 from collections.abc import Callable, Mapping
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -28,6 +29,11 @@ _RETRIES_BY_EXCEPTION_TYPE: Final[Mapping[type, Callable[[RetryPolicy], int | No
 )
 
 
+def _retries_for_a_404_answer(exception: Exception, policy: RetryPolicy) -> int | None:
+    status_code: Final = getattr(exception, "status_code", None)
+    return policy.NotFoundErrorRetries if status_code == 404 else None
+
+
 def _resolve_policy(
     retry_policy: RetryPolicy | Mapping[str, int | None] | None,
     model_group: str | None,
@@ -49,13 +55,14 @@ def get_num_retries_from_retry_policy(
     model_group: str | None = None,
     model_group_retry_policy: Mapping[str, RetryPolicy | Mapping[str, int | None]] | None = None,
 ) -> int | None:
-    """Walk the exception's MRO, most specific class first, and return the first configured retry count."""
+    """Prefer NotFoundErrorRetries for any 404 answer, then walk the exception's MRO most specific class first."""
     policy: Final = _resolve_policy(retry_policy, model_group, model_group_retry_policy)
     if policy is None:
         return None
-    configured: Final = (
+    by_class: Final = (
         _RETRIES_BY_EXCEPTION_TYPE[cls](policy) for cls in type(exception).__mro__ if cls in _RETRIES_BY_EXCEPTION_TYPE
     )
+    configured: Final = chain((_retries_for_a_404_answer(exception, policy),), by_class)
     return next((retries for retries in configured if retries is not None), policy.DefaultRetries)
 
 

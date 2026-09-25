@@ -17,7 +17,7 @@ class A2ARequestUtils:
     """Utility class for A2A request/response processing."""
 
     @staticmethod
-    def extract_text_from_message(message: Any) -> str:
+    def extract_text_from_message(message: object) -> str:
         """
         Extract text content from A2A message parts.
 
@@ -142,7 +142,7 @@ class A2ARequestUtils:
         return prompt_tokens, completion_tokens, total_tokens
 
 
-def get_session_id_from_a2a_params(params: Mapping[str, Any]) -> str | None:
+def get_session_id_from_a2a_params(params: Mapping[str, object]) -> str | None:
     message: Final = params.get("message", {})
     if isinstance(message, dict):
         return message.get("contextId")
@@ -166,7 +166,7 @@ def scope_session_to_principal(session_id: str, principal: str | None) -> str:
 
 
 # Backwards compatibility aliases
-def extract_text_from_a2a_message(message: Any) -> str:
+def extract_text_from_a2a_message(message: object) -> str:
     return A2ARequestUtils.extract_text_from_message(message)
 
 

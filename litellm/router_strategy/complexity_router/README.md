@@ -68,6 +68,117 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Capability forecasting
+
+Set `classifier_type: capability` to use
+[NVIDIA NeMo Switchyard's packaged capability classifier](https://github.com/NVIDIA-NeMo/Switchyard/blob/main/crates/libsy/src/prompts/capability-classifier/prompt.md).
+The classifier forecasts the probability that an efficient model completes
+the whole task, identifies the capability-card boundary that applies, and leaves the
+route choice to a deterministic threshold policy
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: capability
+        classifier_llm_config:
+          model: classifier-model
+        capability_classifier_config:
+          efficient_tier: SIMPLE
+          capable_tier: REASONING
+          base_threshold: 0.5
+          threshold_step: 0.1
+        tiers:
+          SIMPLE:
+            - efficient-model-a
+            - efficient-model-b
+          REASONING: capable-model
+```
+
+The structured classifier verdict contains `crux`, `primary_rule`,
+`capability_boundary`, and `p_solve`. The policy computes the required solve
+probability as follows
+
+- `supported`: `base_threshold`
+- `uncertain` or `unmatched`: `base_threshold + threshold_step`
+- `unsupported`: `base_threshold + 2 * threshold_step`
+
+The efficient tier is selected when `p_solve` is greater than or equal to the
+adjusted threshold. Otherwise the capable tier is selected. A malformed,
+inconsistent, empty, or unavailable verdict always fails closed to the capable
+tier. `base_threshold` is required, `threshold_step` defaults to `0`, and their
+maximum adjusted threshold must not exceed `1`
+
+The classifier receives the packaged Switchyard system prompt, the opening user
+task, and the latest user follow-up when present. Caller system messages,
+assistant turns, and intermediate tool results are not sent. The classifier call
+uses strict JSON Schema output and the existing classifier timeout, circuit
+breaker, attribution, redaction, reasoning-effort, and optional vision settings
+
+`efficient_tier` and `capable_tier` name built-in complexity tiers with configured
+model pools. The forecast still makes one binary quality decision, while the
+ordinary tier pool may contain multiple equivalent deployments. Session affinity,
+keyword overrides, plan-mode floors, modality checks, and other post-classification
+complexity-router controls continue to apply
+
+Routing decisions record the adjusted threshold and the complete valid forecast:
+`classifier_p_solve`, `classifier_capability_boundary`, `classifier_primary_rule`,
+and `classifier_crux`. Prompt redaction removes `classifier_crux` while retaining
+the derived fields needed to audit the decision
+
+#### Calibrating solve probabilities
+
+Supply a fitted monotone logit calibration under `capability_classifier_config`
+to transform the forecast before applying the threshold. Calibration is opt-in;
+without it the router uses the raw probability. Fit coefficients on benchmark
+outcomes from separate training repositories, select thresholds on a validation
+split, and report quality and cost on an untouched evaluation split
+
+```yaml
+capability_classifier_config:
+  efficient_tier: SIMPLE
+  capable_tier: REASONING
+  base_threshold: 0.66
+  threshold_step: 0
+  max_output_tokens: 512
+  response_format: json_object
+  calibration:
+    version: your-benchmark-artifact-v1
+    slope: 1.0
+    intercept: 0.0
+```
+
+The example coefficients are an identity mapping, not a trained calibration.
+The mapping is `sigmoid(slope * logit(clip(p_solve, 1e-6, 1-1e-6)) + intercept)`.
+The slope must be nonnegative, so calibration cannot improve ranking. It can
+make probabilities more accurate and thresholds easier to interpret. The version
+is recorded for auditing; the router does not check whether an artifact matches
+the judge, capability card, efficient solver, or agent harness. Operators must
+keep those aligned and refit when they change
+
+Logs retain `classifier_p_solve` and add `classifier_calibrated_p_solve` and
+`classifier_calibration_version`. `classifier_threshold` is compared to the
+calibrated probability. Invalid verdicts still route to the capable tier
+
+`response_format` defaults to `json_schema`. For endpoints that support JSON
+objects but not strict schemas, `json_object` appends the same schema to the
+unchanged capability prompt and retains strict local validation. Set
+`classifier_llm_config.timeout_ms` to cover the measured judge latency; a local
+judge may need longer than the default 3000 ms. `max_output_tokens` still defaults
+to 4096; 512 is an explicit benchmark setting for a short, non-reasoning judge
+
+For a controlled whole-task benchmark, use `adaptive: false`,
+`session_affinity: true`, and a unique session ID for every task and policy arm.
+Disable keyword, plan-mode, housekeeping, and other optional overrides when
+measuring only the capability policy. When adaptive selection is enabled, it
+cannot select below the capability decision, including a capable-tier fallback
+
+Configure capability forecasting through YAML or the model-management API.
+The dashboard preserves its classifier and calibration on an untouched save;
+it does not provide a capability-card editor
+
 ### Heuristic v2
 
 Set `classifier_type: heuristic_v2` to classify with the bundled calibrated
@@ -80,6 +191,7 @@ model_list:
       model: auto_router/complexity_router
       complexity_router_config:
         classifier_type: heuristic_v2
+        heuristic_v2_success_threshold: 0.9
         tiers:
           SIMPLE: luna
           MEDIUM: terra
@@ -90,9 +202,18 @@ model_list:
 No classifier model call or per-model training data is required. The classifier
 uses global tier quality, request-type quality, and similar-request cohorts from
 the bundled UltraFeedback artifact. It estimates success at every tier, enforces
-monotonic probabilities, and returns the first tier meeting the trained 0.75
-threshold. The existing complexity-router tier pool then selects and dispatches
-a model from that tier
+monotonic probabilities, and returns the first tier meeting the success threshold,
+or REASONING if no tier meets it. The existing complexity-router tier pool then
+selects and dispatches a model from that tier
+
+Set `heuristic_v2_success_threshold` to a value from 0 to 1 to override the
+artifact's threshold. For example, `0.9` requires a predicted success probability
+of at least 90%. Higher thresholds favor more capable tiers. Omit the setting or
+set it to `null` to use the artifact's `routing_threshold`, which is `0.75` for
+the bundled artifact. The override leaves the predicted probabilities unchanged
+
+In the dashboard, select Heuristic v2 under Advanced: Classification Method and
+set Success threshold. Clear the field to restore the artifact's default
 
 Spend logs record `routing_decision.cause: heuristic_v2`, the detected request
 type, and all four predicted probabilities. Existing `classifier_type: heuristic`
@@ -529,3 +650,11 @@ Technical code keywords are detected case-insensitively and include:
 | Best For | Cost optimization | Intent routing |
 
 Use `complexity_router` when you want to optimize costs by routing simple queries to cheaper models. Use `auto_router` when you need semantic intent matching (e.g., routing "customer support" queries to a specialized model).
+
+## Experimental LLM V2 classifier
+
+LLM V2 combines task demands, available verification, and model capability in one judge call. It forecasts whole-task success for an efficient and a capable solver. The router compares their probabilities against an explicitly configured quality allowance and selects the capable solver when classification fails
+
+This classifier is intended for evaluation. Its probabilities are raw forecasts unless matching per-model calibration is supplied, and an estimated quality allowance is not a measured quality guarantee. It requires two model groups, profiles for both solvers, and a description of their harness and budget. Adaptive selection is disabled for this mode so it cannot override the forecast. Existing user-turn classification can reuse a decision until the user changes the task
+
+V2 reads all human task messages and follow-ups, without the complexity classifier's prior-turn truncation or assistant summaries. Long task histories can therefore increase judge cost or exceed its context window, which falls back to the capable solver. Profiles must describe every deployment behind their model group and calibration must match the prompt, solver settings, and harness being evaluated

@@ -50,6 +50,8 @@ from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
     _select_model_name_for_cost_calc,
+    get_usage_object,
+    pricing_entry_for_cost_calc,
 )
 from litellm.exceptions import (
     BudgetExceededError,
@@ -69,7 +71,13 @@ from litellm.litellm_core_utils.classifier_logging import (
     classifier_input_snapshot,
     is_classifier_call,
 )
-from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
+from litellm.litellm_core_utils.core_helpers import (
+    get_provider_response_headers_from_hidden_params,
+    is_expected_client_error,
+    reconstruct_model_name,
+    set_response_cost_in_hidden_params,
+)
+from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
@@ -85,16 +93,25 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
+from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
+    diagnose_zero_cost,
+    zero_cost_warning,
+)
 from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
+)
+from litellm.litellm_core_utils.served_output_texts import (
+    SERVED_OUTPUT_TEXTS_KEY,
+    overlay_served_output_texts,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -152,6 +169,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadStatusFields,
     StandardLoggingPromptManagementMetadata,
     StandardLoggingVectorStoreRequest,
+    StandardLoggingZeroCostDiagnostic,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -205,12 +223,14 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
-    from mcp.types import EmbeddedResource, ImageContent, TextContent
+    from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
     from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
+    from litellm.proxy.hooks.autorouter_baseline_cache import BaselineCacheContext, CapturedBaselineObservation
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -365,12 +385,49 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+class RawRequestCaptured(Exception):
+    pass
+
+
 _DEPLOYMENT_PRICING_KEYS: Final = (
     "input_cost_per_token",
     "output_cost_per_token",
     "input_cost_per_token_batches",
     "output_cost_per_token_batches",
+    "input_cost_per_token_above_272k_tokens_batches",
+    "output_cost_per_token_above_272k_tokens_batches",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_272k_tokens_batches",
+    "cache_creation_input_token_cost_batches",
+    "cache_creation_input_token_cost_above_272k_tokens_batches",
+    "ocr_cost_per_page",
+    "ocr_cost_per_page_batches",
+    "annotation_cost_per_page",
+    "annotation_cost_per_page_batches",
 )
+_INPUT_PRICING_KEY_PREFIXES: Final = (
+    "input_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+_OUTPUT_PRICING_KEY_PREFIXES: Final = ("output_cost_per_token",)
+_BATCH_PRICING_KEY_SUFFIX: Final = "_batches"
+
+
+_NO_CARRIED_RATES: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _published_direction(
+    published: ModelInfo, registered: Mapping[str, object], flat_key: str, prefixes: tuple[str, ...]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in published.items()
+            if registered.get(key) is None
+            and (key == flat_key or (key.startswith(prefixes) and key.endswith(_BATCH_PRICING_KEY_SUFFIX)))
+        }
+    )
 
 
 def deployment_pricing_model_info(model_id: str | None, deployment_model: str | None) -> ModelInfo | None:
@@ -382,10 +439,15 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     get_model_info fills absent costs with 0, so asking it directly cannot
     tell "configured as free" apart from "no pricing configured". A deployment
     may declare only one side of its pricing, so the side it leaves out keeps
-    the model's published rates instead of billing as zero. Ownership is per
-    token direction: declaring either rate for a direction takes that whole
-    direction, so a published batch rate can never displace a standard rate
-    the deployment configured itself.
+    the model's published standard rate and every published batch rate for
+    that direction (flat, long-context tier, cached, cache write) instead of
+    billing as zero. Ownership is per token direction: declaring the flat
+    standard or flat batch rate for a direction takes that whole direction, so
+    a published batch rate can never displace a standard rate the deployment
+    configured itself. A tier-only override keeps every published rate it left
+    out. OCR per-page rates count as declared pricing too; they pass through as
+    registered and ``ocr_batch_cost`` layers the published rate under each
+    per-page family the deployment leaves out.
     """
     if model_id is None:
         return None
@@ -406,13 +468,22 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
         registered.get("output_cost_per_token") is not None
         or registered.get("output_cost_per_token_batches") is not None
     )
-    if not declares_input:
-        merged["input_cost_per_token"] = published.get("input_cost_per_token")
-        merged["input_cost_per_token_batches"] = published.get("input_cost_per_token_batches")
-    if not declares_output:
-        merged["output_cost_per_token"] = published.get("output_cost_per_token")
-        merged["output_cost_per_token_batches"] = published.get("output_cost_per_token_batches")
-    return merged
+    carried_input: Final = (
+        _NO_CARRIED_RATES
+        if declares_input
+        else _published_direction(published, registered, "input_cost_per_token", _INPUT_PRICING_KEY_PREFIXES)
+    )
+    carried_output: Final = (
+        _NO_CARRIED_RATES
+        if declares_output
+        else _published_direction(published, registered, "output_cost_per_token", _OUTPUT_PRICING_KEY_PREFIXES)
+    )
+    priced: Final[ModelInfo] = {  # pyright: ignore[reportAssignmentType]  # carried keys are ModelInfo rates
+        **merged,
+        **carried_input,
+        **carried_output,
+    }
+    return priced
 
 
 def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
@@ -477,6 +548,14 @@ def mask_api_base_credentials(api_base: str) -> str:
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
 
 
+def _timestamp_seconds(moment: object) -> float | None:
+    if isinstance(moment, datetime.datetime):
+        return moment.timestamp()
+    if isinstance(moment, (int, float)):
+        return float(moment)
+    return None
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -494,6 +573,8 @@ class Logging(LiteLLMLoggingBaseClass):
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
+    baseline_cache_context: "BaselineCacheContext | None" = None
+    baseline_observation: "CapturedBaselineObservation | None" = None
 
     def __init__(
         self,
@@ -501,7 +582,7 @@ class Logging(LiteLLMLoggingBaseClass):
         messages,
         stream,
         call_type,
-        start_time,
+        start_time: datetime.datetime,
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
@@ -514,6 +595,7 @@ class Logging(LiteLLMLoggingBaseClass):
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
+        raw_request_only: bool = False,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -556,7 +638,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # ids leaking into a different, later request on the same thread. Sync
         # support is deferred to a follow-up PR with its own safe-restore
         # mechanism; async calls (the proxy's only call path) are unaffected.
-        if supports_correlation_logging:
+        if supports_correlation_logging and litellm.request_correlation_in_logs:
             set_trace_id(self.litellm_trace_id)
             set_session_id(self.litellm_session_id)
         # set_trace_id()/set_session_id() sanitize (strip control chars, bound
@@ -573,7 +655,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
-        self._native_callback_fast_path: bool = False
+        self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
@@ -601,6 +683,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
+        self.zero_cost_warned: bool = False
         self._llm_caching_handler: LLMCachingHandler | None = None
 
         # INITIAL LITELLM_PARAMS
@@ -639,10 +722,29 @@ class Logging(LiteLLMLoggingBaseClass):
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
         self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
         self.response_timing_metrics = dict(timing_metrics)  # mutable-ok: kept deep-copyable
+
+    def add_dynamic_callback(self, callback: CustomLogger) -> None:
+        self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
+        self.dynamic_success_callbacks = self._with_dynamic_callback(self.dynamic_success_callbacks, callback)
+        self.dynamic_async_success_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_success_callbacks, callback
+        )
+        self.dynamic_failure_callbacks = self._with_dynamic_callback(self.dynamic_failure_callbacks, callback)
+        self.dynamic_async_failure_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_failure_callbacks, callback
+        )
+
+    @staticmethod
+    def _with_dynamic_callback(
+        callbacks: Sequence[str | Callable | CustomLogger] | None, callback: CustomLogger
+    ) -> list[str | Callable | CustomLogger]:
+        existing: Final = tuple(callbacks or ())
+        return [*existing, *(() if callback in existing else (callback,))]
 
     def process_dynamic_callbacks(self):
         """
@@ -1221,8 +1323,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 return {"error": f"Unable to parse raw request body. Got - {data}"}
         return data
 
-    def _get_masked_api_base(self, api_base: str) -> str:
-        return str(mask_api_base_credentials(api_base))
+    def _get_masked_api_base(self, api_base: str | None) -> str:
+        return str(mask_api_base_credentials(api_base or ""))
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -1246,11 +1348,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
             additional_args.get("api_base", "")
         )
-
-    def record_api_call_start_time(self) -> None:
-        self.model_call_details["api_call_start_time"] = datetime.datetime.now()
-        if self.model_call_details.get("first_api_call_start_time") is None:
-            self.model_call_details["first_api_call_start_time"] = self.model_call_details["api_call_start_time"]
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
@@ -1316,7 +1413,15 @@ class Logging(LiteLLMLoggingBaseClass):
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
 
-            self.record_api_call_start_time()
+            self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+            # Set-once first provider-handoff instant. api_call_start_time
+            # is overwritten on every retry, so it can't measure one-time
+            # preprocessing; pinning the first attempt excludes retry loops
+            # + backoff. Logging object only — must NOT go into
+            # litellm_params["metadata"] (caller request metadata, typed
+            # Dict[str, str], echoed downstream; a datetime breaks it).
+            if self.model_call_details.get("first_api_call_start_time") is None:
+                self.model_call_details["first_api_call_start_time"] = self.model_call_details["api_call_start_time"]
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
@@ -1376,6 +1481,9 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.error("LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception)
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
+
+        if self.raw_request_only:
+            raise RawRequestCaptured()
 
     def _print_llm_call_debugging_log(
         self,
@@ -1450,21 +1558,16 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         return _get_masked_values(headers, ignore_sensitive_values=ignore_sensitive_headers)
 
-    def record_post_call(
-        self, original_response: object, input: object, api_key: object, additional_args: dict[str, object]
-    ) -> None:
-        self.model_call_details["input"] = input
-        self.model_call_details["api_key"] = api_key
-        self.model_call_details["original_response"] = original_response
-        self.model_call_details["additional_args"] = additional_args
-        self.model_call_details["log_event_type"] = "post_api_call"
-
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response, default=str)
         try:
-            self.record_post_call(original_response, input, api_key, additional_args)
+            self.model_call_details["input"] = input
+            self.model_call_details["api_key"] = api_key
+            self.model_call_details["original_response"] = original_response
+            self.model_call_details["additional_args"] = additional_args
+            self.model_call_details["log_event_type"] = "post_api_call"
 
             attr: Literal["warning", "debug"]
             if self.litellm_request_debug:
@@ -1473,14 +1576,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 attr = "debug"
 
             if json_logs:
-                callattr = getattr(verbose_logger, attr)
+                callattr = verbose_logger.warning if attr == "warning" else verbose_logger.debug
                 callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get("original_response", self.model_call_details)
                     ),
                 )
             else:
-                callattr = getattr(verbose_logger, attr)
+                callattr = verbose_logger.warning if attr == "warning" else verbose_logger.debug
                 callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get("original_response", self.model_call_details)
@@ -1544,15 +1647,11 @@ class Logging(LiteLLMLoggingBaseClass):
     async def async_post_mcp_tool_call_hook(
         self,
         kwargs: dict,
-        response_obj: Any,
+        response_obj: "CallToolResult",
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-    ):
-        """
-        Post MCP Tool Call Hook
-
-        Use this to modify the MCP tool call response before it is returned to the user.
-        """
+    ) -> "CallToolResult":
+        """Apply ordered MCP content callbacks to the result returned to the caller."""
         from litellm.types.llms.base import HiddenParams
         from litellm.types.mcp import MCPPostCallResponseObject
 
@@ -1560,24 +1659,51 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
         )
-        post_mcp_tool_call_response_obj: Final[MCPPostCallResponseObject] = MCPPostCallResponseObject(
-            mcp_tool_call_response=response_obj, hidden_params=HiddenParams()
-        )
+        hidden_params = HiddenParams()
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):
-                    response: MCPPostCallResponseObject | None = await callback.async_post_mcp_tool_call_hook(
-                        kwargs=kwargs,
-                        response_obj=post_mcp_tool_call_response_obj,
-                        start_time=start_time,
-                        end_time=end_time,
+                    original_content = copy.deepcopy(response_obj.content)
+                    original_structured_content = copy.deepcopy(response_obj.structured_content)
+                    callback_response = MCPPostCallResponseObject(
+                        mcp_tool_call_response=copy.deepcopy(original_content), hidden_params=hidden_params
                     )
-                    ######################################################################
-                    # if any of the callbacks modify the response, use the modified response
-                    # current implementation returns the first modified response
-                    ######################################################################
-                    if response is not None:
-                        response_obj = self._parse_post_mcp_call_hook_response(response=response)
+                    try:
+                        response = await callback.async_post_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            response_obj=callback_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                        hook_content = (
+                            self._parse_post_mcp_call_hook_response(response=response)
+                            if response is not None
+                            else callback_response.mcp_tool_call_response
+                        )
+                        if response is not None:
+                            hidden_params = response.hidden_params
+                    except Exception as e:
+                        verbose_logger.exception(
+                            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
+                        )
+                        hook_content = None
+                    structured_replacement_matches = (
+                        response_obj.structured_content != original_structured_content
+                        and (
+                            hook_content is None
+                            or hook_content == original_content
+                            or response_obj.content == hook_content
+                        )
+                    )
+                    if hook_content is not None and hook_content != original_content:
+                        response_obj.content[:] = hook_content
+                    if (
+                        response_obj.content != original_content
+                        and response_obj.structured_content is not None
+                        and not structured_replacement_matches
+                    ):
+                        response_obj.structured_content = None
+                        response_obj.is_error = True
             except Exception as e:
                 verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
         return response_obj
@@ -1597,10 +1723,12 @@ class Logging(LiteLLMLoggingBaseClass):
         return response.mcp_tool_call_response
 
     def get_response_ms(self) -> float:
-        return (
-            self.model_call_details.get("end_time", datetime.datetime.now())
-            - self.model_call_details.get("start_time", datetime.datetime.now())
-        ).total_seconds() * 1000
+        now: Final = datetime.datetime.now()
+        start_seconds: Final = _timestamp_seconds(self.model_call_details.get("start_time", now))
+        end_seconds: Final = _timestamp_seconds(self.model_call_details.get("end_time", now))
+        if start_seconds is None or end_seconds is None:
+            return 0.0
+        return (end_seconds - start_seconds) * 1000
 
     def set_cost_breakdown(
         self,
@@ -1728,11 +1856,26 @@ class Logging(LiteLLMLoggingBaseClass):
         if transformed_result is not None:
             result = transformed_result
 
-        if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
-            hidden_params: Final = getattr(result, "_hidden_params", {})
+        priced_result: Final = (
+            result.response
+            if isinstance(result, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
+            else result
+        )
+
+        result_hidden_params: Final = getattr(priced_result, "_hidden_params", None) or MappingProxyType({})
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+            priced_result, "_hidden_params"
+        ):
+            hidden_params: Final = result_hidden_params
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
+                self._record_zero_cost_diagnostic(
+                    priced_result,
+                    hidden_params["response_cost"],
+                    litellm_model_name=litellm_model_name,
+                    router_model_id=router_model_id or hidden_params.get("model_id"),
+                )
                 return hidden_params["response_cost"]
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
@@ -1744,9 +1887,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = use_custom_pricing_for_model(
-            litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
-        )
+        custom_pricing: Final = self._custom_pricing_for(priced_result)
 
         prompt = self._prompt_for_cost_calculation()
 
@@ -1755,7 +1896,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": result,
+                "response_object": priced_result,
                 "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get("custom_llm_provider", None),
@@ -1798,9 +1939,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
             verbose_logger.debug("response_cost: %s", response_cost)
             additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
-            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0:
-                return (response_cost or 0.0) + additional_response_cost
-            return response_cost
+            total_response_cost: Final = (
+                (response_cost or 0.0) + additional_response_cost
+                if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
+                else response_cost
+            )
+            self._record_zero_cost_diagnostic(
+                priced_result,
+                total_response_cost,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+            )
+            return total_response_cost
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
@@ -1814,8 +1964,107 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             verbose_logger.debug("response_cost_failure_debug_information: %s", debug_info)
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
+            self._record_zero_cost_diagnostic(
+                priced_result,
+                None,
+                calculation_failed=True,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+            )
 
         return None
+
+    def _record_zero_cost_diagnostic(
+        self,
+        result: object,
+        response_cost: float | None,
+        *,
+        calculation_failed: bool = False,
+        litellm_model_name: str | None = None,
+        router_model_id: str | None = None,
+    ) -> None:
+        if response_cost is None and not calculation_failed:
+            return
+        if self.model_call_details.get("cache_hit") is True:
+            self.model_call_details["zero_cost_diagnostic"] = None
+            return
+        try:
+            finding: Final = self._zero_cost_finding(
+                result,
+                response_cost,
+                calculation_failed=calculation_failed,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+            )
+        except Exception as e:  # noqa: BLE001  # the pricing helpers raise plain Exception and a diagnostic must never break cost tracking
+            verbose_logger.debug("zero_cost_diagnostic skipped: %s", e)
+            return
+        self.model_call_details["zero_cost_diagnostic"] = finding[0] if finding is not None else None
+        if finding is None or self.zero_cost_warned:
+            return
+        self.zero_cost_warned = True
+        verbose_logger.warning(finding[1])
+
+    def _zero_cost_finding(
+        self,
+        result: object,
+        response_cost: float | None,
+        *,
+        calculation_failed: bool,
+        litellm_model_name: str | None,
+        router_model_id: str | None,
+    ) -> tuple[StandardLoggingZeroCostDiagnostic, str] | None:
+        metadata: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params)
+        if response_cost or is_unbilled_non_inference_call(self.call_type, metadata, result):
+            return None
+        usage: Final = get_usage_object(completion_response=result)
+        if usage is None:
+            return None
+        model: Final = litellm_model_name or self.model
+        custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
+        pricing: Final = pricing_entry_for_cost_calc(
+            model=model,
+            completion_response=result,
+            custom_llm_provider=custom_llm_provider,
+            custom_pricing=self._custom_pricing_for(result),
+            base_model=_get_base_model_from_metadata(model_call_details=self.model_call_details),
+            router_model_id=router_model_id or self.get_router_model_id(),
+            region_name=_resolve_mantle_region_for_cost(
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=self.model_call_details.get("litellm_params"),
+            ),
+            litellm_logging_obj=self,
+        )
+        if pricing is None:
+            return None
+        diagnostic: Final = diagnose_zero_cost(
+            usage=usage, pricing_model=pricing[0], pricing_entry=pricing[1], calculation_failed=calculation_failed
+        )
+        if diagnostic is None:
+            return None
+        model_group: Final = metadata.get("model_group")
+        return diagnostic, zero_cost_warning(
+            diagnostic,
+            model_group=model_group if isinstance(model_group, str) else None,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+
+    def _custom_pricing_for(self, result: object) -> bool:
+        litellm_params: Final = getattr(self, "litellm_params", None)
+        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        additional_headers: Final = (
+            result_hidden_params.get("additional_headers")
+            if isinstance(result_hidden_params, dict)
+            else getattr(result_hidden_params, "additional_headers", None)
+        )
+        spilled_over: Final = is_spilled_over_ptu_request(
+            model_info=_deployment_model_info(litellm_params),
+            response_headers=self.model_call_details.get("response_headers"),
+            additional_headers=additional_headers,
+        )
+        return False if spilled_over else use_custom_pricing_for_model(litellm_params=litellm_params)
 
     def _prompt_for_cost_calculation(self) -> str:
         """
@@ -1973,6 +2222,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
+        """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
+        usage: Final = getattr(assembled, "usage", None)
+        if isinstance(usage, Usage):
+            self.record_partial_usage_for_failure(usage, self._response_cost_calculator(result=assembled) or 0.0)
+
     async def dispatch_failure_handlers(
         self,
         exception: Exception,
@@ -2077,9 +2332,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
                 )
             )
+            ws_tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(
+                results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+            )
+            ws_service_tier: Final = next(iter(ws_tier_partition)) if len(ws_tier_partition) == 1 else None
             logging_result = LiteLLMRealtimeStreamLoggingObject(
                 usage=combined_ws_usage,
                 results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                service_tier=ws_service_tier,
             )
 
         elif (
@@ -2102,6 +2362,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     endpoint=self.model_call_details.get("endpoint", ""),
                 )
         return logging_result
+
+    def _surface_response_headers_from_result(self, logging_result: object) -> None:
+        existing: Final[object] = self.model_call_details.get("response_headers")
+        if existing is not None:
+            return
+        headers: Final = get_provider_response_headers_from_hidden_params(logging_result)
+        if headers is None:
+            return
+        self.model_call_details["response_headers"] = headers
 
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """
@@ -2136,6 +2405,7 @@ class Logging(LiteLLMLoggingBaseClass):
         build_logging_payload: bool = True,
     ):
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
+        self._surface_response_headers_from_result(logging_result)
         hidden_params: Final = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -2150,6 +2420,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
+            self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
@@ -2170,6 +2441,19 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         if standard_logging_payload is not None:
             emit_standard_logging_payload(standard_logging_payload)
+
+    async def _prepare_baseline_cache_estimate(self, response_obj: object) -> None:
+        if self.baseline_cache_context is None:
+            return
+        from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+
+        await finalize_baseline_cache(self, response_obj)
+
+    async def invalidate_baseline_cache_estimate(self, reason: str, *, completed: bool = False) -> None:
+        """Invalidate uncertain attempts; retire the reservation at logical completion."""
+        from litellm.proxy.hooks.autorouter_baseline_cache import invalidate_baseline_cache
+
+        await invalidate_baseline_cache(self, reason, completed=completed)
 
     def _build_standard_logging_payload(
         self, init_response_obj: object, start_time: Any, end_time: Any
@@ -2442,7 +2726,7 @@ class Logging(LiteLLMLoggingBaseClass):
         call) would leave the outer request's subsequent log lines stamped with
         the nested call's trace_id/session_id instead of its own.
 
-        Uses a plain set() of the captured pre-call value rather than
+        Uses a plain contextvar set() of the captured pre-call value rather than
         contextvars.Token-based reset(), since this can end up called from a
         different asyncio Task/context than __init__ ran in (e.g. the request
         task's own wrapper() finally block, plus async_success_handler
@@ -2453,8 +2737,8 @@ class Logging(LiteLLMLoggingBaseClass):
         that Task's view of the contextvars, so calling it multiple times
         (once per Task involved in this attempt) is required, not just safe.
         """
-        set_trace_id(self._pre_call_trace_id)
-        set_session_id(self._pre_call_session_id)
+        trace_id_var.set(self._pre_call_trace_id)
+        session_id_var.set(self._pre_call_session_id)
 
     def _restore_correlation_context_if_unclaimed(self) -> None:
         """Guarded variant for __del__-triggered cleanup only.
@@ -2524,6 +2808,7 @@ class Logging(LiteLLMLoggingBaseClass):
             if complete_streaming_response is not None:
                 verbose_logger.debug("Logging Details LiteLLM-Success Call streaming complete")
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
+                self._surface_response_headers_from_result(complete_streaming_response)
                 self.model_call_details["response_cost"] = self._response_cost_calculator(
                     result=complete_streaming_response
                 )
@@ -2563,6 +2848,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):
                         continue
 
+                    self.shadow_eval_request_snapshot = None
                     self.model_call_details, result = callback.logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
@@ -3009,7 +3295,16 @@ class Logging(LiteLLMLoggingBaseClass):
             result=result,
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
+            build_logging_payload=self.baseline_cache_context is None,
         )
+
+        if self.stream is not True and self.baseline_cache_context is not None:
+            await self._prepare_baseline_cache_estimate(result)
+            self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
+                result, start_time, end_time
+            )
+            if (prepared_payload := self.model_call_details.get("standard_logging_object")) is not None:
+                emit_standard_logging_payload(prepared_payload)
 
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
@@ -3028,6 +3323,7 @@ class Logging(LiteLLMLoggingBaseClass):
             print_verbose("Async success callbacks: Got a complete streaming response")
 
             self.model_call_details["async_complete_streaming_response"] = complete_streaming_response
+            self._surface_response_headers_from_result(complete_streaming_response)
 
             try:
                 if self.model_call_details.get("cache_hit", False) is True:
@@ -3054,6 +3350,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["response_cost"] = None
 
             self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
+
+            await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
             ## STANDARDIZED LOGGING PAYLOAD
             try:
@@ -3083,6 +3381,7 @@ class Logging(LiteLLMLoggingBaseClass):
             # Only build standard_logging_object if not already built by
             # _success_handler_helper_fn
             if self.model_call_details.get("standard_logging_object") is None:
+                await self._prepare_baseline_cache_estimate(result)
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
                     result, start_time, end_time
@@ -3117,6 +3416,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):
                         continue
 
+                    self.shadow_eval_request_snapshot = None
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
@@ -3176,6 +3476,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+
                     model_call_details: dict = self.model_call_details
                     ##################################
                     # call redaction hook for custom logger
@@ -3186,7 +3488,19 @@ class Logging(LiteLLMLoggingBaseClass):
                         model_call_details=model_call_details, custom_logger=callback
                     )
                     ##################################
-                    if self.stream is True:
+                    if isinstance(callback, ShadowEvalLogger) and (
+                        not self.stream or "async_complete_streaming_response" in model_call_details
+                    ):
+                        await callback.async_log_success_event(
+                            kwargs=model_call_details,
+                            response_obj=model_call_details["async_complete_streaming_response"]
+                            if self.stream
+                            else result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            guardrail_snapshot=self.shadow_eval_request_snapshot,
+                        )
+                    elif self.stream is True:
                         if "async_complete_streaming_response" in model_call_details:
                             await callback.async_log_success_event(
                                 kwargs=model_call_details,
@@ -3284,9 +3598,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
-    def _failure_handler_helper_fn(
-        self, exception, traceback_exception, start_time=None, end_time=None, build_logging_payload: bool = True
-    ):
+    def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -3320,9 +3632,6 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details.setdefault("litellm_params", {})
             metadata: Final = self.model_call_details["litellm_params"].get("metadata", {}) or {}
             metadata.update(exception.headers)
-
-        if not build_logging_payload:
-            return start_time, end_time
 
         ## STANDARDIZED LOGGING PAYLOAD
 
@@ -3594,6 +3903,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
+        if self.baseline_cache_context is not None:
+            await self.invalidate_baseline_cache_estimate("failed_request")
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
             return
@@ -3845,6 +4156,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             ## return unified Usage object
             if isinstance(result.response.usage, ResponseAPIUsage):
+                set_response_cost_in_hidden_params(result.response, result.response.usage.cost)
                 transformed_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                     result.response.usage
                 )
@@ -3870,9 +4182,8 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> InteractionsAPIResponse | None:
         """
         The Interactions API streaming iterator hands the terminal event to the
-        success handlers: the new schema (Api-Revision: 2026-05-20) emits
-        ``interaction.completed`` carrying the full interaction object, the
-        legacy schema (2026-05-07) emits a chunk with ``status="completed"``
+        success handlers: ``interaction.completed`` may carry the full
+        interaction object, or the final chunk may carry ``status="completed"``
         and usage on the chunk itself. Build the equivalent non-streaming
         response so cost calculation and spend tracking see one shape.
         """
@@ -4902,7 +5213,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     for callback in _in_memory_loggers:
         if (
             isinstance(callback, OpenTelemetryV2)
-            and getattr(callback, "callback_name", None) == callback_name
+            and callback.callback_name == callback_name
             and (serves_a_destination or not _exports_nowhere(callback.config))
         ):
             return callback
@@ -5228,6 +5539,18 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
     return {}
 
 
+def _deployment_model_info(litellm_params: dict | None) -> Mapping[str, object]:
+    """The router-stamped deployment model_info from whichever metadata field carries it."""
+    if litellm_params is None:
+        return MappingProxyType({})
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if not isinstance(metadata := litellm_params.get(metadata_key), Mapping):
+            continue
+        if model_info := metadata.get("model_info"):
+            return model_info
+    return MappingProxyType({})
+
+
 def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
     """
     Check if the model uses custom pricing
@@ -5289,7 +5612,7 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     """Access groups the auth layer stamped onto this request, from whichever metadata field carries them.
 
     Detached internal sub-calls only inherit the identity keys, so the auth object is the
-    fallback there, exactly as _get_budget_reservation_from_metadata does for reservations.
+    fallback there, exactly as budget_reservation_from_metadata does for reservations.
     """
     for metadata_variable_name in ("metadata", "litellm_metadata"):
         metadata = litellm_params.get(metadata_variable_name)
@@ -5480,6 +5803,10 @@ class StandardLoggingPayloadSetup:
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
                 clean_metadata[key] = metadata[key]
 
+            recorded_guardrails: Final = metadata.get("applied_guardrails")
+            if applied_guardrails and isinstance(recorded_guardrails, list):
+                clean_metadata["applied_guardrails"] = list(dict.fromkeys([*applied_guardrails, *recorded_guardrails]))
+
             user_api_key: Final = metadata.get("user_api_key")
             if user_api_key and isinstance(user_api_key, str) and is_valid_sha256_hash(user_api_key):
                 clean_metadata["user_api_key_hash"] = user_api_key
@@ -5577,7 +5904,7 @@ class StandardLoggingPayloadSetup:
         base_model: str | None,
         custom_pricing: bool | None,
         custom_llm_provider: str | None,
-        init_response_obj: Any | BaseModel | dict,
+        init_response_obj: object,
         api_base: str | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = _select_model_name_for_cost_calc(
@@ -5610,9 +5937,7 @@ class StandardLoggingPayloadSetup:
         return model_cost_information
 
     @staticmethod
-    def get_final_response_obj(
-        response_obj: dict, init_response_obj: Any | BaseModel | dict, kwargs: dict
-    ) -> dict | str | list | None:
+    def get_final_response_obj(response_obj: dict, init_response_obj: object, kwargs: dict) -> dict | str | list | None:
         """
         Get final response object after redacting the message input/output from logging
         """
@@ -5625,15 +5950,12 @@ class StandardLoggingPayloadSetup:
 
         modified_final_response_obj: Final = redact_message_input_output_from_logging(
             model_call_details=kwargs,
-            result=final_response_obj,
+            result=overlay_served_output_texts(final_response_obj, kwargs.get(SERVED_OUTPUT_TEXTS_KEY)),
         )
 
         if modified_final_response_obj is not None and isinstance(modified_final_response_obj, BaseModel):
-            final_response_obj = modified_final_response_obj.model_dump()
-        else:
-            final_response_obj = modified_final_response_obj
-
-        return final_response_obj
+            return modified_final_response_obj.model_dump()
+        return modified_final_response_obj
 
     @staticmethod
     def get_additional_headers(
@@ -5817,6 +6139,7 @@ class StandardLoggingPayloadSetup:
             error_budget_entity_id=budget_error.entity_id if budget_error else None,
             error_budget_limit=budget_error.max_budget if budget_error else None,
             error_budget_spend=budget_error.current_cost if budget_error else None,
+            normalized_error=normalize_error(original_exception, error_status, error_message),
         )
 
     @staticmethod
@@ -6057,18 +6380,23 @@ def _get_status_fields(
 
 
 def _extract_response_obj_and_hidden_params(
-    init_response_obj: Any | BaseModel | dict,
+    init_response_obj: object,
     original_exception: Exception | None,
 ) -> tuple[dict, dict | None]:
     """Extract response_obj and hidden_params from init_response_obj."""
-    hidden_params: dict | None = None
+    hidden_params: dict | None = (
+        getattr(init_response_obj, "_hidden_params", None)
+        if isinstance(init_response_obj, BaseModel | HttpxBinaryResponseContent)
+        else None
+    )
     if init_response_obj is None:
         response_obj = {}
     elif isinstance(init_response_obj, BaseModel):
         response_obj = init_response_obj.model_dump()
-        hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
+    elif isinstance(init_response_obj, HttpxBinaryResponseContent):
+        response_obj = dict(init_response_obj.logging_summary())
     else:
         response_obj = {}
 
@@ -6101,6 +6429,8 @@ def _autorouter_savings_for_payload(
     model_id: str | None,
     usage_object: Mapping[str, object] | None,
     cost_breakdown: Mapping[str, object] | None,
+    baseline_usage: Usage | None = None,
+    baseline_provenance: Literal["observed_initial", "modeled"] | None = None,
 ) -> float | None:
     """The auto-router savings figure for the payload, or ``None`` when there is none.
 
@@ -6119,6 +6449,8 @@ def _autorouter_savings_for_payload(
             model_id=model_id,
             usage_object=usage_object,
             cost_breakdown=cost_breakdown,
+            baseline_usage=baseline_usage,
+            baseline_provenance=baseline_provenance,
         )
     except Exception as e:  # noqa: BLE001  # a savings figure must never fail request logging
         verbose_logger.debug("autorouter savings skipped on logging payload: %s", e)
@@ -6295,13 +6627,18 @@ def get_standard_logging_object_payload(
             model_name = response_model_name
 
         request_cost_breakdown: Final = cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost)
-        autorouter_savings: Final = _autorouter_savings_for_payload(
-            request_metadata=metadata,
-            model=model_name,
-            custom_llm_provider=custom_llm_provider,
-            model_id=_model_id,
-            usage_object=usage_dict,
-            cost_breakdown=request_cost_breakdown,
+        captured_baseline: Final = logging_obj.baseline_observation
+        autorouter_savings: Final = (
+            None
+            if status != "success" or cache_hit or logging_obj.baseline_cache_context is not None
+            else _autorouter_savings_for_payload(
+                request_metadata=metadata,
+                model=model_name,
+                custom_llm_provider=custom_llm_provider,
+                model_id=_model_id,
+                usage_object=usage_dict,
+                cost_breakdown=request_cost_breakdown,
+            )
         )
 
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
@@ -6348,6 +6685,26 @@ def get_standard_logging_object_payload(
             response_cost=response_cost,
             cost_breakdown=request_cost_breakdown,
             autorouter_savings=autorouter_savings,
+            autorouter_savings_estimate=(
+                {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                    "version": 3,
+                    "status": "unknown",
+                    "reason": "pending_projection",
+                }
+                if captured_baseline is not None
+                else (
+                    {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                        "version": 1,
+                        "status": "estimated" if autorouter_savings is not None else "unknown",
+                        "reason": "uncached_usage" if autorouter_savings is not None else "baseline_unavailable",
+                    }
+                    if metadata.get("routing_decision")
+                    else None
+                )
+            ),
+            autorouter_baseline_observation=(
+                captured_baseline.model_dump_json() if captured_baseline is not None else None
+            ),
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),
@@ -6377,6 +6734,7 @@ def get_standard_logging_object_payload(
             error_str=error_str,
             error_information=error_information,
             response_cost_failure_debug_info=kwargs.get("response_cost_failure_debug_information"),
+            zero_cost_diagnostic=kwargs.get("zero_cost_diagnostic"),
             guardrail_information=metadata.get("standard_logging_guardrail_information", None),
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
@@ -6555,6 +6913,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         response_cost=response_cost,
         autorouter_savings=None,
         response_cost_failure_debug_info=None,
+        zero_cost_diagnostic=None,
         status="success",
         total_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT),
         prompt_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT),

@@ -37,6 +37,14 @@ const CACHE_FILTER_ITEMS = [
   { value: "hit", label: "Cache Hit" },
   { value: "miss", label: "Cache Miss" },
 ] as const;
+
+const SPAN_TYPE_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Types" },
+  { value: "llm", label: "LLM" },
+  { value: "agent", label: "Agent" },
+  { value: "mcp", label: "MCP" },
+  { value: "batch", label: "Batch" },
+] as const;
 const PAGE_SIZE = 50;
 
 const SEARCH_INPUT_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
@@ -327,6 +335,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         onChange={setter(LOG_FILTER_IDS.TEAM_ID)}
         teams={teams}
       />
+
+      <DataTableFilterField label="Span Type">
+        <Select
+          items={SPAN_TYPE_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.SPAN_TYPE) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.SPAN_TYPE)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.SPAN_TYPE, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Types" />
+          </SelectTrigger>
+          <SelectContent>
+            {SPAN_TYPE_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
 
       <DataTableFilterField label="Status">
         <Select

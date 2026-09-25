@@ -39,7 +39,7 @@ const NonReasoningTierToggle: React.FC<{
       <span className="block text-xs text-muted-foreground">
         Adds NON_REASONING below Simple, for operational agent traffic that relays or reformats information rather than
         reasoning about it. Escalation still moves up out of it when a request needs more.
-        {!available && " Requires the LLM classification method."}
+        {!available && " Requires the LLM or Jev classification method"}
       </span>
       <Separator className="my-4" />
     </>

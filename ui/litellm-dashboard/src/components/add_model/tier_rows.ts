@@ -1,4 +1,5 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
+import { isForecastClassifier } from "./forecast_classifier_config";
+import type { ClassifierType, ComplexityTiers } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
 import type { TierModelParams, TierModelParamsByTier } from "./complexity_router_tiers";
 
@@ -32,6 +33,7 @@ export const MAX_TIER_NAME_CHARS = 64;
 export const MAX_TIER_DEFINITION_CHARS = 500;
 
 export interface ActiveTierSet {
+  classifier_type?: ClassifierType;
   tiers: ComplexityTiers;
   enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
@@ -62,7 +64,12 @@ export const activeTierRows = (value: ActiveTierSet): ActiveTierRow[] => {
   const rows =
     value.custom_tier_set?.tiers ??
     tierOrderFor(value.enable_non_reasoning_tier).map((tier) => builtInRow(tier, value.tiers));
-  return rows.map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
+  return rows
+    .filter(
+      (row) =>
+        value.custom_tier_set || !isForecastClassifier(value.classifier_type ?? "heuristic") || row.models.length > 0,
+    )
+    .map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
 };
 
 // The wire shape of an edited tier set, shared by the payload builder and the prompt preview so the
@@ -138,7 +145,7 @@ export const CUSTOM_TIER_RESTRICTIONS = {
   heuristicClassifier: {
     omit: ["heuristic_first_max_tier", "hybrid_boundary_margin"],
     reason:
-      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM classifier. " +
+      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM or JEV classifier. " +
       "Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
   },
   heuristicScoring: {

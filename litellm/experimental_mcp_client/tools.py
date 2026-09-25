@@ -26,7 +26,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall
 ########################################################
 def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolParam:
     """Convert an MCP tool to an OpenAI tool."""
-    normalized_parameters: Final = _normalize_mcp_input_schema(mcp_tool.inputSchema)
+    normalized_parameters: Final = _normalize_mcp_input_schema(mcp_tool.input_schema)
 
     return ChatCompletionToolParam(
         type="function",
@@ -73,7 +73,7 @@ def transform_mcp_tool_to_openai_responses_api_tool(
     mcp_tool: MCPTool,
 ) -> FunctionToolParam:
     """Convert an MCP tool to an OpenAI Responses API tool."""
-    normalized_parameters: Final = _normalize_mcp_input_schema(mcp_tool.inputSchema)
+    normalized_parameters: Final = _normalize_mcp_input_schema(mcp_tool.input_schema)
 
     return FunctionToolParam(
         name=mcp_tool.name,
@@ -93,7 +93,7 @@ def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessages
     return AnthropicMessagesTool(
         name=mcp_tool.name,
         description=mcp_tool.description or "",
-        input_schema=sanitize_input_schema_for_anthropic(mcp_tool.inputSchema),
+        input_schema=sanitize_input_schema_for_anthropic(mcp_tool.input_schema),
         type="custom",
     )
 
@@ -129,7 +129,7 @@ async def list_tools_with_pagination(
             )
             tools.extend(result.tools)
 
-            next_cursor = getattr(result, "nextCursor", None)
+            next_cursor = result.next_cursor
             if not isinstance(next_cursor, str) or not next_cursor:
                 return tools
             if next_cursor in seen_cursors:

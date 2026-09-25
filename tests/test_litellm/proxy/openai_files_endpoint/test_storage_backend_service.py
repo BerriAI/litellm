@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
@@ -6,15 +8,23 @@ from litellm.proxy.openai_files_endpoints import storage_backend_service
 from litellm.proxy.openai_files_endpoints.storage_backend_service import (
     StorageBackendFileService,
 )
+from litellm.proxy.utils import PrismaClient
 
 
 class _RecordingStorageBackend:
-    def __init__(self):
+    def __init__(self, delete_error: Exception | None = None):
         self.upload_calls = []
+        self.delete_calls: list[str] = []
+        self.delete_error = delete_error
 
     async def upload_file(self, **kwargs):
         self.upload_calls.append(kwargs)
         return "https://storage.example/blob-1"
+
+    async def delete_file(self, storage_url: str) -> None:
+        self.delete_calls.append(storage_url)
+        if self.delete_error is not None:
+            raise self.delete_error
 
 
 class _FakeManagedFilesHook(BaseFileEndpoints):
@@ -42,6 +52,11 @@ class _FakeManagedFilesHook(BaseFileEndpoints):
         self.stored.append(kwargs)
 
 
+class _FailingManagedFilesHook(_FakeManagedFilesHook):
+    async def store_unified_file_id(self, **kwargs):
+        raise RuntimeError("db down")
+
+
 class _FakeProxyLogging:
     def __init__(self, hook):
         self._hook = hook
@@ -57,7 +72,7 @@ def _file_data():
 @pytest.mark.asyncio
 async def test_upload_with_target_model_names_but_no_hook_raises_before_uploading(monkeypatch):
     backend = _RecordingStorageBackend()
-    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name: backend)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
 
     with pytest.raises(ProxyException) as exc_info:
         await StorageBackendFileService.upload_file_to_storage_backend(
@@ -80,7 +95,7 @@ async def test_upload_with_target_model_names_but_no_hook_raises_before_uploadin
 @pytest.mark.asyncio
 async def test_upload_without_target_model_names_skips_hook_requirement(monkeypatch):
     backend = _RecordingStorageBackend()
-    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name: backend)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
 
     file_object = await StorageBackendFileService.upload_file_to_storage_backend(
         file_data=_file_data(),
@@ -101,7 +116,7 @@ async def test_upload_without_target_model_names_skips_hook_requirement(monkeypa
 @pytest.mark.asyncio
 async def test_upload_with_target_model_names_and_hook_stores_unified_id(monkeypatch):
     backend = _RecordingStorageBackend()
-    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name: backend)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
     hook = _FakeManagedFilesHook()
 
     file_object = await StorageBackendFileService.upload_file_to_storage_backend(
@@ -125,3 +140,50 @@ async def test_upload_with_target_model_names_and_hook_stores_unified_id(monkeyp
         "stored_id_matches_response": True,
         "model_mappings": {"gpt-x": "https://storage.example/blob-1"},
     }
+
+
+@pytest.mark.asyncio
+async def test_upload_hands_the_prisma_client_to_the_storage_backend_factory(monkeypatch: pytest.MonkeyPatch):
+    backend = _RecordingStorageBackend()
+    factory_calls: list[tuple[str, PrismaClient | None]] = []
+
+    def _factory(name: str, prisma_client: PrismaClient | None = None) -> _RecordingStorageBackend:
+        factory_calls.append((name, prisma_client))
+        return backend
+
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", _factory)
+    prisma_client = MagicMock()
+
+    await StorageBackendFileService.upload_file_to_storage_backend(
+        file_data=_file_data(),
+        target_storage="litellm_db",
+        target_model_names=[],
+        purpose="batch",
+        proxy_logging_obj=_FakeProxyLogging(hook=None),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        prisma_client=prisma_client,
+    )
+
+    assert factory_calls == [("litellm_db", prisma_client)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_error", [None, OSError("blob locked")], ids=["delete succeeds", "delete fails"])
+async def test_upload_deletes_the_uploaded_content_when_the_metadata_write_fails(
+    monkeypatch: pytest.MonkeyPatch, delete_error: Exception | None
+):
+    backend = _RecordingStorageBackend(delete_error=delete_error)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await StorageBackendFileService.upload_file_to_storage_backend(
+            file_data=_file_data(),
+            target_storage="azure_storage",
+            target_model_names=["gpt-x"],
+            purpose="batch",
+            proxy_logging_obj=_FakeProxyLogging(hook=_FailingManagedFilesHook()),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert len(backend.upload_calls) == 1
+    assert backend.delete_calls == ["https://storage.example/blob-1"]

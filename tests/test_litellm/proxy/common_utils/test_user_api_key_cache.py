@@ -82,6 +82,19 @@ class FakeRedisCache(RedisCache):
     async def async_delete_cache(self, key: str):  # type: ignore[override]
         self._store.pop(key, None)
 
+    async def delete_cache_keys(self, keys):  # type: ignore[override]
+        for key in keys:
+            self._store.pop(key, None)
+
+
+class PartitionFailingRedisCache(FakeRedisCache):
+    """Fails the batch delete for the key-object partition and no other."""
+
+    async def delete_cache_keys(self, keys):  # type: ignore[override]
+        if any(is_user_key_cache_key(key) for key in keys):
+            raise ConnectionError("redis unavailable")
+        await super().delete_cache_keys(keys)
+
 
 def _make_key_obj(token: str = "tok") -> UserAPIKeyAuth:
     # Minimal object (UserAPIKeyAuth inherits token from base view).
@@ -332,6 +345,46 @@ class TestUserKeyObjectPartition:
         assert await redis.async_get_cache(HASHED_TOKEN) is None
 
     @pytest.mark.asyncio
+    async def test_batch_delete_routes_each_key_to_its_partition(self):
+        """A batch delete has to clear the same partition the single delete does.
+
+        ``DualCache``'s batch delete only knows about the main in-memory cache, so
+        inheriting it unchanged leaves a key object sitting in ``key_object_cache``
+        with its pre-reset spend, and the next request is authorized against that
+        stale copy until the local entry expires.
+        """
+        redis = FakeRedisCache()
+        cache = UserApiKeyCache(redis_cache=redis)
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
+
+        await cache.async_delete_cache_keys([HASHED_TOKEN, end_user_cache_key("u1")])
+
+        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
+        assert await cache.async_get_cache(end_user_cache_key("u1")) is None
+        assert await redis.async_get_cache(HASHED_TOKEN) is None
+        assert await redis.async_get_cache(end_user_cache_key("u1")) is None
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_clears_the_other_partition_when_one_fails(self):
+        """One partition failing must not cost the other its deletions.
+
+        A caller batching these has already committed the rows they cache, so a
+        partition that is skipped keeps authorizing against pre-reset spend until
+        the entry expires. The failure is still raised for the caller to report.
+        """
+        redis = PartitionFailingRedisCache()
+        cache = UserApiKeyCache(redis_cache=redis)
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
+
+        with pytest.raises(ConnectionError):
+            await cache.async_delete_cache_keys([HASHED_TOKEN, end_user_cache_key("u1")])
+
+        assert await cache.async_get_cache(end_user_cache_key("u1")) is None
+        assert await redis.async_get_cache(end_user_cache_key("u1")) is None
+
+    @pytest.mark.asyncio
     async def test_pipeline_write_routes_each_entry_to_its_partition(self):
         cache = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=2))
         await cache.async_set_cache_pipeline(
@@ -360,6 +413,36 @@ class TestUserKeyObjectPartition:
         cache = UserApiKeyCache()
         assert cache.in_memory_cache_for(HASHED_TOKEN) is cache.key_object_cache.in_memory_cache
         assert cache.in_memory_cache_for(end_user_cache_key("u1")) is cache.in_memory_cache
+
+    def test_update_in_memory_max_size_applies_to_key_object_partition(self):
+        cache = UserApiKeyCache(
+            in_memory_cache=InMemoryCache(max_size_in_memory=2),
+            key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2),
+        )
+        cache.update_in_memory_max_size(3)
+
+        tokens = tuple(hashlib.sha256(f"sk-key-{i}".encode()).hexdigest() for i in range(3))
+        for token in tokens:
+            cache.set_cache(token, _make_key_obj(token), model_type=UserAPIKeyAuth, ttl=100)
+        for i in range(3):
+            cache.set_cache(end_user_cache_key(f"u{i}"), {"user_id": f"u{i}"}, ttl=100)
+
+        first_key = cache.get_cache(tokens[0], model_type=UserAPIKeyAuth)
+        assert first_key is not None, "key partition still evicts at its old capacity"
+        assert first_key.token == tokens[0]
+        assert cache.get_cache(end_user_cache_key("u0")) == {"user_id": "u0"}
+
+    def test_update_in_memory_max_size_none_resets_key_object_partition_to_default(self):
+        cache = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=1))
+        cache.update_in_memory_max_size(None)
+
+        tokens = tuple(hashlib.sha256(f"sk-key-{i}".encode()).hexdigest() for i in range(2))
+        for token in tokens:
+            cache.set_cache(token, _make_key_obj(token), model_type=UserAPIKeyAuth, ttl=100)
+
+        first_key = cache.get_cache(tokens[0], model_type=UserAPIKeyAuth)
+        assert first_key is not None
+        assert first_key.token == tokens[0]
 
 
 class TestManagementObjectTTL:

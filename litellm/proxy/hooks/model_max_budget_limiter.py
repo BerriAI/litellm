@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from openai.types import Batch
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -13,18 +15,21 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
 USER_SPEND_CACHE_KEY_PREFIX: Final = "user_model_spend"
+TEAM_SPEND_CACHE_KEY_PREFIX: Final = "team_model_spend"
 
 _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
     {
         Litellm_EntityType.KEY: VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.USER: USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.END_USER: END_USER_SPEND_CACHE_KEY_PREFIX,
+        Litellm_EntityType.TEAM: TEAM_SPEND_CACHE_KEY_PREFIX,
     }
 )
 
@@ -37,6 +42,7 @@ _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.KEY: "virtual_key_budget_start_time",
         Litellm_EntityType.USER: "user_model_budget_start_time",
         Litellm_EntityType.END_USER: "end_user_budget_start_time",
+        Litellm_EntityType.TEAM: "team_model_budget_start_time",
     }
 )
 
@@ -114,6 +120,17 @@ def model_budget_start_time_cache_key(
     return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
 
 
+def batch_charged_once_marker_key(spend_key: str, batch_id: str) -> str:
+    return f"{spend_key}:batch:{batch_id}"
+
+
+def batch_id_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> str | None:
+    """A finished batch reports its whole cost on every poll, so its id is charged once per counter."""
+    if response_cost <= 0 or not is_batch_retrieve_call_type(call_type):
+        return None
+    return response_obj.id if isinstance(response_obj, Batch) else None
+
+
 def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> ResolvedModelBudget | None:
     """Find the `model_max_budget` entry that governs `model`, or None."""
     for candidate in _budget_model_candidates(model):
@@ -137,6 +154,18 @@ def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> 
             continue
         return ResolvedModelBudget(budget_model=candidate, budget_config=budget_config)
     return None
+
+
+def team_model_budget_applies(model: str, key_model_max_budget: Mapping[str, object] | None) -> bool:
+    """A key entry that spend-gates `model` overrides the team cap: it is then gated on and billed to the key alone."""
+    if not key_model_max_budget:
+        return True
+    resolved: Final = resolve_model_budget(model=model, model_max_budget=key_model_max_budget)
+    return resolved is None or not _spend_gated(resolved.budget_config)
+
+
+def _spend_gated(budget_config: BudgetConfig) -> bool:
+    return budget_config.max_budget is not None and budget_config.max_budget >= 0
 
 
 def _budget_model_candidates(model: str) -> tuple[str, ...]:
@@ -346,6 +375,30 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    async def is_team_within_model_budget(
+        self,
+        team_id: str,
+        team_model_max_budget: Mapping[str, object],
+        key_model_max_budget: Mapping[str, object] | None,
+        model: str,
+    ) -> bool:
+        """
+        Check if the team is within the model budget, unless the key's own
+        `model_max_budget` overrides it for `model`
+
+        Raises:
+            BudgetExceededError: If the team has exceeded the model budget
+        """
+        if not team_model_budget_applies(model=model, key_model_max_budget=key_model_max_budget):
+            return True
+        return await self._is_entity_within_model_budget(
+            entity_type=Litellm_EntityType.TEAM,
+            entity_id=team_id,
+            model_max_budget=team_model_max_budget,
+            model=model,
+            exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
+        )
+
     async def _is_entity_within_model_budget(
         self,
         entity_type: Litellm_EntityType,
@@ -456,11 +509,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         entity_budgets: Final = (
             (
                 Litellm_EntityType.KEY,
                 payload_metadata.get("user_api_key_hash"),
-                _metadata.get("user_api_key_model_max_budget"),
+                key_model_max_budget,
+            ),
+            (
+                Litellm_EntityType.TEAM,
+                payload_metadata.get("user_api_key_team_id"),
+                (
+                    _metadata.get("user_api_key_team_model_max_budget")
+                    if team_model_budget_applies(
+                        model=model,
+                        key_model_max_budget=(
+                            key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
+                        ),
+                    )
+                    else None
+                ),
             ),
             (
                 Litellm_EntityType.USER,
@@ -478,27 +546,23 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if not resolved_budgets:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
-                "no key, user or end-user model_max_budget covers model=%s",
+                "no key, team, user or end-user model_max_budget covers model=%s",
                 model,
             )
             return
 
+        batch_id: Final = batch_id_to_charge_once(
+            call_type=kwargs.get("call_type"),
+            response_obj=response_obj,
+            response_cost=response_cost,
+        )
         for entity_type, entity_id, resolved in resolved_budgets:
-            await self._increment_spend_for_key(
-                budget_config=resolved.budget_config,
-                spend_key=model_budget_spend_cache_key(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    budget_model=resolved.budget_model,
-                    budget_duration=resolved.budget_config.budget_duration,
-                ),
-                start_time_key=model_budget_start_time_cache_key(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    budget_model=resolved.budget_model,
-                    budget_duration=resolved.budget_config.budget_duration,
-                ),
+            await self._charge_entity(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                resolved=resolved,
                 response_cost=response_cost,
+                batch_id=batch_id,
             )
 
         if self.dual_cache.redis_cache is not None:
@@ -508,3 +572,45 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             "current state of in memory cache %s",
             json.dumps(self.dual_cache.in_memory_cache.cache_dict, indent=4, default=str),
         )
+
+    async def _charge_entity(
+        self,
+        entity_type: Litellm_EntityType,
+        entity_id: str | None,
+        resolved: ResolvedModelBudget,
+        response_cost: float,
+        batch_id: str | None,
+    ) -> None:
+        budget_duration: Final = resolved.budget_config.budget_duration
+        if budget_duration is None:
+            return
+        spend_key: Final = model_budget_spend_cache_key(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            budget_model=resolved.budget_model,
+            budget_duration=budget_duration,
+        )
+        if batch_id is not None and not await self._claim_batch_charge(
+            spend_key=spend_key,
+            batch_id=batch_id,
+            ttl_seconds=duration_in_seconds(budget_duration),
+        ):
+            return
+        await self._increment_spend_for_key(
+            budget_config=resolved.budget_config,
+            spend_key=spend_key,
+            start_time_key=model_budget_start_time_cache_key(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                budget_model=resolved.budget_model,
+                budget_duration=budget_duration,
+            ),
+            response_cost=response_cost,
+        )
+
+    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
+        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
+        polls: Final = await self.dual_cache.async_increment_cache(
+            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
+        )
+        return polls == 1
