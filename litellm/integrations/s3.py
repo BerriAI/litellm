@@ -58,8 +58,22 @@ def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
     return _resolve_positive_int("s3_max_queue_size", configured, fallback)
 
 
-def resolve_s3_max_retry_age_seconds(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_retry_age_seconds", configured, fallback)
+def resolve_s3_max_retry_age_seconds(configured: object) -> int | None:
+    if configured is None or configured == "":
+        return None
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is not an integer, retry age budget disabled", configured
+        )
+        return None
+    if bound < 0:
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r must be at least 0, retry age budget disabled", configured
+        )
+        return None
+    return bound or None
 
 
 def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> int:

@@ -468,15 +468,16 @@ def test_s3_v2_aged_out_object_is_dropped_next_to_delivered_siblings(gateway: Ga
             key: Final = scenario.key(models=[model])
             _send(owned.gateway, model, key, f"{marker}-doomed")
             _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-sibling")
+            _send(owned.gateway, model, key, f"{marker}-trigger")
             eventually(
                 lambda: owned.log.read_text(),
-                lambda text: "older than s3_max_retry_age_seconds=1)" in text,
+                lambda text: "retrying longer than s3_max_retry_age_seconds=1)" in text,
                 seconds=60,
             )
             exhausted: Final = sink.rejected_attempts
             _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-one-flush-later")
             _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-two-flushes-later")
-    assert sum(1 for r in provider.drain() if r.method == "POST") == 4
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 5
     assert 3 <= exhausted <= 3 * 3, f"{exhausted} PUTs for an object that aged out after its second flush"
     assert sink.rejected_attempts == exhausted, (
         f"a 503 object kept being PUT after ageing out: {exhausted} -> {sink.rejected_attempts}"
@@ -503,7 +504,7 @@ def test_s3_v2_aged_out_object_stays_queued_while_the_whole_sink_is_down(gateway
     )
 
 
-def test_s3_v2_failing_sink_keeps_only_the_newest_events_at_the_queue_cap(gateway: Gateway, tmp_path: Path) -> None:
+def test_s3_v2_failing_sink_trims_the_oldest_failed_events_past_the_queue_cap(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3cap" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(fail_status=503, delay_seconds=0.05)
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
@@ -521,7 +522,7 @@ def test_s3_v2_failing_sink_keeps_only_the_newest_events_at_the_queue_cap(gatewa
                 _send(owned.gateway, model, key, f"{marker}-{index}")
             eventually(
                 lambda: owned.log.read_text(),
-                lambda text: "dropping oldest events until the next flush" in text,
+                lambda text: "after a failed flush, dropped" in text,
                 seconds=30,
             )
             payloads: Final = collect_payloads(sink, 4, seconds=90)
@@ -532,6 +533,30 @@ def test_s3_v2_failing_sink_keeps_only_the_newest_events_at_the_queue_cap(gatewa
         f"the oldest events survived the cap: {landed}"
     )
     assert f"{marker}-23" in landed, f"the newest event was dropped: {landed}"
+
+
+def test_s3_v2_default_config_retries_access_denied_and_every_event_lands(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3denied" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_status=403, fail_code="AccessDenied", delay_seconds=0.05)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            sink.fail_until = time.time() + 20
+            ids: Final = _push(candidate, model, key, marker, 8)
+            payloads: Final = collect_payloads(sink, 8, seconds=120)
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 8
+    assert frozenset(payload["id"] for payload in payloads) == ids, (
+        f"a default-config run lost events through a 20s AccessDenied outage: {len(payloads)} landed"
+    )
+    attempt_totals: Final = tuple(sorted(sink.attempt_counts.values()))
+    assert len(attempt_totals) == 8 and all(count >= 4 for count in attempt_totals), (
+        f"each object must see at least one full 3-PUT retry burst before landing: {attempt_totals}"
+    )
 
 
 @pytest.mark.covers("other.observability.s3_v2.batch_retry_resends_identical_key_and_body")

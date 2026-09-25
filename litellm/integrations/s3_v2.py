@@ -10,6 +10,7 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager, nullcontext
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Literal, cast
 from urllib.parse import quote
@@ -24,7 +25,6 @@ from litellm.constants import (
     DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
     DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY,
     DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
-    DEFAULT_S3_MAX_RETRY_AGE_SECONDS,
 )
 from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
 from litellm.integrations.s3 import (
@@ -73,6 +73,7 @@ _TERMINAL_ERROR_CODES: Final = frozenset(
     }
 )
 _BODY_CODED_STATUSES: Final = frozenset({400, 403})
+_RETRYABLE_STATUSES: Final = frozenset({403, 408, 429, 500, 502, 503, 504})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
 
 
@@ -220,9 +221,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 max_queue_size=self.s3_max_queue_size,
             )
             self.log_queue: list[s3BatchLoggingElement] = []
-            self._dropped_at_enqueue: int = 0
-            self._in_flight_count: int = 0
-            self._sink_failing: bool = False
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
@@ -334,10 +332,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_max_queue_size = resolve_s3_max_queue_size(configured_queue_size, constructor_queue_size)
 
         configured_retry_age: Final = params.get("s3_max_retry_age_seconds")
-        constructor_retry_age: Final = resolve_s3_max_retry_age_seconds(
-            s3_max_retry_age_seconds, DEFAULT_S3_MAX_RETRY_AGE_SECONDS
+        constructor_retry_age: Final = resolve_s3_max_retry_age_seconds(s3_max_retry_age_seconds)
+        self.s3_max_retry_age_seconds = (
+            constructor_retry_age
+            if configured_retry_age is None or configured_retry_age == ""
+            else resolve_s3_max_retry_age_seconds(configured_retry_age)
         )
-        self.s3_max_retry_age_seconds = resolve_s3_max_retry_age_seconds(configured_retry_age, constructor_retry_age)
 
         self.s3_drop_on_terminal_error = s3_drop_on_terminal_error or resolve_s3_drop_on_terminal_error(
             params.get("s3_drop_on_terminal_error")
@@ -422,23 +422,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             end_time=end_time,
         )
 
-    def _enqueue(self, element: s3BatchLoggingElement) -> None:
-        if self._sink_failing and self._in_flight_count == 0 and len(self.log_queue) >= self.max_queue_size:
-            if self._dropped_at_enqueue == 0:
-                verbose_logger.warning(
-                    "s3 logging: queue full (max_queue_size=%s), dropping oldest events until the next flush",
-                    self.max_queue_size,
-                )
-            self._dropped_at_enqueue += 1
-            verbose_logger.debug(
-                "s3 logging: queue full (max_queue_size=%s), dropping oldest event key=%s",
-                self.max_queue_size,
-                self.log_queue[0].s3_object_key,
-            )
-            self.handle_callback_failure(callback_name="S3Logger")
-            del self.log_queue[0]
-        self.log_queue.append(element)
-
     async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
         """Batch audit logs and upload to S3 under audit_logs/ prefix."""
         try:
@@ -460,7 +443,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_object_download_filename=f"audit-{audit_log_id}.json",
             )
 
-            self._enqueue(element)
+            self.log_queue.append(element)  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
 
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
@@ -487,7 +470,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             verbose_logger.debug("\ns3 Logger - Logging payload = %s", s3_batch_logging_element)
 
-            self._enqueue(s3_batch_logging_element)
+            self.log_queue.append(
+                s3_batch_logging_element
+            )  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
             verbose_logger.debug(
                 "s3 logging: queue length %s, batch size %s",
                 len(self.log_queue),
@@ -497,7 +482,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception("s3 Layer Error - %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
-    async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement) -> UploadOutcome:
+    async def async_upload_data_to_s3(
+        self,
+        batch_logging_element: s3BatchLoggingElement,
+        slot: AbstractAsyncContextManager[object] = nullcontext(),
+    ) -> UploadOutcome:
         try:
             import base64
             import hashlib
@@ -557,8 +546,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             max_retries: Final = 3
             for attempt in range(max_retries):
-                response = await self._recorded_put(signed_put)
-                if response.status_code >= 400 and not _is_terminal(response) and attempt < max_retries - 1:
+                async with slot:
+                    response = await self._recorded_put(signed_put)
+                if (
+                    response.status_code in _RETRYABLE_STATUSES
+                    and not _is_terminal(response)
+                    and attempt < max_retries - 1
+                ):
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
@@ -592,13 +586,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Raises S3BatchUploadError when any upload failed; CustomBatchLogger.flush_queue
         keeps the surviving queue entries for the next flush.
         """
-        if self._dropped_at_enqueue:
-            verbose_logger.warning(
-                "s3 logging: dropped %s events because the queue was full (max_queue_size=%s)",
-                self._dropped_at_enqueue,
-                self.max_queue_size,
-            )
-            self._dropped_at_enqueue = 0
         batch: Final = tuple(self.log_queue)
         if not batch:
             return
@@ -610,11 +597,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
-        self._in_flight_count = len(uploads)
-        try:
-            results: Final = await asyncio.gather(*(self._upload_bounded(element) for element in uploads))
-        finally:
-            self._in_flight_count = 0
+        results: Final = await asyncio.gather(*(self._upload_bounded(element) for element in uploads))
         delivered: Final = sum(1 for outcome in results if outcome == "delivered")
         bucket_wide: Final = delivered == 0
         failed: Final = tuple(
@@ -625,37 +608,40 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             tuple(element for element, _ in failed)
             if bucket_wide
             else tuple(
-                element
+                element if element.retrying_since is not None else element.model_copy(update={"retrying_since": now})
                 for element, outcome in failed
-                if outcome != "dropped" and now - element.enqueued_at <= self.s3_max_retry_age_seconds
+                if outcome != "dropped"
+                and not (
+                    self.s3_max_retry_age_seconds is not None
+                    and element.retrying_since is not None
+                    and now - element.retrying_since > self.s3_max_retry_age_seconds
+                )
             )
         )
         dropped: Final = len(failed) - len(requeued)
         if dropped:
             verbose_logger.warning(
-                "s3 logging: %s uploads dropped (terminal or older than s3_max_retry_age_seconds=%s)",
+                "s3 logging: %s uploads dropped (terminal or retrying longer than s3_max_retry_age_seconds=%s)",
                 dropped,
                 self.s3_max_retry_age_seconds,
             )
-        self._sink_failing = len(requeued) > 0
         if not requeued:
             return
-        retained: Final = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
-            *requeued,
-            *self.log_queue[len(batch) :],
-        ]
-        overflow: Final = max(0, len(retained) - self.max_queue_size)
+        arrivals: Final = self.log_queue[len(batch) :]
+        overflow: Final = max(0, len(requeued) + len(arrivals) - self.max_queue_size)
+        survivors: Final = (*requeued, *arrivals)[overflow:]
+        kept_failed: Final = survivors[: max(0, len(requeued) - overflow)]
+        kept_new: Final = survivors[len(kept_failed) :]
         if overflow:
-            for _ in range(overflow):
-                self.handle_callback_failure(callback_name="S3Logger")
             verbose_logger.warning(
                 "s3 logging: queue exceeded max_queue_size=%s after a failed flush, dropped %s oldest events",
                 self.max_queue_size,
                 overflow,
             )
-            self.log_queue = retained[overflow:]
-        else:
-            self.log_queue = retained
+        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+            *kept_new,
+            *kept_failed,
+        ]
         raise S3BatchUploadError(failed=len(failed), total=len(uploads))
 
     def _batch_file_mode_active(self) -> bool:
@@ -670,8 +656,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return True
 
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> UploadOutcome:
-        async with self._upload_limiter:
-            return await self.async_upload_data_to_s3(element)
+        return await self.async_upload_data_to_s3(element, slot=self._upload_limiter)
 
     async def _recorded_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
         try:
@@ -708,7 +693,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             content_type="application/x-ndjson",
             s3_object_key=f"{parent}/{batch_name}.jsonl" if parent else f"{batch_name}.jsonl",
             s3_object_download_filename=f"{batch_name}.jsonl",
-            enqueued_at=min(element.enqueued_at for element in elements),
+            retrying_since=min(
+                (element.retrying_since for element in elements if element.retrying_since is not None), default=None
+            ),
         )
 
     def create_s3_batch_logging_element(
@@ -829,7 +816,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             max_retries: Final = 3
             for attempt in range(max_retries):
                 response = signed_put()
-                if response.status_code >= 400 and not _is_terminal(response) and attempt < max_retries - 1:
+                if (
+                    response.status_code in _RETRYABLE_STATUSES
+                    and not _is_terminal(response)
+                    and attempt < max_retries - 1
+                ):
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",

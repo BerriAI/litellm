@@ -323,9 +323,6 @@ class TestS3LoggerAuditLogEvent:
             logger.log_queue = []
             logger.batch_size = 100
             logger.max_queue_size = 100
-            logger._dropped_at_enqueue = 0
-            logger._sink_failing = False
-            logger._in_flight_count = 0
 
             audit_log = StandardAuditLogPayload(
                 id="audit-123",
@@ -360,9 +357,6 @@ class TestS3LoggerAuditLogEvent:
             logger.log_queue = []
             logger.batch_size = 100
             logger.max_queue_size = 100
-            logger._dropped_at_enqueue = 0
-            logger._sink_failing = False
-            logger._in_flight_count = 0
 
             audit_log = StandardAuditLogPayload(
                 id="audit-456",

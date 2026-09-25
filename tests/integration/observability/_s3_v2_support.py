@@ -35,6 +35,7 @@ class RecordingS3Sink:
     peak: int = 0
     attempts: int = 0
     attempt_log: list[tuple[float, int]] = field(default_factory=list)  # mutable-ok: appended under lock per PUT
+    attempt_counts: dict[str, int] = field(default_factory=dict)  # mutable-ok: per-target PUT counts under lock
     store: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: GET reads must see writes from earlier PUTs
 
     def respond(self, request: Request) -> Reply:
@@ -47,6 +48,7 @@ class RecordingS3Sink:
         assert request.target.startswith(f"/{BUCKET}/{PREFIX}/"), request.target
         with self.lock:
             self.attempts += 1
+            self.attempt_counts[request.target] = self.attempt_counts.get(request.target, 0) + 1
             self.in_flight += 1
             self.peak = max(self.peak, self.in_flight)
             self.attempt_log.append((time.time(), self.in_flight))
