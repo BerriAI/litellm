@@ -8668,7 +8668,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
@@ -8742,7 +8742,7 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
