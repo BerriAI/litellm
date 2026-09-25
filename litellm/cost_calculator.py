@@ -790,6 +790,12 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
+    return any("cost_per" in field and value is not None for field, value in entry.items()) or (
+        entry.get("tiered_pricing") is not None
+    )
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -828,12 +834,7 @@ def _select_model_name_for_cost_calc(
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry: Final = litellm.model_cost[router_model_id]
-            if (
-                entry.get("input_cost_per_token") is not None
-                or entry.get("input_cost_per_second") is not None
-                or entry.get("input_cost_per_query") is not None
-                or entry.get("tiered_pricing") is not None
-            ):
+            if _cost_map_entry_prices_anything(entry):
                 return_model = router_model_id
             else:
                 return_model = model
@@ -1699,7 +1700,7 @@ def completion_cost(
                         litellm_model_name=model,
                         data_residency=data_residency,
                         litellm_logging_obj=litellm_logging_obj,
-                        custom_pricing_model=selected_model if custom_pricing else None,
+                        custom_pricing_model=selected_model if explicit_pricing else None,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2884,10 +2885,7 @@ def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) 
         litellm.model_cost.get(model_name),
         litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
     )
-    return any(
-        entry is not None and any("cost_per" in field and value is not None for field, value in entry.items())
-        for entry in entries
-    )
+    return any(entry is not None and _cost_map_entry_prices_anything(entry) for entry in entries)
 
 
 def _first_priced_realtime_token_costs(
@@ -2936,8 +2934,8 @@ def handle_realtime_stream_cost_calculation(
 
     Args:
         results: A list of OpenAIRealtimeStreamBaseObject objects
-        custom_pricing_model: deployment-scoped pricing key, tried ahead of the
-            model the session reported so a config override is not ignored
+        custom_pricing_model: deployment-scoped pricing key from the deployment's
+            custom rates or base_model, tried ahead of the session-reported model
     """
     received_model = None
     potential_model_names: Final = [custom_pricing_model]

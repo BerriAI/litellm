@@ -5036,6 +5036,108 @@ def test_unpriced_deployment_entry_still_falls_through_to_the_session_model(monk
     assert with_unpriced_override > 0
 
 
+def test_realtime_audio_only_override_bills_audio_at_the_deployment_rate(monkeypatch):
+    """Regression: an audio-only pricing override was never selected as the pricing key.
+
+    The deployment-selection guard recognised only text, per-second, per-query and
+    tiered rates, so a deployment that priced just the audio meters was passed over
+    and the session kept billing the public rates for the exact tokens it priced.
+    """
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    model = "gemini-live-2.5-flash-native-audio"
+    deployment_key = "deployment-id-for-an-audio-only-realtime-group"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_key,
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "realtime",
+            "input_cost_per_audio_token": 0.0,
+            "output_cost_per_audio_token": 0.0,
+        },
+    )
+
+    logging_object = LiteLLMRealtimeStreamLoggingObject(
+        usage=Usage(
+            prompt_tokens=203,
+            completion_tokens=58,
+            total_tokens=261,
+            prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=203),
+            completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=58),
+        ),
+        results=[
+            {"type": "session.created", "session": {"model": model}},
+            {
+                "type": "response.done",
+                "response": {"usage": {"input_tokens": 203, "output_tokens": 58, "total_tokens": 261}},
+            },
+        ],
+    )
+
+    public_cost = completion_cost(
+        completion_response=logging_object,
+        model=model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="vertex_ai",
+    )
+    assert public_cost > 0
+
+    overridden_cost = completion_cost(
+        completion_response=logging_object,
+        model=model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="vertex_ai",
+        custom_pricing=True,
+        router_model_id=deployment_key,
+    )
+    assert overridden_cost == pytest.approx(0.0)
+
+
+def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch):
+    """Regression: a priced base_model was discarded for realtime sessions.
+
+    The resolved base model only reached the realtime cost path when custom pricing
+    was on, so a session reporting an alias unmapped in the cost map recorded zero
+    instead of the base model's published price.
+    """
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    base_model = "gemini-live-2.5-flash-native-audio"
+    logging_object = LiteLLMRealtimeStreamLoggingObject(
+        usage=Usage(
+            prompt_tokens=219,
+            completion_tokens=81,
+            total_tokens=300,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=16, audio_tokens=203),
+            completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=23, audio_tokens=58),
+        ),
+        results=[
+            {"type": "session.created", "session": {"model": "my-voice-alias"}},
+            {
+                "type": "response.done",
+                "response": {"usage": {"input_tokens": 219, "output_tokens": 81, "total_tokens": 300}},
+            },
+        ],
+    )
+
+    aliased_cost = completion_cost(
+        completion_response=logging_object,
+        model="my-voice-alias",
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="vertex_ai",
+        base_model=base_model,
+    )
+    base_cost = completion_cost(
+        completion_response=logging_object,
+        model=base_model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="vertex_ai",
+    )
+    assert aliased_cost == pytest.approx(base_cost, rel=1e-9)
+    assert aliased_cost > 0
+
+
 def test_baseten_glm_5_3_fast_is_priced_from_registry(_local_model_cost_map: None) -> None:
     model: Final = "baseten/zai-org/GLM-5.3-Fast"
     prompt_tokens: Final = 1000
