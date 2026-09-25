@@ -276,6 +276,54 @@ def test_transform_request_unsupported_task_type_maps_to_400():
     assert "Unsupported Amazon Nova Canvas taskType" in str(excinfo.value.message)
 
 
+def test_transform_request_text_image_without_any_image_raises():
+    """TEXT_IMAGE with neither a multipart image nor a conditionImage fails fast."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_image_edit_request(
+            model=TEST_MODEL,
+            prompt="same layout",
+            image=None,
+            image_edit_optional_request_params={"taskType": "TEXT_IMAGE"},
+            litellm_params={},
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "requires an image input" in str(excinfo.value.message)
+
+
+def test_transform_request_text_image_invalid_control_mode_raises():
+    """Unknown controlMode fails fast instead of hitting AWS with a bad payload."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_image_edit_request(
+            model=TEST_MODEL,
+            prompt="restyle",
+            image=img,
+            image_edit_optional_request_params={"taskType": "TEXT_IMAGE", "controlMode": "CANNY_EDIT"},
+            litellm_params={},
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "Unsupported Amazon Nova Canvas controlMode" in str(excinfo.value.message)
+
+
+def test_transform_request_text_image_forwards_negative_text():
+    """TEXT_IMAGE forwards negativeText into textToImageParams."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    body, _ = config.transform_image_edit_request(
+        model=TEST_MODEL,
+        prompt="restyle",
+        image=img,
+        image_edit_optional_request_params={"taskType": "TEXT_IMAGE", "negativeText": "blurry"},
+        litellm_params={},
+        headers={},
+    )
+    assert body["textToImageParams"]["negativeText"] == "blurry"
+
+
 #################################################
 # controlStrength coercion and range
 #################################################

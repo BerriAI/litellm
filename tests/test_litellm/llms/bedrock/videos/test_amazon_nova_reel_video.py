@@ -2253,3 +2253,449 @@ def test_cross_region_video_id_resolves_to_base_model_deployment():
     )
     # The status transform still encodes the cross-region id verbatim.
     assert _Config.extract_invocation_arn(video_id) == invocation_arn
+
+
+#################################################
+# create-path HTTP error mapping (sync + async)
+#################################################
+
+
+def test_handler_sync_create_http_status_error_maps_to_bedrock_error(monkeypatch):
+    """A non-2xx create response must map to BedrockError with the upstream status,
+    body and headers (raise_for_status path), not escape as httpx.HTTPStatusError."""
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+
+    class _FailingClient:
+        def post(self, **kwargs):
+            return httpx.Response(
+                403,
+                json={"message": "access denied"},
+                request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"),
+            )
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _FailingClient())
+    with pytest.raises(BedrockError) as excinfo:
+        handler.video_generation(
+            model="bedrock/amazon.nova-reel-v1:0",
+            prompt="waves at sunset",
+            optional_params={"output_s3_uri": "s3://bucket/out/"},
+            logging_obj=None,
+            timeout=5.0,
+            avideo_generation=False,
+        )
+    assert excinfo.value.status_code == 403
+    assert "access denied" in str(excinfo.value.message)
+    assert excinfo.value.headers is not None
+
+
+def test_handler_async_create_http_status_error_maps_to_bedrock_error(monkeypatch):
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+
+    class _FailingAsyncClient(httpx.AsyncClient):
+        async def post(self, **kwargs):
+            return httpx.Response(
+                429,
+                json={"message": "too many requests"},
+                request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"),
+            )
+
+    with pytest.raises(BedrockError) as excinfo:
+        asyncio.run(
+            handler.async_video_generation(
+                model="bedrock/amazon.nova-reel-v1:0",
+                prompt="waves at sunset",
+                optional_params={"output_s3_uri": "s3://bucket/out/"},
+                logging_obj=None,
+                timeout=5.0,
+                client=_FailingAsyncClient(),
+            )
+        )
+    assert excinfo.value.status_code == 429
+    assert "too many requests" in str(excinfo.value.message)
+    assert excinfo.value.headers is not None
+
+
+#################################################
+# status mapping + video id guards
+#################################################
+
+
+def test_handler_empty_video_id_raises_400():
+    handler = BedrockVideoGeneration()
+    with pytest.raises(BedrockError) as excinfo:
+        handler.video_status(video_id="", litellm_params={})
+    assert excinfo.value.status_code == 400
+    assert "Could not extract a Bedrock invocation ARN" in str(excinfo.value.message)
+
+
+def test_map_status_response_non_200_maps_to_bedrock_error_with_headers():
+    handler = BedrockVideoGeneration()
+    resp = httpx.Response(
+        500,
+        json={"message": "internal"},
+        request=httpx.Request("GET", "https://example.com/async-invoke/arn"),
+    )
+    with pytest.raises(BedrockError) as excinfo:
+        handler._map_status_response(resp, TEST_MODEL, "video-id", None)
+    assert excinfo.value.status_code == 500
+    assert "get-async-invoke error" in str(excinfo.value.message)
+    assert excinfo.value.headers is not None
+
+
+#################################################
+# helper edge branches
+#################################################
+
+
+def test_client_error_helpers_edge_branches():
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.videos.handler import _client_error_code, _client_error_http_status
+
+    err = ClientError({"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
+    assert _client_error_code(err) == "NoSuchKey"
+    # Non-mapping response payloads fall back to "" / None.
+    assert _client_error_code(Exception("nope")) == ""
+    assert _client_error_http_status(Exception("nope")) is None
+    without_status = ClientError({"Error": {"Code": "X"}}, "Op")
+    assert _client_error_http_status(without_status) is None
+
+
+def test_region_from_invocation_arn_invalid_returns_none():
+    from litellm.llms.bedrock.videos.handler import _region_from_invocation_arn
+
+    assert _region_from_invocation_arn("not-an-arn") is None
+    assert _region_from_invocation_arn("arn:aws:bedrock::123:async-invoke/x") is None
+
+
+def test_parse_s3_uri_empty_bucket_raises():
+    from litellm.llms.bedrock.videos.handler import _parse_s3_uri
+
+    with pytest.raises(BedrockError) as excinfo:
+        _parse_s3_uri("s3:///only-prefix")
+    assert excinfo.value.status_code == 400
+    assert "Invalid S3 output URI" in str(excinfo.value.message)
+
+
+def test_s3_uri_from_output_config_none_branches():
+    from litellm.llms.bedrock.videos.handler import _s3_uri_from_output_config
+
+    assert _s3_uri_from_output_config(None) is None
+    assert _s3_uri_from_output_config({"s3OutputDataConfig": None}) is None
+    assert _s3_uri_from_output_config({"s3OutputDataConfig": {}}) is None
+
+
+def test_params_to_dict_branches():
+    from types import MappingProxyType
+
+    from litellm.llms.bedrock.videos.handler import _params_to_dict
+
+    assert _params_to_dict(None) == {}
+    mapping = {"aws_region_name": "us-east-1", "litellm_call_id": "x"}
+    result = _params_to_dict(mapping)
+    assert result == mapping
+    assert result is not mapping  # copied, never aliased
+    frozen = MappingProxyType({"k": "v"})
+    assert _params_to_dict(frozen) == {"k": "v"}
+
+
+def test_as_generic_litellm_params_copies_metadata_from_mapping():
+    from litellm.llms.bedrock.videos.handler import _as_generic_litellm_params
+
+    result = _as_generic_litellm_params({"metadata": {"request_id": "r1"}, "litellm_call_id": "c1"})
+    assert isinstance(result, GenericLiteLLMParams)
+    assert result.metadata == {"request_id": "r1"}
+    assert result.litellm_call_id == "c1"
+    direct = GenericLiteLLMParams()
+    assert _as_generic_litellm_params(direct) is direct
+
+
+def test_get_config_class_returns_nova_reel_config():
+    assert BedrockVideoGeneration().get_config_class() is BedrockNovaReelVideoConfig
+
+
+def test_load_credentials_region_fallback_chain(monkeypatch):
+    """Explicit aws_region_name > AWS_REGION_NAME env > AWS_REGION env > default."""
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(handler, "resolve_credentials", lambda auth_params, region: None)
+
+    _, region = handler._load_credentials({"aws_region_name": "eu-west-1"})
+    assert region == "eu-west-1"
+
+    monkeypatch.setenv("AWS_REGION_NAME", "ap-south-1")
+    _, region = handler._load_credentials({})
+    assert region == "ap-south-1"
+
+    monkeypatch.delenv("AWS_REGION_NAME")
+    monkeypatch.setenv("AWS_REGION", "ca-central-1")
+    _, region = handler._load_credentials({})
+    assert region == "ca-central-1"
+
+    monkeypatch.delenv("AWS_REGION")
+    _, region = handler._load_credentials({})
+    assert region == "us-west-2"
+
+
+def test_transform_create_response_post_call_logging():
+    handler = BedrockVideoGeneration()
+    logging_obj = Mock()
+    resp = httpx.Response(200, json={"invocationArn": TEST_ARN})
+    handler._transform_create_response(TEST_MODEL, resp, {}, logging_obj)
+    logging_obj.post_call.assert_called_once()
+
+
+def test_sign_get_request_missing_botocore_module_raises_import_error(monkeypatch):
+    import sys
+
+    from litellm.llms.bedrock.videos.handler import _sign_get_request
+
+    monkeypatch.setitem(sys.modules, "botocore.auth", None)
+    with pytest.raises(ImportError, match="pip install boto3"):
+        _sign_get_request(None, "https://example.com/async-invoke", {}, "us-east-1")
+
+
+def test_download_s3_object_missing_botocore_module_raises_import_error(monkeypatch):
+    import sys
+
+    handler = BedrockVideoGeneration()
+    monkeypatch.setitem(sys.modules, "botocore.config", None)
+    with pytest.raises(ImportError, match="pip install boto3"):
+        handler._download_s3_object("bucket", ["out/output.mp4"], {}, {})
+
+
+def test_download_s3_object_threads_credentials_into_session(monkeypatch):
+    """Resolved SigV4 credentials (with a session token) must reach the boto3 Session."""
+    from botocore.credentials import Credentials
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    sessions: list[dict] = []
+
+    class _FakeS3Client:
+        def get_object(self, Bucket, Key):
+            return {"Body": io.BytesIO(b"mp4")}
+
+        def close(self):
+            pass
+
+    class _FakeSession:
+        def __init__(self, **kwargs):
+            sessions.append(kwargs)
+
+        def client(self, service_name, config=None):
+            return _FakeS3Client()
+
+    monkeypatch.setattr("boto3.Session", _FakeSession)
+    monkeypatch.setattr(
+        handler,
+        "_load_credentials",
+        lambda optional_params, aws_region_name=None, bearer_token=None: (
+            Credentials("AK", "SK", "tok"),
+            aws_region_name or "us-east-1",
+        ),
+    )
+    content = handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert content == b"mp4"
+    assert sessions[0]["aws_access_key_id"] == "AK"
+    assert sessions[0]["aws_secret_access_key"] == "SK"
+    assert sessions[0]["aws_session_token"] == "tok"
+
+
+#################################################
+# input_reference + duration edge branches
+#################################################
+
+
+def test_input_reference_unsupported_type_raises():
+    with pytest.raises(BedrockError) as excinfo:
+        _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": 12345})
+    assert excinfo.value.status_code == 400
+    assert "must be bytes, a file-like object or a base64 string" in str(excinfo.value.message)
+
+
+def test_input_reference_data_url_non_base64_prefix_raises():
+    with pytest.raises(BedrockError) as excinfo:
+        _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": "data:text/plain,hello"})
+    assert excinfo.value.status_code == 400
+    assert "base64-encoded" in str(excinfo.value.message)
+
+
+def test_duration_seconds_from_request_edge_branches():
+    from litellm.llms.bedrock.videos.transformation import _duration_seconds_from_request
+
+    assert _duration_seconds_from_request(None) is None
+    assert _duration_seconds_from_request({"modelInput": "not-a-mapping"}) is None
+    # Manual shots: non-mapping shots and missing/unparseable durations are skipped.
+    manual: Final[dict] = {
+        "modelInput": {
+            "multiShotManualParams": {
+                "shots": [
+                    "not-a-shot",
+                    {"text": "a", "durationSeconds": "6"},
+                    {"text": "b", "durationSeconds": None},
+                    {"text": "c", "durationSeconds": "not-a-number"},
+                    {"text": "d", "durationSeconds": 4},
+                ]
+            }
+        }
+    }
+    assert _duration_seconds_from_request(manual) == 10.0
+    # Manual params without shots fall through to videoGenerationConfig.
+    assert _duration_seconds_from_request({"modelInput": {"multiShotManualParams": {}}}) is None
+    assert _duration_seconds_from_request({"modelInput": {}}) is None
+    assert _duration_seconds_from_request({"modelInput": {"videoGenerationConfig": "nope"}}) is None
+    assert _duration_seconds_from_request({"modelInput": {"videoGenerationConfig": {"durationSeconds": None}}}) is None
+    assert _duration_seconds_from_request({"modelInput": {"videoGenerationConfig": {"durationSeconds": "x"}}}) is None
+    assert _duration_seconds_from_request({"modelInput": {"videoGenerationConfig": {"durationSeconds": "6"}}}) == 6.0
+
+
+def test_dimension_param_overrides_size():
+    body: Final = _create_request({"output_s3_uri": "s3://bucket/out/", "size": "1280x720", "dimension": "1080x1920"})
+    assert body["modelInput"]["videoGenerationConfig"]["dimension"] == "1080x1920"
+
+
+def test_prebuilt_dict_input_reference_passthrough():
+    """A pre-built provider-shaped input_reference dict is forwarded as the images list."""
+    prebuilt: Final[dict] = {"format": "png", "source": {"bytes": "already-encoded"}}
+    body: Final = _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": prebuilt})
+    assert body["modelInput"]["textToVideoParams"]["images"] == [prebuilt]
+
+
+#################################################
+# remaining transform guards and returns
+#################################################
+
+
+def test_validate_environment_none_headers_gets_content_type():
+    headers = _make_config().validate_environment(None, TEST_MODEL)
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_get_complete_url_raises_not_implemented():
+    with pytest.raises(NotImplementedError, match="get_complete_url"):
+        _make_config().get_complete_url(model=TEST_MODEL, api_base=None, litellm_params={})
+
+
+def test_transform_status_retrieve_request_raises_not_implemented():
+    with pytest.raises(NotImplementedError, match="status URLs"):
+        _make_config().transform_video_status_retrieve_request(
+            video_id="vid", api_base="", litellm_params=GenericLiteLLMParams(), headers={}
+        )
+
+
+def test_transform_content_request_raises_not_implemented():
+    with pytest.raises(NotImplementedError, match="S3 output location"):
+        _make_config().transform_video_content_request(
+            video_id="vid", api_base="", litellm_params=GenericLiteLLMParams(), headers={}
+        )
+
+
+def test_transform_content_response_returns_raw_content():
+    resp = httpx.Response(200, content=b"mp4-bytes")
+    assert _make_config().transform_video_content_response(resp, None) == b"mp4-bytes"
+
+
+def test_transform_status_response_missing_arn_raises_value_error():
+    config = _make_config()
+    resp = httpx.Response(200, json={"status": "InProgress"})
+    with pytest.raises(ValueError, match="invocationArn"):
+        config.transform_video_status_retrieve_response(raw_response=resp, logging_obj=None, model=TEST_MODEL)
+
+
+def test_unsupported_remix_response_raises_400_class_bedrock_error():
+    with pytest.raises(BedrockError) as excinfo:
+        _make_config().transform_video_remix_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_unsupported_list_response_raises_400_class_bedrock_error():
+    with pytest.raises(BedrockError) as excinfo:
+        _make_config().transform_video_list_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_unsupported_delete_operations_raise_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_delete_request(
+            video_id="vid", api_base="", litellm_params=GenericLiteLLMParams(), headers={}
+        )
+    assert excinfo.value.status_code == 400
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_delete_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_provider_config_manager_bedrock_prefixed_non_reel_model_returns_none():
+    from litellm.utils import ProviderConfigManager
+
+    cfg = ProviderConfigManager.get_provider_video_config(
+        "bedrock/anthropic.claude-sonnet-4-5", litellm.LlmProviders.BEDROCK
+    )
+    assert cfg is None
+
+
+#################################################
+# create-path timeout mapping (sync + async)
+#################################################
+
+
+def test_handler_sync_create_timeout_maps_to_bedrock_408(monkeypatch):
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+
+    class _TimingOutPostClient:
+        def post(self, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _TimingOutPostClient())
+    with pytest.raises(BedrockError) as excinfo:
+        handler.video_generation(
+            model="bedrock/amazon.nova-reel-v1:0",
+            prompt="waves at sunset",
+            optional_params={"output_s3_uri": "s3://bucket/out/"},
+            logging_obj=None,
+            timeout=1.0,
+            avideo_generation=False,
+        )
+    assert excinfo.value.status_code == 408
+
+
+def test_handler_async_create_timeout_maps_to_bedrock_408(monkeypatch):
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+
+    class _TimingOutAsyncPostClient(httpx.AsyncClient):
+        async def post(self, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(BedrockError) as excinfo:
+        asyncio.run(
+            handler.async_video_generation(
+                model="bedrock/amazon.nova-reel-v1:0",
+                prompt="waves at sunset",
+                optional_params={"output_s3_uri": "s3://bucket/out/"},
+                logging_obj=None,
+                timeout=1.0,
+                client=_TimingOutAsyncPostClient(),
+            )
+        )
+    assert excinfo.value.status_code == 408
