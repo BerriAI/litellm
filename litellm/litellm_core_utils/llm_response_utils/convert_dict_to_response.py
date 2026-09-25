@@ -409,7 +409,7 @@ def _handle_invalid_parallel_tool_calls(
             shift += len(replacement)
 
         return tool_calls
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
         # This helper only ever sees model-generated (hallucinated) payloads, so
         # any structural surprise - unparseable JSON, a `tool_uses` that is not a
         # list, entries without `parameters`/`recipient_name` - means we cannot
