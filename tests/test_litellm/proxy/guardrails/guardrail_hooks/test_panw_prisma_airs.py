@@ -4620,46 +4620,27 @@ class TestPanwAirsLatestRoleMessageOnly:
 
     @pytest.mark.asyncio
     async def test_anthropic_system_plus_multiturn_no_fallback(self):
-        """Anthropic with top-level system + multi-turn messages[]
-        — latest-user works, no scan-all fallback.
+        """Anthropic with a top-level system prompt and multi-turn messages[]
+        scans only the latest user turn, with no scan-all fallback.
 
-        Key scenario: Anthropic top-level `system` field causes
-        structured_messages to have an injected system entry, but
-        request_data["messages"] does NOT include it.
+        The Anthropic handler hoists the top-level `system` field into both
+        `texts` and `structured_messages`, so the latest-user walk has to
+        count the same entries the framework flattened.
         """
-        handler = PanwPrismaAirsHandler(
-            guardrail_name="test_panw_airs",
-            api_key="test_api_key",
-            profile_name="test_profile",
-            default_on=True,
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import (
+            AnthropicMessagesHandler,
         )
 
-        # Original Anthropic messages (no system in messages array)
-        original_messages = [
-            {"role": "user", "content": "First user turn"},
-            {"role": "assistant", "content": "First assistant turn"},
-            {"role": "user", "content": "Latest user turn"},
-        ]
-
-        # texts extracted from original_messages (3 text entries)
-        texts = ["First user turn", "First assistant turn", "Latest user turn"]
-
-        # structured_messages has an INJECTED system message from translation
-        structured_messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "First user turn"},
-            {"role": "assistant", "content": "First assistant turn"},
-            {"role": "user", "content": "Latest user turn"},
-        ]
-
-        inputs: GenericGuardrailAPIInputs = {
-            "texts": texts,
-            "structured_messages": structured_messages,
-        }
+        handler = make_handler()
         request_data = {
             "litellm_call_id": "test-call-id",
             "model": "anthropic/claude-sonnet-4-20250514",
-            "messages": original_messages,
+            "system": "You are a helpful assistant.",
+            "messages": [
+                {"role": "user", "content": "First user turn"},
+                {"role": "assistant", "content": "First assistant turn"},
+                {"role": "user", "content": "Latest user turn"},
+            ],
             "proxy_server_request": {
                 "url": "http://localhost:4000/v1/messages",
             },
@@ -4670,13 +4651,11 @@ class TestPanwAirsLatestRoleMessageOnly:
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
-            await handler.apply_guardrail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type="request",
+            await AnthropicMessagesHandler().process_input_messages(
+                data=request_data,
+                guardrail_to_apply=handler,
             )
 
-            # Should scan ONLY the latest user message, not fall back to scan-all
             assert mock_api.call_count == 1
             assert mock_api.call_args.kwargs["content"] == "Latest user turn"
 

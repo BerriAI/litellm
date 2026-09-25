@@ -6,7 +6,8 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -15,12 +16,15 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
+from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
     from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .litellm_params import RoutingStrategyName
 from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
@@ -58,6 +62,25 @@ class RoutingGroup(BaseModel):
     routing_strategy: str
     routing_strategy_args: dict | None = None
 
+    model_priorities: dict[str, Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]] | None = Field(
+        default=None,
+        description="For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_model_priorities(self) -> "RoutingGroup":
+        if self.routing_strategy != "priority":
+            if self.model_priorities:
+                raise ValueError("model_priorities requires routing_strategy='priority'")
+            return self
+        if not self.models or len(self.models) != len(frozenset(self.models)):
+            raise ValueError("Priority routing groups require nonempty, distinct models")
+        if self.model_priorities is None or frozenset(self.model_priorities) != frozenset(self.models):
+            raise ValueError("model_priorities must contain exactly the group's models")
+        if self.routing_strategy_args:
+            raise ValueError("Priority routing groups use model_priorities, not routing_strategy_args")
+        return self
+
     model_config = ConfigDict(protected_namespaces=())
 
 
@@ -82,12 +105,7 @@ class RouterConfig(BaseModel):
     context_window_fallbacks: list | None = []
     model_group_alias: dict[str, list[str]] | None = {}
     retry_after: int | None = 0
-    routing_strategy: Literal[
-        "simple-shuffle",
-        "least-busy",
-        "usage-based-routing",
-        "latency-based-routing",
-    ] = "simple-shuffle"
+    routing_strategy: RoutingStrategyName = "simple-shuffle"
     routing_groups: list[RoutingGroup] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -108,6 +126,7 @@ class RetryPolicy(BaseModel):
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
     ServiceUnavailableErrorRetries: int | None = None
+    NotFoundErrorRetries: int | None = None
     DefaultRetries: int | None = None
 
 
@@ -146,6 +165,7 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
+    weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
 
@@ -158,6 +178,44 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=datetime.timezone.utc)
     return value.astimezone(datetime.timezone.utc)
+
+
+class ModelAccessWindow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    start: datetime.time
+    end: datetime.time
+    timezone: str
+    team_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("start", "end")
+    @classmethod
+    def _naive_wall_clock(cls, value: datetime.time) -> datetime.time:
+        if value.tzinfo is not None:
+            raise ValueError("start and end must be local wall-clock times without a UTC offset")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_iana_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone '{value}'") from exc
+        return value
+
+    @field_validator("team_ids")
+    @classmethod
+    def _non_empty_team_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not team_id for team_id in value):
+            raise ValueError("team_ids entries must be non-empty")
+        return value
+
+    @model_validator(mode="after")
+    def _start_differs_from_end(self) -> "ModelAccessWindow":
+        if self.start == self.end:
+            raise ValueError("start and end must differ")
+        return self
 
 
 class ModelInfo(MirroredPricingParams):
@@ -180,9 +238,13 @@ class ModelInfo(MirroredPricingParams):
 
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: str | None = None
+    member_auto_router: bool = False
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
+    discoverable: bool | None = None
+
+    access_windows: tuple[ModelAccessWindow, ...] | None = None
 
     # Bounds live on the model rather than litellm.constants: names there reach
     # litellm/__init__ through several modules' star re-exports, and a Final rebound that
@@ -248,7 +310,7 @@ class ModelInfo(MirroredPricingParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -299,8 +361,12 @@ class CredentialLiteLLMParams(BaseModel):
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
+    s3_endpoint_url: str | None = None
     s3_region_name: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
     s3_encryption_key_id: str | None = None
+    s3_bucket_owner: str | None = None
     aws_batch_role_arn: str | None = None
     s3_output_bucket_name: str | None = None
     bedrock_tags: list | None = None
@@ -328,6 +394,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
+    provider_affinity_header: str | None = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
@@ -358,7 +425,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None
-    mock_response: str | ModelResponse | Exception | Any | None = None
+    mock_response: str | ModelResponse | Exception | object | None = None
 
     # tag-based routing
     tags: list[str] | None = None
@@ -399,6 +466,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
 
+    @field_validator("provider_affinity_header")
+    @classmethod
+    def validate_provider_affinity_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_provider_affinity_header_name(value)
+
     @model_validator(mode="before")
     @classmethod
     def preprocess_input_data(cls, data: object) -> object:
@@ -435,7 +509,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -460,7 +534,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -501,6 +575,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: float | str | None
     max_retries: int | None
     organization: list | str | None  # for openai orgs
+    provider_affinity_header: ReadOnly[str | None]
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     )
@@ -534,6 +609,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
@@ -621,6 +698,12 @@ class Deployment(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class DiscoveredDeploymentModelInfo:
+    deployment: Mapping[str, object]
+    limits: Mapping[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
     """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 
@@ -644,7 +727,9 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    max_parallel_requests_exceeded = "Deployment has all max_parallel_requests slots in use."
     no_deployments_available = "No deployments available for selected model"
+    all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
     no_healthy_deployments = "There are no healthy deployments for this model"
@@ -718,6 +803,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -868,6 +954,11 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
+class RouterErrorTypes(str, enum.Enum):
+    rate_limit_error = "rate_limit_error"
+    all_deployments_in_cooldown = "all_deployments_in_cooldown"
+
+
 class RouterRateLimitError(ValueError):
     def __init__(
         self,
@@ -875,18 +966,39 @@ class RouterRateLimitError(ValueError):
         cooldown_time: float,
         enable_pre_call_checks: bool,
         cooldown_list: list,
+        model_ids: Sequence[str] = (),
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
-        _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
+        self.type = (
+            RouterErrorTypes.all_deployments_in_cooldown.value
+            if self.all_deployments_in_cooldown
+            else RouterErrorTypes.rate_limit_error.value
+        )
+        _reason: Final = (
+            f" {RouterErrors.all_deployments_in_cooldown.value}." if self.all_deployments_in_cooldown else ""
+        )
+        _message: Final = (
+            f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds.{_reason} "
+            f"Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        )
         super().__init__(_message)
 
 
 class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+class RetryAttemptRecord(TypedDict):
+    model_group: ReadOnly[str | None]
+    deployment_id: ReadOnly[str | None]
+    exception_type: ReadOnly[str]
+    exception_string: ReadOnly[str]
+    attempted_retries: ReadOnly[int | None]
 
 
 VALID_LITELLM_ENVIRONMENTS = [
@@ -927,6 +1039,19 @@ class FallbackAccessCheck(Protocol):
 
     The router runs it before every cross-model-group fallback attempt and skips targets it
     rejects, so a fallback can never reach a model the caller could not have requested directly.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+
+
+class FallbackBudgetCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` is still within budget for fallback `model`.
+
+    Budget is enforced once during auth, against the *requested* model group. A fallback target is
+    chosen later, inside the router, so a zero-cost group that falls back to a priced one bills
+    without any budget gate. The router runs this before every cross-model-group fallback attempt
+    and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
@@ -1006,6 +1131,13 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
 
 @dataclass(frozen=True, slots=True)
+class BaselineRouteStamp:
+    router_name: str
+    baseline_model: str
+    baseline_deployment_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConsumedRequestTagsStamp:
     """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
 
@@ -1043,11 +1175,11 @@ class RoutingContext(BaseModel):
     plugins that need the exact original payload can read `raw_messages`.
     """
 
-    raw_messages: list[dict[str, Any]]
-    structured_messages: list[dict[str, Any]]
+    raw_messages: list[dict[str, object]]
+    structured_messages: list[dict[str, object]]
     candidate_models: list[str]
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    signals: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    signals: dict[str, object] = Field(default_factory=dict)
 
 
 @runtime_checkable

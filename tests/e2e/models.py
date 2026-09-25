@@ -60,6 +60,7 @@ class KeyMetadata(BaseModel):
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
     tag: str | None = None
+    guardrails: list[str] | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -123,6 +124,32 @@ class KeyDeleteBody(BaseModel):
     keys: list[str]
 
 
+class KeyDeleteByAliasBody(BaseModel):
+    key_aliases: list[str]
+
+
+class AuditLogParams(BaseModel):
+    object_id: str
+    action: str
+    table_name: str
+    page_size: int
+
+
+class AuditLogEntry(BaseModel):
+    id: str
+    changed_by: str | None = None
+    changed_by_api_key: str | None = None
+    action: str
+    table_name: str
+    object_id: str
+    before_value: object | None = None
+
+
+class AuditLogPage(BaseModel):
+    audit_logs: list[AuditLogEntry]
+    total: int
+
+
 class KeyInfoParams(BaseModel):
     key: str
 
@@ -136,6 +163,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    status: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
@@ -191,6 +219,7 @@ class ImageUrl(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
+    cache_control: CacheControl | None = None
 
 
 class ImageContentPart(BaseModel):
@@ -283,14 +312,20 @@ class ChatToolResultTurn(BaseModel):
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
+class ChatStreamOptions(BaseModel):
+    include_usage: bool
+
+
 class ChatBody(BaseModel):
     model: str
     messages: Sequence[ChatTurn]
     stream: bool = False
+    stream_options: ChatStreamOptions | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     temperature: float | None = None
     user: str | None = None
+    safety_identifier: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
@@ -299,25 +334,45 @@ class ChatBody(BaseModel):
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    include_guardrail_response: bool | None = None
     response_format: dict[str, object] | None = None
     chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+RoutingStrategy = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "usage-based-routing-v2",
+    "latency-based-routing",
+    "cost-based-routing",
+]
+
+
 class RouterSettingsOverride(BaseModel):
     """Router settings a test scopes below the global config: sent per request as
     `router_settings_override` in a /chat/completions body (the reliability suite's
-    fallback and retry knobs) or stored on a key as `router_settings` at
-    /key/generate (the auto-router suite's tag filtering switch). Serialized
-    exclude_none, so an override sets only the knobs a test exercises. Each
-    fallbacks map is model_name -> the ordered fallback model_names to try."""
+    fallback, retry, routing-strategy, and deadline knobs) or stored on a key as
+    `router_settings` at /key/generate (the auto-router suite's tag filtering
+    switch). Serialized exclude_none, so an override sets only the knobs a test
+    exercises. Each fallbacks map is model_name -> the ordered fallback model_names
+    to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    routing_strategy: RoutingStrategy | None = None
     model_group_retry_policy: dict[str, dict[str, int]] | None = None
     enable_tag_filtering: bool | None = None
+
+
+class DeploymentExtraBody(BaseModel):
+    """`litellm_params.extra_body` of a deployment whose upstream is another LiteLLM
+    proxy: forwarded verbatim in every request body, so the inner proxy honors the
+    same per-request router knobs an end user could send it."""
+
+    router_settings_override: RouterSettingsOverride | None = None
 
 
 class ReliabilityChatBody(ChatBody):
@@ -394,6 +449,14 @@ class Usage(BaseModel):
     completion_tokens_details: CompletionTokensDetails | None = None
 
 
+class GuardrailInformationEntry(BaseModel):
+    guardrail_name: str
+    guardrail_status: str
+    guardrail_mode: object | None = None
+    guardrail_response: object | None = None
+    duration: float | None = None
+
+
 class ChatResponse(BaseModel):
     id: str | None = None
     object: str | None = None
@@ -401,6 +464,7 @@ class ChatResponse(BaseModel):
     choices: list[ChatChoice] = []
     usage: Usage | None = None
     service_tier: str | None = None
+    guardrail_information: list[GuardrailInformationEntry] | None = None
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------
@@ -488,12 +552,18 @@ class AnthropicToolResultTurn(BaseModel):
 type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
+class AnthropicToolChoice(BaseModel):
+    type: Literal["auto", "any", "tool", "none"]
+    name: str | None = None
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    tool_choice: AnthropicToolChoice | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
@@ -540,6 +610,10 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
+class McpOauthCredentials(BaseModel):
+    upstream_resource: str
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -552,8 +626,11 @@ class McpServerCreateBody(BaseModel):
     allow_all_keys: bool = True
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+    per_server_oauth_discovery: bool | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    registration_url: str | None = None
+    credentials: McpOauthCredentials | None = None
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -591,6 +668,26 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class McpServerUserCredentialRow(BaseModel):
+    user_id: str
+    credential_type: Literal["oauth2", "byok"]
+    expires_at: str | None = None
+    connected_at: str | None = None
+    updated_at: str
+
+
+class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
+    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
+
+
+class McpOauthUserCredentialStatus(BaseModel):
+    server_id: str
+    has_credential: bool
+    expires_at: str | None = None
+    is_expired: bool = False
+    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -637,6 +734,40 @@ class EmbedResponse(BaseModel):
     model: str | None = None
 
 
+# ---------- videos ----------
+
+
+class VideoCreateBody(BaseModel):
+    model: str
+    prompt: str
+    seconds: str | None = None
+
+
+class VideoCreateResponse(BaseModel):
+    id: str
+    status: str | None = None
+
+
+# ---------- rerank ----------
+
+
+class RerankBody(BaseModel):
+    model: str
+    query: str
+    documents: list[str]
+    top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class RerankItem(BaseModel):
+    index: int | None = None
+    relevance_score: float | None = None
+
+
+class RerankResponse(BaseModel):
+    results: list[RerankItem] = []
+
+
 # ---------- ocr ----------
 
 
@@ -654,6 +785,12 @@ class OcrBody(BaseModel):
     document: OcrDocument
 
 
+class OcrForm(BaseModel):
+    """Multipart /v1/ocr form fields; the document travels as the `file` part."""
+
+    model: str
+
+
 class OcrPage(BaseModel):
     index: int
     markdown: str
@@ -663,6 +800,122 @@ class OcrResponse(BaseModel):
     object: str | None = None
     model: str | None = None
     pages: list[OcrPage] = []
+
+
+# ---------- completions ----------
+
+
+class CompletionBody(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 8
+    n: int = 1
+
+
+class CompletionChoice(BaseModel):
+    text: str = ""
+
+
+class CompletionResponse(BaseModel):
+    choices: list[CompletionChoice] = []
+
+
+# ---------- images ----------
+
+
+class ImageGenerationBody(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class ImageDatum(BaseModel):
+    url: str | None = None
+    b64_json: str | None = None
+
+
+class ImageGenerationResponse(BaseModel):
+    data: list[ImageDatum] = []
+
+
+class ImageEditForm(BaseModel):
+    """POST /v1/images/edits form fields; the image travels as the `image` multipart part."""
+
+    model: str
+    prompt: str
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class SearchBody(BaseModel):
+    """POST /v1/search/{search_tool_name} body (Perplexity-compatible)."""
+
+    query: str
+    max_results: int = 2
+
+
+class SearchResultItem(BaseModel):
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResultItem] = []
+
+
+class SearchToolLiteLLMParamsBody(BaseModel):
+    search_provider: str
+
+
+class SearchToolBody(BaseModel):
+    search_tool_name: str
+    litellm_params: SearchToolLiteLLMParamsBody
+
+
+class SearchToolCreateBody(BaseModel):
+    """POST /search_tools body: the tool as it would sit under `search_tools:` in the config."""
+
+    search_tool: SearchToolBody
+
+
+class SearchToolCreateResponse(BaseModel):
+    search_tool_id: str
+
+
+# ---------- audio ----------
+
+
+class SpeechBody(BaseModel):
+    model: str
+    input: str
+    voice: str = "alloy"
+
+
+class TranscriptionForm(BaseModel):
+    model: str
+
+
+class TranscriptionResponse(BaseModel):
+    text: str = ""
+
+
+# ---------- moderations ----------
+
+
+class ModerationBody(BaseModel):
+    model: str
+    input: str
+
+
+class ModerationResult(BaseModel):
+    flagged: bool
+
+
+class ModerationResponse(BaseModel):
+    results: list[ModerationResult] = []
 
 
 # ---------- spend logs ----------
@@ -684,10 +937,18 @@ class GuardrailRunRecord(BaseModel):
     guardrail_response: object | None = None
 
 
+class SpendLogErrorInformation(BaseModel):
+    error_code: str | None = None
+    error_class: str | None = None
+    error_message: str | None = None
+    normalized_error: str | None = None
+
+
 class SpendLogMetadata(BaseModel):
     user_api_key_alias: str | None = None
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
+    error_information: SpendLogErrorInformation | None = None
 
 
 class SpendLogRow(BaseModel):
@@ -699,6 +960,7 @@ class SpendLogRow(BaseModel):
     cache_hit: str | None = None
     call_type: str | None = None
     custom_llm_provider: str | None = None
+    model_id: str | None = None
     team_id: str | None = None
     user: str | None = None
     end_user: str | None = None
@@ -706,8 +968,11 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    session_id: str | None = None
     metadata: SpendLogMetadata | None = None
     proxy_server_request: JsonValue = None
+    response: JsonValue = None
+    litellm_call_id: str | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -738,6 +1003,15 @@ class SpendLogsPageParams(BaseModel):
     page: int
     page_size: int
     api_key: str | None = None
+
+
+class SessionSpendLogsParams(BaseModel):
+    """Query for /spend/logs/session/ui, the session view the Admin UI logs page
+    opens: every row whose session_id equals the given one, newest first."""
+
+    session_id: str
+    page: int = 1
+    page_size: int = 100
 
 
 class SpendLogsPage(BaseModel):
@@ -845,6 +1119,34 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class RouterCurrentValues(BaseModel):
+    """The `current_values` block of GET /router/settings: the router knobs the
+    proxy is actually running with (only the ones a test preconditions on)."""
+
+    optional_pre_call_checks: tuple[str, ...] = ()
+
+
+class RouterSettingsResponse(BaseModel):
+    current_values: RouterCurrentValues
+
+
+class ConfigListParams(BaseModel):
+    config_type: Literal["general_settings"]
+
+
+class ConfigField(BaseModel):
+    """One row of GET /config/list: a general_settings field and the value the
+    proxy is running with, the two fields a test preconditions on."""
+
+    model_config = ConfigDict(extra="ignore")
+    field_name: str
+    field_value: JsonValue = None
+
+
+class ConfigFieldList(RootModel[tuple[ConfigField, ...]]):
+    """GET /config/list answers with a bare array of general_settings fields."""
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -906,9 +1208,11 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    allowed_openai_params: list[str] | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
@@ -918,6 +1222,7 @@ class LiteLLMParamsBody(BaseModel):
     s3_region_name: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
     aws_session_name: str | None = None
@@ -937,9 +1242,11 @@ class LiteLLMParamsBody(BaseModel):
     tags: list[str] | None = None
     mock_response: str | list[float] | None = None
     timeout: float | None = None
+    max_retries: int | None = None
+    cooldown_time: float | None = None
+    extra_body: DeploymentExtraBody | None = None
     tpm: int | None = None
     weight: int | None = None
-    cooldown_time: float | None = None
     order: int | None = None
 
 
@@ -955,6 +1262,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
 
 
@@ -1091,13 +1399,13 @@ class UiLoginBody(BaseModel):
 
 
 class UiLoginResponse(BaseModel):
-    token: str
+    token: str = Field(repr=False)
     redirect_url: str
 
 
 class UiSessionClaims(BaseModel):
     user_id: str
-    key: str
+    key: str = Field(repr=False)
     user_role: str
     login_method: Literal["sso", "username_password"]
     exp: int
@@ -1118,6 +1426,7 @@ class TeamNewBody(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
+    model_aliases: dict[str, str] | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -1126,8 +1435,9 @@ class TeamNewResponse(BaseModel):
 
 class TeamUpdateBody(BaseModel):
     team_id: str
-    team_alias: str
+    team_alias: str | None = None
     models: list[str] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamInfoParams(BaseModel):
@@ -1135,6 +1445,7 @@ class TeamInfoParams(BaseModel):
 
 
 class TeamData(BaseModel):
+    organization_id: str | None = None
     team_alias: str | None = None
     models: list[str] = []
     members_with_roles: list[TeamMemberEntry] = []
@@ -1175,6 +1486,7 @@ class UserNewBody(BaseModel):
     user_email: str
     user_role: UserRole
     user_id: str | None = None
+    auto_create_key: bool | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -1187,7 +1499,7 @@ class UserUpdateBody(BaseModel):
 
 
 class UserInfoParams(BaseModel):
-    user_id: str
+    user_id: str | None = None
 
 
 class UserData(BaseModel):
@@ -1240,14 +1552,34 @@ class OrgInfoParams(BaseModel):
     organization_id: str
 
 
+class OrgMembership(BaseModel):
+    user_id: str
+    user_role: str
+
+
 class OrgInfoResponse(BaseModel):
     organization_id: str
     organization_alias: str | None = None
     models: list[str] = []
+    members: tuple[OrgMembership, ...] = ()
+
+
+class OrgMemberEntry(BaseModel):
+    user_id: str
+    role: Literal["org_admin", "internal_user"]
+
+
+class OrgMemberAddBody(BaseModel):
+    organization_id: str
+    member: OrgMemberEntry
 
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
+    pass
 
 
 # ---------- tags (management) ----------

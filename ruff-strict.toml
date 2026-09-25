@@ -57,3 +57,13 @@ max-args = 5
 "typing_extensions.TypeGuard".msg = "Same as typing.TypeGuard."
 "typing.TypeIs".msg = "Unverified narrowing (the body is trusted). Parse into a concrete type instead."
 "typing_extensions.TypeIs".msg = "Same as typing.TypeIs."
+# Dispatched public entry points: import them from their dispatch module so every
+# supported call path selects Rust or Python in one place. Only the dispatch
+# modules and internal recursive calls may reach the Python implementation
+# directly, each with a `# noqa: TID251  # <reason>`.
+"litellm.responses.main.responses".msg = "Import litellm.responses.dispatch.responses so the call routes through dispatch."
+"litellm.responses.main.aresponses".msg = "Import litellm.responses.dispatch.aresponses so the call routes through dispatch."
+"litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages".msg = "Import litellm.messages.anthropic_messages so the call routes through dispatch."
+"litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler".msg = "Import litellm.messages.anthropic_messages_handler so the call routes through dispatch."
+"litellm.main.completion".msg = "Import litellm.completion so the call routes through dispatch."
+"litellm.main.acompletion".msg = "Import litellm.acompletion so the call routes through dispatch."

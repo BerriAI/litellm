@@ -7,10 +7,10 @@
 
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol
 
 import httpx
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -56,7 +56,13 @@ class DeepKeepFirewallResponse(TypedDict):
 class _DeepKeepInitKwargsView(TypedDict):
     """Typed read of the guardrail name carried in the untyped base-guardrail kwargs."""
 
-    guardrail_name: ReadOnly[str]
+    guardrail_name: ReadOnly[str | None]
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    guardrail_name: ReadOnly[str | None]
 
 
 class _DeepKeepMetadataSource(TypedDict, total=False):
@@ -110,7 +116,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         firewall_id: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         extra_headers: Mapping[str, str] | list[str] | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 

@@ -1,7 +1,10 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
+from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
 from litellm.router_utils.auto_router_model_naming import (
     carries_complexity_router_settings,
     classify_strategy_router_model,
@@ -17,9 +20,33 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 
 COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
-SEMANTIC_FIELDS = frozenset(
-    {"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"}
-)
+SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
+
+
+@pytest.mark.parametrize("model", ["jev-latest", "jev-preview"])
+def test_jev_enumerates_a_paid_evaluation_without_a_completion_classifier(model: str) -> None:
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"model": model},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+        }
+    )
+    assert tuple((dep.model_name, dep.role) for dep in found) == (
+        ("cheap", "tier"),
+        (f"typesafe/{model}", "evaluation"),
+    )
+
+
+@pytest.mark.parametrize("instructions", [None, DEFAULT_JEV_INSTRUCTIONS, "Route conservatively"])
+def test_only_non_default_jev_instructions_claim_the_shared_customization_slot(instructions: str | None) -> None:
+    capability = claimed_capability({"classifier_type": "jev", "jev_classifier_config": {"instructions": instructions}})
+    assert (capability.key if capability else None) == (
+        "tier_or_classifier_prompt" if instructions == "Route conservatively" else None
+    )
 
 
 @pytest.mark.parametrize(
@@ -171,12 +198,56 @@ def test_validate_accepts_loadable_complexity_config(complexity_router_config):
     assert validate_complexity_router_config_write(complexity_router_config=complexity_router_config) is None
 
 
+def _fuse_write_config(profiles: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "classifier_type": "llm_v2",
+        "classifier_llm_config": {"model": "judge"},
+        "tiers": {"SIMPLE": ["opaque-efficient"], "REASONING": ["opaque-capable"]},
+        "llm_v2_config": {"max_quality_gap": 0.05, **profiles},
+    }
+
+
+def test_fuse_write_accepts_presets_and_custom_text_with_the_same_entitlement() -> None:
+    catalog: Final = get_fuse_presets()
+    presets: Final = _fuse_write_config(
+        {
+            "efficient_profile_preset": catalog.models[0].id,
+            "capable_profile_preset": catalog.models[-1].id,
+            "harness_preset": catalog.harnesses[0].id,
+        }
+    )
+    custom: Final = _fuse_write_config(
+        {
+            "efficient_profile": catalog.models[0].text,
+            "capable_profile": catalog.models[-1].text,
+            "harness": catalog.harnesses[0].text,
+        }
+    )
+    assert validate_complexity_router_config_write(presets) is None
+    assert validate_complexity_router_config_write(custom) is None
+    assert claimed_capability(presets) is claimed_capability(custom)
+    assert claimed_capability(presets) is not None
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_fuse_write_rejects_unknown_preset_even_with_custom_text(field: str) -> None:
+    config: Final = _fuse_write_config(
+        {
+            "efficient_profile": "Custom efficient solver",
+            "capable_profile": "Custom capable solver",
+            "harness": "Custom runtime",
+            f"{field}_preset": "unknown-v1",
+        }
+    )
+    violation: Final = validate_complexity_router_config_write(config)
+    assert violation is not None
+    assert f"{field}_preset" in violation
+
+
 def test_naming_check_ignores_the_config_entirely():
     """The naming contract and the config's contents are separate questions with separate owners;
     a write may carry a config without naming a model, so neither can stand in for the other."""
-    violation = validate_strategy_router_model_write(
-        model="auto_router/complexity_router", present_fields=frozenset()
-    )
+    violation = validate_strategy_router_model_write(model="auto_router/complexity_router", present_fields=frozenset())
     assert violation is not None
     assert "requires" in violation
 
@@ -213,6 +284,22 @@ def test_config_check_ignores_the_model_entirely():
                 },
             },
             (("a", "tier"), ("clf", "classifier")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a", "REASONING": "b"},
+                    "classifier_type": "capability",
+                    "classifier_llm_config": {"model": "clf"},
+                    "capability_classifier_config": {
+                        "efficient_tier": "SIMPLE",
+                        "capable_tier": "REASONING",
+                        "base_threshold": 0.5,
+                    },
+                },
+            },
+            (("a", "tier"), ("b", "tier"), ("clf", "classifier")),
         ),
         (
             {
@@ -287,7 +374,10 @@ def test_complexity_ignores_its_config_default_model_and_quality_does_not():
 )
 def test_strategy_router_dependencies_never_raises_on_a_malformed_config(config):
     """A config the router itself would refuse must not take the whole /health response down."""
-    assert strategy_router_dependencies({"model": "auto_router/complexity_router", "complexity_router_config": config}) == ()
+    assert (
+        strategy_router_dependencies({"model": "auto_router/complexity_router", "complexity_router_config": config})
+        == ()
+    )
 
 
 @pytest.mark.parametrize(
@@ -379,6 +469,8 @@ def test_placement_is_scoped_to_complexity_router_deployments(model, present_fie
 
 
 _HV2_CONFIG: Mapping[str, object] = {"classifier_type": "heuristic_v2"}
+_CAPABILITY_CONFIG: Mapping[str, object] = {"classifier_type": "capability"}
+_FUSE_CONFIG: Mapping[str, object] = {"classifier_type": "llm_v2"}
 _CUSTOM_TIER_CONFIG: Mapping[str, object] = {
     "classifier_type": "llm",
     "tier_definitions": [{"name": "routine", "description": "easy"}, {"name": "hard", "description": "hard"}],
@@ -393,13 +485,34 @@ _CUSTOM_PROMPT_CONFIG: Mapping[str, object] = {
     "config,expected_key",
     [
         (_CUSTOM_PROMPT_CONFIG, "tier_or_classifier_prompt"),
-        ({"classifier_type": "llm", "classifier_llm_config": {"model": "m"}, "classification_prompt": "grade it"}, "tier_or_classifier_prompt"),
-        ({"classifier_type": "llm", "classifier_llm_config": {"model": "m"}, "classification_examples": '- "x" -> SIMPLE'}, "tier_or_classifier_prompt"),
+        (
+            {"classifier_type": "llm", "classifier_llm_config": {"model": "m"}, "classification_prompt": "grade it"},
+            "tier_or_classifier_prompt",
+        ),
+        (
+            {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "m"},
+                "classification_examples": '- "x" -> SIMPLE',
+            },
+            "tier_or_classifier_prompt",
+        ),
         ({"classifier_type": "hybrid", "classification_examples": "- y -> MEDIUM"}, "tier_or_classifier_prompt"),
-        ({"classifier_type": "llm", "classifier_llm_config": {"model": "m"}, "classification_prompt": None, "classification_examples": None}, None),
+        (
+            {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "m"},
+                "classification_prompt": None,
+                "classification_examples": None,
+            },
+            None,
+        ),
         ({"classifier_type": "heuristic", "classification_examples": "- x -> SIMPLE"}, None),
         ({"classifier_type": "hybrid", "classifier_llm_config": {"system_prompt": "p"}}, "tier_or_classifier_prompt"),
-        ({"classifier_type": "heuristic_first", "classifier_llm_config": {"system_prompt": "p"}}, "tier_or_classifier_prompt"),
+        (
+            {"classifier_type": "heuristic_first", "classifier_llm_config": {"system_prompt": "p"}},
+            "tier_or_classifier_prompt",
+        ),
         ({"classifier_type": "llm", "classifier_llm_config": {"model": "m", "classification_rubric": "chat"}}, None),
         ({"classifier_type": "llm", "classifier_llm_config": {"model": "m"}}, None),
         ({"classifier_type": "llm", "classifier_llm_config": {"model": "m", "system_prompt": None}}, None),
@@ -441,14 +554,33 @@ def test_is_complexity_router_model(model: str | None, expected: bool) -> None:
 @pytest.mark.parametrize(
     "litellm_params,expected_key",
     [
+        ({"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY_CONFIG}, "capability"),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _FUSE_CONFIG}, "llm_v2"),
+        ({"model": "openai/solver", "complexity_router_config": _CAPABILITY_CONFIG}, None),
+        ({"model": "auto_router/quality_router", "complexity_router_config": _FUSE_CONFIG}, None),
         ({"model": "auto_router/complexity_router", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
         ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
-        ({"model": "auto_router/complexity_router", "complexity_router_config": _CUSTOM_TIER_CONFIG}, "tier_or_classifier_prompt"),
-        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _CUSTOM_TIER_CONFIG}, "tier_or_classifier_prompt"),
-        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic"}}, None),
+        (
+            {"model": "auto_router/complexity_router", "complexity_router_config": _CUSTOM_TIER_CONFIG},
+            "tier_or_classifier_prompt",
+        ),
+        (
+            {"model": "auto_router/complexity_router-eu", "complexity_router_config": _CUSTOM_TIER_CONFIG},
+            "tier_or_classifier_prompt",
+        ),
+        (
+            {"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic"}},
+            None,
+        ),
         ({"model": "auto_router/complexity_router", "complexity_router_config": {"tiers": {"SIMPLE": "a"}}}, None),
         ({"model": "auto_router/complexity_router", "complexity_router_config": {"tier_definitions": None}}, None),
-        ({"model": "auto_router/complexity_router", "complexity_router_config": {"tier_labels": {"SIMPLE": "Cheap"}}}, None),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tier_labels": {"SIMPLE": "Cheap"}},
+            },
+            None,
+        ),
         ({"model": "auto_router/complexity_router"}, None),
         ({"model": "auto_router/quality_router", "complexity_router_config": _HV2_CONFIG}, None),
         ({"model": "auto_router/quality_router", "complexity_router_config": _CUSTOM_TIER_CONFIG}, None),
@@ -471,12 +603,17 @@ def test_gated_capability_of(litellm_params: Mapping[str, object], expected_key:
 def test_count_capability_routers_counts_only_its_own_capability(capability) -> None:
     """Each capability has its own ceiling, so a router claiming the sibling capability never counts,
     while a custom tier set and a custom classifier prompt count into the SAME customization slot."""
+
     def row(name: str, config: Mapping[str, object] | None) -> Mapping[str, object]:
-        params = {"model": "auto_router/complexity_router"} | ({} if config is None else {"complexity_router_config": config})
+        params = {"model": "auto_router/complexity_router"} | (
+            {} if config is None else {"complexity_router_config": config}
+        )
         return {"model_name": name, "litellm_params": params}
 
     by_key = {
         "heuristic_v2": (_HV2_CONFIG, _HV2_CONFIG),
+        "capability": (_CAPABILITY_CONFIG, _CAPABILITY_CONFIG),
+        "llm_v2": (_FUSE_CONFIG, _FUSE_CONFIG),
         "tier_or_classifier_prompt": (_CUSTOM_TIER_CONFIG, _CUSTOM_PROMPT_CONFIG),
     }
     mine_first, mine_second = by_key[capability.key]
@@ -529,11 +666,17 @@ def test_every_gated_capability_has_a_distinct_predicate_and_sql_spelling() -> N
     "config",
     [
         _HV2_CONFIG,
+        _CAPABILITY_CONFIG,
+        _FUSE_CONFIG,
         _CUSTOM_TIER_CONFIG,
         _CUSTOM_PROMPT_CONFIG,
         {"classifier_type": "heuristic"},
         {"classifier_type": "heuristic_v2", "classifier_llm_config": {"system_prompt": "p"}},
-        {"classifier_type": "llm", "classifier_llm_config": {"model": "m", "system_prompt": "p"}, "tier_labels": {"SIMPLE": "Cheap"}},
+        {
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "m", "system_prompt": "p"},
+            "tier_labels": {"SIMPLE": "Cheap"},
+        },
     ],
 )
 def test_capabilities_are_mutually_exclusive_on_one_config(config: Mapping[str, object]) -> None:

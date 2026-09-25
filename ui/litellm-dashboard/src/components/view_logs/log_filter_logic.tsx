@@ -21,6 +21,7 @@ export interface PaginatedResponse {
 
 export const LOG_FILTER_IDS = {
   TEAM_ID: "team_id",
+  SPAN_TYPE: "span_type",
   STATUS: "status",
   CACHE_STATUS: "cache_hit",
   KEY_ALIAS: "key_alias",
@@ -38,6 +39,7 @@ export const LOG_FILTER_IDS = {
 
 export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
+  [LOG_FILTER_IDS.SPAN_TYPE]: "Span Type",
   [LOG_FILTER_IDS.STATUS]: "Status",
   [LOG_FILTER_IDS.CACHE_STATUS]: "Cache",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
@@ -183,6 +185,7 @@ export function useLogFilterLogic({
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
           cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
+          span_type: getFilterValue(columnFilters, LOG_FILTER_IDS.SPAN_TYPE),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
           model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),

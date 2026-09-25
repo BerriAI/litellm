@@ -264,7 +264,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 stack.extend(reversed(node))
 
     @classmethod
-    def _extra_inspection_sources(cls, data: Mapping[str, Any]) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
+    def _extra_inspection_sources(cls, data: Mapping[str, object]) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
         """Text the proxy forwards to the model outside chat ``messages``:
         Responses-API ``input`` and ``instructions``, legacy completion
         ``prompt`` and tool/function/``response_format`` schema strings. Returned
@@ -336,7 +336,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _anonymize_request(self, res: Any, data: dict) -> dict:
+    def _anonymize_request(self, res: _CatoAnalyzeResponse, data: dict) -> dict:
         verbose_proxy_logger.info("Cato: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -379,7 +379,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return data
 
     @classmethod
-    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> bool:
+    def _apply_extra_redaction(cls, data: dict, field: str, redacted: Sequence[Mapping[str, object]]) -> bool:
         if field == "input":
             input_only: Final = {"input": data["input"]}
             if not redacted:
@@ -400,7 +400,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return True
 
     @classmethod
-    def _apply_schema_string_redaction(cls, data: dict, redacted: list) -> None:
+    def _apply_schema_string_redaction(cls, data: dict, redacted: Sequence[Mapping[str, object]]) -> None:
         redactions: Final = iter(redacted)
         for container, key in cls._iter_schema_string_refs(data):
             replacement = next(redactions, None)
@@ -408,7 +408,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 container[key] = replacement["content"]
 
     @staticmethod
-    def _apply_prompt_redaction(data: dict, redacted: list) -> None:
+    def _apply_prompt_redaction(data: dict, redacted: Sequence[Mapping[str, object]]) -> None:
         contents: Final = [m.get("content") for m in redacted if isinstance(m, dict)]
         prompt: Final = data.get("prompt")
         if isinstance(prompt, str):

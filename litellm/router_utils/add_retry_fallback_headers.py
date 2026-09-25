@@ -131,6 +131,19 @@ def ensure_response_additional_headers(response: object) -> dict[str, object]:
     return additional_headers
 
 
+def apply_response_model_id(response: object, request_metadata: Mapping[str, object] | None) -> None:
+    if request_metadata is None:
+        return
+    model_id: Final = _routing_header_mapping(request_metadata.get("model_info")).get("id")
+    if not isinstance(model_id, str) or not model_id:
+        return
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    if hidden_params.get("model_id"):
+        return
+    hidden_params["model_id"] = model_id
+    _write_hidden_params(response, hidden_params)
+
+
 def apply_quality_router_decision_headers(
     additional_headers: dict[str, object],
     request_kwargs: object,
@@ -151,7 +164,7 @@ def apply_quality_router_decision_headers(
             additional_headers[header] = str(decision[field])
 
 
-def response_in_flight_token_count(response: object) -> int:
+def response_total_token_count(response: object) -> int:
     usage: Final = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     if usage is None:
         return 0
@@ -166,15 +179,10 @@ def response_in_flight_token_count(response: object) -> int:
 def apply_remaining_usage_headers(
     additional_headers: dict[str, object],
     remaining_usage: dict[str, int],
-    in_flight_tokens: int,
 ) -> None:
-    in_flight_delta: Final = {
-        "x-ratelimit-remaining-tokens": in_flight_tokens,
-        "x-ratelimit-remaining-requests": 1,
-    }
     for header, value in remaining_usage.items():
         if value is not None and header not in additional_headers:
-            additional_headers[header] = value - in_flight_delta.get(header, 0)
+            additional_headers[header] = value
 
 
 def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:

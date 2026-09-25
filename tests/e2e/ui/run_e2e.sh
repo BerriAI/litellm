@@ -145,6 +145,7 @@ fi
 
 # --- Credentials ---
 export LITELLM_MASTER_KEY="sk-1234"
+export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY="true"
 export MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}/v1"
 export E2E_MOCK_PRESIDIO_URL="http://127.0.0.1:${MOCK_PRESIDIO_PORT}"
 export DISABLE_SCHEMA_UPDATE="true"

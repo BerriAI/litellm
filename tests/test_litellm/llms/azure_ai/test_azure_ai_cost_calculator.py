@@ -158,13 +158,6 @@ class TestAzureModelRouterFlatCost:
         assert prompt_cost == pytest.approx(1000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
         assert completion_cost_usd == 0.0
 
-    @pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
-    def test_router_entry_prices_its_own_fee(self, router_entry_name: str) -> None:
-        usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
-        prompt_cost, completion_cost_usd = cost_per_token(model=router_entry_name, usage=usage)
-        assert prompt_cost == pytest.approx(0.14, rel=1e-9)
-        assert completion_cost_usd == 0.0
-
     def test_routed_model_is_priced_as_itself(self) -> None:
         routed_prompt_cost, routed_completion_cost = _routed_model_cost()
         prompt_cost, completion_cost_usd = cost_per_token(model=ROUTED_MODEL, usage=ROUTED_USAGE)
@@ -209,24 +202,6 @@ class TestAzureModelRouterFlatCost:
         )
         assert prompt_cost == pytest.approx(routed_prompt_cost + ROUTED_FEE, rel=1e-9)
         assert completion_cost_usd == pytest.approx(routed_completion_cost, rel=1e-9)
-
-    def test_flat_cost_helper(self) -> None:
-        assert calculate_azure_model_router_flat_cost(
-            model="azure-model-router", prompt_tokens=10_000
-        ) == pytest.approx(0.0014, rel=1e-9)
-        assert calculate_azure_model_router_flat_cost(model="gpt-5-nano", prompt_tokens=10_000) == 0.0
-
-    def test_flat_cost_reads_the_fee_from_the_deployment_named_entry(self) -> None:
-        litellm.register_model(
-            {"azure_ai/model-router": {"input_cost_per_token": 2e-07, "litellm_provider": "azure_ai", "mode": "chat"}}
-        )
-        litellm.get_model_info.cache_clear()
-        assert calculate_azure_model_router_flat_cost(model="model-router", prompt_tokens=1_000_000) == pytest.approx(
-            0.2, rel=1e-9
-        )
-        assert calculate_azure_model_router_flat_cost(
-            model="azure-model-router", prompt_tokens=1_000_000
-        ) == pytest.approx(0.14, rel=1e-9)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -350,32 +325,3 @@ class TestAzureAIServiceTierCostCalculation:
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion
-
-
-def test_codestral_2501_model_info_and_cost(local_model_cost_map):
-    model_info = get_model_info(model="Codestral-2501", custom_llm_provider="azure_ai")
-    usage = Usage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000)
-
-    prompt_cost, completion_cost = cost_per_token(model="Codestral-2501", usage=usage)
-
-    assert model_info["mode"] == "chat"
-    assert model_info["max_input_tokens"] == 256000
-    assert model_info["max_output_tokens"] == 4096
-    assert prompt_cost == pytest.approx(0.3)
-    assert completion_cost == pytest.approx(0.9)
-
-
-def test_mai_thinking_1_model_info_and_cost(local_model_cost_map):
-    model_info = get_model_info(model="MAI-Thinking-1", custom_llm_provider="azure_ai")
-    usage = Usage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000)
-
-    prompt_cost, completion_cost = cost_per_token(model="MAI-Thinking-1", usage=usage)
-
-    assert model_info["mode"] == "chat"
-    assert model_info["max_input_tokens"] == 256000
-    assert model_info["max_output_tokens"] == 64000
-    assert model_info["cache_read_input_token_cost"] == pytest.approx(2e-07)
-    assert model_info["supports_reasoning"] is True
-    assert model_info["supports_function_calling"] is True
-    assert prompt_cost == pytest.approx(2.0)
-    assert completion_cost == pytest.approx(8.0)

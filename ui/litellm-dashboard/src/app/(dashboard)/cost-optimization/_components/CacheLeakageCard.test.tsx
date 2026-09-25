@@ -46,13 +46,13 @@ const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics
   date,
   metrics: baseMetrics({}),
   breakdown: {
-    models: Object.fromEntries(
+    models: {},
+    model_groups: Object.fromEntries(
       Object.entries(models).map(([name, m]) => [
         name,
         { metrics: baseMetrics(m), metadata: {}, api_key_breakdown: {} },
       ]),
     ),
-    model_groups: {},
     mcp_servers: {},
     providers: {},
     api_keys: {},
@@ -71,6 +71,7 @@ const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange>
         isFetchingMore: false,
         progress: { currentPage: 1, totalPages: 1 },
         cancelled: false,
+        failed: false,
         cancel: vi.fn(),
         ...overrides,
       }}
@@ -122,11 +123,11 @@ describe("CacheLeakageCard", () => {
     expect(firstDataRow()).toHaveTextContent("alpha");
   });
 
-  it("switches to the model view and lists only Anthropic models", () => {
+  it("switches to the model view and lists models from every provider", () => {
     renderWith([
       dayWithModels("2026-07-12", {
         "claude-sonnet-5": { prompt_tokens: 5000, cache_read_input_tokens: 0 },
-        "gpt-4o": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+        "vertex_ai/gemini-2.5-pro": { prompt_tokens: 8000, cache_read_input_tokens: 2000 },
       }),
     ]);
 
@@ -134,7 +135,7 @@ describe("CacheLeakageCard", () => {
 
     expect(screen.getByText("Cache leakage by model")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
-    expect(screen.queryByText("gpt-4o")).not.toBeInTheDocument();
+    expect(screen.getByText("vertex_ai/gemini-2.5-pro")).toBeInTheDocument();
   });
 
   it("shows an empty state when no key used tokens in the range", () => {
@@ -176,5 +177,29 @@ describe("CacheLeakageCard", () => {
     expect(
       screen.queryByText("Data is still loading; rows and totals will update as the rest of the range arrives."),
     ).not.toBeInTheDocument();
+  });
+
+  it("says which keys are missing from the key ranking when the proxy capped the per-key lists", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    renderWith([day], { apiKeyTruncation: { limit: 100, total: 3000 } });
+
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Only the 100 highest-spend keys of 3,000 are loaded, so a lower-spend key that leaks more is not listed here.",
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "By model" }));
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("keeps the key ranking note off when every key was loaded", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    renderWith([day]);
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 });

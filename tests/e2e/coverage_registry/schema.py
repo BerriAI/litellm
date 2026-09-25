@@ -58,16 +58,23 @@ LlmRoute = Literal[
     "openai",
     "together_ai",
     "vertex",
+    "xiaomi_mimo",
 ]
 
 LlmCapability = Literal[
     "assume_role",
     "basic",
+    "batch_deployment",
+    "blank_s3_env",
+    "code_interpreter",
     "count_tokens",
+    "govcloud_partition",
+    "split_s3_credentials",
     "input_validation",
     "long_context_1m",
     "mid_conversation_system",
     "multi_turn",
+    "native_passthrough",
     "pdf_input",
     "prompt_cache_1h",
     "prompt_cache_5m",

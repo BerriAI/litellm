@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from starlette.routing import BaseRoute, Match
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.route_priority import hot_routes_first
@@ -196,17 +196,25 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/assemblyai/",
             "/azure/",
             "/azure_ai/",
+            "/azure_speech/",
             "/bedrock/",
             "/cohere/",
             "/comprehendmedical",
             "/cursor/",
+            "/deepgram/",
             "/eu.assemblyai/",
+            "/fal_ai/",
             "/gemini/",
             "/gigachat/",
             "/milvus/",
             "/mistral/",
+            "/nvidia_nim/",
             "/openai/",
             "/openai_passthrough/",
+            "/tinyfish/",
+            "/transcribe",
+            "/typesafe/",
+            "/openrouter/",
             "/vertex-ai/",
             "/vertex_ai/",
             "/vllm/",
@@ -227,6 +235,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="anthropic_skills",
         module_path="litellm.proxy.anthropic_endpoints.skills_endpoints",
         path_prefixes=("/v1/skills", "/skills"),
+    ),
+    LazyFeature(
+        name="claude_code_gateway",
+        module_path="litellm.proxy.anthropic_endpoints.gateway_endpoints",
+        path_prefixes=("/claude_code_gateway",),
     ),
     LazyFeature(
         name="langfuse_passthrough",
@@ -294,7 +307,7 @@ class LazyFeatureMiddleware:
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         fastapi_app: "FastAPI",
         features: tuple[LazyFeature, ...] = LAZY_FEATURES,
     ):

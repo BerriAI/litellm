@@ -1,6 +1,8 @@
 import datetime
 import json
-import sys
+import logging
+import threading
+import time
 import types
 import unittest
 from typing import Final, Optional
@@ -11,6 +13,7 @@ import pytest
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
 
 
 # Import LangfuseUsageDetails directly from the module where it's defined
@@ -33,57 +36,19 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         )
         self.env_patcher.start()
 
-        # Create mock objects
-        self.mock_langfuse_client = MagicMock()
-        # Mock the client attribute to prevent errors during logger initialization
-        self.mock_langfuse_client.client = MagicMock()
-        self.mock_langfuse_trace = MagicMock()
-        self.mock_langfuse_generation = MagicMock()
-        self.mock_langfuse_generation.trace_id = "test-trace-id"
-
-        # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
-        self.mock_langfuse_span = MagicMock()
-        self.mock_langfuse_span.end = MagicMock()
-        self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
-
-        # Setup the trace and generation chain
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-        self.last_trace_kwargs = {}
-
-        def _trace_side_effect(*args, **kwargs):
-            self.last_trace_kwargs = kwargs
-            return self.mock_langfuse_trace
-
-        self.mock_langfuse_client.trace.side_effect = _trace_side_effect
-
-        # Mock the langfuse module that's imported locally in methods
-        self.langfuse_module_patcher = patch.dict(
-            "sys.modules", {"langfuse": MagicMock()}
-        )
-        self.mock_langfuse_module = self.langfuse_module_patcher.start()
-
-        # Create a mock for the langfuse module with version
-        self.mock_langfuse = MagicMock()
-        self.mock_langfuse.version = MagicMock()
-        self.mock_langfuse.version.__version__ = (
-            "3.0.0"  # Set a version that supports all features
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
         )
 
-        # Mock the Langfuse class
-        self.mock_langfuse_class = MagicMock()
-        self.mock_langfuse_class.return_value = self.mock_langfuse_client
+        self.span_exporter = InMemorySpanExporter()
+        self.real_provider = TracerProvider()
+        self.real_provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
 
-        # Set up the sys.modules['langfuse'] mock
-        sys.modules["langfuse"] = self.mock_langfuse
-        sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
-
-        # Create a fresh logger instance for each test
+        # the host above is unreachable, so the REST client is cheap to build
+        # and each test swaps in the export channel it wants
         self.logger = LangFuseLogger()
-
-        # Explicitly set the Langfuse client to our mock
-        self.logger.Langfuse = self.mock_langfuse_client
-        # Ensure langfuse_sdk_version is set correctly for _supports_* methods
-        self.logger.langfuse_sdk_version = "3.0.0"
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
@@ -113,29 +78,46 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # Bind the method to the instance
-        self.logger.log_event_on_langfuse = types.MethodType(
-            log_event_on_langfuse, self.logger
-        )
-
-        # Make sure _is_langfuse_v2 returns True
-        def mock_is_langfuse_v2(self):
-            return True
-
-        self.logger._is_langfuse_v2 = types.MethodType(mock_is_langfuse_v2, self.logger)
+        self.logger.log_event_on_langfuse = types.MethodType(log_event_on_langfuse, self.logger)
 
     def tearDown(self):
         # Clean up logger instance to prevent state leakage
         if hasattr(self, "logger"):
-            # Reset logger's Langfuse client to break any references
-            self.logger.Langfuse = None
-            # Delete logger instance to ensure complete cleanup
             del self.logger
 
         # Restore global Langfuse client counter to prevent cross-test pollution
         litellm.initialized_langfuse_clients = self._original_langfuse_clients_count
 
         self.env_patcher.stop()
-        self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
+
+    def use_real_langfuse_client(self):
+        """Point the logger at an export channel whose spans land in memory."""
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from litellm.integrations.langfuse.langfuse_sdk import build_langfuse_tracing
+
+        self.span_exporter = InMemorySpanExporter()
+        self.logger.tracing = build_langfuse_tracing(
+            exporter=self.span_exporter,
+            environment=None,
+            release=None,
+            sample_rate=1.0,
+            flush_interval_millis=10,
+        )
+        self.real_provider = self.logger.tracing.provider
+        return self.logger.tracing
+
+    def exported_generation(self):
+        self.logger.tracing.flush()
+        spans = [s for s in self.span_exporter.get_finished_spans()]
+        assert spans, "no spans were exported"
+        return spans[-1]
+
+    @staticmethod
+    def span_trace_id(span):
+        return format(span.context.trace_id, "032x")
 
     def test_langfuse_usage_details_type(self):
         """Test that LangfuseUsageDetails TypedDict is properly defined with the correct fields"""
@@ -266,21 +248,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
-        # Reset the mock to ensure clean state; clear side_effect so return_value takes effect
-        self.mock_langfuse_client.reset_mock(side_effect=True)
-        self.mock_langfuse_trace.reset_mock(side_effect=True)
-        self.mock_langfuse_generation.reset_mock(side_effect=True)
-
-        # Re-setup the trace and generation chain with clean state
-        self.mock_langfuse_generation.trace_id = "test-trace-id"
-        mock_span = MagicMock()
-        mock_span.end = MagicMock()
-        self.mock_langfuse_trace.span.return_value = mock_span
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-
-        # Ensure trace returns our mock
-        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
-        self.logger.Langfuse = self.mock_langfuse_client
+        self.use_real_langfuse_client()
 
         with (
             patch(
@@ -288,7 +256,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 side_effect=lambda generation_params, **kwargs: generation_params,
                 create=True,
             ) as mock_add_prompt_params,
-            patch.object(self.logger, "_supports_prompt", return_value=True),
         ):
             # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
@@ -338,29 +305,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             except Exception as e:
                 self.fail(f"_log_langfuse_v2 raised an exception: {e}")
 
-            # Verify that trace was called first
-            self.mock_langfuse_client.trace.assert_called()
-
-            #  Check the arguments passed to the mocked langfuse generation call
-            self.mock_langfuse_trace.generation.assert_called_once()
-            call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
-
-            #  Inspect the usage and usage_details dictionaries
-            usage_arg = call_kwargs.get("usage")
-            usage_details_arg = call_kwargs.get("usage_details")
-
-            self.assertIsNotNone(usage_arg)
-            self.assertIsNotNone(usage_details_arg)
-
-            # Verify that None values were converted to 0
-            self.assertEqual(usage_arg["prompt_tokens"], 0)
-            self.assertEqual(usage_arg["completion_tokens"], 0)
-
-            self.assertEqual(usage_details_arg["input"], 0)
-            self.assertEqual(usage_details_arg["output"], 0)
-            self.assertEqual(usage_details_arg["total"], 0)
-            self.assertEqual(usage_details_arg["cache_creation_input_tokens"], 0)
-            self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)
+            usage_details = json.loads(self.exported_generation().attributes["langfuse.observation.usage_details"])
+            assert usage_details["input"] == 0
+            assert usage_details["output"] == 0
+            assert usage_details["total"] == 0
+            assert usage_details["cache_creation_input_tokens"] == 0
+            assert usage_details["cache_read_input_tokens"] == 0
 
             mock_add_prompt_params.assert_called_once()
 
@@ -413,7 +363,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
     def test_log_langfuse_v2_uses_standard_trace_id_when_available(self):
         payload = self._build_standard_logging_payload(trace_id="std-trace-id")
         kwargs = self._build_langfuse_kwargs(payload)
-        self.last_trace_kwargs = {}
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -435,12 +385,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 litellm_call_id="call-id-xyz",
             )
 
-        assert self.last_trace_kwargs.get("id") == "std-trace-id"
+        assert self.span_trace_id(self.exported_generation()) == resolve_trace_id("std-trace-id")
 
     def test_log_langfuse_v2_defaults_to_call_id_without_standard_trace_id(self):
         payload = self._build_standard_logging_payload()
         kwargs = self._build_langfuse_kwargs(payload)
-        self.last_trace_kwargs = {}
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -462,7 +412,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 litellm_call_id="call-id-xyz",
             )
 
-        assert self.last_trace_kwargs.get("id") == "call-id-xyz"
+        assert self.span_trace_id(self.exported_generation()) == resolve_trace_id("call-id-xyz")
 
     def test_log_langfuse_v2_uses_litellm_trace_id_fallback_over_call_id(self):
         """
@@ -474,7 +424,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         payload = self._build_standard_logging_payload()  # no trace_id
         kwargs = self._build_langfuse_kwargs(payload)
         kwargs["litellm_trace_id"] = "trace-id-from-kwargs"
-        self.last_trace_kwargs = {}
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -497,7 +447,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # litellm_trace_id should be preferred over litellm_call_id
-        assert self.last_trace_kwargs.get("id") == "trace-id-from-kwargs"
+        assert self.span_trace_id(self.exported_generation()) == resolve_trace_id("trace-id-from-kwargs")
 
     CANARY = "sk-lf-canary-SECRET-d4e5f6"
 
@@ -527,24 +477,51 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         }
 
     def _emitted_payload_text(self):
-        """Every blob this logger handed to the langfuse SDK, as one searchable string."""
+        """Every attribute this logger exported to langfuse, as one searchable string."""
         import json
 
-        blobs = [self.last_trace_kwargs]
-        if self.mock_langfuse_trace.generation.call_args is not None:
-            blobs.append(self.mock_langfuse_trace.generation.call_args.kwargs)
-        blobs.extend(call.kwargs for call in self.mock_langfuse_trace.span.call_args_list)
-        return json.dumps(blobs, default=repr)
+        self.logger.tracing.flush()
+        return json.dumps(
+            [dict(span.attributes or {}) for span in self.span_exporter.get_finished_spans()],
+            default=repr,
+        )
 
-    def _drive_with_canary(self, extra_metadata=None, hidden_params=None):
+    def exported_generation_metadata(self):
+        """The generation's metadata as langfuse receives it, one attribute per key.
+
+        v4 serializes each value onto the span, so they are decoded back here to
+        keep these assertions about what litellm emitted rather than about the
+        SDK's wire encoding.
+        """
+        import json
+
+        prefix = "langfuse.observation.metadata."
+
+        def decoded(raw):
+            try:
+                return json.loads(raw)
+            except (TypeError, ValueError):
+                return raw
+
+        return {
+            key[len(prefix) :]: decoded(value)
+            for key, value in (self.exported_generation().attributes or {}).items()
+            if key.startswith(prefix)
+        }
+
+    def exported_spans_named(self, name):
+        self.logger.tracing.flush()
+        return [span for span in self.span_exporter.get_finished_spans() if span.name == name]
+
+    def _drive_with_canary(self, extra_metadata=None, hidden_params=None, guardrail_information=None):
         metadata = {**self._canary_request_metadata(), **(extra_metadata or {})}
         payload = self._build_standard_logging_payload(trace_id="canary-trace-id")
         if hidden_params is not None:
             payload["hidden_params"] = hidden_params
+        if guardrail_information is not None:
+            payload["guardrail_information"] = guardrail_information
         kwargs = {**self._build_langfuse_kwargs(payload), "response_cost": 0.25}
-        self.last_trace_kwargs = {}
-        self.mock_langfuse_trace.generation.reset_mock()
-        self.mock_langfuse_trace.span.reset_mock()
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -565,7 +542,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 level="INFO",
                 litellm_call_id="canary-call-id",
             )
-        return self.mock_langfuse_trace.generation.call_args.kwargs["metadata"]
+        return self.exported_generation_metadata()
 
     def test_team_callback_credentials_never_reach_langfuse(self):
         """
@@ -589,10 +566,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         debug_langfuse dumps request metadata into the trace as a second emit site.
         It must be sourced from the allowlisted payload too.
         """
-        self._drive_with_canary(extra_metadata={"debug_langfuse": True})
+        import json
 
-        dumped = self.last_trace_kwargs["metadata"]["metadata_passed_to_litellm"]
+        self._drive_with_canary(extra_metadata={"debug_langfuse": True})
+        dumped = json.loads(self.exported_generation().attributes["langfuse.trace.metadata.metadata_passed_to_litellm"])
+
         assert "user_api_key_auth" not in dumped
+        assert dumped["first_custom"] == "keep-first"
         assert self.CANARY not in self._emitted_payload_text()
 
     def test_raw_request_metadata_reaches_the_emitted_blob_through_no_key(self):
@@ -616,18 +596,68 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """
         self._drive_with_canary(hidden_params={"vertex_ai_grounding_metadata": ["ground-a", "ground-b"]})
 
-        span_inputs = [call.kwargs.get("input") for call in self.mock_langfuse_trace.span.call_args_list]
+        span_inputs = [
+            span.attributes.get("langfuse.observation.input")
+            for span in self.exported_spans_named("vertex_ai_grounding_metadata")
+        ]
         assert span_inputs == ["ground-a", "ground-b"]
         assert self.CANARY not in self._emitted_payload_text()
+
+    def test_only_the_generation_claims_the_trace_root(self):
+        """
+        Langfuse derives trace name and I/O from the root observation, and with several
+        roots the one with the latest start wins. A post-call guardrail starts after the
+        model call, so it must nest under the generation instead of being a root itself, or
+        the trace shows the guardrail's request instead of the model's.
+        """
+        self._drive_with_canary(
+            hidden_params={"vertex_ai_grounding_metadata": ["ground-a"]},
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii-post",
+                    "guardrail_mode": "post_call",
+                    "guardrail_request": {"texts": ["post-call scan"]},
+                    "guardrail_response": {"flagged": False},
+                    "start_time": 1704110402.0,
+                    "end_time": 1704110403.0,
+                }
+            ],
+        )
+
+        [generation] = [span for span in self.span_exporter.get_finished_spans() if span.name.startswith("litellm-")]
+        [guardrail] = self.exported_spans_named("guardrail")
+        [grounding] = self.exported_spans_named("vertex_ai_grounding_metadata")
+        assert generation.parent is None
+        assert generation.attributes["langfuse.trace.name"] == "canary-trace"
+        for child in (guardrail, grounding):
+            assert child.parent.span_id == generation.context.span_id
+            assert child.context.trace_id == generation.context.trace_id
+            assert "langfuse.trace.name" not in child.attributes
+
+    def test_generation_is_exported_when_a_child_span_fails(self):
+        """v2 buffered the generation in one call, so a bad guardrail entry could not lose it;
+        the OTel generation is open until ``end()`` and must still be ended when a child raises."""
+        self._drive_with_canary(
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii-post",
+                    "guardrail_mode": "post_call",
+                    "start_time": "not-a-timestamp",
+                    "end_time": 1704110403.0,
+                }
+            ],
+        )
+
+        [generation] = [span for span in self.span_exporter.get_finished_spans() if span.name.startswith("litellm-")]
+        assert generation.attributes["langfuse.trace.name"] == "canary-trace"
+        assert self.exported_spans_named("guardrail") == []
 
     def test_caller_cannot_spoof_an_allowlisted_identity_field(self):
         """
         Request metadata never reaches the blob, so a caller naming user_api_key_alias
         cannot have their value emitted in place of the proxy-resolved one.
         """
-        generation_metadata = self._drive_with_canary(
-            extra_metadata={"user_api_key_alias": "spoofed-by-caller"}
-        )
+        generation_metadata = self._drive_with_canary(extra_metadata={"user_api_key_alias": "spoofed-by-caller"})
 
         assert generation_metadata["user_api_key_alias"] == "canary-alias"
 
@@ -642,7 +672,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         payload["metadata"]["requester_metadata"] = {"litellm_response_cost": "caller-value", "api_base": "caller"}
         kwargs = {**self._build_langfuse_kwargs(payload), "response_cost": 0.25}
         metadata = self._canary_request_metadata()
-        self.mock_langfuse_trace.generation.reset_mock()
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -664,9 +694,47 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 litellm_call_id="canary-call-id",
             )
 
-        generation_metadata = self.mock_langfuse_trace.generation.call_args.kwargs["metadata"]
+        generation_metadata = self.exported_generation_metadata()
         assert generation_metadata["litellm_response_cost"] == 0.25
         assert generation_metadata["api_base"] == "https://real-api-base"
+
+    def test_generation_metadata_carries_the_call_id_and_response_id(self):
+        """
+        v2's generation id was ``time-<hh-mm-ss-us>_<response id>``, so a generation could
+        be found from the provider response id. v4 hashes that string onto 16 hex chars,
+        which leaves nothing searchable unless both ids are emitted as metadata.
+        """
+        payload = self._build_standard_logging_payload(trace_id="canary-trace-id")
+        kwargs = {**self._build_langfuse_kwargs(payload), "response_cost": 0.25}
+        metadata = self._canary_request_metadata()
+        self.use_real_langfuse_client()
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kw: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata=metadata,
+                litellm_params={"metadata": metadata},
+                output=None,
+                start_time=datetime.datetime(2024, 1, 1, 12, 0, 0),
+                end_time=datetime.datetime(2024, 1, 1, 12, 0, 1),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=litellm.ModelResponse(
+                    id="chatcmpl-canary-response", choices=[{"message": {"role": "assistant", "content": "OK"}}]
+                ),
+                level="DEFAULT",
+                litellm_call_id="canary-call-id",
+            )
+
+        generation_metadata = self.exported_generation_metadata()
+        assert generation_metadata["litellm_call_id"] == "canary-call-id"
+        assert generation_metadata["response_id"] == "chatcmpl-canary-response"
+        assert "chatcmpl-canary-response" in self._emitted_payload_text()
 
     def test_denied_steering_keys_and_enrichments(self):
         """
@@ -732,8 +800,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """
         self._drive_with_canary()
 
-        assert self.last_trace_kwargs.get("session_id") == "canary-session"
-        assert self.last_trace_kwargs.get("name") == "canary-trace"
+        generation = self.exported_generation()
+        assert generation.attributes["session.id"] == "canary-session"
+        assert generation.attributes["langfuse.trace.name"] == "canary-trace"
 
     def test_failure_trace_survives_a_missing_standard_logging_object(self):
         """
@@ -752,8 +821,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "messages": [],
             "litellm_trace_id": "trace-id-failure",
         }
-        self.last_trace_kwargs = {}
-        self.mock_langfuse_trace.generation.reset_mock()
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -777,9 +845,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         import json
 
-        assert trace_id == "trace-id-failure"
-        assert self.last_trace_kwargs.get("id") == "trace-id-failure"
-        generation_metadata = self.mock_langfuse_trace.generation.call_args.kwargs["metadata"]
+        # Must use litellm_trace_id, not litellm_call_id. v4 addresses a trace by a
+        # 32-hex id, so the callback returns the resolved form, which is what makes
+        # the alerting deep link point at a trace langfuse can actually open
+        assert trace_id == resolve_trace_id("trace-id-failure")
+        assert self.span_trace_id(self.exported_generation()) == trace_id
+        generation_metadata = self.exported_generation_metadata()
         assert "user_api_key_auth" not in generation_metadata
         assert self.CANARY not in self._emitted_payload_text()
         assert "first_custom" not in generation_metadata
@@ -796,7 +867,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """
         payload = self._build_standard_logging_payload(trace_id="std-trace-123")
         kwargs = self._build_langfuse_kwargs(payload)
-        self.last_trace_kwargs = {}
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -819,9 +890,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # session_id should be set for Langfuse session grouping
-        assert self.last_trace_kwargs.get("session_id") == "my-session-abc"
+        assert self.exported_generation().attributes["session.id"] == "my-session-abc"
         # trace_id should remain the standard trace_id, NOT the session_id
-        assert self.last_trace_kwargs.get("id") == "std-trace-123"
+        assert self.span_trace_id(self.exported_generation()) == resolve_trace_id("std-trace-123")
 
     def test_log_langfuse_v2_session_id_preserved_for_error_level(self):
         """
@@ -831,7 +902,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """
         payload = self._build_standard_logging_payload(trace_id="std-trace-err")
         kwargs = self._build_langfuse_kwargs(payload)
-        self.last_trace_kwargs = {}
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -854,11 +925,11 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # session_id must be preserved even for ERROR level logs
-        assert self.last_trace_kwargs.get("session_id") == "error-session-xyz"
+        assert self.exported_generation().attributes["session.id"] == "error-session-xyz"
         # trace_id should be the standard trace_id, not the session_id
-        assert self.last_trace_kwargs.get("id") == "std-trace-err"
+        assert self.span_trace_id(self.exported_generation()) == resolve_trace_id("std-trace-err")
         # status_message should be set for error traces
-        assert self.last_trace_kwargs.get("status_message") is not None
+        assert self.exported_generation().attributes["langfuse.observation.level"] == "ERROR"
 
     def test_log_langfuse_v2_explicit_trace_id_takes_priority_over_session_id(self):
         """
@@ -867,7 +938,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """
         payload = self._build_standard_logging_payload()
         kwargs = self._build_langfuse_kwargs(payload)
-        self.last_trace_kwargs = {}
+        self.use_real_langfuse_client()
 
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
@@ -898,9 +969,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # Explicit trace_id must take priority
-        assert self.last_trace_kwargs.get("id") == "explicit-trace-id-777"
+        assert self.span_trace_id(self.exported_generation()) == resolve_trace_id("explicit-trace-id-777")
         # session_id must still be set for session grouping
-        assert self.last_trace_kwargs.get("session_id") == "session-999"
+        assert self.exported_generation().attributes["session.id"] == "session-999"
 
 
 def test_failure_handler_langfuse_kwargs_excludes_original_response():
@@ -948,12 +1019,10 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
 
     try:
         # Mock LangFuseHandler to return our capturing mock logger
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.LangFuseHandler"
-        ) as mock_handler_class:
-            mock_handler_class.get_langfuse_logger_for_request.return_value = (
-                mock_langfuse_logger
-            )
+        with (
+            patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class
+        ):  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
+            mock_handler_class.get_langfuse_logger_for_request.return_value = mock_langfuse_logger
 
             # Call the actual failure_handler
             test_exception = Exception("TestError: model not found")
@@ -965,23 +1034,19 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
             )
 
         # Verify log_event_on_langfuse was actually called
-        assert (
-            mock_langfuse_logger.log_event_on_langfuse.called
-        ), "log_event_on_langfuse was not called"
+        assert mock_langfuse_logger.log_event_on_langfuse.called, "log_event_on_langfuse was not called"
 
         # Verify original_response is NOT in the kwargs passed to Langfuse
         langfuse_kwargs = captured_kwargs.get("kwargs", {})
-        assert (
-            "original_response" not in langfuse_kwargs
-        ), "original_response should be excluded from kwargs passed to Langfuse"
+        assert "original_response" not in langfuse_kwargs, (
+            "original_response should be excluded from kwargs passed to Langfuse"
+        )
 
         # Verify session_id metadata is preserved in the kwargs
-        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get(
-            "metadata", {}
+        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get("metadata", {})
+        assert langfuse_metadata.get("session_id") == "test-session-failure", (
+            "session_id should be preserved in kwargs passed to Langfuse"
         )
-        assert (
-            langfuse_metadata.get("session_id") == "test-session-failure"
-        ), "session_id should be preserved in kwargs passed to Langfuse"
 
         # Verify level is ERROR
         assert captured_kwargs.get("level") == "ERROR"
@@ -1023,9 +1088,9 @@ async def test_async_log_failure_event_logs_to_langfuse():
             "generation_id": "mock-gen",
         }
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
-        ) as mock_handler:
+        with (
+            patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler
+        ):  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -1050,9 +1115,7 @@ async def test_async_log_failure_event_logs_to_langfuse():
             )
 
             # Verify log_event_on_langfuse was called
-            assert (
-                mock_logger.log_event_on_langfuse.called
-            ), "log_event_on_langfuse was not called for failure event"
+            assert mock_logger.log_event_on_langfuse.called, "log_event_on_langfuse was not called for failure event"
             call_kwargs = mock_logger.log_event_on_langfuse.call_args[1]
             assert call_kwargs["level"] == "ERROR"
             assert call_kwargs["status_message"] == "API error: model not found"
@@ -1092,9 +1155,9 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
             "generation_id": "mock-gen",
         }
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler"
-        ) as mock_handler:
+        with (
+            patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler
+        ):  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -1123,6 +1186,77 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
             assert call_kwargs["level"] == "ERROR"
             # Falls back to exception from kwargs
             assert "InternalServerError" in call_kwargs["status_message"]
+
+
+class _OtlpReceiver:
+    """A local HTTP server that records the paths of every POST it gets, standing in for Langfuse."""
+
+    def __init__(self) -> None:
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        self.received: list[str] = []
+        received = self.received
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append(self.path)
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), _Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def close(self) -> None:
+        self.server.shutdown()
+
+
+def _log_one_completion(logger: LangFuseLogger) -> None:
+    now = datetime.datetime.now()
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}, "proxy_server_request": {"headers": {}}},
+            "messages": [{"role": "user", "content": "hi"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "yo"}}]),
+        start_time=now,
+        end_time=now,
+    )
+    logger.flush()
+
+
+def test_mock_mode_makes_no_network_calls(monkeypatch):
+    """LANGFUSE_MOCK promises full execution without egress.
+
+    The mock intercepts httpx, but v4 ships observations over its own OTLP
+    exporter, so nothing stops a real request to the configured host without an
+    exporter that drops them.
+    """
+    receiver = _OtlpReceiver()
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_HOST", receiver.url)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-mock-egress")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-mock-egress")
+
+    try:
+        logger = LangFuseLogger()
+        assert logger.is_mock_mode is True
+        _log_one_completion(logger)
+        time.sleep(1)
+    finally:
+        receiver.close()
+
+    assert receiver.received == [], f"mock mode sent real requests: {receiver.received}"
 
 
 def test_max_langfuse_clients_limit():
@@ -1160,7 +1294,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
-        with pytest.raises(Exception, match='Max langfuse clients reached') as exc_info:
+        with pytest.raises(Exception, match="Max langfuse clients reached") as exc_info:
             logger3 = LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",
@@ -1176,73 +1310,76 @@ def test_max_langfuse_clients_limit():
     litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
 
 
-class _RecordingLangfuse:
-    last_parameters: Optional[dict] = None
-
-    def __init__(self, environment=None, **parameters):
-        type(self).last_parameters = {"environment": environment, **parameters}
-        self.client = MagicMock()
+_UNREACHABLE_HOST: Final = "http://127.0.0.1:1"
 
 
-class _RecordingLangfuseWithoutEnvironment:
-    last_parameters: Optional[dict] = None
-
-    def __init__(self, **parameters):
-        type(self).last_parameters = parameters
-        self.client = MagicMock()
-
-
-def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
+def _build_langfuse_logger(monkeypatch, **overrides) -> LangFuseLogger:
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
-        return LangFuseLogger(
-            langfuse_public_key="pk-lit5228",
-            langfuse_secret="sk-lit5228",
-            langfuse_host="https://test.langfuse.com",
-        )
+    return LangFuseLogger(
+        **{
+            "langfuse_public_key": "pk-lit5228",
+            "langfuse_secret": "sk-lit5228",
+            "langfuse_host": _UNREACHABLE_HOST,
+            **overrides,
+        }
+    )
 
 
-def test_langfuse_environment_is_passed_to_sdk_client(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+def _exported_environment(logger: LangFuseLogger):
+    from langfuse import LangfuseOtelSpanAttributes
+
+    return logger.tracing.provider.resource.attributes.get(LangfuseOtelSpanAttributes.ENVIRONMENT)
+
+
+def test_langfuse_environment_lands_on_every_exported_span(monkeypatch):
     monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="staging",
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment="staging")
     assert logger.langfuse_environment == "staging"
-    assert _RecordingLangfuse.last_parameters["environment"] == "staging"
+    assert _exported_environment(logger) == "staging"
 
 
 def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment-wide")
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env")
     assert logger.langfuse_environment == "deployment-wide"
-    assert _RecordingLangfuse.last_parameters["environment"] == "deployment-wide"
+    assert _exported_environment(logger) == "deployment-wide"
 
 
-def test_langfuse_environment_omitted_for_old_sdk_versions(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuseWithoutEnvironment):
-        LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="staging",
-        )
-    assert "environment" not in _RecordingLangfuseWithoutEnvironment.last_parameters
+def _exported_release(logger: LangFuseLogger):
+    from langfuse import LangfuseOtelSpanAttributes
+
+    return logger.tracing.provider.resource.attributes.get(LangfuseOtelSpanAttributes.RELEASE)
+
+
+@pytest.mark.parametrize("platform_var", ["GITHUB_SHA", "CI_COMMIT_SHA", "RENDER_GIT_COMMIT", "SOURCE_VERSION"])
+def test_release_falls_back_to_the_deploy_platforms_commit_variable(monkeypatch, platform_var):
+    """Deployments that never set ``LANGFUSE_RELEASE`` still got a release on every trace from the v2 SDK, which
+    read the CI or hosting platform's commit variable; dropping that silently blanked their release filter."""
+    from litellm.integrations.langfuse.langfuse_sdk import _COMMON_RELEASE_ENVS
+
+    for name in ("LANGFUSE_RELEASE", *_COMMON_RELEASE_ENVS):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(platform_var, "deadbeef")
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key=f"pk-release-{platform_var}")
+    assert logger.langfuse_release == "deadbeef"
+    assert _exported_release(logger) == "deadbeef"
+
+
+def test_explicit_langfuse_release_wins_over_the_platform_commit(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_RELEASE", "v9")
+    monkeypatch.setenv("GITHUB_SHA", "deadbeef")
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-release-explicit")
+    assert _exported_release(logger) == "v9"
+
+
+def test_non_string_generation_name_is_exported_as_its_text(monkeypatch):
+    """v2 coerced ``generation_name`` through pydantic; a raw int would now fail OTLP encoding and lose the batch."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"generation_name": 12345})
+
+    assert span.name == "12345"
 
 
 def test_dynamic_langfuse_environment_triggers_dynamic_logger():
@@ -1253,13 +1390,11 @@ def test_dynamic_langfuse_environment_triggers_dynamic_logger():
 
     assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
 
-    config = LangFuseHandler.get_dynamic_langfuse_logging_config(
-        standard_callback_dynamic_params=params
-    )
+    config = LangFuseHandler.get_dynamic_langfuse_logging_config(standard_callback_dynamic_params=params)
     assert config["langfuse_environment"] == "team-a-env"
 
 
-def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
+def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import gc
     import weakref
 
@@ -1269,21 +1404,20 @@ def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     logger = _build_langfuse_logger(monkeypatch)
-    sdk_client = _RecordingLangfuse.last_parameters["httpx_client"]
 
     cached_handler = _get_httpx_client()
     handler_ref = weakref.ref(cached_handler)
 
-    assert sdk_client is logger.langfuse_client
-    assert sdk_client is cached_handler.client
+    assert logger.langfuse_client is cached_handler.client
 
     litellm.in_memory_llm_clients_cache = LLMClientCache()
     del cached_handler
     gc.collect()
 
     assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is None
-    assert handler_ref() is not None, "logger must keep the handler that owns the client it handed the SDK"
-    assert not sdk_client.is_closed
+    assert handler_ref() is not None, "logger must keep the handler that owns the client behind its REST API"
+    assert not logger.langfuse_client.is_closed
+    assert logger.api_client.auth_check() is not None
 
 
 def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
@@ -1307,20 +1441,100 @@ def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
 _LANGFUSE_REDACTED = "redacted-by-litellm"
 
 
-def _steering_logger() -> LangFuseLogger:
-    """``__new__`` skips the SDK and network setup in ``__init__``."""
-    logger = LangFuseLogger.__new__(LangFuseLogger)
-    logger.Langfuse = MagicMock()
-    logger.langfuse_sdk_version = "2.60.0"
-    return logger
-
-
-def _emit(logger: LangFuseLogger, *, metadata=None, headers=None):
-    """``log_event_on_langfuse`` is the entry point that folds ``langfuse_*`` headers into metadata."""
-    now = datetime.datetime.now()
-    response_obj = litellm.ModelResponse(
-        choices=[{"message": {"role": "assistant", "content": "the-output"}}]
+def _steering_logger():
+    """``__new__`` skips the network setup in ``__init__``; spans land in memory."""
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
     )
+
+    from litellm.integrations.langfuse.langfuse import installed_langfuse_version
+    from litellm.integrations.langfuse.langfuse_sdk import build_langfuse_client, build_langfuse_tracing
+
+    exporter = InMemorySpanExporter()
+    logger = LangFuseLogger.__new__(LangFuseLogger)
+    logger.tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+    logger.api_client = build_langfuse_client(
+        public_key="pk-steering-test", secret_key="sk-steering-test", base_url=_UNREACHABLE_HOST, httpx_client=None
+    )
+    logger.langfuse_sdk_version = installed_langfuse_version()
+    return logger, exporter
+
+
+def test_log_event_keeps_exporting_after_the_dynamic_cache_evicts_the_logger():
+    """Per-key loggers are evicted from ``DynamicLoggingCache`` while a callback may still hold them.
+
+    v2 lost that callback's events to a shut-down client; the export channel is shared per
+    credential set and outlives any one logger, so the events still land.
+    """
+    from litellm.litellm_core_utils.specialty_caches.dynamic_logging_cache import LangfuseInMemoryCache
+
+    logger, exporter = _steering_logger()
+    cache = LangfuseInMemoryCache()
+    cache.set_cache("langfuse-evicted", logger)
+    litellm.initialized_langfuse_clients += 1
+    before = litellm.initialized_langfuse_clients
+    cache._remove_key("langfuse-evicted")
+
+    now = datetime.datetime.now()
+    returned = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "the-output"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert litellm.initialized_langfuse_clients == before - 1
+    assert _span_trace_id(_exported_span(logger, exporter)) == returned["trace_id"]
+
+
+def _exported_span(logger, exporter):
+    logger.flush()
+    return exporter.get_finished_spans()[-1]
+
+
+_TRACE_FIELD_KEYS = {
+    "user.id": "user_id",
+    "session.id": "session_id",
+    "langfuse.version": "version",
+    "langfuse.release": "release",
+}
+
+
+def _trace_params(span):
+    """The trace-level fields of the exported span, keyed as v2's ``trace_params`` were."""
+    prefix = "langfuse.trace."
+    attributes = span.attributes or {}
+    return {
+        **{
+            key[len(prefix) :]: value
+            for key, value in attributes.items()
+            if key.startswith(prefix) and not key.startswith(prefix + "metadata.")
+        },
+        **{name: attributes[key] for key, name in _TRACE_FIELD_KEYS.items() if key in attributes},
+    }
+
+
+def _span_trace_id(span):
+    return format(span.context.trace_id, "032x")
+
+
+def _emit(rig, *, metadata=None, headers=None):
+    """``log_event_on_langfuse`` is the entry point that folds ``langfuse_*`` headers into metadata.
+
+    Both the trace-level and the observation fields are read back off the span litellm exported.
+    """
+    logger, exporter = rig
+    exporter.clear()
+
+    now = datetime.datetime.now()
+    response_obj = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "the-output"}}])
     logger.log_event_on_langfuse(
         kwargs={
             "call_type": "completion",
@@ -1335,10 +1549,14 @@ def _emit(logger: LangFuseLogger, *, metadata=None, headers=None):
         start_time=now,
         end_time=now,
     )
-    return (
-        logger.Langfuse.trace.call_args.kwargs,
-        logger.Langfuse.trace.return_value.generation.call_args.kwargs,
-    )
+    prefix = "langfuse.observation."
+    span = _exported_span(logger, exporter)
+    generation_params = {
+        key[len(prefix) :]: value
+        for key, value in (span.attributes or {}).items()
+        if key.startswith(prefix) and not key.startswith(prefix + "metadata.")
+    }
+    return _trace_params(span), generation_params, span
 
 
 @pytest.mark.parametrize("level", ["DEFAULT", "ERROR"])
@@ -1464,8 +1682,9 @@ def test_session_header_trace_provenance(headers, metadata, expected_id, level):
         redact_credential_headers,
     )
 
-    logger: Final = _steering_logger()
+    logger, exporter = _steering_logger()
     for turn in range(2):
+        exporter.clear()
         call_id = f"call-{turn}"
         request_headers = Headers(headers)
         data = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -1495,17 +1714,19 @@ def test_session_header_trace_provenance(headers, metadata, expected_id, level):
             level=level,
             status_message="provider error" if level == "ERROR" else None,
         )
-        trace_params = logger.Langfuse.trace.call_args.kwargs
-        assert trace_params["id"] == (call_id if expected_id == "call" else expected_id)
-        assert result["trace_id"] == trace_params["id"]
+        span = _exported_span(logger, exporter)
+        assert _span_trace_id(span) == resolve_trace_id(call_id if expected_id == "call" else expected_id)
+        assert result["trace_id"] == _span_trace_id(span)
         if expected_id != "existing-trace":
-            assert trace_params["session_id"] == headers.get("langfuse_session_id", original_metadata.get("session_id"))
+            assert span.attributes.get("session.id") == headers.get(
+                "langfuse_session_id", original_metadata.get("session_id")
+            )
         steering = {key[len("langfuse_") :]: value for key, value in headers.items() if key.startswith("langfuse_")}
         assert data["metadata"] == {**original_metadata, **steering}
 
 
 def test_session_header_trace_without_call_id_keeps_session_alias():
-    logger: Final = _steering_logger()
+    logger, exporter = _steering_logger()
     now: Final = datetime.datetime.now()
 
     result: Final = logger.log_event_on_langfuse(
@@ -1524,8 +1745,8 @@ def test_session_header_trace_without_call_id_keeps_session_alias():
         end_time=now,
     )
 
-    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
-    assert result["trace_id"] == "session-7125"
+    assert _span_trace_id(_exported_span(logger, exporter)) == resolve_trace_id("session-7125")
+    assert result["trace_id"] == resolve_trace_id("session-7125")
 
 
 def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
@@ -1559,7 +1780,7 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
 )
 def test_sdk_caller_without_request_headers_keeps_its_trace(proxy_server_request):
     """A direct SDK caller has no request headers, so a session-shaped trace id stays the caller's."""
-    logger: Final = _steering_logger()
+    logger, exporter = _steering_logger()
     now: Final = datetime.datetime.now()
 
     result: Final = logger.log_event_on_langfuse(
@@ -1578,8 +1799,8 @@ def test_sdk_caller_without_request_headers_keeps_its_trace(proxy_server_request
         end_time=now,
     )
 
-    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
-    assert result["trace_id"] == "session-7125"
+    assert _span_trace_id(_exported_span(logger, exporter)) == resolve_trace_id("session-7125")
+    assert result["trace_id"] == resolve_trace_id("session-7125")
 
 
 def test_session_header_classifier_survives_non_string_header_keys():
@@ -1593,38 +1814,38 @@ def test_session_header_classifier_survives_non_string_header_keys():
 
 
 def test_mask_input_header_false_keeps_the_prompt():
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, generation_params = _emit(logger, headers={"langfuse_mask_input": "false"})
+    trace_params, generation_params, _ = _emit(rig, headers={"langfuse_mask_input": "false"})
 
-    assert trace_params["input"] == {"messages": [{"role": "user", "content": "the-input"}]}
-    assert generation_params["input"] == {"messages": [{"role": "user", "content": "the-input"}]}
+    assert "input" not in trace_params
+    assert json.loads(generation_params["input"]) == {"messages": [{"role": "user", "content": "the-input"}]}
 
 
 def test_mask_input_header_true_redacts_the_prompt():
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, generation_params = _emit(logger, headers={"langfuse_mask_input": "true"})
+    trace_params, generation_params, _ = _emit(rig, headers={"langfuse_mask_input": "true"})
 
-    assert trace_params["input"] == _LANGFUSE_REDACTED
+    assert "input" not in trace_params
     assert generation_params["input"] == _LANGFUSE_REDACTED
 
 
 def test_mask_output_header_false_keeps_the_completion():
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, generation_params = _emit(logger, headers={"langfuse_mask_output": "false"})
+    trace_params, generation_params, _ = _emit(rig, headers={"langfuse_mask_output": "false"})
 
-    assert trace_params["output"] != _LANGFUSE_REDACTED
-    assert generation_params["output"] != _LANGFUSE_REDACTED
+    assert "output" not in trace_params
+    assert "the-output" in generation_params["output"]
 
 
 def test_mask_output_header_true_redacts_the_completion():
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, generation_params = _emit(logger, headers={"langfuse_mask_output": "true"})
+    trace_params, generation_params, _ = _emit(rig, headers={"langfuse_mask_output": "true"})
 
-    assert trace_params["output"] == _LANGFUSE_REDACTED
+    assert "output" not in trace_params
     assert generation_params["output"] == _LANGFUSE_REDACTED
 
 
@@ -1638,30 +1859,31 @@ def test_mask_output_header_true_redacts_the_completion():
     ],
 )
 def test_mask_input_from_the_request_body_is_unchanged(mask_input, expect_redacted):
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, _ = _emit(logger, metadata={"mask_input": mask_input})
+    _, generation_params, _ = _emit(rig, metadata={"mask_input": mask_input})
 
-    assert (trace_params["input"] == _LANGFUSE_REDACTED) is expect_redacted
+    assert (generation_params["input"] == _LANGFUSE_REDACTED) is expect_redacted
 
 
 @pytest.mark.parametrize("flag", [True, "true"])
-def test_update_trace_keys_header_applies_every_key_when_enabled(flag):
-    logger = _steering_logger()
+def test_update_trace_keys_header_applies_every_key_when_enabled(flag, monkeypatch):
+    rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", flag):
-        trace_params, _ = _emit(
-            logger,
-            headers={
-                "langfuse_existing_trace_id": "trace-1",
-                "langfuse_update_trace_keys": "trace_release, trace_tail",
-                "langfuse_trace_release": "v1.2.3",
-                "langfuse_trace_tail": "last",
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", flag)
+    trace_params, _, span = _emit(
+        rig,
+        headers={
+            "langfuse_existing_trace_id": "trace-1",
+            "langfuse_update_trace_keys": "trace_release, trace_tail",
+            "langfuse_trace_release": "v1.2.3",
+            "langfuse_trace_tail": "last",
+        },
+    )
 
     assert trace_params["release"] == "v1.2.3"
-    assert trace_params["tail"] == "last"
+    assert span.attributes["langfuse.release"] == "v1.2.3"
+    assert not [key for key in span.attributes if key.endswith("tail")]
 
 
 def test_update_trace_keys_is_off_by_default():
@@ -1670,10 +1892,10 @@ def test_update_trace_keys_is_off_by_default():
     user_api_key_auth and have the resolved auth object, including team callback
     credentials, serialized onto the trace. It stays inert until an operator opts in.
     """
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, _ = _emit(
-        logger,
+    trace_params, _, span = _emit(
+        rig,
         metadata={
             "existing_trace_id": "trace-1",
             "update_trace_keys": ["user_api_key_auth", "trace_release"],
@@ -1684,41 +1906,185 @@ def test_update_trace_keys_is_off_by_default():
 
     assert "user_api_key_auth" not in trace_params
     assert "release" not in trace_params
-    assert "sk-canary" not in json.dumps(trace_params, default=repr)
+    assert "sk-canary" not in json.dumps(dict(span.attributes or {}), default=repr)
 
 
-def test_update_trace_keys_input_and_output_are_gated_too():
-    logger = _steering_logger()
+def test_update_trace_keys_input_and_output_are_gated_too(monkeypatch):
+    rig = _steering_logger()
 
-    off, _ = _emit(logger, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        on, _ = _emit(logger, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+    off, _, _ = _emit(rig, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    on, _, _ = _emit(rig, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
 
     assert "input" not in off and "output" not in off
     assert "input" in on and "output" in on
 
 
-def test_update_trace_keys_from_the_request_body_list_applies_when_enabled():
-    logger = _steering_logger()
+def test_update_trace_keys_input_output_reach_the_trace_even_under_a_parent(monkeypatch):
+    """With a real parent the generation is not the trace root, so trace-level
+    I/O must be stamped explicitly; v2 updated the trace object directly."""
+    rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        trace_params, _ = _emit(
-            logger,
-            metadata={
-                "existing_trace_id": "trace-1",
-                "update_trace_keys": ["trace_release"],
-                "trace_release": "v1.2.3",
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    _, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "parent_observation_id": "b" * 16,
+            "update_trace_keys": ["input", "output"],
+        },
+    )
+
+    assert "the-input" in str(span.attributes["langfuse.trace.input"])
+    assert "the-output" in str(span.attributes["langfuse.trace.output"])
+
+
+def test_a_fresh_trace_under_a_callers_parent_still_carries_its_own_input_and_output():
+    """Langfuse copies I/O onto a trace only from its root observation; a caller's ``parent_observation_id``
+    makes the generation a child, so the trace-level fields v2 set on ``trace(...)`` must be stamped."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"parent_observation_id": "0123456789abcdef"})
+
+    assert span.parent is not None
+    assert "the-input" in str(span.attributes["langfuse.trace.input"])
+    assert "the-output" in str(span.attributes["langfuse.trace.output"])
+
+
+def test_a_failed_call_under_a_callers_parent_stamps_the_error_as_the_trace_output():
+    """The ERROR branch used to write a trace-level ``status_message``, a field the v4 trace schema does not
+    have, and skip ``output``; the generation's parent is the caller's, so nothing else fills the trace."""
+    logger, exporter = _steering_logger()
+    now = datetime.datetime.now()
+
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {"parent_observation_id": "0123456789abcdef"}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+        level="ERROR",
+        status_message="provider said no",
+    )
+    span = _exported_span(logger, exporter)
+
+    assert span.parent is not None
+    assert "provider said no" in str(span.attributes["langfuse.trace.output"])
+    assert span.attributes["langfuse.observation.status_message"] == "provider said no"
+
+
+def test_a_fresh_trace_root_leaves_the_duplicate_io_to_langfuse():
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_id": "a" * 32})
+
+    assert span.parent is None
+    assert "langfuse.trace.input" not in (span.attributes or {})
+    assert "the-input" in str(span.attributes["langfuse.observation.input"])
+
+
+def test_existing_trace_id_appends_without_claiming_trace_root():
+    """Langfuse copies a root observation's name and I/O onto the trace, so a
+    continuation that claimed root would rename the trace after every request;
+    v2 only ever touched the keys in ``update_trace_keys``."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"existing_trace_id": "trace-1", "trace_name": "second-call"})
+
+    assert span.parent is not None
+    assert "langfuse.trace.name" not in (span.attributes or {})
+
+
+def test_a_fresh_trace_still_claims_root_so_its_generation_names_it():
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_id": "a" * 32, "trace_name": "first-call"})
+
+    assert span.parent is None
+    assert span.attributes["langfuse.trace.name"] == "first-call"
+
+
+def test_trace_io_is_not_stamped_when_update_trace_keys_does_not_ask(monkeypatch):
+    rig = _steering_logger()
+
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    _, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "parent_observation_id": "b" * 16,
+            "update_trace_keys": ["trace_release"],
+        },
+    )
+
+    assert "langfuse.trace.input" not in (span.attributes or {})
+    assert "langfuse.trace.output" not in (span.attributes or {})
+
+
+def test_update_trace_keys_from_the_request_body_list_applies_when_enabled(monkeypatch):
+    rig = _steering_logger()
+
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    trace_params, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "update_trace_keys": ["trace_release"],
+            "trace_release": "v1.2.3",
+        },
+    )
 
     assert trace_params["release"] == "v1.2.3"
+    assert span.attributes["langfuse.release"] == "v1.2.3"
+
+
+def test_update_trace_keys_trace_metadata_reaches_the_trace_and_stays_off_the_generation(monkeypatch):
+    rig = _steering_logger()
+
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    _, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "parent_observation_id": "b" * 16,
+            "update_trace_keys": ["trace_metadata"],
+            "trace_metadata": {"step": 2, "note": "x" * 300},
+        },
+    )
+
+    assert span.attributes["langfuse.trace.metadata.step"] == 2
+    assert span.attributes["langfuse.trace.metadata.note"] == "x" * 300
+    assert "langfuse.observation.metadata.step" not in span.attributes
+
+
+def test_non_mapping_trace_metadata_does_not_lose_the_event():
+    """A caller who passes ``trace_metadata`` as a string still gets a generation, and the string is not spread."""
+    rig = _steering_logger()
+
+    trace_params, generation_params, span = _emit(rig, metadata={"trace_metadata": "just-a-note"})
+
+    assert json.loads(generation_params["output"])["content"] == "the-output"
+    assert trace_params["name"] == "litellm-completion"
+    assert not any(key.startswith("langfuse.trace.metadata.") for key in span.attributes or {})
+
+
+def test_trace_metadata_is_not_propagated_when_absent():
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_name": "plain"})
+
+    assert not any(key.startswith("langfuse.trace.metadata.") for key in span.attributes or {})
 
 
 def test_update_trace_keys_matches_whole_keys_not_substrings():
-    logger = _steering_logger()
+    rig = _steering_logger()
 
-    trace_params, _ = _emit(
-        logger,
+    trace_params, _, _ = _emit(
+        rig,
         headers={"langfuse_existing_trace_id": "trace-1", "langfuse_update_trace_keys": "my_input"},
     )
 
@@ -1726,25 +2092,12 @@ def test_update_trace_keys_matches_whole_keys_not_substrings():
 
 
 def test_langfuse_environment_is_coerced_and_validated(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment=123,  # non-string: must coerce, not crash
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment=123)
     assert logger.langfuse_environment == "123"
 
     with pytest.raises(ValueError, match="langfuse_environment"):
-        LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="Production",
-        )
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment="Production")
 
 
 def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
@@ -1754,15 +2107,7 @@ def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
 
     # '' falls back to the deployment env var at init
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="",
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment="")
     assert logger.langfuse_environment == "production"
 
     # env-only params that add nothing do not select a dynamic logger
@@ -1805,3 +2150,322 @@ def test_langfuse_deployment_environment_fallback_never_raises(monkeypatch, env_
         langfuse_host="https://test.langfuse.com",
     )
     assert logger.langfuse_environment == expected
+
+
+def test_continued_trace_keeps_the_generation_version():
+    """v2 set ``version`` on the generation even when the trace was not being updated."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"existing_trace_id": "b" * 32, "version": "gen-7"})
+
+    assert span.attributes["langfuse.version"] == "gen-7"
+
+
+def test_new_trace_version_takes_precedence_over_the_generation_version():
+    """v4 has one ``langfuse.version`` per span, so unlike v2's separate trace and generation fields only one
+    value can survive; ``trace_version`` wins, matching the v4 SDK, whose propagated attributes overwrite a span's own."""
+    rig = _steering_logger()
+
+    captured_trace_params, _, span = _emit(rig, metadata={"trace_version": "trace-1", "version": "gen-7"})
+
+    assert captured_trace_params["version"] == "trace-1"
+    assert span.attributes["langfuse.version"] == "trace-1"
+
+
+def test_log_event_returns_the_v2_dict_shape_for_the_alerting_trace_id_cache():
+    """litellm_logging only caches the langfuse trace id off a dict with a ``trace_id`` key.
+
+    Slack alerting builds its trace URL from that cache, so a different return
+    shape silently breaks alert links.
+    """
+    rig = _steering_logger()
+    logger, _ = rig
+
+    returned = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {"trace_id": "c" * 32}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "the-output"}}]),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+    )
+
+    assert isinstance(returned, dict)
+    assert returned["trace_id"] == "c" * 32
+    assert returned["generation_id"]
+
+
+def test_parse_langfuse_debug_only_enables_on_true_strings():
+    """v4 treats any truthy value as debug=on, so the raw env string "false" would enable debug."""
+    assert langfuse_module.parse_langfuse_debug("true") is True
+    assert langfuse_module.parse_langfuse_debug("True") is True
+    assert langfuse_module.parse_langfuse_debug("1") is True
+    assert langfuse_module.parse_langfuse_debug("false") is False
+    assert langfuse_module.parse_langfuse_debug("False") is False
+    assert langfuse_module.parse_langfuse_debug("") is False
+    assert langfuse_module.parse_langfuse_debug(None) is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 1), ("", 1), ("3", 3), ("0", 1), ("-5", 1), ("abc", 1)],
+    ids=["unset", "empty", "valid", "zero", "negative", "text"],
+)
+def test_flush_interval_env_falls_back_instead_of_failing_the_first_request(monkeypatch, raw, expected, caplog):
+    """The batch scheduler rejects a non-positive delay; v2's consumer thread accepted 0, so the value must
+    not raise out of the lazily built logger and take Langfuse logging down for the worker."""
+    if raw is None:
+        monkeypatch.delenv("LANGFUSE_FLUSH_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("LANGFUSE_FLUSH_INTERVAL", raw)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert LangFuseLogger._get_langfuse_flush_interval(1) == expected  # pyright: ignore[reportPrivateUsage]  # the parser under test
+    assert ("LANGFUSE_FLUSH_INTERVAL" in caplog.text) is (raw in ("0", "-5", "abc"))
+
+
+def test_zero_flush_interval_still_builds_a_working_export_channel(monkeypatch):
+    receiver = _OtlpReceiver()
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-flush-zero-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-flush-zero-test")
+    monkeypatch.delenv("LANGFUSE_MOCK", raising=False)
+    monkeypatch.setenv("LANGFUSE_FLUSH_INTERVAL", "0")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+
+    try:
+        logger = LangFuseLogger(langfuse_host=receiver.url)
+        _log_one_completion(logger)
+    finally:
+        receiver.close()
+
+    assert receiver.received == ["/api/public/otel/v1/traces"]
+
+
+def test_langfuse_debug_env_string_false_stays_off(monkeypatch):
+    """LANGFUSE_DEBUG=false must not reach the v4 client as a truthy string.
+
+    The v4 client does ``if debug:`` and then mutates root logging via
+    ``logging.basicConfig``, so the unparsed string "false" turns debug ON.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-debug-parse-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-debug-parse-test")
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_DEBUG", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+
+    assert LangFuseLogger().langfuse_debug is False
+
+
+def test_langfuse_debug_env_true_turns_on_the_langfuse_logger(monkeypatch):
+    """``LANGFUSE_DEBUG=true`` reached the v2 client as ``debug=`` and switched the SDK's logger to DEBUG;
+    a parsed flag that nothing reads would make the variable a silent no-op."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-debug-wire-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-debug-wire-test")
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_DEBUG", "true")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+    langfuse_logger = logging.getLogger("langfuse")
+    level_before = langfuse_logger.level
+    langfuse_logger.setLevel(logging.WARNING)
+    try:
+        assert LangFuseLogger().langfuse_debug is True
+        assert langfuse_logger.level == logging.DEBUG
+    finally:
+        langfuse_logger.setLevel(level_before)
+
+
+def test_explicit_langfuse_host_beats_the_v4_base_url_env(monkeypatch):
+    """Per-key/per-team ``langfuse_host`` must win over LANGFUSE_BASE_URL.
+
+    v4 resolves ``base_url or $LANGFUSE_BASE_URL or host``, so a stray env var
+    could silently redirect every tenant's traces to one server. The proof is a
+    real round trip: the observation lands on the configured host.
+    """
+    receiver = _OtlpReceiver()
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-base-url-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-base-url-test")
+    monkeypatch.delenv("LANGFUSE_MOCK", raising=False)
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("LANGFUSE_FLUSH_INTERVAL", "1")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+
+    try:
+        logger = LangFuseLogger(langfuse_host=receiver.url)
+        _log_one_completion(logger)
+    finally:
+        receiver.close()
+
+    assert logger.langfuse_host == receiver.url
+    assert receiver.received == ["/api/public/otel/v1/traces"]
+
+
+def test_resolve_credentials_falls_back_to_langfuse_base_url(monkeypatch):
+    """v4's canonical env var works when LANGFUSE_HOST is unset, but never beats it."""
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://from-base-url.example")
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+
+    _, _, host = langfuse_module.resolve_langfuse_credentials()
+    assert host == "https://from-base-url.example"
+
+    monkeypatch.setenv("LANGFUSE_HOST", "https://from-host.example")
+    _, _, host = langfuse_module.resolve_langfuse_credentials()
+    assert host == "https://from-host.example"
+
+    _, _, host = langfuse_module.resolve_langfuse_credentials(langfuse_host="https://explicit.example")
+    assert host == "https://explicit.example"
+
+
+def test_version_gate_rejects_v5_prereleases():
+    """ "5.0.0rc1" sorts below "5", so a plain version comparison would admit it."""
+    langfuse_module.raise_if_unsupported_langfuse_version("4.7")
+    with pytest.raises(ImportError):
+        langfuse_module.raise_if_unsupported_langfuse_version("5.0.0rc1")
+    with pytest.raises(ImportError):
+        langfuse_module.raise_if_unsupported_langfuse_version("5.0.0")
+
+
+def test_old_sdk_fails_with_the_upgrade_message_before_the_otel_module_is_imported(monkeypatch):
+    """On a v2 install `langfuse_sdk` itself fails to import, so the version gate must run first
+    or the caller is told the package is missing when it only needs upgrading."""
+    import sys
+
+    monkeypatch.setattr(langfuse_module, "installed_langfuse_version", lambda: "2.59.7")
+    monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse_sdk", None)
+
+    with pytest.raises(ImportError) as raised:
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-old-sdk")
+
+    assert "2.59.7" in str(raised.value)
+    assert "langfuse_otel" in str(raised.value)
+    assert "not installed" not in str(raised.value)
+
+
+def test_missing_sdk_is_reported_as_not_installed(monkeypatch):
+    from importlib.metadata import PackageNotFoundError
+
+    def not_installed() -> str:
+        raise PackageNotFoundError("langfuse")
+
+    monkeypatch.setattr(langfuse_module, "installed_langfuse_version", not_installed)
+
+    with pytest.raises(Exception, match="Langfuse not installed"):
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-no-sdk")
+
+
+@pytest.mark.parametrize("raw", ["abc", "2.5", ""], ids=["text", "fraction", "empty"])
+def test_prompt_cache_ttl_typo_is_named_before_the_sdk_is_imported(monkeypatch, raw):
+    """The v4 SDK evaluates ``int(LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS)`` at import, so without this
+    gate every request failed with a bare ``invalid literal for int()`` that never named the variable."""
+    import sys
+
+    monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
+    monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse_sdk", None)
+
+    with pytest.raises(ValueError, match="LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS") as raised:
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-ttl-typo")
+
+    assert repr(raw) in str(raised.value)
+
+
+@pytest.mark.parametrize("raw", ["5", " -3 ", "+0"], ids=["whole", "negative", "signed-zero"])
+def test_whole_second_prompt_cache_ttl_passes_the_gate(monkeypatch, raw):
+    monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
+    assert langfuse_module.raise_if_unusable_prompt_cache_ttl() is None
+
+
+def test_stopped_logger_hands_its_export_channel_back(monkeypatch):
+    """`DynamicLoggingCache` calls `stop()` on expiry; the channel must be retired once every
+    logger that held it has stopped, or each credential rotation leaks a batch export thread."""
+    from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing, release_langfuse_tracing
+
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-stop-releases")
+
+    def acquire_same_credentials():
+        return acquire_langfuse_tracing(
+            public_key="pk-stop-releases",
+            secret_key="sk-lit5228",
+            base_url=_UNREACHABLE_HOST,
+            environment=logger.langfuse_environment,
+            release=logger.langfuse_release,
+            flush_interval=logger.langfuse_flush_interval,
+            mock_mode=False,
+        )
+
+    logger.stop()
+    reacquired = acquire_same_credentials()
+    assert reacquired is logger.tracing, "the channel stays up while another logger still holds it"
+
+    release_langfuse_tracing(reacquired, grace_seconds=0.0)
+    assert acquire_same_credentials() is not logger.tracing, "stop() did not give the logger's hold back"
+
+
+def test_logger_that_fails_to_build_takes_no_slot_and_no_channel(monkeypatch):
+    """Each failed retry for the same dynamic credentials would otherwise eat a client slot and a
+    holder on the channel, so fixing the configuration could not bring Langfuse logging back."""
+    from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing, release_langfuse_tracing
+
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "5.5")
+    probe = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-failed-build")
+
+    def acquire_same_credentials():
+        return acquire_langfuse_tracing(
+            public_key="pk-failed-build",
+            secret_key="sk-lit5228",
+            base_url=_UNREACHABLE_HOST,
+            environment=probe.langfuse_environment,
+            release=probe.langfuse_release,
+            flush_interval=probe.langfuse_flush_interval,
+            mock_mode=False,
+        )
+
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "not-a-number")
+    with pytest.raises(ValueError, match="not-a-number"):
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-failed-build")
+    assert litellm.initialized_langfuse_clients == 0
+
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "5.5")
+    release_langfuse_tracing(probe.tracing, grace_seconds=0.0)
+    assert acquire_same_credentials() is not probe.tracing, "the failed build left a holder on the channel"
+
+
+def test_int_steering_values_reach_langfuse_as_strings():
+    """Langfuse models user, session and version as strings; v2's pydantic coerced ints for the caller."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_user_id": 12345, "session_id": 67, "trace_version": 3})
+
+    assert span.attributes["user.id"] == "12345"
+    assert span.attributes["session.id"] == "67"
+    assert span.attributes["langfuse.version"] == "3"
+
+
+def test_long_steering_values_are_neither_capped_nor_dropped():
+    """v2 sent ids of any length; the SDK's 200 character rule belongs to baggage propagation, which litellm no longer uses."""
+    rig = _steering_logger()
+    long_user: Final = "u" * 250
+
+    _, _, span = _emit(rig, metadata={"trace_user_id": long_user})
+
+    assert span.attributes["user.id"] == long_user
+
+
+def test_returned_generation_id_names_the_exported_observation():
+    """v4 derives observation ids from the OTel span, so a pre-computed id would name nothing."""
+    logger, exporter = _steering_logger()
+
+    returned = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {"trace_id": "d" * 32}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "the-output"}}]),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+    )
+
+    span = _exported_span(logger, exporter)
+    assert returned["generation_id"] == format(span.context.span_id, "016x")
