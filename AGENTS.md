@@ -31,6 +31,8 @@ A test must only fail when litellm code changes. Never pin facts we don't own (a
 
 End-to-end tests belong in `tests/e2e/` and must follow the harness conventions documented in that directory's `AGENTS.md`
 
+Before verifying a change, look the feature up in `docs/feature_sitemap/README.md`. It maps every customer-facing feature to its docs, code entrypoints, tests, coverage-registry ids, and a live verify recipe, one file per domain, so open only the domain file your change touches
+
 When creating PRs, target the repository's current default branch for both internal and external / OSS contributions. Check it with `python3 scripts/default_branch.py --branch` instead of assuming a branch name or relying on cached `origin/HEAD`
 
 When writing a PR body, treat the comments and imperative instructions inside .github/pull_request_template.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/pull_request_template.md from disk before writing a PR body to make sure you see every comment rule. A section you have nothing to put in (Relevant issues, Affected release, Linear ticket, Caveats, QA runbook, and so on) is removed entirely, heading included, never left as an empty title
