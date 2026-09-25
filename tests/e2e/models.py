@@ -574,8 +574,6 @@ class CountTokensBody(BaseModel):
 
     model: str
     messages: list[ChatMessage]
-    system: str | None = None
-    tools: list[AnthropicTool] | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):

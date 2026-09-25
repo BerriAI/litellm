@@ -4,6 +4,7 @@ from e2e_http import require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import (
     AnthropicCustomTool,
+    AnthropicTool,
     ChatMessage,
     CountTokensBody,
     JsonSchemaProperty,
@@ -14,6 +15,11 @@ from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
+
+
+class _CountTokensWithSystemAndToolsBody(CountTokensBody):
+    system: str | None = None
+    tools: list[AnthropicTool] | None = None
 
 
 class _CallEndpoint(BaseModel):
@@ -88,7 +94,7 @@ class TestMessagesCountTokens:
         with_system_and_tools = unwrap(
             proxy.count_tokens(
                 scoped_key,
-                CountTokensBody(
+                _CountTokensWithSystemAndToolsBody(
                     model=model,
                     messages=[ChatMessage(role="user", content=prompt)],
                     system="You are a helpful assistant",
@@ -105,7 +111,7 @@ class TestMessagesCountTokens:
         self, proxy: ProxyClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         model = _provision(proxy, resources)
-        body = CountTokensBody(
+        body = _CountTokensWithSystemAndToolsBody(
             model=model,
             messages=[ChatMessage(role="user", content=f"hello world {unique_marker()}")],
             system="You are a helpful assistant",
