@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { FlaskConical, Search } from "lucide-react";
+import { parseAsArrayOf, parseAsString, useQueryState } from "nuqs";
 import GuardrailTestPanel from "./GuardrailTestPanel";
 import { applyGuardrail } from "@/components/networking";
 import { toast } from "@/lib/toast";
@@ -29,6 +30,9 @@ interface GuardrailTestPlaygroundProps {
   onClose: () => void;
 }
 
+const selectedNamesParser = parseAsArrayOf(parseAsString).withDefault([]);
+const searchParser = parseAsString.withDefault("");
+
 interface TestResult {
   guardrailName: string;
   response_text: string;
@@ -47,24 +51,28 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
   accessToken,
   onClose,
 }) => {
-  const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedNames, setSelectedNames] = useQueryState("test_guardrails", selectedNamesParser);
+  const [searchQuery, setSearchQuery] = useQueryState("test_q", searchParser);
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [testErrors, setTestErrors] = useState<TestError[]>([]);
   const [isTesting, setIsTesting] = useState(false);
+
+  const selectedGuardrails = useMemo(() => {
+    const knownNames = new Set(guardrailsList.map((guardrail) => guardrail.guardrail_name));
+    return new Set(selectedNames.filter((name) => knownNames.has(name)));
+  }, [guardrailsList, selectedNames]);
 
   const filteredGuardrails = guardrailsList.filter((guardrail) =>
     guardrail.guardrail_name?.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const toggleGuardrailSelection = (guardrailName: string) => {
-    const newSelection = new Set(selectedGuardrails);
-    if (newSelection.has(guardrailName)) {
-      newSelection.delete(guardrailName);
-    } else {
-      newSelection.add(guardrailName);
-    }
-    setSelectedGuardrails(newSelection);
+    const selected = Array.from(selectedGuardrails);
+    void setSelectedNames(
+      selectedGuardrails.has(guardrailName)
+        ? selected.filter((name) => name !== guardrailName)
+        : [...selected, guardrailName],
+    );
   };
 
   const handleTestGuardrails = async (text: string, metadata?: Record<string, unknown> | null) => {
@@ -131,7 +139,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                     <InputGroupInput
                       placeholder="Search guardrails..."
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onChange={(e) => void setSearchQuery(e.target.value)}
                     />
                   </InputGroup>
                 </div>
@@ -214,7 +222,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                       results={testResults.length > 0 ? testResults : null}
                       errors={testErrors.length > 0 ? testErrors : null}
                       isLoading={isTesting}
-                      onClose={() => setSelectedGuardrails(new Set())}
+                      onClose={() => void setSelectedNames(null)}
                     />
                   </div>
                 )}
