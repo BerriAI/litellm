@@ -314,7 +314,7 @@ test-unit: install-test-deps
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
