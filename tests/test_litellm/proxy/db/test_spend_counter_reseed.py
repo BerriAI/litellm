@@ -340,7 +340,9 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
     monkeypatch: pytest.MonkeyPatch, window: bool, batch: bool, increment: float
 ) -> None:
     from litellm.proxy import proxy_server
+    from litellm.proxy.db import spend_counter_reseed
 
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 2)
     cache: Final = DualCache(in_memory_cache=InMemoryCache())
     counter_key: Final = (
         f"spend:team:concurrent-{batch}-{increment}:window:1d"
@@ -352,18 +354,57 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
     reseed_task: Final = asyncio.create_task(_reseed_with_paused_table(table, cache, counter_key, window))
     await asyncio.wait_for(table.read_started.wait(), timeout=5)
 
-    increment_task: Final = asyncio.create_task(
-        proxy_server._apply_spend_counter_increments(
-            pending=(proxy_server.PendingSpendIncrement(counter_key=counter_key, increment=increment),)
-        )
-        if batch
-        else proxy_server._increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+    pressure_tables: Final = tuple(_PausedSpendTable(20.0) for _ in range(4))
+    pressure_tasks: Final = tuple(
+        asyncio.create_task(_reseed_with_paused_table(pressure_table, cache, f"spend:user:pressure-{index}", False))
+        for index, pressure_table in enumerate(pressure_tables)
     )
-    await asyncio.sleep(0)
-    table.resume_read.set()
-    await asyncio.wait_for(asyncio.gather(reseed_task, increment_task), timeout=5)
+    await asyncio.wait_for(asyncio.gather(*(item.read_started.wait() for item in pressure_tables)), timeout=5)
+    try:
+        increment_task: Final = asyncio.create_task(
+            proxy_server._apply_spend_counter_increments(
+                pending=(proxy_server.PendingSpendIncrement(counter_key=counter_key, increment=increment),)
+            )
+            if batch
+            else proxy_server._increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+        )
+        await asyncio.sleep(0)
+        table.resume_read.set()
+        await asyncio.wait_for(asyncio.gather(reseed_task, increment_task), timeout=5)
+    finally:
+        for item in pressure_tables:
+            item.resume_read.set()
+        await asyncio.wait_for(asyncio.gather(*pressure_tasks), timeout=5)
 
     assert cache.in_memory_cache.get_cache(key=counter_key) == 100.0 + increment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_holder", [False, True], ids=["waiter", "holder"])
+async def test_cancelled_counter_operation_releases_usage(monkeypatch: pytest.MonkeyPatch, cancel_holder: bool) -> None:
+    from litellm.proxy.db import spend_counter_reseed
+
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 1)
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    counter_key: Final = f"spend:user:cancel-{cancel_holder}"
+    table: Final = _PausedSpendTable(100.0)
+    holder: Final = asyncio.create_task(_reseed_with_paused_table(table, cache, counter_key, False))
+    await asyncio.wait_for(table.read_started.wait(), timeout=5)
+    waiter: Final = asyncio.create_task(SpendCounterReseed.increment_in_memory(cache, counter_key, 5.0))
+    await asyncio.sleep(0)
+    assert not waiter.done()
+
+    cancelled: Final = holder if cancel_holder else waiter
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    table.resume_read.set()
+    await asyncio.wait_for(waiter if cancel_holder else holder, timeout=5)
+
+    assert await SpendCounterReseed.increment_in_memory(cache, counter_key, 2.0) == (7.0 if cancel_holder else 102.0)
+    async with SpendCounterReseed._counter_lock("spend:user:evict-cancelled"):
+        pass
+    assert counter_key not in SpendCounterReseed._locks
 
 
 @pytest.mark.asyncio
