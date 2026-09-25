@@ -1010,6 +1010,10 @@ class ModelResponseIterator:
                     self.served_model = start_message["model"]
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
+                if "input_transformations" in message_start_block["message"]:
+                    provider_specific_fields["input_transformations"] = message_start_block["message"][
+                        "input_transformations"
+                    ]
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }

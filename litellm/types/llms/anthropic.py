@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
@@ -611,6 +611,7 @@ class MessageChunk(TypedDict, total=False):
     stop_sequence: str | None
     usage: UsageDelta
     safeguard_results: ReadOnly[list[dict[str, object]]]
+    input_transformations: ReadOnly[Sequence[Mapping[str, object]]]
 
 
 class MessageStartBlock(TypedDict):
