@@ -201,7 +201,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                     "scenarioId": "orchestration",
                     "executableIds": [
                         "orchestration"
-                    ],  # mutable-ok: list literal required by httpx multi-value param serialization
+                    ],
                     "status": "RUNNING",
                 },
             )
