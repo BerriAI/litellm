@@ -310,6 +310,56 @@ async def test_async_set_and_get_roundtrip():
     assert metadata["semantic-similarity"] == pytest.approx(0.95)
 
 
+def test_set_cache_passes_only_metadata_to_get_embedding():
+    sync_client = MagicMock()
+    cache = _make_cache(sync_client=sync_client)
+    captured: dict[str, object] = {}
+
+    def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(metadata) if metadata is not None else None
+        return [0.1, 0.2, 0.3]
+
+    cache._get_embedding = spy_embedding
+
+    cache.set_cache(
+        key="cache-key",
+        value={"content": "Paris"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
+    sync_client.hset.assert_called_once()
+
+
+def test_get_cache_passes_only_metadata_to_get_embedding():
+    sync_client = MagicMock()
+    sync_client.ft.return_value.search.return_value = _search_result(0.1)
+    cache = _make_cache(sync_client=sync_client)
+    captured: dict[str, object] = {}
+
+    def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(metadata) if metadata is not None else None
+        return [0.1, 0.2, 0.3]
+
+    cache._get_embedding = spy_embedding
+
+    result = cache.get_cache(
+        key="cache-key",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert result == {"content": "Paris"}
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
+
+
 @pytest.mark.asyncio
 async def test_async_set_cache_passes_only_metadata_to_get_async_embedding():
     async_client = AsyncMock()
