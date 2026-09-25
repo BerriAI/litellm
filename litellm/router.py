@@ -7684,6 +7684,14 @@ class Router:
                 num_retries=num_retries,
                 healthy_deployments=_healthy_deployments,
                 all_deployments=_all_deployments,
+                fallback_available=self._fallback_available_for_error(
+                    error=original_exception,
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                    model_group=model_group,
+                    kwargs=kwargs,
+                ),
             )
 
             await asyncio.sleep(retry_after)
@@ -7754,6 +7762,14 @@ class Router:
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,
                         all_deployments=_all_deployments,
+                        fallback_available=self._fallback_available_for_error(
+                            error=e,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
+                            kwargs=kwargs,
+                        ),
                     )
                     await asyncio.sleep(_timeout)
 
@@ -7911,6 +7927,7 @@ class Router:
         num_retries: int,
         healthy_deployments: list | None = None,
         all_deployments: list | None = None,
+        fallback_available: bool = False,
     ) -> int | float:
         """
         Calculate back-off, then retry
@@ -7919,6 +7936,8 @@ class Router:
             1. there are healthy deployments in the same model group
             2. there are fallbacks for the completion call
         """
+        if fallback_available:
+            return 0
 
         ## base case - single deployment
         if all_deployments is not None and len(all_deployments) == 1:
@@ -8383,14 +8402,55 @@ class Router:
             return self._has_content_policy_fallback(model_group, kwargs)
         if self._has_default_fallbacks():
             return True
-        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
-        if fallbacks is None:
+        return self._regular_fallback_available(
+            fallbacks=kwargs.get("fallbacks", self.fallbacks), model_group=model_group, kwargs=kwargs
+        )
+
+    def _regular_fallback_available(
+        self, fallbacks: list | None, model_group: str | None, kwargs: Mapping[str, Any]
+    ) -> bool:
+        if fallbacks is None or fallbacks_disabled_for_request(kwargs):
             return False
         resolved, _ = get_fallback_model_group_for_lookup_groups(
             fallbacks=fallbacks,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
         )
         return has_unattempted_fallback_target(resolved, kwargs)
+
+    def _fallback_available_for_error(
+        self,
+        error: Exception,
+        fallbacks: list | None,
+        context_window_fallbacks: list | None,
+        content_policy_fallbacks: list | None,
+        model_group: str | None,
+        kwargs: Mapping[str, Any],
+    ) -> bool:
+        """
+        Whether async_function_with_fallbacks_common_utils would hand this error to an untried
+        fallback, checked in the order it dispatches: client-side lists, then the dedicated
+        context-window or content-policy list (authoritative once set), then regular fallbacks
+        """
+        if model_group is None or fallbacks_disabled_for_request(kwargs):
+            return False
+        if _check_non_standard_fallback_format(fallbacks=fallbacks):
+            return has_unattempted_fallback_target(fallbacks, kwargs)
+        dedicated_fallbacks: Final = (
+            context_window_fallbacks
+            if isinstance(error, litellm.ContextWindowExceededError)
+            else content_policy_fallbacks
+            if isinstance(error, litellm.ContentPolicyViolationError)
+            else None
+        )
+        if dedicated_fallbacks is not None:
+            return has_unattempted_fallback_target(
+                self._get_fallback_model_group_for_lookup_groups(
+                    fallbacks=dedicated_fallbacks,
+                    lookup_groups=fallback_lookup_groups(kwargs, model_group),
+                ),
+                kwargs,
+            )
+        return self._regular_fallback_available(fallbacks=fallbacks, model_group=model_group, kwargs=kwargs)
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
