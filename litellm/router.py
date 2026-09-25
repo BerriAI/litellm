@@ -637,21 +637,21 @@ class FallbackAwareAnthropicMessagesStream:
 
     @property
     def chunks(self) -> list | None:
-        return cast(
+        return cast(  # cast-ok: the billing helper itself treats chunks as an opaque getattr
             "list | None", getattr(self._source_iterator, "chunks", None)
-        )  # cast-ok: the billing helper itself treats chunks as an opaque getattr
+        )
 
     @property
     def messages(self) -> list | None:
-        return cast(
+        return cast(  # cast-ok: messages is a plain list on the inner stream
             "list | None", getattr(self._source_iterator, "messages", None)
-        )  # cast-ok: messages is a plain list on the inner stream
+        )
 
     @property
     def model(self) -> str | None:
-        return cast(
+        return cast(  # cast-ok: model is a str on the inner stream
             "str | None", getattr(self._source_iterator, "model", None)
-        )  # cast-ok: model is a str on the inner stream
+        )
 
     def adopt_fallback_source(self, fallback_response: object) -> None:
         self._source_iterator = fallback_response
