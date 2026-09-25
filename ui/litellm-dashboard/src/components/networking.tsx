@@ -1498,6 +1498,35 @@ export const teamDailyActivityExportCall = async ({
   });
 };
 
+export const userDailyActivityExportCall = async ({
+  accessToken,
+  startTime,
+  endTime,
+  exportType,
+  format,
+  userId,
+}: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  exportType: ExportScope;
+  format: ExportFormat;
+  userId?: string | null;
+}): Promise<Blob> => {
+  return apiClient.get<Blob>(`/user/daily/activity/export`, {
+    accessToken,
+    responseType: "blob",
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      timezone: new Date().getTimezoneOffset().toString(),
+      export_type: exportType,
+      format,
+      user_id: userId ? userId : undefined,
+    },
+  });
+};
+
 export const teamDailyActivityKeySearchCall = async (
   accessToken: string,
   startTime: Date,

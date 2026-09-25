@@ -1293,6 +1293,49 @@ def _export_folded_user_row(
     )
 
 
+EXPORT_CSV_METRIC_HEADERS: Final = (
+    "Spend ($)",
+    "Requests",
+    "Successful Requests",
+    "Failed Requests",
+    "Total Tokens",
+    "Prompt Tokens",
+    "Completion Tokens",
+    "Cache Read Input Tokens",
+    "Cache Creation Input Tokens",
+)
+
+
+def csv_safe(value: str) -> str:
+    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
+def daily_activity_error(*, status_code: int, message: str) -> HTTPException:
+    """Single construction site for the `{"error": ...}` detail shape the
+    daily-activity endpoints have always returned."""
+    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
+
+
+_MAX_AGGREGATED_RANGE_DAYS: Final = 400
+
+
+def aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+    """The aggregated endpoint has no pagination to bound its work, so malformed
+    dates and ranges wider than the UI ever requests are rejected before querying."""
+    if start_date is None or end_date is None:
+        return "Please provide start_date and end_date"
+    try:
+        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "start_date and end_date must be valid YYYY-MM-DD dates"
+    if parsed_end < parsed_start:
+        return "end_date must be on or after start_date"
+    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
+        return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
+    return None
+
+
 async def get_daily_activity_export_rows(
     *,
     prisma_client: PrismaClient,

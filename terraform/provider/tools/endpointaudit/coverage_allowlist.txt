@@ -35,6 +35,7 @@ GET /team/spend/by_user
 GET /team/spend/report
 GET /user/daily/activity
 GET /user/daily/activity/aggregated
+GET /user/daily/activity/export
 GET /user/daily/activity/aggregated/search
 GET /user/daily/activity/aggregated/model_top_keys
 GET /user/spend/report
