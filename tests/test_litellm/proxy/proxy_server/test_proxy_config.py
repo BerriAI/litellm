@@ -3941,6 +3941,26 @@ async def test_ProxyConfig__update_general_settings_retries_a_failed_schedule_on
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_retries_a_schedule_that_raised(monkeypatch):
+    """A transient add_job failure must not be remembered as a completed attempt; the next
+    reload with the same settings tries again."""
+    fake_scheduler = MagicMock()
+    fake_scheduler.get_job.return_value = None
+    fake_scheduler.add_job.side_effect = [RuntimeError("scheduler busy"), None]
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    retention = {"maximum_daily_tag_spend_retention_period": "90d"}
+    pc.settings.apply_db_row("general_settings", retention)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+    with pytest.raises(RuntimeError):
+        await pc._update_general_settings(retention)
+    await pc._update_general_settings(retention)
+    assert fake_scheduler.add_job.call_count == 2
+    assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_reschedules_when_only_the_cron_changes(monkeypatch):
     fake_scheduler = MagicMock()
     fake_scheduler.get_job.return_value = MagicMock()
