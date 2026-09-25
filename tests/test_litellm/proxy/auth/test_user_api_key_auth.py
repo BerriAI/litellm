@@ -2296,8 +2296,12 @@ async def test_auto_register_map_existing_key_race_loser_keeps_reused_key():
             return_value="winner-hash",
         ),
     ):
-        await _auto_register_jwt_mapping(**_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler))
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
 
+    assert result is not None
+    assert result.org_id == "key-own-org"
     prisma_client.db.litellm_verificationtoken.delete.assert_not_awaited()
     assert user_api_key_cache.async_set_cache.await_args.kwargs["value"] == "winner-hash"
 
