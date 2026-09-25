@@ -5,9 +5,6 @@ pub const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com";
 /// timeout from the caller still overrides this on the request builder.
 pub(crate) const MESSAGES_TIMEOUT_SECS: u64 = 600;
 
-/// Connect timeout for Anthropic Messages provider calls, in seconds.
-pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
-
 /// Provider name used for Anthropic Messages when a deployment's provider model
 /// does not carry an explicit provider prefix.
 pub const ANTHROPIC_MESSAGES_PROVIDER: &str = "anthropic";
