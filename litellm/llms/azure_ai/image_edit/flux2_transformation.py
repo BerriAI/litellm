@@ -1,6 +1,6 @@
 import base64
 from collections.abc import Mapping, Sequence
-from io import BufferedReader, IOBase
+from io import IOBase
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -8,6 +8,7 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.token_counter import image_dimensions_from_bytes
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM: Final = "reference_image_pixels"
+UNMEASURED_REFERENCE_IMAGE_PIXELS: Final = 1024 * 1024
 
 
 class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
@@ -137,15 +139,16 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         return request_body, []
 
     def _read_image_bytes(self, image: FileTypes | Sequence[FileTypes]) -> bytes:
-        if isinstance(image, BufferedReader):
-            image_bytes: Final = image.read()
-            image.seek(0)
-            return image_bytes
         if isinstance(image, bytes):
             return image
-        if isinstance(image, IOBase):
+        if not isinstance(image, IOBase):
+            raise ValueError(f"Unsupported image type: {type(image)}")
+        if not image.seekable():
             return image.read()
-        raise ValueError(f"Unsupported image type: {type(image)}")
+        image.seek(0)
+        image_bytes: Final = image.read()
+        image.seek(0)
+        return image_bytes
 
     def transform_image_edit_response(
         self,
@@ -196,6 +199,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 def _pixel_count(image_bytes: bytes) -> int:
     dimensions: Final = image_dimensions_from_bytes(image_bytes)
     if dimensions is None:
-        return 0
+        verbose_logger.warning("Could not read the dimensions of a FLUX.2 reference image, billing it as one megapixel")
+        return UNMEASURED_REFERENCE_IMAGE_PIXELS
     width, height = dimensions
     return width * height
