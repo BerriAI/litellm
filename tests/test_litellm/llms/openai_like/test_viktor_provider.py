@@ -131,7 +131,7 @@ def test_router_deployment_reaches_viktor(viktor_http: respx.MockRouter, base_ur
 def test_transcription_is_refused_without_calling_viktor(viktor_http: respx.MockRouter) -> None:
     catch_all = viktor_http.route().mock(return_value=httpx.Response(500))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unmapped provider"):
         litellm.transcription(model="viktor/viktor", file=("a.wav", b"RIFF", "audio/wav"))
 
     assert not catch_all.called
