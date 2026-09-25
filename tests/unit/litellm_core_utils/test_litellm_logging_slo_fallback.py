@@ -110,9 +110,10 @@ async def test_streaming_slo_double_build_failure_is_logged(monkeypatch, caplog)
     )
     build_calls = []
 
-    def fake_build(self, init_response_obj, start_time, end_time):
+    def fake_build(self, init_response_obj, start_time, end_time) -> None:
+        # Returning None is the point: both the primary build and the
+        # empty-response retry fail.
         build_calls.append(init_response_obj)
-        return None  # both the primary build and the empty-response retry fail
 
     monkeypatch.setattr(Logging, "_build_standard_logging_payload", fake_build)
     monkeypatch.setattr(litellm, "_async_success_callback", [])
