@@ -545,7 +545,6 @@ redis:
 # Prisma migration job settings
 migrationJob:
   enabled: true # Enable or disable the schema migration Job
-  retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
   # Wall-clock budget for the whole Job, shared across every `backoffLimit`
   # retry rather than granted per attempt. Without it a migration that blocks
@@ -554,7 +553,6 @@ migrationJob:
   # stop reconciling the whole chart until someone deletes the Job by hand.
   # Set to null to opt out and restore the unbounded behaviour.
   activeDeadlineSeconds: 1800
-  disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   # Optional service account for the migration job.
   # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.
   # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".

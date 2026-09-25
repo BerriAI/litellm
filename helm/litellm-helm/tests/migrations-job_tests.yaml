@@ -112,6 +112,24 @@ tests:
             name: CUSTOM_VAR
             value: "custom_value"
 
+  - it: should override a user-supplied DISABLE_SCHEMA_UPDATE so the Job always migrates
+    template: migrations-job.yaml
+    set:
+      envVars:
+        DISABLE_SCHEMA_UPDATE: "true"
+      migrationJob:
+        enabled: true
+    asserts:
+      # The Job is what owns the schema, so it renders its own
+      # DISABLE_SCHEMA_UPDATE=false after envVars and extraEnvVars. Kubernetes
+      # takes the last value for a duplicated name, so the user's "true" cannot
+      # leave the schema unmigrated. Skipping migrations is migrationJob.enabled.
+      - equal:
+          path: spec.template.spec.containers[0].env[-1]
+          value:
+            name: DISABLE_SCHEMA_UPDATE
+            value: "false"
+
   - it: should not include DATABASE_URL when deployStandalone is false
     template: migrations-job.yaml
     set:
