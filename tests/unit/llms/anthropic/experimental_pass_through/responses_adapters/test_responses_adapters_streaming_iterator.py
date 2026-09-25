@@ -4,18 +4,25 @@ Tests for AnthropicResponsesStreamWrapper
 """
 
 import asyncio
+import json
 import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
+import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
 )
+from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 
 
 def _process_all(events: list) -> list:
@@ -132,6 +139,7 @@ class TestReasoningItemWithoutSummaryText:
             {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
             {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hello"},
             {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+            {"type": "response.completed"},
         ]
 
     def test_reasoning_without_summary_emits_no_thinking_block(self):
@@ -144,6 +152,8 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_start", 0),
             ("content_block_delta", 0),
             ("content_block_stop", 0),
+            ("message_delta", None),
+            ("message_stop", None),
         ]
         assert chunks[1]["content_block"] == {"type": "text", "text": ""}
 
@@ -166,6 +176,8 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_start", 1),
             ("content_block_delta", 1),
             ("content_block_stop", 1),
+            ("message_delta", None),
+            ("message_stop", None),
         ]
         assert chunks[1]["content_block"] == {"type": "thinking", "thinking": "", "signature": ""}
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
@@ -215,6 +227,8 @@ class TestEncryptedReasoningIsStreamedForReplay:
             ("content_block_start", 1),
             ("content_block_delta", 1),
             ("content_block_stop", 1),
+            ("message_delta", None),
+            ("message_stop", None),
         ]
         assert chunks[1]["content_block"] == {
             "type": "redacted_thinking",
@@ -234,9 +248,7 @@ class TestEncryptedReasoningIsStreamedForReplay:
         ]
         chunks = _process_all(events)
 
-        thinking = "".join(
-            c["delta"]["thinking"] for c in chunks if c.get("delta", {}).get("type") == "thinking_delta"
-        )
+        thinking = "".join(c["delta"]["thinking"] for c in chunks if c.get("delta", {}).get("type") == "thinking_delta")
         assert thinking == "First.\n\nSecond."
         assert [c["type"] for c in chunks].count("content_block_start") == 1
 
@@ -283,6 +295,7 @@ class TestToolUseBlockClosedExactlyOnce:
                 "type": "response.output_item.done",
                 "item": {"type": "message", "id": "chatcmpl-123", "status": "completed"},
             },
+            {"type": "response.completed"},
         ]
 
     def test_one_content_block_stop_per_content_block_start(self):
@@ -302,6 +315,8 @@ class TestToolUseBlockClosedExactlyOnce:
             ("content_block_delta", 0),
             ("content_block_delta", 0),
             ("content_block_stop", 0),
+            ("message_delta", None),
+            ("message_stop", None),
         ]
         assert chunks[1]["content_block"] == {
             "type": "tool_use",
@@ -452,3 +467,158 @@ class TestRefusalStreamEvents:
         message_delta = next(c for c in chunks if c["type"] == "message_delta")
         assert message_delta["delta"]["stop_reason"] == "max_tokens"
         assert "stop_details" not in message_delta["delta"]
+
+
+def _collect(stream) -> list:
+    async def _run() -> list:
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=stream, model="m")
+        return [chunk async for chunk in wrapper]
+
+    return asyncio.run(_run())
+
+
+class TestUpstreamFailureEndsStreamWithErrorEvent:
+    """A provider failure must reach the Anthropic client as an ``error`` event that
+    ends the stream, never as a fabricated ``end_turn`` or a silent close."""
+
+    def test_response_failed_event_emits_error_event_and_stops_pulling_upstream(self):
+        failed = SimpleNamespace(
+            status="failed",
+            output=[],
+            usage=None,
+            error={"code": "rate_limit_exceeded", "message": "Rate limit reached for gpt-5.5, try again in 20s."},
+        )
+
+        async def _gen():
+            yield {"type": "response.created"}
+            yield {"type": "response.failed", "response": failed}
+            raise AssertionError("upstream was pulled again after the failure")
+
+        async def _run() -> list:
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="m")
+            return [frame async for frame in wrapper.async_anthropic_sse_wrapper()]
+
+        frames = asyncio.run(_run())
+        assert [frame.split(b"\n", 1)[0] for frame in frames] == [b"event: message_start", b"event: error"]
+        error_payload = json.loads(frames[1].split(b"data: ", 1)[1])
+        assert error_payload["type"] == "error"
+        assert error_payload["error"] == {
+            "type": "rate_limit_error",
+            "message": "Rate limit reached for gpt-5.5, try again in 20s.",
+        }
+
+    def test_raised_mid_stream_fallback_error_is_unwrapped_to_the_provider_failure(self):
+        rate_limit = litellm.RateLimitError(message="You have no credits remaining.", llm_provider="openai", model="m")
+        wrapped = MidStreamFallbackError(
+            message=str(rate_limit),
+            model="m",
+            llm_provider="openai",
+            original_exception=rate_limit,
+            is_pre_first_chunk=True,
+        )
+
+        async def _gen():
+            yield {"type": "response.created"}
+            raise wrapped
+
+        chunks = _collect(_gen())
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
+        assert chunks[1]["error"] == {"type": "rate_limit_error", "message": rate_limit.message}
+
+    def test_sync_upstream_transport_error_after_content_becomes_api_error_event(self):
+        def _events():
+            yield {"type": "response.created"}
+            yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+            yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+            raise ConnectionResetError("Response payload is not completed")
+
+        chunks = _collect(_events())
+        assert [chunk["type"] for chunk in chunks] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "error",
+        ]
+        assert chunks[-1]["error"] == {"type": "api_error", "message": "Response payload is not completed"}
+
+    def test_error_event_message_is_redacted_before_it_reaches_the_client(self):
+        async def _gen():
+            yield {"type": "response.created"}
+            raise RuntimeError("upstream failed with key sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ")
+
+        chunks = _collect(_gen())
+        assert chunks[-1]["type"] == "error"
+        assert "sk-proj-" not in chunks[-1]["error"]["message"]
+        assert chunks[-1]["error"]["message"].startswith("upstream failed with key")
+
+    @pytest.mark.parametrize(
+        ("raised", "expected_error"),
+        [
+            (
+                MidStreamFallbackError(message="boom", model="m", llm_provider="openai"),
+                {"type": "api_error", "message": "litellm.MidStreamFallbackError: boom"},
+            ),
+            (
+                type("StringStatusError", (Exception,), {"status_code": "429"})("throttled"),
+                {"type": "rate_limit_error", "message": "throttled"},
+            ),
+            (
+                type("NonErrorStatusError", (Exception,), {"status_code": 200})("odd status"),
+                {"type": "api_error", "message": "odd status"},
+            ),
+        ],
+        ids=["mid-stream-fallback-without-original", "digit-string-status", "status-outside-4xx-5xx"],
+    )
+    def test_raised_failure_status_is_normalized_into_the_error_type(self, raised, expected_error):
+        async def _gen():
+            yield {"type": "response.created"}
+            raise raised
+
+        chunks = _collect(_gen())
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
+        assert chunks[1]["error"] == expected_error
+
+    def test_pydantic_response_failed_event_is_mapped_like_a_dict_event(self):
+        failed = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            error={"code": "server_error", "message": "The server had an error while processing your request."},
+            status="failed",
+            output=[],
+            model="m",
+            object="response",
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        )
+
+        async def _gen():
+            yield {"type": "response.created"}
+            yield ResponseFailedEvent(type="response.failed", response=failed)
+
+        chunks = _collect(_gen())
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
+        assert chunks[1]["error"] == {
+            "type": "api_error",
+            "message": "The server had an error while processing your request.",
+        }
+
+    def test_upstream_ending_without_a_terminal_event_is_an_error_not_a_silent_close(self):
+        async def _gen():
+            yield {"type": "response.created"}
+            yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+            yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+
+        chunks = _collect(_gen())
+        assert [chunk["type"] for chunk in chunks] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "error",
+        ]
+        assert chunks[-1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
+
+    def test_sync_upstream_ending_before_any_event_is_an_error_not_a_silent_close(self):
+        chunks = _collect(iter(()))
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
+        assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
