@@ -10405,14 +10405,20 @@
               "title": "Timeout"
             },
             "unreachable_fallback": {
-              "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
-              "enum": [
-                "fail_closed",
-                "fail_open"
+              "anyOf": [
+                {
+                  "enum": [
+                    "fail_closed",
+                    "fail_open"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Unreachable Fallback",
-              "type": "string"
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error. 'fail_open' logs a critical error and allows the request to proceed. Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed.",
+              "title": "Unreachable Fallback"
             },
             "violation_message_template": {
               "anyOf": [
@@ -13261,14 +13267,20 @@
               "title": "Tracker Api Key"
             },
             "unreachable_fallback": {
-              "default": "fail_closed",
-              "description": "Behavior when the headroom compression service is unreachable or errors. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and forwards the request uncompressed instead of blocking it.",
-              "enum": [
-                "fail_closed",
-                "fail_open"
+              "anyOf": [
+                {
+                  "enum": [
+                    "fail_closed",
+                    "fail_open"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Unreachable Fallback",
-              "type": "string"
+              "description": "Behavior when the guardrail endpoint is unreachable. 'fail_closed' blocks, 'fail_open' allows and logs. Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed.",
+              "title": "Unreachable Fallback"
             },
             "use_v2": {
               "anyOf": [

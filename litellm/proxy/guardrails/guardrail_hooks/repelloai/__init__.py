@@ -30,7 +30,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
         asset_id=litellm_params.asset_id,
-        unreachable_fallback=litellm_params.unreachable_fallback,
+        unreachable_fallback=litellm_params.unreachable_fallback or "fail_closed",
         event_hook=_event_hook_from_mode(litellm_params.mode),
         default_on=litellm_params.default_on or False,
     )

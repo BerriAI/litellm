@@ -210,6 +210,14 @@ const TEAM_COLORS: Record<string, string> = {
   Finance: "bg-success/15 text-success",
 };
 
+const FAIL_OPEN_BY_DEFAULT_GUARDRAILS: ReadonlySet<string> = new Set(["agent_365", "typesafe"]);
+
+function defaultUnreachableFallback(guardrailType: string | undefined): "fail_open" | "fail_closed" {
+  return guardrailType !== undefined && FAIL_OPEN_BY_DEFAULT_GUARDRAILS.has(guardrailType)
+    ? "fail_open"
+    : "fail_closed";
+}
+
 function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   const lines: string[] = [
     "litellm_settings:",
@@ -220,7 +228,7 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
     `        mode: ${g.mode ?? "pre_call"}  # or post_call, during_call`,
     `        api_base: ${g.endpoint || "https://your-guardrail-api.com"}`,
     "        api_key: os.environ/YOUR_GUARDRAIL_API_KEY  # optional",
-    `        unreachable_fallback: ${g.unreachable_fallback ?? "fail_closed"}  # default: fail_closed. Set to fail_open to proceed if the guardrail endpoint is unreachable.`,
+    `        unreachable_fallback: ${g.unreachable_fallback ?? defaultUnreachableFallback(g.guardrailType)}  # fail_closed blocks, fail_open proceeds when the guardrail endpoint is unreachable. Shown value is this guardrail's default.`,
     `        forward_api_key: ${g.forwardKey}`,
   ];
   if (g.model && g.model !== "—") {

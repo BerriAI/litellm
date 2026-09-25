@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
@@ -22,12 +22,14 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -79,6 +81,10 @@ def _parse_aadsts_codes(raw: object) -> tuple[int, ...]:
         return _AADSTS_CODES_ADAPTER.validate_python(raw)
     except ValidationError:
         return ()
+
+
+def registered_prometheus_logger() -> PrometheusLogger | None:
+    return next((cb for cb in litellm.callbacks if isinstance(cb, PrometheusLogger)), None)
 
 
 def entra_assertion(value: object) -> str | None:
@@ -157,8 +163,9 @@ class Agent365Guardrail(CustomGuardrail):
         resource_app_id: str = AGENT_365_PROD_RESOURCE_APP_ID,
         agent_id: str | None = None,
         request_timeout: float = 10.0,
-        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_open",
         async_handler: AsyncHTTPHandler | None = None,
+        prometheus_logger_lookup: Callable[[], PrometheusLogger | None] = registered_prometheus_logger,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail (event_hook, default_on)
     ) -> None:
         super().__init__(
@@ -176,11 +183,12 @@ class Agent365Guardrail(CustomGuardrail):
         self.agent_id = agent_id
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
-            "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+            "fail_closed" if unreachable_fallback == "fail_closed" else "fail_open"
         )
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
+        self._prometheus_logger_lookup = prometheus_logger_lookup
         self._obo_token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()  # mutable-ok: lock-guarded LRU
         self._obo_cache_lock = threading.Lock()
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
@@ -575,12 +583,13 @@ class Agent365Guardrail(CustomGuardrail):
         latency_ms: float | None = None,
     ) -> dict:  # mutable-ok: returns the request data dict per hook contract
         if self.unreachable_fallback == "fail_open":
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.error(
                 "Agent 365 guardrail (%s): %s; unreachable_fallback='fail_open', allowing tool call '%s' unscanned",
                 self.guardrail_name,
                 reason,
                 tool_name,
             )
+            self._count_fail_open()
             self._record_verdict(
                 data=data,
                 verdict="Unscanned",
@@ -607,6 +616,13 @@ class Agent365Guardrail(CustomGuardrail):
             "tool": tool_name,
         }
         raise HTTPException(status_code=503, detail=unavailable_detail)
+
+    def _count_fail_open(self) -> None:
+        prometheus: Final = self._prometheus_logger_lookup()
+        if prometheus is not None:
+            prometheus.record_guardrail_fail_open(
+                guardrail_name=self.guardrail_name or type(self).__name__, hook_type="pre_call"
+            )
 
     def _record_verdict(
         self,

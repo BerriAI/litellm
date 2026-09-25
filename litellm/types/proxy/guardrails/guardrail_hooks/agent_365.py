@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import Field
 
@@ -58,6 +58,16 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
         description=(
             "Agent identity reported to Agent 365 with every tool evaluation. "
             "When unset, the caller's key alias is used."
+        ),
+    )
+
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_open",
+        description=(
+            "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, or skips the evaluation. "
+            "'fail_open' (default) allows the tool call and records it as Unscanned in the logs, OpenTelemetry "
+            "and the litellm_guardrail_errors_total Prometheus counter. 'fail_closed' blocks it with HTTP 503. "
+            "Blocks, 4xx rejections, throttling and Entra token failures always block."
         ),
     )
 

@@ -1055,12 +1055,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description="Additional provider-specific parameters for generic guardrail APIs",
     )
 
-    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
-        default="fail_closed",
+    unreachable_fallback: Literal["fail_closed", "fail_open"] | None = Field(
+        default=None,
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "'fail_closed' raises an error. 'fail_open' logs a critical error and allows the request to proceed. "
+            "Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed."
         ),
     )
 
@@ -1203,6 +1204,13 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+    )
+    unreachable_fallback: Literal["fail_closed", "fail_open"] | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # mixins pin a default; unset defers to the guardrail's own
+        default=None,
+        description=(
+            "Behavior when the guardrail endpoint is unreachable. 'fail_closed' blocks, 'fail_open' allows and logs. "
+            "Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed."
+        ),
     )
 
     @field_validator("timeout", mode="before", check_fields=False)

@@ -554,3 +554,24 @@ class TestPrometheusGuardrailMetrics:
         mock_latency_metric.labels.assert_called_once()
         call_kwargs = mock_latency_metric.labels.call_args[1]
         assert call_kwargs["guardrail_name"] == guardrail_name
+
+    def test_record_guardrail_fail_open_increments_errors_total(self):
+        prometheus_logger = PrometheusLogger()
+
+        prometheus_logger.record_guardrail_fail_open(guardrail_name="a365", hook_type="pre_call")
+        prometheus_logger.record_guardrail_fail_open(guardrail_name="a365", hook_type="pre_call")
+
+        assert (
+            REGISTRY.get_sample_value(
+                "litellm_guardrail_errors_total",
+                {"guardrail_name": "a365", "error_type": "fail_open", "hook_type": "pre_call"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                "litellm_guardrail_requests_total",
+                {"guardrail_name": "a365", "status": "success", "hook_type": "pre_call"},
+            )
+            is None
+        )
