@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { Policy } from "@/components/policies/types";
 
 import { getPolicyTableColumns, PolicyRow } from "./PolicyTableColumns";
@@ -35,7 +34,12 @@ interface PolicyTableProps {
   isAdmin?: boolean;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "policy_name", desc: false }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["policy_name", "created_at"],
+  defaultSort: { id: "policy_name", desc: false },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 function EmptyState() {
   return (
@@ -59,7 +63,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   onViewClick,
   isAdmin = false,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
 
@@ -72,11 +76,13 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     <DataTable
       data={rows}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(row) => `${row.primaryPolicy.definition_location ?? "db"}:${row.policy_name}`}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading policies…"
       noDataMessage={<EmptyState />}
