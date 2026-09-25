@@ -39467,13 +39467,13 @@ export interface components {
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
              * Cache Aware Routing
-             * @description Compare observed prompt-cache costs after classification. On supported native Anthropic proxy requests, an already warm model in the same or a higher tier may replace the classified model when its estimated input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing.
+             * @description Opt in to comparing prompt-cache costs after classification. On supported native Anthropic proxy requests, an already warm model in the same or a higher tier may replace the classified model when its estimated input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing.
              * @default false
              */
             cache_aware_routing: boolean;
             /**
              * Cache Aware Routing Output Tokens
-             * @description Expected output tokens used in cache-aware cost comparisons; capped by the requested output limit.
+             * @description Expected output tokens used in cache-aware cost comparisons; capped by each model's effective output limit.
              * @default 1024
              */
             cache_aware_routing_output_tokens: number;

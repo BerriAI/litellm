@@ -4442,6 +4442,7 @@ class ComplexityRouter(CustomLogger):
         choice: Final = await choose_cached_model(
             router=self.litellm_router_instance,
             config=self.config,
+            params_for_model=self._litellm_params_for_model,
             response=response,
             request_kwargs=request_kwargs,
             messages=messages,

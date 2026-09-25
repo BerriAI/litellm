@@ -1425,7 +1425,7 @@ class ComplexityRouterConfig(BaseModel):
     cache_aware_routing: bool = Field(
         default=False,
         description=(
-            "Compare observed prompt-cache costs after classification. On supported native Anthropic proxy requests, "
+            "Opt in to comparing prompt-cache costs after classification. On supported native Anthropic proxy requests, "
             "an already warm model in the same or a higher tier may replace the classified model when its estimated "
             "input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing."
         ),
@@ -1433,7 +1433,7 @@ class ComplexityRouterConfig(BaseModel):
     cache_aware_routing_output_tokens: int = Field(
         default=1024,
         ge=0,
-        description="Expected output tokens used in cache-aware cost comparisons; capped by the requested output limit.",
+        description="Expected output tokens used in cache-aware cost comparisons; capped by each model's effective output limit.",
     )
     cache_aware_routing_timeout_ms: int = Field(
         default=2000,
