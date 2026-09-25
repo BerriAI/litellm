@@ -45,6 +45,7 @@ import hashlib
 import os
 import re
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
@@ -56,6 +57,7 @@ from types import MappingProxyType
 from typing import Final, Literal, assert_never
 from urllib.parse import parse_qsl, urlsplit
 
+from botocore.eventstream import EventStreamBuffer
 from e2e_http import (
     NetworkError,
     StreamChunk,
@@ -96,16 +98,18 @@ from fixture_mode import (
 )
 from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
 from provider_cache import (
+    JSON_VALUE,
     SIGNATURE_HEADERS,
     CacheEdge,
     MountPolicy,
     RequestSigner,
+    invoke_chunk_value,
     is_bedrock,
     scoped_edge_base,
     split_test_segment,
 )
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 BEDROCK_REGIONS: Final[tuple[str, ...]] = ("us-east-1",)
 
@@ -539,12 +543,24 @@ class ReplayEdge:
 
 @dataclass(frozen=True, slots=True)
 class StreamCut:
-    """Where a live edge hangs up on a streamed upstream body: after ``after_chunks`` whole
-    transfer chunks, and with ``mid_chunk`` set, part way through a line of the next one, so
-    the client is left inside an SSE frame the way a dropped transport leaves it."""
+    """Where a live edge hangs up on a streamed upstream body: before its first byte, or with
+    ``after_content`` set, right after the first transfer chunk carrying assistant output (a
+    ``content_block_delta``). That frame is what commits the proxy's mid-stream fallback
+    wrapper to the client: it holds the lifecycle frames before it back and drops them when
+    the transport fails first, so a cut after a fixed number of chunks landed on either side
+    of that commit depending on how the provider batched its frames. With ``mid_chunk`` set
+    the hang-up comes part way through a line of the chunk after that one, so the client is
+    left inside an SSE frame the way a dropped transport leaves it.
 
-    after_chunks: int
+    Whatever was relayed sits on the wire for ``_CUT_SETTLE_SECONDS`` before the hang-up, so
+    the client has read it by then instead of receiving the data and the close in one burst,
+    where its reader can surface the close before what it buffered."""
+
+    after_content: bool
     mid_chunk: bool = False
+
+
+_CUT_SETTLE_SECONDS: Final = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -801,16 +817,62 @@ def _torn_prefix(data: bytes) -> bytes:
     return data[: len(data) // 2].rstrip(b"\r\n") or data[:1]
 
 
-def _cut_steps(steps: Generator[StreamStep, None, None], cut: StreamCut) -> Generator[StreamStep, None, None]:
+def _is_content_delta(value: JsonValue | None) -> bool:
+    return isinstance(value, dict) and value.get("type") == "content_block_delta"
+
+
+def _anthropic_chunk_carries_content(data: bytes) -> bool:
+    return any(line == b"event: content_block_delta" for line in data.splitlines())
+
+
+def _invoke_frame_carries_content(payload: bytes) -> bool:
+    try:
+        return _is_content_delta(invoke_chunk_value(JSON_VALUE.validate_json(payload)))
+    except ValidationError:
+        return False
+
+
+def _bedrock_content_detector() -> Callable[[bytes], bool]:
+    """Bedrock's invoke stream wraps each Anthropic event in an eventstream frame that a
+    transfer chunk can split, so the frames are reassembled across chunks before being read."""
+    frames: Final = EventStreamBuffer()
+
+    def carries_content(data: bytes) -> bool:
+        frames.add_data(data)
+        return any(_invoke_frame_carries_content(frame.payload) for frame in frames)
+
+    return carries_content
+
+
+def _content_detector(mount: str) -> Callable[[bytes], bool]:
+    return _bedrock_content_detector() if is_bedrock(mount) else _anthropic_chunk_carries_content
+
+
+def _cut_steps(
+    steps: Generator[StreamStep, None, None], cut: StreamCut, carries_content: Callable[[bytes], bool]
+) -> Generator[StreamStep, None, None]:
     with closing(steps) as source:
-        for relayed, step in enumerate(source):
-            if isinstance(step, StreamTruncation) or relayed < cut.after_chunks:
+        if cut.after_content:
+            for step in source:
                 yield step
-                continue
-            if cut.mid_chunk:
-                yield StreamChunk(data=_torn_prefix(step.data))
-            yield StreamTruncation(reason=f"edge cut the upstream stream: {cut!r}")
-            return
+                if isinstance(step, StreamTruncation):
+                    return
+                if carries_content(step.data):
+                    break
+            else:
+                return
+        if cut.mid_chunk:
+            match next(source, None):
+                case StreamChunk(data=data):
+                    yield StreamChunk(data=_torn_prefix(data))
+                case StreamTruncation() as truncation:
+                    yield truncation
+                    return
+                case None:
+                    return
+        if cut.after_content or cut.mid_chunk:
+            time.sleep(_CUT_SETTLE_SECONDS)
+        yield StreamTruncation(reason=f"edge cut the upstream stream: {cut!r}")
 
 
 def _handle_live(
@@ -834,7 +896,7 @@ def _handle_live(
         case NetworkError(message=message):
             return _recorded_outcome(_network_error_response(message))
         case StreamHead() if cut is not None:
-            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), _cut_steps(head.steps, cut))
+            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), _cut_steps(head.steps, cut, _content_detector(mount)))
         case StreamHead() if _is_streamed(head.headers):
             return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
         case StreamHead():
@@ -908,7 +970,7 @@ def handle_edge_request(
         case LiveEdge(observe_request=observe_request, sign=sign, cut=cut):
             return _handle_live(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                observe_request=observe_request, sign=sign, cut=cut,
+                mount=mount, observe_request=observe_request, sign=sign, cut=cut,
             )
         case RecordEdge():
             return _handle_record(

@@ -403,9 +403,9 @@ BEDROCK_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_EDGE_REGION: Final = "us-east-1"
 _STREAM_FAILURE_PROMPT: Final = "Count from 1 to 100, one number per line."
 _FRAME_PAYLOAD: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-_AT_FRAME_BOUNDARY: Final = StreamCut(after_chunks=2)
-_MID_FRAME: Final = StreamCut(after_chunks=2, mid_chunk=True)
-_BEFORE_FIRST_BYTE: Final = StreamCut(after_chunks=0)
+_AT_FRAME_BOUNDARY: Final = StreamCut(after_content=True)
+_MID_FRAME: Final = StreamCut(after_content=True, mid_chunk=True)
+_BEFORE_FIRST_BYTE: Final = StreamCut(after_content=False)
 
 type _CutRegistration = Callable[[ProxyClient, ResourceManager, StreamCut], tuple[str, str]]
 
