@@ -8,7 +8,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -4525,7 +4525,7 @@ def _make_native_responses_iterator(*, sse_payloads: tuple[dict[str, str], ...],
 _RESPONSES_LIFECYCLE_PAYLOADS: Final = ({"type": "response.created"}, {"type": "response.in_progress"})
 
 
-async def _events_until_error(stream) -> AsyncIterator[object]:
+async def _events_until_error(stream: AsyncIterable[object]) -> AsyncIterator[object]:
     try:
         async for chunk in stream:
             yield chunk
@@ -4684,7 +4684,7 @@ async def test_aresponses_streaming_iterator_commits_held_lifecycle_events_at_th
     ],
 )
 def test_responses_stream_holds_event_holds_only_pre_output_lifecycle_events_under_the_cap(
-    event_type, held_event_count, expected
+    event_type: str, held_event_count: int, expected: bool
 ):
     assert _responses_stream_holds_event(MagicMock(type=event_type), held_event_count) is expected
 
