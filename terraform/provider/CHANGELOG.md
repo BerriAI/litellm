@@ -60,6 +60,7 @@ longer signal it.
 - **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
 - **key**: A config-supplied `key` value (write-only) is now forwarded to `/key/generate`; previously it was silently dropped and the proxy generated a random key instead
 - **security**: The `litellm_key` data source and `litellm_key_block` resource normalize raw `sk-` keys to their SHA-256 token hash before building request URLs and resource IDs, so plaintext keys no longer land in reverse-proxy access logs, Terraform plan output, or state IDs
+- **unified_access_group**: create now accepts any 2xx response instead of requiring exactly HTTP 200; `POST /v1/unified_access_group` legitimately returns 201, so creation previously succeeded on the proxy but failed in the provider, leaving the group out of state and forcing a `terraform import` to recover on the next apply's 409. Same fix and shape as the one already applied to `mcp_server`/`model`/`key`/`organization_member`; `handleResponse` (shared by several other resources) was the one status-check helper that fix didn't reach. The legacy `litellm_access_group` resource calls the unrelated `/access_group/new` endpoint, which already returns 200, so it was never affected
 
 ### Changed
 

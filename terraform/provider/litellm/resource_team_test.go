@@ -434,3 +434,41 @@ func TestTeamLimitTypesSentOnCreateOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleResponseAcceptsFullSuccessRange(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+	}{
+		{name: "200 OK", statusCode: http.StatusOK, wantErr: false},
+		{name: "201 Created", statusCode: http.StatusCreated, wantErr: false},
+		{name: "202 Accepted", statusCode: http.StatusAccepted, wantErr: false},
+		{name: "204 No Content", statusCode: http.StatusNoContent, wantErr: false},
+		{name: "400 Bad Request", statusCode: http.StatusBadRequest, wantErr: true},
+		{name: "404 Not Found", statusCode: http.StatusNotFound, wantErr: true},
+		{name: "409 Conflict", statusCode: http.StatusConflict, wantErr: true},
+		{name: "500 Internal Server Error", statusCode: http.StatusInternalServerError, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			rec.WriteHeader(tt.statusCode)
+			rec.WriteString(`{"access_group_id":"ag-1","access_group_name":"uag-baseline"}`)
+			resp := rec.Result()
+
+			err := handleResponse(resp, "creating unified access group")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("handleResponse returned no error for status %d", tt.statusCode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("handleResponse returned unexpected error for status %d: %v", tt.statusCode, err)
+			}
+		})
+	}
+}

@@ -466,7 +466,7 @@ func toStringSlice(v interface{}) []string {
 }
 
 func handleResponse(resp *http.Response, action string) error {
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("error %s: %s - %s", action, resp.Status, string(body))
 	}
