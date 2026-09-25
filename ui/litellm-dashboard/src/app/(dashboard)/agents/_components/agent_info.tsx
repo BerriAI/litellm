@@ -78,21 +78,6 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
   </>
 );
 
-const AgentBudgetDetails = ({ agent }: { agent: Agent }) => (
-  <>
-    <DetailItem label="Agent Budget">
-      {agent.litellm_budget_table?.max_budget != null
-        ? `$${agent.spend ?? 0} / $${agent.litellm_budget_table.max_budget}`
-        : "No aggregate limit"}
-    </DetailItem>
-    <DetailItem label="Budget Reset">
-      {agent.litellm_budget_table?.budget_reset_at
-        ? new Date(agent.litellm_budget_table.budget_reset_at).toLocaleString()
-        : "No scheduled reset"}
-    </DetailItem>
-  </>
-);
-
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
@@ -364,7 +349,6 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
             <DetailList>
               <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
               <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
-              <AgentBudgetDetails agent={agent} />
               <DetailItem label="Display Name">{agent.agent_card_params?.name || "-"}</DetailItem>
               <DetailItem label="Description">{agent.agent_card_params?.description || "-"}</DetailItem>
               <DetailItem label="URL">{agent.agent_card_params?.url || "-"}</DetailItem>
