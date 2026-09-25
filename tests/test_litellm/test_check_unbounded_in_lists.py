@@ -78,6 +78,13 @@ class TestPrismaFilters:
         assert _kinds(tmp_path, 'from x import STATES\nwhere = {"s": {"in": list(STATES)}}\n') == ("prisma",)
         assert _kinds(tmp_path, 'terminal = ("done", "failed")\nwhere = {"s": {"in": terminal}}\n') == ()
 
+    def test_a_constant_spread_into_a_display_is_still_a_constant(self, tmp_path):
+        base = 'BASE: Final = ("a", "b")\n'
+        assert _kinds(tmp_path, base + 'MORE: Final = (*BASE, "c")\nwhere = {"s": {"not_in": list(MORE)}}\n') == ()
+        assert _kinds(tmp_path, base + 'where = {"s": {"in": [*BASE, "c"]}}\n') == ()
+        assert _kinds(tmp_path, base + 'where = {"s": {"in": [*BASE, *extra]}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'MORE: Final = (*load(), "c")\nwhere = {"s": {"in": MORE}}\n') == ("prisma",)
+
     def test_a_module_value_that_could_grow_is_not_a_constant(self, tmp_path):
         assert _kinds(tmp_path, 'IDS = ["a"]\nIDS.append(late)\nwhere = {"x": {"in": IDS}}\n') == ("prisma",)
         assert _kinds(tmp_path, 'IDS = sorted(("a", "b"))\nwhere = {"x": {"in": IDS}}\n') == ("prisma",)
@@ -112,6 +119,15 @@ class TestPrismaFilters:
     def test_the_message_names_the_value(self, tmp_path):
         (finding,) = _check(tmp_path, 'where = {"user_id": {"in": list(user_ids)}}\n')
         assert "list(user_ids)" in finding.message
+
+    def test_an_in_list_is_pointed_at_the_chunking_helper(self, tmp_path):
+        (finding,) = _check(tmp_path, 'where = {"user_id": {"in": user_ids}}\n')
+        assert "litellm.repositories.bounded_in" in finding.message
+
+    def test_a_not_in_list_is_pointed_at_an_array_parameter_since_it_cannot_be_chunked(self, tmp_path):
+        (finding,) = _check(tmp_path, 'where = {"user_id": {"not_in": user_ids}}\n')
+        assert "<> ALL($1::text[])" in finding.message
+        assert "bounded_in" not in finding.message
 
 
 class TestRawSql:
@@ -201,13 +217,16 @@ class TestMarkers:
 
 
 class TestDriver:
-    def test_findings_do_not_fail_the_run(self, tmp_path, capsys):
-        target = tmp_path / "module.py"
-        target.write_text('where = {"user_id": {"in": user_ids}}\n', encoding="utf-8")
-        assert checker.main([str(target)]) == 0
-        out = capsys.readouterr().out
-        assert f"{target}:1: prisma" in out
-        assert "1 unbounded IN list(s)" in out
+    def test_the_chunking_helper_is_exempt(self):
+        helper = checker.REPO_ROOT / "litellm" / "repositories" / "bounded_in.py"
+        assert "prisma" in tuple(finding.kind for finding in checker.check_file(helper))
+        assert checker.scan(checker.collect_paths([str(helper)])) == ()
+
+    def test_a_copy_of_the_helper_elsewhere_is_not_exempt(self, tmp_path):
+        helper = checker.REPO_ROOT / "litellm" / "repositories" / "bounded_in.py"
+        copy = tmp_path / "bounded_in.py"
+        copy.write_text(helper.read_text(encoding="utf-8"), encoding="utf-8")
+        assert "prisma" in tuple(finding.kind for finding in checker.scan([copy]))
 
     def test_a_syntax_error_is_reported_not_raised(self, tmp_path):
         assert _kinds(tmp_path, "def broken(:\n") == ("unreadable",)
@@ -219,3 +238,112 @@ class TestDriver:
         (nested / "b.txt").write_text('where = {"user_id": {"in": user_ids}}\n', encoding="utf-8")
         findings = checker.scan(checker.collect_paths([str(tmp_path / "pkg")]))
         assert tuple(finding.path.name for finding in findings) == ("a.py",)
+
+
+def _identities(tmp_path: Path, source: str) -> tuple:
+    return tuple(checker.identify(_check(tmp_path, source)))
+
+
+class TestIdentity:
+    def test_a_finding_is_keyed_by_scope_field_and_occurrence_not_line(self, tmp_path):
+        source = (
+            "class Repo:\n"
+            "    async def load(self):\n"
+            '        a = {"user_id": {"in": ids}}\n'
+            '        b = {"user_id": {"in": more}}\n'
+            '        return {"team_id": {"not_in": teams}}\n'
+        )
+        path = (tmp_path / "module.py").resolve().as_posix()
+        assert _identities(tmp_path, source) == (
+            f"{path} Repo.load prisma user_id.in 0",
+            f"{path} Repo.load prisma user_id.in 1",
+            f"{path} Repo.load prisma team_id.not_in 0",
+        )
+
+    def test_the_field_is_read_from_a_subscript_or_keyword_or_computed_key(self, tmp_path):
+        source = 'where["user_id"] = {"in": ids}\nwhere = Filter(team_id={"in": ids})\nwhere = {field: {"in": ids}}\n'
+        subjects = tuple(key.split(" ")[3] for key in _identities(tmp_path, source))
+        assert subjects == ("user_id.in", "team_id.in", "[field].in")
+
+    def test_raw_sql_is_keyed_by_the_column_before_in(self, tmp_path):
+        source = 'def q():\n    return f"WHERE \\"{column}\\" NOT IN ({placeholders})"\n'
+        path = (tmp_path / "module.py").resolve().as_posix()
+        assert _identities(tmp_path, source) == (f"{path} q raw-sql {{column}}.IN 0",)
+
+    def test_moving_code_down_the_file_keeps_the_key(self, tmp_path):
+        source = 'def f():\n    return {"user_id": {"in": ids}}\n'
+        shifted = "import os\n\n\ndef g():\n    return 1\n\n\n" + source
+        assert _identities(tmp_path, source) == _identities(tmp_path, shifted)
+
+
+class TestBaseline:
+    def _run(self, *args: str) -> int:
+        return checker.main(list(args))
+
+    def _write(self, tmp_path: Path, source: str) -> Path:
+        target = tmp_path / "pkg" / "module.py"
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(source, encoding="utf-8")
+        return target
+
+    def test_a_finding_missing_from_the_baseline_fails_the_run(self, tmp_path, capsys):
+        target = self._write(tmp_path, 'where = {"user_id": {"in": user_ids}}\n')
+        baseline = tmp_path / "baseline.txt"
+        assert self._run(str(target), "--baseline", str(baseline)) == 1
+        out = capsys.readouterr().out
+        assert f"{target}:1: prisma" in out
+        assert "1 new" in out
+
+    def test_a_baselined_finding_passes_even_after_the_code_moves(self, tmp_path, capsys):
+        target = self._write(tmp_path, 'def f():\n    return {"user_id": {"in": user_ids}}\n')
+        baseline = tmp_path / "baseline.txt"
+        assert self._run(str(target), "--baseline", str(baseline), "--update-baseline") == 0
+        target.write_text("import os\n\n\n" + target.read_text(encoding="utf-8"), encoding="utf-8")
+        assert self._run(str(target), "--baseline", str(baseline)) == 0
+        assert "1 baselined, 0 new, 0 stale" in capsys.readouterr().out
+
+    def test_a_new_finding_beside_a_baselined_one_fails(self, tmp_path, capsys):
+        target = self._write(tmp_path, 'def f():\n    return {"user_id": {"in": user_ids}}\n')
+        baseline = tmp_path / "baseline.txt"
+        assert self._run(str(target), "--baseline", str(baseline), "--update-baseline") == 0
+        target.write_text(
+            target.read_text(encoding="utf-8") + 'def g():\n    return {"user_id": {"in": user_ids}}\n',
+            encoding="utf-8",
+        )
+        assert self._run(str(target), "--baseline", str(baseline)) == 1
+        assert f"{target}:4: prisma" in capsys.readouterr().out
+
+    def test_a_fixed_finding_leaves_a_stale_entry_that_fails_the_run(self, tmp_path, capsys):
+        target = self._write(tmp_path, 'def f():\n    return {"user_id": {"in": user_ids}}\n')
+        baseline = tmp_path / "baseline.txt"
+        assert self._run(str(target), "--baseline", str(baseline), "--update-baseline") == 0
+        target.write_text('def f():\n    return {"user_id": {"in": [user_id]}}\n', encoding="utf-8")
+        assert self._run(str(target), "--baseline", str(baseline)) == 1
+        out = capsys.readouterr().out
+        assert "stale entry" in out
+        assert "f prisma user_id.in 0" in out
+
+    def test_update_baseline_drops_fixed_entries_and_keeps_unscanned_ones(self, tmp_path):
+        target = self._write(tmp_path, 'def f():\n    return {"user_id": {"in": user_ids}}\n')
+        baseline = tmp_path / "baseline.txt"
+        elsewhere = "litellm/elsewhere.py g prisma team_id.in 0"
+        fixed = f"{target.resolve().as_posix()} gone prisma team_id.in 0"
+        baseline.write_text(f"{elsewhere}\n{fixed}\n", encoding="utf-8")
+        assert self._run(str(target), "--baseline", str(baseline), "--update-baseline") == 0
+        assert checker.read_baseline(baseline) == frozenset(
+            {elsewhere, f"{target.resolve().as_posix()} f prisma user_id.in 0"}
+        )
+        assert self._run(str(target), "--baseline", str(baseline)) == 0
+
+    def test_entries_for_files_outside_the_scan_are_not_stale(self, tmp_path):
+        target = self._write(tmp_path, "x = 1\n")
+        baseline = tmp_path / "baseline.txt"
+        baseline.write_text("litellm/elsewhere.py g prisma team_id.in 0\n", encoding="utf-8")
+        assert self._run(str(target), "--baseline", str(baseline)) == 0
+
+    def test_an_entry_for_a_deleted_file_under_a_scanned_directory_is_stale(self, tmp_path):
+        self._write(tmp_path, "x = 1\n")
+        baseline = tmp_path / "baseline.txt"
+        gone = (tmp_path / "pkg" / "deleted.py").resolve().as_posix()
+        baseline.write_text(f"{gone} f prisma user_id.in 0\n", encoding="utf-8")
+        assert self._run(str(tmp_path / "pkg"), "--baseline", str(baseline)) == 1
