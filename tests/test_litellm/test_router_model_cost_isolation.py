@@ -384,6 +384,75 @@ async def test_discovery_preserves_input_overrides_and_survives_outages(monkeypa
     _invalidate_model_cost_lowercase_map()
 
 
+async def test_discovery_skips_deployments_whose_limits_are_already_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression for #42657: token-limit discovery must not send GET /v1/models
+    # to a deployment that already declares both max_input_tokens and
+    # max_output_tokens. On scale-to-zero backends every such call cold-starts a
+    # worker and bills real money to confirm values the operator already set.
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]})
+
+    router: Final = Router(model_list=[
+        {
+            "model_name": "fully-configured",
+            "litellm_params": {
+                "model": "hosted_vllm/local-model",
+                "api_base": "https://configured.test/v1",
+                "api_key": "local-key",
+            },
+            "model_info": {
+                "id": "fully-configured",
+                "max_input_tokens": 2048,
+                "max_output_tokens": 1024,
+            },
+        },
+        {
+            "model_name": "needs-discovery",
+            "litellm_params": {
+                "model": "hosted_vllm/local-model",
+                "api_base": "https://discover.test/v1",
+                "api_key": "local-key",
+            },
+            "model_info": {"id": "needs-discovery"},
+        },
+    ])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    responder: Final = Mock(side_effect=respond)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+
+        # Only the unconfigured deployment triggers a discovery request; the
+        # fully-configured one is skipped entirely.
+        discovery_hosts = {call.args[0].url.host for call in responder.call_args_list}
+        assert discovery_hosts == {"discover.test"}
+        assert responder.call_count == 1
+
+        # The configured deployment keeps its explicit limits; the discovered one
+        # picks up the upstream card.
+        assert router.get_configured_token_limits("fully-configured") == (2048, 1024)
+        assert router.get_configured_token_limits("needs-discovery") == (4096, 4096)
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_deployment_token_limits_configured_predicate() -> None:
+    # Direct coverage for the guard predicate #42657 adds: discovery is skipped
+    # only when BOTH per-request limits are explicitly set, so a partially
+    # configured deployment still discovers the missing one.
+    assert Router._deployment_token_limits_configured(
+        {"max_input_tokens": 2048, "max_output_tokens": 1024}
+    )
+    assert not Router._deployment_token_limits_configured({"max_input_tokens": 2048})
+    assert not Router._deployment_token_limits_configured({"max_output_tokens": 1024})
+    assert not Router._deployment_token_limits_configured({})
+    assert not Router._deployment_token_limits_configured(None)
+
+
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     """
     When deployment A has input_cost_per_token=0 and deployment B has no
