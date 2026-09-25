@@ -266,6 +266,27 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
 
 
+@pytest.mark.parametrize("empty_content", [None, []])
+def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_content(empty_content):
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": empty_content},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-opus-5",
+        llm_provider="vertex_ai",
+    )
+
+    assert len(result) == 3
+    assert result[-1]["role"] == "user"
+    assert isinstance(result[-1]["content"], list)
+    assert result[-1]["content"][0]["type"] == "text"
+    assert result[-1]["content"][0]["text"]
+
+
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 
