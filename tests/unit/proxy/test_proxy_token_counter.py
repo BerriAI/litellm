@@ -65,7 +65,7 @@ async def test_vLLM_token_counting():
 
     print("response: ", response)
 
-    assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the default tokenizer
+    assert response.tokenizer_type == "openai_tokenizer"
     assert response.model_used == "wolfram/miquliz-120b-v2.0"
 
 
@@ -98,7 +98,7 @@ async def test_token_counting_model_not_in_model_list():
 
     print("response: ", response)
 
-    assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
+    assert response.tokenizer_type == "openai_tokenizer"
     assert response.model_used == "special-alias"
 
 
@@ -131,7 +131,7 @@ async def test_gpt_token_counting():
 
     print("response: ", response)
 
-    assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
+    assert response.tokenizer_type == "openai_tokenizer"
     assert response.request_model == "gpt-4"
 
 

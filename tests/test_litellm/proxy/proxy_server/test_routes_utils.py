@@ -407,8 +407,6 @@ def test_token_counter_fallback_prompt_with_tools_does_not_500(client, auth_as, 
 
 
 def test_token_counter_contents_only_request_counts_text_parts(client, auth_as, monkeypatch):
-    """Regression: a contents-only request (google countTokens shape) reaches the
-    local fallback as translated messages instead of raising ValueError -> 500."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     contents = [
@@ -432,12 +430,13 @@ def test_token_counter_contents_only_request_counts_text_parts(client, auth_as, 
 
 
 def test_token_counter_media_only_contents_falls_back_instead_of_500(client, auth_as, monkeypatch):
-    """Regression: contents carrying only media or function-call parts (no text)
-    still produce a local count, because their JSON frames serialize to text."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     contents = [
-        {"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": "QUJDREVGR0hJSktMTU5PUFFSUw=="}}]},
+        {
+            "role": "user",
+            "parts": [{"inline_data": {"mime_type": "image/png", "data": "QUJDREVGR0hJSktMTU5PUFFSUw=="}}],
+        },
         {
             "role": "model",
             "parts": [{"function_call": {"name": "get_weather", "args": {"city": "sf", "data": "daily notes"}}}],

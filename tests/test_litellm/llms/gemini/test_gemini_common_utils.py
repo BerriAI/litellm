@@ -37,10 +37,10 @@ class TestGeminiModelInfo:
         # Test edge cases where model names end with characters from "models/"
         # These would be incorrectly processed if using strip("models/") instead of replace("models/", "")
         models = [
-            {"name": "models/gemini-1.5-pro"},  # ends with 'o' - would become "gemini-1.5-pr" with strip()
-            {"name": "models/test-model"},  # ends with 'l' - would become "gemini/test-mode" with strip()
-            {"name": "models/custom-models"},  # ends with 's' - would become "gemini/custom-model" with strip()
-            {"name": "models/demo"},  # ends with 'o' - would become "gemini/dem" with strip()
+            {"name": "models/gemini-1.5-pro"},
+            {"name": "models/test-model"},
+            {"name": "models/custom-models"},
+            {"name": "models/demo"},
         ]
 
         result = gemini_model_info.process_model_name(models)
@@ -154,8 +154,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_translates_anthropic_messages_system_and_tools(self):
-        """Anthropic-format messages are converted to gemini contents/system/tools
-        before hitting the countTokens endpoint."""
         import httpx
 
         recorded: list = []
@@ -198,8 +196,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_passes_system_and_tools_with_native_contents(self):
-        """A request that already carries gemini contents still counts the
-        caller-supplied system instruction and tools."""
         import httpx
 
         recorded: list = []
@@ -231,8 +227,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_provider_error_returns_error_response(self):
-        """A provider APIError must surface as an error TokenCountResponse so the
-        proxy falls back to the local tokenizer instead of 500ing."""
         import httpx
 
         def _handler(request):
@@ -267,8 +261,6 @@ class TestGoogleAIStudioTokenCounter:
         ],
     )
     async def test_count_tokens_translation_error_falls_back(self, bad_messages):
-        """Malformed message shapes surface as a 400 error TokenCountResponse so
-        the proxy falls back instead of 500ing."""
         token_counter = GoogleAIStudioTokenCounter()
 
         result = await token_counter.count_tokens(
@@ -287,8 +279,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_malformed_anthropic_input_returns_400_without_http_call(self):
-        """Input that fails Anthropic request validation returns a 400 error
-        response before any request reaches the provider."""
         import httpx
 
         recorded: list = []
@@ -318,8 +308,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_without_api_key_returns_provider_error_response(self, monkeypatch):
-        """A deployment with no usable Gemini key still reaches the provider and
-        maps its rejection to an error TokenCountResponse so the proxy falls back."""
         import httpx
 
         import litellm
@@ -352,8 +340,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_connection_error_returns_error_response(self):
-        """A provider APIConnectionError surfaces as an error TokenCountResponse
-        so the proxy falls back instead of 500ing."""
         import litellm
 
         token_counter = GoogleAIStudioTokenCounter()
@@ -381,8 +367,6 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_response_without_total_tokens_returns_502(self):
-        """A 200 body missing totalTokens is a malformed provider response, not
-        a successful count, so it surfaces as a 502 error response."""
         import httpx
 
         recorded: list = []

@@ -105,7 +105,7 @@ def test_build_count_tokens_payload_maps_anthropic_web_search_tool():
         tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
     )
 
-    assert payload.tools == [{"googleSearch": {}}]
+    assert payload.tools == ({"googleSearch": {}},)
 
 
 def test_build_count_tokens_payload_maps_openai_web_search_tool():
@@ -116,12 +116,10 @@ def test_build_count_tokens_payload_maps_openai_web_search_tool():
         tools=[{"type": "web_search_preview"}],
     )
 
-    assert payload.tools == [{"googleSearch": {}}]
+    assert payload.tools == ({"googleSearch": {}},)
 
 
 def test_build_count_tokens_payload_routes_openai_tool_types_to_openai_path():
-    """Regression: web_search_preview and computer_use are OpenAI tool types;
-    they must not trip the anthropic shape detector (which drops tool_calls)."""
     payload = build_count_tokens_payload(
         model="gemini-2.5-flash",
         messages=[
@@ -186,7 +184,7 @@ def test_build_count_tokens_payload_drops_search_tool_when_mixed_with_functions(
         ],
     )
 
-    assert payload.tools == [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
+    assert payload.tools == ({"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]},)
 
 
 def test_build_count_tokens_payload_merges_thought_signature_into_one_part():
@@ -257,7 +255,7 @@ def test_build_count_tokens_payload_maps_anthropic_hosted_tools_to_native_gemini
         tools=[{"type": "code_execution_20250522", "name": "code_execution"}],
     )
 
-    assert payload.tools == [{"codeExecution": {}}]
+    assert payload.tools == ({"codeExecution": {}},)
 
 
 def test_build_count_tokens_payload_maps_web_fetch_tool_to_url_context():
@@ -268,7 +266,7 @@ def test_build_count_tokens_payload_maps_web_fetch_tool_to_url_context():
         tools=[{"type": "web_fetch_20250910", "name": "web_fetch"}],
     )
 
-    assert payload.tools == [{"urlContext": {}}]
+    assert payload.tools == ({"urlContext": {}},)
 
 
 def test_build_count_tokens_payload_drops_url_context_when_mixed_with_functions():
@@ -282,7 +280,7 @@ def test_build_count_tokens_payload_drops_url_context_when_mixed_with_functions(
         ],
     )
 
-    assert payload.tools == [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
+    assert payload.tools == ({"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]},)
 
 
 def test_build_count_tokens_payload_folds_system_into_contents_for_models_without_system_support():
@@ -315,16 +313,16 @@ def test_normalize_count_tokens_tools_handles_each_tool_shape():
     from litellm.llms.gemini.count_tokens.transformation import normalize_count_tokens_tools
 
     assert normalize_count_tokens_tools(None) is None
-    assert normalize_count_tokens_tools([{"function_declarations": [{"name": "g"}]}]) == [
-        {"function_declarations": [{"name": "g"}]}
-    ]
-    assert normalize_count_tokens_tools([{"googleSearch": {}}]) == [{"googleSearch": {}}]
+    assert normalize_count_tokens_tools([{"function_declarations": [{"name": "g"}]}]) == (
+        {"function_declarations": [{"name": "g"}]},
+    )
+    assert normalize_count_tokens_tools([{"googleSearch": {}}]) == ({"googleSearch": {}},)
     assert normalize_count_tokens_tools(
         [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]
-    ) == [{"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]}]
-    assert normalize_count_tokens_tools([{"name": "f", "input_schema": {"type": "object"}}]) == [
-        {"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]}
-    ]
-    assert normalize_count_tokens_tools([{"googleSearch": {}}, {"type": "function", "function": {"name": "f"}}]) == [
-        {"function_declarations": [{"name": "f"}]}
-    ]
+    ) == ({"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]},)
+    assert normalize_count_tokens_tools([{"name": "f", "input_schema": {"type": "object"}}]) == (
+        {"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]},
+    )
+    assert normalize_count_tokens_tools([{"googleSearch": {}}, {"type": "function", "function": {"name": "f"}}]) == (
+        {"function_declarations": [{"name": "f"}]},
+    )

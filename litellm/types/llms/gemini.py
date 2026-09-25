@@ -23,8 +23,6 @@ class GeminiGenerateContentRequest(TypedDict):
 
 
 class GeminiCountTokensRequest(TypedDict, total=False):
-    """Body of models/{model}:countTokens: bare contents, or a generateContentRequest when system or tools are set."""
-
     contents: ReadOnly[Sequence[ContentType]]
     generateContentRequest: ReadOnly[GeminiGenerateContentRequest]
 

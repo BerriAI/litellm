@@ -13,6 +13,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import PartType, SystemInstructions
 from litellm.types.utils import TokenCountResponse
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
@@ -471,6 +472,12 @@ def get_api_key_from_env() -> str | None:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
+def _system_instructions_from_text(text: str) -> SystemInstructions:
+    instruction_part: Final[PartType] = {"text": text}
+    instructions: Final[SystemInstructions] = {"parts": [instruction_part]}  # mutable-ok: parts is Required[list]
+    return instructions
+
+
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
@@ -501,7 +508,6 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             build_count_tokens_payload,
             normalize_count_tokens_tools,
         )
-        from litellm.types.llms.vertex_ai import SystemInstructions
 
         if contents is None and not messages:
             return None
@@ -527,7 +533,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             payload.system_instruction
             if payload is not None
             else (
-                {"parts": [{"text": system}]}  # mutable-ok: SystemInstructions wire shape
+                _system_instructions_from_text(system)
                 if isinstance(system, str)
                 else cast(  # cast-ok: contents-path callers pass a Gemini-shaped systemInstruction
                     "SystemInstructions | None",
@@ -537,10 +543,8 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         )
         gemini_tools: Final = payload.tools if payload is not None else normalize_count_tokens_tools(tools)
         count_tokens_params_request.update(
-            {  # mutable-ok: kwargs dict for acount_tokens
-                "model": model_to_use,
-                "contents": payload.contents if payload is not None else contents,
-            }
+            model=model_to_use,
+            contents=payload.contents if payload is not None else contents,
         )
         try:
             result: Final = await GoogleAIStudioTokenCounter().acount_tokens(

@@ -1,10 +1,3 @@
-"""Live e2e: POST /v1/messages/count_tokens against a gemini/ deployment.
-
-Registers a fresh gemini/gemini-2.5-flash deployment via /model/new (deleted on
-teardown) and drives the endpoint through the shared transport, since no
-official provider SDK covers this route.
-"""
-
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
