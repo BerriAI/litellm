@@ -520,7 +520,7 @@ class PipelineExecutor:
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> tuple[
-        Literal["pass", "fail", "error"],
+        Literal["pass", "fail", "error", "skip"],
         dict | None,
         str | None,
         Exception | None,
@@ -530,7 +530,7 @@ class PipelineExecutor:
 
         Returns:
             Tuple of (outcome, modified_data, error_detail, original_exception):
-            - outcome: "pass", "fail", or "error"
+            - outcome: "pass", "fail", "error", or "skip"
             - modified_data: dict if guardrail returned modified data, else None
             - error_detail: error message string if fail/error, else None
             - original_exception: the exception the guardrail raised, so the
@@ -542,9 +542,10 @@ class PipelineExecutor:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
+        if not _pipeline_stream_scope_allows(callback, data, mode, streaming_chunks):
+            return ("skip", None, None, None)
+
         hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
-        if not _pipeline_stream_scope_allows(callback, hook_input, mode, streaming_chunks):
-            return ("pass", None, None, None)
         snapshot_entries_before: Final = len(_recorded_guardrail_information(hook_input))
 
         # Use unified_guardrail path if callback implements apply_guardrail
@@ -730,10 +731,13 @@ def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
     """
     Map pipeline step outcome to the configured action.
 
+    - skip -> next (stream_scope mismatch; do not apply on_pass/on_fail)
     - pass -> on_pass
     - fail -> on_fail (content/policy intervention)
     - error -> on_error if set, else on_fail (backward compatible)
     """
+    if outcome == "skip":
+        return "next"
     if outcome == "pass":
         return step.on_pass
     if outcome == "fail":

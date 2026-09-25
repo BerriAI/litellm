@@ -394,28 +394,41 @@ async def test_block_carries_original_guardrail_exception(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pipeline_step_honors_stream_scope(monkeypatch):
-    guard = StreamScopedPassGuardrail(guardrail_name="stream-only", stream_scope="streaming")
-    monkeypatch.setattr(litellm, "callbacks", [guard])
+    stream_only = StreamScopedPassGuardrail(guardrail_name="stream-only", stream_scope="streaming")
+    later = AlwaysFailGuardrail(guardrail_name="later-block")
+    monkeypatch.setattr(litellm, "callbacks", [stream_only, later])
+    steps = [
+        PipelineStep(guardrail="stream-only", on_fail="block", on_pass="allow"),
+        PipelineStep(guardrail="later-block", on_fail="block", on_pass="allow"),
+    ]
+
     skipped = await PipelineExecutor.execute_steps(
-        steps=[PipelineStep(guardrail="stream-only", on_fail="block", on_pass="allow")],
+        steps=steps,
         mode="pre_call",
         data={"messages": [{"role": "user", "content": "hi"}]},
         user_api_key_dict=MagicMock(),
         call_type="completion",
         policy_name="stream-scope",
     )
-    assert guard.calls == 0
-    assert skipped.terminal_action == "allow"
+    assert stream_only.calls == 0
+    assert later.calls == 1
+    assert skipped.step_results[0].outcome == "skip"
+    assert skipped.step_results[0].action_taken == "next"
+    assert skipped.terminal_action == "block"
 
+    stream_only.calls = 0
+    later.calls = 0
     ran = await PipelineExecutor.execute_steps(
-        steps=[PipelineStep(guardrail="stream-only", on_fail="block", on_pass="allow")],
+        steps=steps,
         mode="pre_call",
         data={"messages": [{"role": "user", "content": "hi"}], "stream": True},
         user_api_key_dict=MagicMock(),
         call_type="completion",
         policy_name="stream-scope",
     )
-    assert guard.calls == 1
+    assert stream_only.calls == 1
+    assert later.calls == 0
+    assert ran.step_results[0].outcome == "pass"
     assert ran.terminal_action == "allow"
 
 
