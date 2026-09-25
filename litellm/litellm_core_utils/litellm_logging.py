@@ -2261,13 +2261,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
     ) -> None:
-        if self.stream is not None and self.stream is True:
-            """
-            Ignore check on stream, as there can be multiple chunks
-            """
+        if self.stream is True and event_type in ("async_success", "sync_success"):
             return
         self.model_call_details[f"has_logged_{event_type}"] = True
-        return
 
     def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
         if litellm.global_disable_no_log_param:
