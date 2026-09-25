@@ -729,6 +729,15 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_zero_cost_requests_total"),
             )
 
+            self.litellm_spend_capture_rate = self._gauge_factory(
+                "litellm_spend_capture_rate",
+                (
+                    "Share of the provider's bill LiteLLM captured as spend over the scheduled check's window "
+                    "(captured spend / provider bill), by api_provider; NaN when the last check produced no rate"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            )
+
             # Cache metrics
             self.litellm_cache_hits_metric = self._counter_factory(
                 name="litellm_cache_hits_metric",
@@ -2028,6 +2037,15 @@ class PrometheusLogger(CustomLogger):
         )
         self.litellm_zero_cost_requests_total.labels(**labels).inc()
 
+    def set_spend_capture_rate(self, api_provider: str, capture_rate: float | None) -> None:
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            enum_values=UserAPIKeyLabelValues(api_provider=api_provider),
+        )
+        gauge: Final = self.litellm_spend_capture_rate
+        series: Final = gauge.labels(**labels) if labels else gauge
+        series.set(math.nan if capture_rate is None else capture_rate)
+
     @staticmethod
     def _get_remaining_from_v3_rate_limit_headers(
         standard_logging_payload: StandardLoggingPayload | None,
@@ -2778,6 +2796,13 @@ class PrometheusLogger(CustomLogger):
         - increment deployment failure responses metric
         - increment deployment total requests metric
 
+        Both counters also carry a model_group label. When a deployment was
+        actually selected, model_group is the router-resolved value and is
+        trusted as-is. On a pre-routing reject (no deployment selected), it
+        is caller-supplied via litellm_params.metadata and is bounded with
+        _bounded_requested_model_label the same way requested_model is, so an
+        unrecognized value cannot mint unbounded label series.
+
         Args:
             request_kwargs: dict
 
@@ -2844,6 +2869,7 @@ class PrometheusLogger(CustomLogger):
                 label_api_base = api_base
                 label_api_provider = llm_provider
                 label_requested_model = model_group or litellm_model_name
+                label_model_group = model_group
             else:
                 label_litellm_model_name = ""
                 label_model_id = ""
@@ -2852,6 +2878,7 @@ class PrometheusLogger(CustomLogger):
                 label_requested_model = (
                     _bounded_requested_model_label(litellm_model_name or model_group, router_originated=True) or ""
                 )
+                label_model_group = _bounded_requested_model_label(model_group, router_originated=True)
 
             enum_values: Final = UserAPIKeyLabelValues(
                 litellm_model_name=label_litellm_model_name,
@@ -2861,6 +2888,7 @@ class PrometheusLogger(CustomLogger):
                 exception_status=exception_status,
                 exception_class=(self._get_exception_class_name(exception) if exception else None),
                 requested_model=label_requested_model,
+                model_group=label_model_group,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
                 user_email=user_email,
@@ -2912,9 +2940,21 @@ class PrometheusLogger(CustomLogger):
         model_id: str | None,
         api_base: str | None,
         llm_provider: str | None,
+        model_group: str | None,
     ):
         """
         Set the deployment TPM and RPM limits metrics
+
+        Args:
+            model_info: the deployment's static model_info config (id, tpm, rpm, etc.)
+            litellm_params: the deployment's litellm_params, as a tpm/rpm fallback source
+            litellm_model_name: the resolved deployment model name
+            model_id: the deployment's model_id
+            api_base: the deployment's api_base
+            llm_provider: the deployment's custom_llm_provider
+            model_group: the router-resolved model_group the deployment belongs to,
+                from the caller's already-resolved enum_values.model_group (trusted,
+                not caller-supplied at this call site)
         """
         tpm: Final = model_info.get("tpm") or litellm_params.get("tpm")
         rpm: Final = model_info.get("rpm") or litellm_params.get("rpm")
@@ -2927,6 +2967,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    model_group=model_group,
                 ),
             )
             self.litellm_deployment_tpm_limit.labels(**_labels).set(tpm)
@@ -2939,6 +2980,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    model_group=model_group,
                 ),
             )
             self.litellm_deployment_rpm_limit.labels(**_labels).set(rpm)
@@ -3058,6 +3100,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     llm_provider=llm_provider,
+                    model_group=enum_values.model_group,
                 )
 
             remaining_requests: int | None = None

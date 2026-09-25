@@ -22,6 +22,8 @@ export interface RequestOptions {
   body?: unknown;
   /** Sent verbatim (FormData, Blob, pre-stringified text); disables JSON handling. */
   rawBody?: BodyInit;
+  /** Response body handling. Defaults to JSON parsing; use this for downloads. */
+  responseType?: "json" | "blob" | "text";
   query?: QueryParams;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -138,7 +140,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
   async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials } = options;
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials, responseType } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
@@ -177,6 +179,12 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       throw new ApiError(message, response.status, errorBody);
     }
 
+    if (responseType === "blob") {
+      return (await response.blob()) as T;
+    }
+    if (responseType === "text") {
+      return (await response.text()) as T;
+    }
     const text = await response.text();
     return (text ? JSON.parse(text) : undefined) as T;
   }

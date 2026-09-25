@@ -6,11 +6,12 @@ import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { modelGroupHref, teamDetailHref } from "@/utils/entityLinks";
@@ -48,6 +49,10 @@ import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+
+export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
+  return (totalSpend ?? 0) < spend;
+}
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -682,6 +687,26 @@ export default function KeyInfoView({
                   )}
                   <p className="text-sm mt-2" data-testid="key-lifetime-spend">
                     Lifetime spend: ${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)}
+                    {needsLifetimeSpendBackfill(currentKeyData.spend, currentKeyData.total_spend) && (
+                      <HoverCard>
+                        <HoverCardTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Why lifetime spend is below current spend"
+                              className="inline-flex align-middle ml-1 cursor-help"
+                              data-testid="key-lifetime-spend-backfill-hint"
+                            />
+                          }
+                        >
+                          <Info className="size-3 text-muted-foreground" />
+                        </HoverCardTrigger>
+                        <HoverCardContent className="w-80">
+                          Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026 and was not backfilled,
+                          so this key&apos;s lifetime spend only counts usage since that upgrade.
+                        </HoverCardContent>
+                      </HoverCard>
+                    )}
                   </p>
                 </div>
               </Card>
