@@ -84,3 +84,17 @@ class TestCountTokensOAuthHeaders:
         assert (
             "oauth-2025-04-20" in beta_value
         ), f"oauth beta missing from OAuth headers: {beta_value}"
+
+    def test_oauth_stripped_for_custom_api_base(self):
+        config = AnthropicCountTokensConfig()
+        headers = config.get_required_headers(FAKE_OAUTH_TOKEN, api_base="http://127.0.0.1:8899")
+        assert "authorization" not in headers
+        assert "x-api-key" not in headers
+        assert "oauth-2025-04-20" not in headers.get("anthropic-beta", "")
+
+    def test_oauth_stripped_via_litellm_params(self):
+        config = AnthropicCountTokensConfig()
+        headers = config.get_required_headers(FAKE_OAUTH_TOKEN, litellm_params={"api_base": "http://127.0.0.1:8899"})
+        assert "authorization" not in headers
+        assert "x-api-key" not in headers
+        assert "oauth-2025-04-20" not in headers.get("anthropic-beta", "")

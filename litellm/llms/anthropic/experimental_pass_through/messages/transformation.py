@@ -251,12 +251,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
+        if api_base is None and isinstance(optional_params, dict):
+            api_base = optional_params.get("api_base")
         # Check for Anthropic OAuth token in Authorization header
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=api_key,
+            api_base=api_base,
+        )
 
         header_names: Final = frozenset(name.lower() for name in headers)
         if "x-api-key" not in header_names and "authorization" not in header_names:
-            auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
+            auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base=api_base)
             if auth_header is None:
                 raise AuthenticationError(
                     message=(

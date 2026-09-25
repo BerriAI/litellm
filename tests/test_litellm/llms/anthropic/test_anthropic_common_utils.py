@@ -154,6 +154,117 @@ class TestOptionallyHandleAnthropicOAuth:
         assert returned_api_key is None
         assert "authorization" not in updated_headers
 
+    def test_oauth_stripped_for_third_party_api_base(self):
+        from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+        headers = {
+            "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+        }
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=FAKE_REGULAR_KEY,
+            api_base="http://127.0.0.1:8899",
+        )
+
+        assert returned_api_key == FAKE_REGULAR_KEY
+        assert "authorization" not in updated_headers
+        assert "Authorization" not in updated_headers
+        assert "oauth-2025-04-20" not in updated_headers.get("anthropic-beta", "")
+        assert updated_headers.get("anthropic-beta") == "interleaved-thinking-2025-05-14"
+        assert "anthropic-dangerous-direct-browser-access" not in updated_headers
+
+    def test_direct_oauth_key_stripped_for_third_party_api_base(self):
+        from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+        headers = {}
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=FAKE_OAUTH_TOKEN,
+            api_base="http://127.0.0.1:8899",
+        )
+
+        assert returned_api_key is None
+        assert "authorization" not in updated_headers
+
+    def test_header_casing_cleanup_for_third_party_api_base(self):
+        from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+        headers = {
+            "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "Anthropic-Beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+            "Anthropic-Dangerous-Direct-Browser-Access": "true",
+        }
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=FAKE_REGULAR_KEY,
+            api_base="http://127.0.0.1:8899",
+        )
+
+        assert returned_api_key == FAKE_REGULAR_KEY
+        assert "Authorization" not in updated_headers
+        assert updated_headers.get("Anthropic-Beta") == "interleaved-thinking-2025-05-14"
+        assert "Anthropic-Dangerous-Direct-Browser-Access" not in updated_headers
+
+    def test_oauth_preserved_for_official_api_base(self):
+        from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+        headers = {
+            "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+        }
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=FAKE_REGULAR_KEY,
+            api_base="https://api.anthropic.com",
+        )
+
+        assert returned_api_key == FAKE_OAUTH_TOKEN
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
+        assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
+
+
+class TestIsAnthropicApiBase:
+    def test_default_none_and_empty(self):
+        from litellm.llms.anthropic.common_utils import is_anthropic_api_base
+
+        assert is_anthropic_api_base(None) is True
+        assert is_anthropic_api_base("") is True
+
+    def test_unresolved_base_with_custom_env(self):
+        from litellm.llms.anthropic.common_utils import is_anthropic_api_base
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://custom.gateway.com"}):
+            assert is_anthropic_api_base(None) is False
+            assert is_anthropic_api_base("") is False
+
+    def test_configured_base_localhost_http(self):
+        from litellm.llms.anthropic.common_utils import is_anthropic_api_base
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "http://127.0.0.1:8000"}):
+            assert is_anthropic_api_base("http://127.0.0.1:8000") is True
+
+    def test_official_anthropic_hosts(self):
+        from litellm.llms.anthropic.common_utils import is_anthropic_api_base
+
+        assert is_anthropic_api_base("https://api.anthropic.com") is True
+        assert is_anthropic_api_base("https://api.anthropic.com/v1") is True
+        assert is_anthropic_api_base("https://api.anthropic.com/v1/messages") is True
+        assert is_anthropic_api_base("https://custom.anthropic.com") is True
+
+    def test_insecure_cleartext_http_rejected(self):
+        from litellm.llms.anthropic.common_utils import is_anthropic_api_base
+
+        assert is_anthropic_api_base("http://api.anthropic.com") is False
+
+    def test_third_party_hosts_rejected(self):
+        from litellm.llms.anthropic.common_utils import is_anthropic_api_base
+
+        assert is_anthropic_api_base("http://127.0.0.1:8899") is False
+        assert is_anthropic_api_base("https://api.minimax.chat") is False
+        assert is_anthropic_api_base("https://evil.com/api.anthropic.com") is False
+        assert is_anthropic_api_base("https://notanthropic.com") is False
+
 
 class TestGetAnthropicHeaders:
     """Tests for get_anthropic_headers method with OAuth support."""
@@ -349,6 +460,117 @@ class TestValidateEnvironmentOAuth:
 
         assert updated_headers["authorization"] == "Bearer custom-api-key"
         assert "x-api-key" not in updated_headers
+
+    def test_validate_environment_third_party_api_base_uses_configured_key(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = {"Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+        updated_headers = config.validate_environment(
+            headers=headers,
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"api_base": "http://127.0.0.1:8899"},
+            api_key=FAKE_REGULAR_KEY,
+            api_base=None,
+        )
+
+        assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in updated_headers
+        assert "Authorization" not in updated_headers
+
+    def test_validate_environment_direct_oauth_key_stripped_for_third_party(self):
+        import pytest
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with pytest.raises(litellm.AuthenticationError):
+            config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={"api_base": "http://127.0.0.1:8899"},
+                api_key=FAKE_OAUTH_TOKEN,
+                api_base=None,
+            )
+
+    def test_auth_token_env_custom_api_base(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "custom-token-secret"}):
+            header = AnthropicModelInfo.get_auth_header(api_base="https://custom.gateway.com")
+            assert header == {"authorization": "Bearer custom-token-secret"}
+
+    def test_oauth_auth_token_env_custom_api_base_returns_none(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": FAKE_OAUTH_TOKEN}):
+            header = AnthropicModelInfo.get_auth_header(api_base="https://custom.gateway.com")
+            assert header is None
+
+    def test_oauth_api_key_custom_api_base_returns_none(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        header = AnthropicModelInfo.get_auth_header(api_key=FAKE_OAUTH_TOKEN, api_base="https://custom.gateway.com")
+        assert header is None
+
+    def test_env_oauth_api_key_stripped_for_third_party(self):
+        import pytest
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": FAKE_OAUTH_TOKEN}):
+            with pytest.raises(litellm.AuthenticationError):
+                config.validate_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={"api_base": "http://127.0.0.1:8899"},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    def test_env_oauth_auth_token_stripped_for_third_party(self):
+        import pytest
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": FAKE_OAUTH_TOKEN}):
+            with pytest.raises(litellm.AuthenticationError):
+                config.validate_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={"api_base": "http://127.0.0.1:8899"},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    def test_env_oauth_key_ignored_when_configured_key_provided_for_third_party(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": FAKE_OAUTH_TOKEN}):
+            updated_headers = config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={"api_base": "http://127.0.0.1:8899"},
+                api_key=FAKE_REGULAR_KEY,
+                api_base=None,
+            )
+            assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
+            assert "authorization" not in updated_headers
+            assert "Authorization" not in updated_headers
 
     def test_custom_api_base_via_litellm_params(self):
         """validate_environment uses Bearer when api_base and use_bearer_for_custom_base are in litellm_params."""
@@ -1984,7 +2206,6 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-
     @pytest.mark.parametrize(
         "model",
         [
@@ -2345,3 +2566,64 @@ class TestMalformedContentListItems:
                 api_key=FAKE_REGULAR_KEY,
                 max_tokens=5,
             )
+def test_issue_42172_anthropic_oauth_scoped_to_api_base():
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_provider_specific_headers_to_request,
+        clean_headers,
+    )
+
+    fake_oauth: Final = "sk-ant-oat01-TEST_OAUTH_TOKEN"
+    deploy_key: Final = "sk-backend_configured_key"
+    client_headers: Final = {
+        "x-litellm-api-key": "sk-1234",
+        "authorization": f"Bearer {fake_oauth}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    from collections.abc import Mapping
+
+    class Abort(BaseException):
+        def __init__(self, headers: Mapping[str, str]) -> None:
+            self.headers: Final = headers
+
+    class WireCaptureHTTPHandler(HTTPHandler):
+        def post(self, url=None, *args, headers=None, **kwargs):
+            from types import MappingProxyType
+
+            raise Abort(MappingProxyType({k.lower(): v for k, v in dict(headers or {}).items()}))
+
+    cleaned: Final = clean_headers(
+        client_headers,
+        litellm_key_header_name=None,
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header="x-litellm-api-key",
+    )
+    data: Final[dict[str, object]] = {}
+    add_provider_specific_headers_to_request(data=data, headers=cleaned)
+    psh: Final = data.get("provider_specific_header")
+
+    kwargs: Final[dict[str, object]] = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": "http://127.0.0.1:8899",
+        "api_key": deploy_key,
+        "client": WireCaptureHTTPHandler(),
+    }
+    if psh is not None:
+        kwargs["provider_specific_header"] = psh
+
+    from types import MappingProxyType
+
+    empty_headers: Final = MappingProxyType({})
+    captured_headers = empty_headers
+    try:
+        litellm.completion(**kwargs)
+    except Abort as exc:
+        captured_headers = exc.headers  # rebind-ok: exception extraction
+
+    assert fake_oauth not in captured_headers.get("authorization", "")
+    assert not captured_headers.get("authorization")
+    assert captured_headers.get("x-api-key") == deploy_key
