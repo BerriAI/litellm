@@ -3331,7 +3331,7 @@ def _make_marker_session_iterator(
                 return False
 
         class MockSession:
-            def post(self, url, json=None, headers=None):
+            def post(self, url, json=None, headers=None, timeout=None):
                 payload = json
                 if url.endswith("analyze"):
                     recorded_analyze_payloads.append(payload)
@@ -3690,7 +3690,7 @@ async def test_chunked_analyze_concurrency_is_bounded():
                 return False
 
         class MockSession:
-            def post(self, url, json=None, headers=None):
+            def post(self, url, json=None, headers=None, timeout=None):
                 return MockResponse()
 
             async def __aenter__(self):
@@ -3760,7 +3760,7 @@ async def test_chunked_analyze_applies_score_threshold_before_merge():
                 return False
 
         class MockSession:
-            def post(self, url, json=None, headers=None):
+            def post(self, url, json=None, headers=None, timeout=None):
                 text = json["text"]
                 idx = text.find(CHUNK_MARKER_ONE)
                 if idx == -1:
@@ -3832,7 +3832,7 @@ async def test_chunk_fanout_bound_is_shared_across_concurrent_calls():
                 return False
 
         class MockSession:
-            def post(self, url, json=None, headers=None):
+            def post(self, url, json=None, headers=None, timeout=None):
                 return MockResponse()
 
             async def __aenter__(self):
