@@ -120,7 +120,6 @@ def _cleanup_config(tmp_path: Path, retention: dict[str, JsonValue]) -> Path:
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("spend.daily_tag_spend.retention_prunes_rows_older_than_the_period_and_keeps_the_rest")
 def test_daily_tag_spend_retention_prunes_only_rows_older_than_the_period(gateway: Gateway, tmp_path: Path) -> None:
     tag: Final = f"integration-retention-{uuid.uuid4().hex}"
     expired, on_the_cutoff, today = _day(200), _day(30), _day(0)
@@ -139,7 +138,6 @@ def test_daily_tag_spend_retention_prunes_only_rows_older_than_the_period(gatewa
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("spend.daily_tag_spend.runtime_config_update_enables_cleanup_on_a_multi_worker_proxy")
 def test_config_update_turns_on_daily_tag_spend_cleanup_without_a_restart(gateway: Gateway, tmp_path: Path) -> None:
     tag: Final = f"integration-retention-{uuid.uuid4().hex}"
     expired, yesterday_of_cutoff, on_the_cutoff, today = _day(200), _day(31), _day(30), _day(0)
@@ -166,7 +164,6 @@ def test_config_update_turns_on_daily_tag_spend_cleanup_without_a_restart(gatewa
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("spend.daily_tag_spend.invalid_retention_value_keeps_rows_and_leaves_the_proxy_serving")
 def test_unparseable_daily_tag_spend_retention_deletes_nothing_and_keeps_serving(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -189,7 +186,6 @@ def test_unparseable_daily_tag_spend_retention_deletes_nothing_and_keeps_serving
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("spend.daily_tag_spend.retention_horizon_is_independent_of_the_spend_log_horizon")
 def test_daily_tag_spend_keeps_days_the_shorter_spend_log_horizon_already_pruned(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -211,7 +207,6 @@ def test_daily_tag_spend_keeps_days_the_shorter_spend_log_horizon_already_pruned
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("spend.daily_tag_spend.cleanup_and_serving_survive_losing_one_of_two_workers")
 def test_daily_tag_spend_cleanup_completes_after_one_of_two_workers_is_killed(gateway: Gateway, tmp_path: Path) -> None:
     tag: Final = f"integration-retention-{uuid.uuid4().hex}"
     expired, today = _day(200), _day(0)
@@ -237,7 +232,6 @@ def test_daily_tag_spend_cleanup_completes_after_one_of_two_workers_is_killed(ga
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("spend.daily_tag_spend.unset_retention_never_deletes_even_while_spend_logs_are_pruned")
 def test_daily_tag_spend_is_kept_forever_when_its_retention_is_unset(gateway: Gateway, tmp_path: Path) -> None:
     tag: Final = f"integration-retention-{uuid.uuid4().hex}"
     request_id: Final = f"integration-retention-{uuid.uuid4().hex}"

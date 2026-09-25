@@ -10549,7 +10549,9 @@ class ProxyStartupEvent:
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
 
-            if isinstance(cleanup_cron, str) and cleanup_cron:
+            if cleanup_cron and not isinstance(cleanup_cron, str):
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %r", cleanup_cron)
+            elif isinstance(cleanup_cron, str) and cleanup_cron:
                 from apscheduler.triggers.cron import CronTrigger
 
                 try:
