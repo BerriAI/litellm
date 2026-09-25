@@ -92,7 +92,7 @@ async fn successful_azure_responses_do_not_fall_back_when_the_value_is_empty_or_
             Default::default(),
         )),
         Arc::new(|_: &str| Some("environment".into())),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     assert_eq!(
         resolver

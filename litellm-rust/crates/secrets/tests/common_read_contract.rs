@@ -240,7 +240,7 @@ async fn python_read_failures_preserve_provider_fallback_rules(
             KeyManagementSettings::default(),
         )),
         Arc::new(move |_: &str| environment_value.map(str::to_owned)),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     let expected = if matches!(provider, Provider::Aws) {
         None

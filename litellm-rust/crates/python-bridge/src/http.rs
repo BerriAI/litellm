@@ -6,8 +6,8 @@ use std::{
 
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
-    HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    TlsSource, Unsupported,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer,
+    Resolution, SslVerify, TlsSource, Unsupported,
     media::{PublicDnsResolver, UrlPolicy},
 };
 use pyo3::{
@@ -105,6 +105,11 @@ pub(crate) fn call_config(
         crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
     }
     Ok(resolution.config)
+}
+
+pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {
+    let config = call_config(py, &PyDict::new(py), true)?;
+    pool().client(&config, variant).map_err(client_error)
 }
 
 pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {

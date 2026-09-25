@@ -40,7 +40,7 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(state),
         environment,
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     )
     .with_failure_policy(FailurePolicy::Propagate);
     let result = resolver.get_secret_str("KEY", None).await;

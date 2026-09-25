@@ -13,7 +13,7 @@ pub(super) fn network(error: reqwest::Error) -> Error {
 }
 
 pub(super) async fn send(
-    http: &reqwest::Client,
+    http: &litellm_http::Client,
     url: &str,
     headers: &[(String, String)],
     body: &Value,

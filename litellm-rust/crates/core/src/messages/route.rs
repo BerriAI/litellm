@@ -12,7 +12,7 @@ use litellm_host::{
     machine::{CallMachine, HostChannel, MachineFault},
     protocol::Protocol,
 };
-use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
+use litellm_http::{Client, ClientVariant, HttpClientConfig, HttpClientPool};
 use litellm_secrets::source::SecretSource;
 use litellm_types::{
     llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
@@ -122,7 +122,7 @@ pub fn messages_machine(
 
 async fn execute(
     host: MessagesHost,
-    http: reqwest::Client,
+    http: Client,
     secrets: Arc<dyn SecretSource>,
 ) -> Result<MessagesOutput, Error> {
     let call = host.project().await?;

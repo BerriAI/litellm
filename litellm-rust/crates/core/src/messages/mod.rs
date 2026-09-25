@@ -13,7 +13,7 @@ mod prepare;
 pub mod route;
 use std::sync::Arc;
 
-use litellm_http::{HttpClientConfig, HttpClientPool};
+use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine};
@@ -42,7 +42,9 @@ pub async fn messages(
         timeout: request.timeout,
         shaping: request.shaping,
     };
-    let secrets = Arc::new(EnvironmentSecrets::python_compatible());
+    let secrets = Arc::new(EnvironmentSecrets::python_compatible(
+        pool.client(config, ClientVariant::Provider)?,
+    ));
     match litellm_host::run::run(
         messages_machine(pool, config, secrets)?,
         &LocalMessagesHost::new(call),

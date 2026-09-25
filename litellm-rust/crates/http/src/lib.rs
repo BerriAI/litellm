@@ -1,3 +1,4 @@
+mod client;
 mod config;
 mod error;
 pub mod media;
@@ -9,6 +10,7 @@ mod settings;
 mod tls;
 pub mod transport;
 
+pub use client::Client;
 pub use config::{HttpClientConfig, Resolution, Verify};
 pub use error::{Error, TlsSource};
 pub use pool::{ClientVariant, HttpClientPool};
