@@ -293,6 +293,41 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
 
         assert response.status_code in [200, 401, 500]
 
+    @patch("litellm.proxy.proxy_server.llm_router")  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    @patch("litellm.proxy.proxy_server.user_api_key_auth")  # test-quality-ok: isolate proxy endpoint authentication
+    def test_openai_v1_responses_missing_input_raises_400(self, mock_auth, mock_router):
+        mock_auth.return_value = MagicMock(
+            token="test_token",
+            user_id="test_user",
+            team_id=None,
+        )
+
+        client = TestClient(app)
+
+        test_data = {"model": "gpt-4o"}
+
+        response = client.post(
+            "/openai/v1/responses",
+            json=test_data,
+            headers={"Authorization": "Bearer sk-1234"},
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
+        assert "input" in data["error"]["message"].lower()
+
+    def test_responses_missing_input_raises_bad_request_error(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.responses(model="gpt-4o")
+        assert "input" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_aresponses_missing_input_raises_bad_request_error(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await litellm.aresponses(model="gpt-4o")
+        assert "input" in str(exc_info.value).lower()
+
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
