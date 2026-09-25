@@ -481,6 +481,54 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_keeps_thinking_blocks_for_claude():
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "My reasoning here.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "Answer text."},
+            ],
+        )
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="anthropic/claude-sonnet-4-5",
+    )
+
+    assert result[0]["thinking_blocks"][0]["thinking"] == "My reasoning here."
+    assert result[0]["reasoning_content"] == "My reasoning here."
+
+
+def test_translate_anthropic_messages_to_openai_omits_thinking_blocks_for_non_claude():
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "My reasoning here.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "Answer text."},
+            ],
+        )
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="openai/my-vllm-model",
+    )
+
+    assert "thinking_blocks" not in result[0]
+    assert result[0]["reasoning_content"] == "My reasoning here."
+
+
 def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning_blocks():
     """A session that moves from an OpenAI reasoning model to a chat provider replays reasoning only OpenAI can read.
 
