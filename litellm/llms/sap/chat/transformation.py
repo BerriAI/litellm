@@ -27,6 +27,10 @@ from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
     SAPStreamIterator,
+    normalize_reasoning_content,
+)
+from .handler import (
+    normalize_choice as _normalize_choice_fn,
 )
 from .models import (
     ChatCompletionTool,
@@ -188,6 +192,21 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def map_openai_params(
+        self,
+        non_default_params: dict,  # mutable-ok: mirrors base class signature
+        optional_params: dict,  # mutable-ok: mirrors base class signature
+        model: str,
+        drop_params: bool,
+    ) -> dict:  # mutable-ok: mirrors base class signature
+        supported = self.get_supported_openai_params(model)
+        optional_params.update(
+            {  # mutable-ok: comprehension passed directly to update, never stored separately
+                p: v for p, v in non_default_params.items() if p in supported
+            }
+        )
+        return optional_params
+
     def get_supported_openai_params(self, model):
         params: Final = [
             "frequency_penalty",
@@ -213,6 +232,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
             "response_format",
             "timeout",
+            "reasoning_effort",
+            "thinking",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
@@ -392,7 +413,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        final_result = normalize_reasoning_content(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(final_result)
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
@@ -405,13 +427,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         return response
 
-    def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
-        """Strip markdown code block wrapper from JSON content if present.
+    @staticmethod
+    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
+        return normalize_reasoning_content(raw)
 
-        SAP GenAI Hub with Anthropic models sometimes returns JSON wrapped in
-        markdown code blocks (```json ... ```) depending on prompt phrasing.
-        This method strips that wrapper to ensure consistent JSON output.
-        """
+    @staticmethod
+    def _normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic dict from raw JSON
+        return _normalize_choice_fn(choice)
+
+    def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
         import re
 
         for choice in response.choices or []:

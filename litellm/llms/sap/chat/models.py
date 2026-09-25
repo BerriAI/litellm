@@ -98,11 +98,17 @@ class SAPUserMessage(BaseModel):
     content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
 
+class ReasoningBlock(BaseModel):
+    content: str = ""
+    signature: str = ""
+
+
 class SAPAssistantMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
+    reasoning_content: list[ReasoningBlock] | None = None
 
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
