@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from litellm.integrations.zerobus.client import ZerobusIngestClient
-from litellm.types.integrations.zerobus import ZerobusConnection, ZerobusIngestFailure
+from litellm.types.integrations.zerobus import ZerobusAccessToken, ZerobusConnection, ZerobusIngestFailure
 
 CONNECTION = ZerobusConnection(
     workspace_url="https://dbc-a1b2c3d4-e5f6.cloud.databricks.com/",
@@ -149,6 +149,15 @@ async def test_the_service_principal_authenticates_with_http_basic():
     scheme, credentials = http_client.token_calls[0].headers["Authorization"].split(" ")
     assert scheme == "Basic"
     assert base64.b64decode(credentials).decode() == "sp-client-id:sp-client-secret"
+
+
+def test_the_client_secret_and_minted_token_stay_out_of_reprs_and_tracebacks():
+    token = ZerobusAccessToken(value="tok-secret", expires_at=1.0)
+
+    assert "sp-client-secret" not in repr(CONNECTION)
+    assert "sp-client-id" in repr(CONNECTION)
+    assert "tok-secret" not in repr(token)
+    assert "expires_at=1.0" in repr(token)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 from pydantic import Field
@@ -35,13 +35,13 @@ class ZerobusConnection:
     workspace_id: str
     server_endpoint: str
     client_id: str
-    client_secret: str
+    client_secret: str = field(repr=False)
     table_name: str
 
 
 @dataclass(frozen=True, slots=True)
 class ZerobusAccessToken:
-    value: str
+    value: str = field(repr=False)
     expires_at: float
 
 
