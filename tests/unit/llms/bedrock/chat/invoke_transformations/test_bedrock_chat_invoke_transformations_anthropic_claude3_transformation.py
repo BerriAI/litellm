@@ -14,6 +14,7 @@ import pytest
 # tests are executed from any working directory.
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -752,7 +753,12 @@ def test_bedrock_chat_invoke_drop_params_still_inlines_for_non_native(local_mode
 
 @pytest.mark.parametrize(
     "model",
-    ["us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"],
+    [
+        "us.anthropic.claude-fable-5-1",
+        "anthropic.claude-fable-5-1",
+        "us.anthropic.claude-opus-5-5",
+        "anthropic.claude-opus-5-5",
+    ],
 )
 def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(local_model_cost_map, model):
     """Regression: Bedrock rejects both native ``output_config.format`` and forced
@@ -774,8 +780,47 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
     )
 
     assert "output_format" not in result
-    assert "tools" in result
+    assert result["tools"][0]["description"] == RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
     assert "tool_choice" not in result
+
+
+@pytest.mark.parametrize(
+    ("extra_params", "expected_tool_choice", "expected_description"),
+    [
+        ({}, {"name": "json_tool_call", "type": "tool"}, None),
+        ({"reasoning_effort": "low"}, None, RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION),
+        (
+            {
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+                "tool_choice": "auto",
+            },
+            {"type": "auto"},
+            None,
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_response_format_tool_description_asks_for_the_tool_only_when_it_cannot_be_forced(
+    local_model_cost_map, extra_params, expected_tool_choice, expected_description
+):
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "City",
+                    "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+                },
+            },
+            "max_tokens": 4096,
+            **extra_params,
+        },
+        optional_params={},
+        model="us.anthropic.claude-opus-5",
+        drop_params=False,
+    )
+
+    assert result.get("tool_choice") == expected_tool_choice
+    assert result["tools"][0].get("description") == expected_description
 
 
 @pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-fable-5-1"])

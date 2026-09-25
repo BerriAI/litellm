@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
+from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
@@ -7396,7 +7397,12 @@ def test_unforced_tool_choice_unaffected_on_fable_5_1_converse(local_model_cost_
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
+    [
+        "anthropic.claude-fable-5-1",
+        "us.anthropic.claude-fable-5-1",
+        "anthropic.claude-opus-5-5",
+        "us.anthropic.claude-opus-5-5",
+    ],
 )
 def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(
     local_model_cost_map, model
@@ -7422,9 +7428,48 @@ def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_conve
     )
 
     assert "outputConfig" not in result
-    assert "tools" in result
+    assert result["tools"][0]["function"]["description"] == RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
     assert "tool_choice" not in result
     assert result.get("json_mode") is True
+
+
+@pytest.mark.parametrize(
+    ("extra_params", "expected_tool_choice", "expected_description"),
+    [
+        ({}, {"tool": {"name": "json_tool_call"}}, "A city"),
+        ({"reasoning_effort": "low"}, None, f"{RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION} A city"),
+        (
+            {
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+                "tool_choice": "auto",
+            },
+            {"auto": {}},
+            "A city",
+        ),
+    ],
+)
+def test_response_format_tool_description_asks_for_the_tool_only_when_it_cannot_be_forced(
+    local_model_cost_map, extra_params, expected_tool_choice, expected_description
+):
+    result = AmazonConverseConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "City",
+                    "description": "A city",
+                    "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+                },
+            },
+            **extra_params,
+        },
+        optional_params={},
+        model="us.anthropic.claude-opus-5",
+        drop_params=False,
+    )
+
+    assert result.get("tool_choice") == expected_tool_choice
+    assert result["tools"][0]["function"]["description"] == expected_description
 
 
 def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(

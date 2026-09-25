@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
@@ -1242,16 +1243,20 @@ class AmazonConverseConfig(BaseConfig):
         elif json_schema is not None:
             # Fallback: translate to a synthetic tool call
             # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+            tool_choice_blocked: Final = is_thinking_enabled or AnthropicModelInfo.forced_tool_use_unsupported(model)
             _tool: Final = self._create_json_tool_call_for_response_format(
                 json_schema=json_schema,
-                description=description,
+                description=(
+                    " ".join(filter(None, (RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION, description)))
+                    if tool_choice_blocked
+                    else description
+                ),
             )
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
 
             if (
                 litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
-                and not is_thinking_enabled
-                and not AnthropicModelInfo.forced_tool_use_unsupported(model)
+                and not tool_choice_blocked
             ):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
