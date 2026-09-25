@@ -7,9 +7,11 @@ use std::{future::Future, pin::Pin};
 use litellm_coroutine::{Co, Coroutine, CoroutineState, ResumeError};
 
 use super::{HostFailure, Interrupted, Machine, MachineStep, Step};
+use serde_json::{Map, Value};
+
 use crate::{
-    event::{MachineEvent, RequestContext, WireRequest},
-    host::{Demand, HostOp, Reply},
+    event::{MachineEvent, PublicRequest, RequestContext, WireRequest},
+    host::{Demand, HostOp, Reply, Verdict},
     protocol::Protocol,
 };
 
@@ -63,6 +65,25 @@ where
         ask: impl FnOnce(Reply<A>) -> R::Op + Send,
     ) -> Result<A, R::Error> {
         self.yield_(|reply| HostOp::Custom(ask(reply))).await
+    }
+
+    pub async fn pre_request(
+        &self,
+        request: PublicRequest,
+    ) -> Result<Map<String, Value>, R::Error> {
+        self.yield_(|reply| HostOp::PreRequest {
+            request: Box::new(request),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn after_response(&self, response: R::Response) -> Result<Verdict<R>, R::Error> {
+        self.yield_(|reply| HostOp::AfterResponse {
+            response: Box::new(response),
+            reply,
+        })
+        .await
     }
 
     pub async fn before_send(

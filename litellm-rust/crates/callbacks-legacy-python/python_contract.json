@@ -73,6 +73,10 @@
   ],
   "custom_pricing_fields": [],
   "is_internal_call": [],
+  "pre_request_hooks": [
+    "model",
+    "messages",
+    "kwargs"
   "before_deployment_call": [
     "kwargs",
     "call_type"

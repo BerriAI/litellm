@@ -110,6 +110,16 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
     litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
+fn delivered_bytes(chunks: &[Seen]) -> Vec<u8> {
+    chunks
+        .iter()
+        .flat_map(|step| match step {
+            Seen::Deliver(chunk) => chunk.to_vec(),
+            Seen::Open(_) => panic!("the stream opens exactly once"),
+        })
+        .collect()
+}
+
 #[rstest]
 #[tokio::test]
 async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
@@ -429,6 +439,27 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
         .await
         .expect("the failed stream closes its upstream connection")
         .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_truncated_upstream_body_fails_after_delivering_received_bytes(call: MessagesCall) {
+    let payload = b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n";
+    let (base, server) = truncated_sse_upstream(payload).await;
+    let host = RecordingStreamHost::new(streaming(call, base), usize::MAX);
+
+    let error = stream_through(&host)
+        .await
+        .err()
+        .expect("a truncated body fails");
+
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    let seen = host.seen.into_inner().unwrap();
+    let [Seen::Open(_), chunks @ ..] = seen.as_slice() else {
+        panic!("the route opens before delivering bytes");
+    };
+    assert_eq!(delivered_bytes(chunks), payload.as_slice());
+    server.await.expect("server completes");
 }
 
 #[rstest]

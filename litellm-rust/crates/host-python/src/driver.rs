@@ -304,6 +304,9 @@ where
                 answered(projected.map(|projection| reply.send(projection)))
             }
             HostOp::Custom(op) => answered(self.host.invoke(py, op)),
+            HostOp::PreRequest { .. } | HostOp::AfterResponse { .. } => {
+                return Err(missing_state());
+            }
             HostOp::BeforeSend {
                 wire,
                 context,
@@ -566,7 +569,7 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use litellm_host::event::{MachineEvent, RawResponse, RequestContext};
+    use litellm_host::event::{MachineEvent, PublicRequest, RawResponse, RequestContext};
     use litellm_host::machine::{CallMachine, MachineFault};
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
@@ -758,6 +761,23 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         FailBegin,
         ReplaceResponse,
         FailAfterSuccess,
+        AwaitPreRequest,
+    }
+
+    fn rewritten_params() -> serde_json::Map<String, serde_json::Value> {
+        [("tools".to_string(), serde_json::json!("rewritten-tools"))]
+            .into_iter()
+            .collect()
+    }
+
+    fn completed_awaitable(py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let locals = PyDict::new(py);
+        py.run(
+            pyo3::ffi::c_str!("async def done():\n    return 'hook-result'\ncoroutine = done()"),
+            Some(&locals),
+            Some(&locals),
+        )?;
+        Ok(locals.get_item("coroutine")?.expect("coroutine").unbind())
     }
 
     struct SyntheticAdapter {
@@ -777,6 +797,20 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 return Err(PyValueError::new_err("begin failed"));
             }
             Ok(LifecycleStep::Arguments(arguments))
+        }
+
+        fn pre_request(
+            &mut self,
+            py: Python<'_>,
+            _: Box<PublicRequest>,
+        ) -> PyResult<LifecycleStep> {
+            self.log.push("pre_request");
+            match self.script {
+                AdapterScript::AwaitPreRequest => {
+                    Ok(LifecycleStep::Await(completed_awaitable(py)?))
+                }
+                _ => Ok(LifecycleStep::Params(rewritten_params())),
+            }
         }
 
         fn before_send(
@@ -806,9 +840,9 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 AdapterScript::FailAfterSuccess => {
                     Err(PyValueError::new_err("after_success failed"))
                 }
-                AdapterScript::Plain | AdapterScript::FailBegin => {
-                    Ok(LifecycleStep::Response(response))
-                }
+                AdapterScript::Plain
+                | AdapterScript::FailBegin
+                | AdapterScript::AwaitPreRequest => Ok(LifecycleStep::Response(response)),
             }
         }
 
@@ -838,8 +872,16 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             Ok(())
         }
 
-        fn resume(&mut self, _: Python<'_>, _: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
-            Err(missing_state())
+        fn resume(
+            &mut self,
+            py: Python<'_>,
+            result: PyResult<Py<PyAny>>,
+        ) -> PyResult<LifecycleStep> {
+            if !matches!(self.script, AdapterScript::AwaitPreRequest) {
+                return Err(missing_state());
+            }
+            self.log.push(format!("resumed:{}", result?.bind(py)));
+            Ok(LifecycleStep::Params(rewritten_params()))
         }
 
         fn close(&mut self, _: Python<'_>) {
@@ -1137,6 +1179,105 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 assert_eq!(log.entries(), ["started", "begin", "opened"]);
                 assert_eq!(read_all(py, &stream, asynchronous), ["first", "second"]);
             }
+        });
+    }
+
+    fn hooked_machine() -> CallMachine<Synthetic> {
+        CallMachine::new(|host| {
+            Box::pin(async move {
+                let projected = host.project().await?;
+                let params = host
+                    .pre_request(PublicRequest {
+                        model: "m".into(),
+                        custom_llm_provider: "p".into(),
+                        messages: serde_json::json!([]),
+                        params: [("tools".to_string(), serde_json::json!("original-tools"))]
+                            .into_iter()
+                            .collect(),
+                        fields: &["tools"],
+                    })
+                    .await?;
+                let wire = host.before_send(wire(), context()).await?;
+                let tools = params["tools"].as_str().unwrap_or("not-a-string");
+                Ok(format!("{projected}|{tools}|{}", wire.url))
+            })
+        })
+    }
+
+    #[test]
+    fn the_pre_request_step_runs_between_projection_and_before_send() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            for asynchronous in [false, true] {
+                let (result, log) = run_scripted(
+                    py,
+                    hooked_machine(),
+                    OpScript::Answer,
+                    AdapterScript::Plain,
+                    asynchronous,
+                );
+                assert_eq!(
+                    result.unwrap().extract::<String>(py).unwrap(),
+                    "project:1|rewritten-tools|rewritten"
+                );
+                assert_eq!(
+                    log,
+                    [
+                        "started",
+                        "begin",
+                        "project",
+                        "pre_request",
+                        "before_send",
+                        "complete",
+                        "after_success",
+                        "succeeded:project:1|rewritten-tools|rewritten",
+                        "adapter.close",
+                        "host.close",
+                    ]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_pre_request_step_that_awaits_is_resumed_with_the_awaited_value() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let (result, log) = run_scripted(
+                py,
+                hooked_machine(),
+                OpScript::Answer,
+                AdapterScript::AwaitPreRequest,
+                true,
+            );
+            assert_eq!(
+                result.unwrap().extract::<String>(py).unwrap(),
+                "project:1|rewritten-tools|rewritten"
+            );
+            assert_eq!(
+                log,
+                [
+                    "started",
+                    "begin",
+                    "project",
+                    "pre_request",
+                    "resumed:hook-result",
+                    "before_send",
+                    "complete",
+                    "after_success",
+                    "succeeded:project:1|rewritten-tools|rewritten",
+                    "adapter.close",
+                    "host.close",
+                ]
+            );
         });
     }
 

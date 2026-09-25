@@ -239,3 +239,24 @@ async def test_native_messages_stream_success_log_carries_usage_rebuilt_from_the
     assert usage.completion_tokens == MESSAGES_EVENTS[4][1]["usage"]["output_tokens"]
     assert usage.prompt_tokens == MESSAGES_RESPONSE["usage"]["input_tokens"]
     assert success[0].response.choices[0].message.content == "Hello from native Messages"
+
+
+def test_native_messages_dispatches_each_callback_phase_once_when_logger_is_registered_multiple_times(
+    messages_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+
+    litellm.anthropic.messages.create(
+        **arguments(
+            messages_server,
+            callbacks=[recorder, recorder],
+            success_callback=[recorder],
+            failure_callback=[recorder],
+        )
+    )
+    recorder.wait_for("log_success_event")
+
+    assert recorder.names.count("log_pre_api_call") == 1
+    assert recorder.names.count("logging_hook") == 1
+    assert recorder.names.count("log_success_event") == 1
+    assert "log_failure_event" not in recorder.names

@@ -76,6 +76,7 @@ FAKES = {
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
     'is_internal_call': lambda: legacy.is_internal.get(),
+    'pre_request_hooks': lambda model, messages, kwargs: kwargs['logger'].pre_request(model, messages, kwargs),
     'before_deployment_call': lambda kwargs, call_type: kwargs['logger'].hook('pre', kwargs, call_type),
     'after_deployment_success': lambda kwargs, response, call_type: kwargs['logger'].hook(
         'success', response, call_type
@@ -131,6 +132,10 @@ class StubLogger:
     def hook(self, phase, value, call_type):
         self.record(phase + '_hook', call_type)
         return self.hooks.get(phase, lambda value: 'awaitable')(value)
+
+    def pre_request(self, model, messages, kwargs):
+        self.record('pre_request', (model, messages, kwargs))
+        return self.hooks.get('pre_request', lambda model, messages, kwargs: 'awaitable')(model, messages, kwargs)
 
     def failure_handler(self, error, trace, start, end):
         self.record('failure_handler', error)

@@ -1,9 +1,12 @@
-use litellm_host::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
+use litellm_host::event::{
+    FailureOrigin, MachineEvent, PublicRequest, RequestContext, Timing, WireRequest,
+};
 use litellm_host::protocol::Protocol;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use serde_json::{Map, Value};
 
 pub fn missing_state() -> PyErr {
     PyRuntimeError::new_err("missing native call state")
@@ -20,6 +23,7 @@ pub type Preflight = fn(Python<'_>, &Bound<'_, PyDict>) -> PyResult<()>;
 pub enum LifecycleStep {
     Await(Py<PyAny>),
     Arguments(Py<PyDict>),
+    Params(Map<String, Value>),
     Wire(Box<WireRequest>),
     Response(Py<PyAny>),
     Done,
@@ -60,6 +64,14 @@ pub trait PythonLifecycle: Send + Sync {
         arguments: Py<PyDict>,
         started_at: f64,
     ) -> PyResult<LifecycleStep>;
+
+    fn pre_request(
+        &mut self,
+        _py: Python<'_>,
+        request: Box<PublicRequest>,
+    ) -> PyResult<LifecycleStep> {
+        Ok(LifecycleStep::Params(request.params))
+    }
 
     fn before_send(
         &mut self,

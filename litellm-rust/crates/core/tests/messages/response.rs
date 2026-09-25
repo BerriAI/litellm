@@ -139,6 +139,75 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
 }
 
 #[rstest]
+#[tokio::test]
+async fn an_invalid_thinking_signature_retries_without_replayed_thinking(call: MessagesCall) {
+    let upstream = upstream([
+        status_response(
+            400,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "messages.3.content.0.thinking.signature.str: Input should be a valid string"
+                }
+            }),
+        ),
+        message_response(),
+    ])
+    .await;
+    let history = json!([
+        {"role": "user", "content": [{"type": "text", "text": "first question"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]},
+        {"role": "user", "content": [{"type": "text", "text": "second question"}]},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "replayed from another provider", "signature": null},
+            {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}}
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "found"}]}
+    ]);
+
+    let response = run(MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(upstream.uri()),
+        body: object(json!({
+            "model": MODEL,
+            "max_tokens": 64,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}}}],
+            "messages": history,
+        })),
+        ..call
+    })
+    .await;
+    let requests = received(&upstream).await;
+
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected one recovery retry after the signature error"
+    );
+    let first = requests[0].json();
+    let retry = requests[1].json();
+    assert_eq!(first["messages"][3]["content"][0]["type"], "thinking");
+    assert_eq!(
+        first["thinking"],
+        json!({"type": "enabled", "budget_tokens": 1024})
+    );
+    assert_eq!(
+        retry["messages"],
+        json!([
+            {"role": "user", "content": [{"type": "text", "text": "first question"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]},
+            {"role": "user", "content": [{"type": "text", "text": "second question"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "found"}]}
+        ])
+    );
+    assert!(retry.get("thinking").is_none());
+    assert!(matches!(response, Ok(MessagesOutput::Message(_))));
+}
+
+#[rstest]
 #[case::not_json(ResponseTemplate::new(200).set_body_string("not json"))]
 #[case::not_a_message(json_response(json!({"unexpected": true})))]
 #[tokio::test]

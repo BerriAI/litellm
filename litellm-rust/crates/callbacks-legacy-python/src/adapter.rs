@@ -1682,3 +1682,215 @@ logger = FailingLogger()
         });
     }
 }
+
+#[cfg(test)]
+mod pre_request_hooks_tests {
+    use std::ffi::CStr;
+
+    use litellm_host::event::PublicRequest;
+    use litellm_host_python::{LifecycleStep, PythonLifecycle};
+    use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
+    use rstest::rstest;
+    use serde_json::{Map, Value, json};
+
+    use super::LegacyLogging;
+    use crate::test_support::{legacy_call, local, namespace, run};
+
+    const CALL: &CStr = c"
+tool = {'name': 'original_tool', 'input_schema': {'type': 'object'}}
+tools = [tool]
+messages = [{'role': 'user', 'content': 'hi'}]
+kwargs = {'logger': logger, 'model': 'claude', 'messages': messages, 'tools': tools, 'max_tokens': 16}
+logger.hooks = {'pre': lambda kwargs: kwargs}
+";
+
+    fn object(value: Value) -> Map<String, Value> {
+        let Value::Object(map) = value else {
+            panic!("expected a json object, got {value}");
+        };
+        map
+    }
+
+    fn request() -> Box<PublicRequest> {
+        Box::new(PublicRequest {
+            model: "claude".into(),
+            custom_llm_provider: "anthropic".into(),
+            messages: json!([{"role": "user", "content": "hi"}]),
+            params: object(json!({
+                "tools": [{"name": "original_tool", "input_schema": {"type": "object"}}],
+                "max_tokens": 16,
+            })),
+            fields: &["tools", "stream", "tool_choice", "max_tokens"],
+        })
+    }
+
+    /// A call past `begin` and its deployment hook, where the route projects it.
+    fn prepared(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> LegacyLogging {
+        let mut logging = legacy_call(py, locals, asynchronous);
+        let kwargs = local(locals, "kwargs")
+            .cast_into::<PyDict>()
+            .unwrap()
+            .unbind();
+        match logging.begin(py, kwargs, 0.0).unwrap() {
+            LifecycleStep::Await(hook_result) => {
+                logging.resume(py, Ok(hook_result)).unwrap();
+            }
+            LifecycleStep::Arguments(_) => {}
+            _ => panic!("begin ends in the prepared arguments"),
+        }
+        logging
+    }
+
+    fn awaiting(step: LifecycleStep) -> Py<PyAny> {
+        let LifecycleStep::Await(awaitable) = step else {
+            panic!("expected the hooks' awaitable");
+        };
+        awaitable
+    }
+
+    fn params(step: LifecycleStep) -> Map<String, Value> {
+        let LifecycleStep::Params(params) = step else {
+            panic!("expected the answered params");
+        };
+        params
+    }
+
+    fn expose_view(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &LegacyLogging) {
+        locals
+            .set_item("view", logging.call.kwargs().clone_ref(py))
+            .unwrap();
+    }
+
+    #[rstest]
+    #[case::synchronous(false)]
+    #[case::asynchronous(true)]
+    fn pre_request_hooks_run_only_for_asynchronous_calls(#[case] asynchronous: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            let mut logging = prepared(py, &locals, asynchronous);
+            let step = logging.pre_request(py, request()).unwrap();
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names.contains(&"pre_request".to_string()), asynchronous);
+            match step {
+                LifecycleStep::Await(_) => {
+                    assert!(asynchronous, "a sync call has no loop to await on")
+                }
+                LifecycleStep::Params(answered) => {
+                    assert!(!asynchronous, "an async call awaits its hooks");
+                    assert_eq!(answered, request().params);
+                }
+                _ => panic!("pre_request awaits the hooks or answers unchanged"),
+            }
+        });
+    }
+
+    #[test]
+    fn the_hooks_receive_the_callers_objects_and_the_resolved_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            let mut logging = prepared(py, &locals, true);
+            awaiting(logging.pre_request(py, request()).unwrap());
+            run(
+                py,
+                &locals,
+                c"
+[(model, hooked_messages, hooked)] = [value for name, value in logger.calls if name == 'pre_request']
+assert model == 'claude'
+assert hooked_messages is messages
+assert hooked['tools'] is tools
+assert hooked['litellm_params'] == {'custom_llm_provider': 'anthropic'}
+assert hooked['litellm_logging_obj'] is logger
+assert hooked['max_tokens'] == 16
+",
+            );
+        });
+    }
+
+    #[test]
+    fn edits_the_hooks_return_reach_the_route_and_every_later_reader() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            run(
+                py,
+                &locals,
+                c"
+renamed = [{'name': 'renamed_tool', 'input_schema': {'type': 'object'}}]
+logger.hooks['pre_request'] = lambda model, messages, kwargs: {
+    **kwargs, 'tools': renamed, 'stream': False, 'max_agentic_loops': 3
+}
+",
+            );
+            let mut logging = prepared(py, &locals, true);
+            let returned = awaiting(logging.pre_request(py, request()).unwrap());
+            let answered = params(logging.resume(py, Ok(returned)).unwrap());
+            assert_eq!(
+                answered,
+                object(json!({
+                    "tools": [{"name": "renamed_tool", "input_schema": {"type": "object"}}],
+                    "stream": false,
+                    "max_tokens": 16,
+                }))
+            );
+            expose_view(py, &locals, &logging);
+            run(
+                py,
+                &locals,
+                c"
+assert view['tools'] is renamed
+assert view['stream'] is False
+assert view['max_agentic_loops'] == 3
+assert 'litellm_params' not in view
+assert view['litellm_logging_obj'] is logger
+",
+            );
+        });
+    }
+
+    #[test]
+    fn hooks_that_return_none_change_nothing() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            run(
+                py,
+                &locals,
+                c"logger.hooks['pre_request'] = lambda model, messages, kwargs: None",
+            );
+            let mut logging = prepared(py, &locals, true);
+            let returned = awaiting(logging.pre_request(py, request()).unwrap());
+            let answered = params(logging.resume(py, Ok(returned)).unwrap());
+            assert_eq!(answered, request().params);
+            expose_view(py, &locals, &logging);
+            run(
+                py,
+                &locals,
+                c"
+assert view['tools'] is tools
+assert 'stream' not in view
+assert 'litellm_params' not in view
+",
+            );
+        });
+    }
+
+    #[test]
+    fn a_raising_hook_fails_the_call_with_its_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            let mut logging = prepared(py, &locals, true);
+            awaiting(logging.pre_request(py, request()).unwrap());
+            let failure = PyRuntimeError::new_err("hook refused");
+            let raised = failure.value(py).clone();
+            let error = logging.resume(py, Err(failure)).err().unwrap();
+            assert!(error.value(py).is(&raised));
+        });
+    }
+}

@@ -47,6 +47,10 @@ async fn perform<R: Protocol, H: Host<R>>(host: &H, op: HostOp<R>) -> Result<(),
             .await
             .map(|projection| reply.send(projection)),
         HostOp::Custom(op) => host.custom_op(op).await,
+        HostOp::PreRequest { request, reply } => host
+            .pre_request(*request)
+            .await
+            .map(|params| reply.send(params)),
         HostOp::BeforeSend {
             wire,
             context,
@@ -59,6 +63,10 @@ async fn perform<R: Protocol, H: Host<R>>(host: &H, op: HostOp<R>) -> Result<(),
             .emit(&CallEvent::Machine(event))
             .await
             .map(|()| reply.send(())),
+        HostOp::AfterResponse { response, reply } => host
+            .after_response(*response)
+            .await
+            .map(|verdict| reply.send(verdict)),
         HostOp::Open(head, reply) => host.open(head).await.map(|demand| reply.send(demand)),
         HostOp::Deliver(chunk, reply) => host.deliver(chunk).await.map(|demand| reply.send(demand)),
     }
@@ -68,8 +76,11 @@ async fn perform<R: Protocol, H: Host<R>>(host: &H, op: HostOp<R>) -> Result<(),
 mod tests {
     use std::sync::Mutex;
 
+    use serde_json::json;
+
     use super::*;
-    use crate::host::Reply;
+    use crate::event::PublicRequest;
+    use crate::host::{Reply, Verdict};
     use crate::machine::{CallMachine, MachineFault};
 
     struct Unit;
@@ -166,6 +177,35 @@ mod tests {
         assert_eq!(
             *host.seen.lock().unwrap(),
             ["started", "project", "op:sign", "op:send", "failed"]
+        );
+    }
+
+    #[tokio::test]
+    async fn hook_ops_default_to_handing_back_what_the_machine_offered() {
+        let host = Recording::default();
+        let machine = CallMachine::<Unit>::new(|host| {
+            Box::pin(async move {
+                host.project().await?;
+                let request = PublicRequest {
+                    model: "model".into(),
+                    custom_llm_provider: "provider".into(),
+                    messages: json!([]),
+                    params: [("tools".to_string(), json!(["a"]))].into_iter().collect(),
+                    fields: &["tools"],
+                };
+                if host.pre_request(request.clone()).await? != request.params {
+                    return Err("pre_request altered the params");
+                }
+                match host.after_response(()).await? {
+                    Verdict::Return(()) => Ok(()),
+                    Verdict::Resend(_) => Err("after_response asked to resend"),
+                }
+            })
+        });
+        assert_eq!(run(machine, &host).await, Ok(()));
+        assert_eq!(
+            *host.seen.lock().unwrap(),
+            ["started", "project", "succeeded"]
         );
     }
 

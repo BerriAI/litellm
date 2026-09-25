@@ -53,9 +53,23 @@ async fn drive_until(
                 });
                 host.custom_op(op).await.map_err(HostFailure::Error)
             }
+            HostOp::PreRequest { request, reply } => {
+                ops.push("PreRequest");
+                host.pre_request(*request)
+                    .await
+                    .map(|params| reply.send(params))
+                    .map_err(HostFailure::Error)
+            }
             HostOp::BeforeSend { wire, reply, .. } => {
                 ops.push("BeforeSend");
                 intercept(*wire).map(|wire| reply.send(wire))
+            }
+            HostOp::AfterResponse { response, reply } => {
+                ops.push("AfterResponse");
+                host.after_response(*response)
+                    .await
+                    .map(|verdict| reply.send(verdict))
+                    .map_err(HostFailure::Error)
             }
             HostOp::Emit(event, reply) => {
                 let event = CallEvent::Machine(event);
@@ -83,7 +97,9 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                     match step.unwrap() {
                         MachineStep::Host(HostOp::Project(reply)) => reply.send(host.project().await.unwrap()),
                         MachineStep::Host(HostOp::Custom(op)) => host.custom_op(op).await.unwrap(),
+                        MachineStep::Host(HostOp::PreRequest { request, reply }) => reply.send(host.pre_request(*request).await.unwrap()),
                         MachineStep::Host(HostOp::BeforeSend { wire, reply, .. }) => reply.send(*wire),
+                        MachineStep::Host(HostOp::AfterResponse { response, reply }) => reply.send(host.after_response(*response).await.unwrap()),
                         MachineStep::Host(HostOp::Emit(_, reply)) => reply.send(()),
                         MachineStep::Complete(_) => panic!("the stalled call completed"),
                     }

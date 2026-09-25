@@ -60,9 +60,11 @@ pub(crate) enum Logging {
     FailureHandler,
 }
 
-/// The `litellm.utils` fan-outs that run every callback's deployment hook.
+/// The fan-outs that run one hook of every registered callback.
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
 pub(crate) enum DeploymentHooks {
+    #[strum(serialize = "pre_request_hooks")]
+    PreRequest,
     #[strum(serialize = "before_deployment_call")]
     BeforeDeploymentCall,
     #[strum(serialize = "after_deployment_success")]
