@@ -197,9 +197,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             litellm.module_level_client.get(
                 f"{self.base_url}/lm/deployments",
                 headers=self.headers,
-                params={
+                params={  # mutable-ok: one-shot query-params dict passed directly to httpx, not stored
                     "scenarioId": "orchestration",
-                    "executableIds": ["orchestration"],
+                    "executableIds": ["orchestration"],  # mutable-ok: list literal required by httpx multi-value param serialization
                     "status": "RUNNING",
                 },
             )
@@ -208,7 +208,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         )
         candidates: Final[list[tuple[str, str, str]]] = sorted(
             (
-                (dep["deploymentUrl"], dep["createdAt"], dep.get("name", ""))
+                (dep["deploymentUrl"], dep["createdAt"], dep.get("configurationName", ""))
                 for dep in resources
                 if dep.get("deploymentUrl")
             ),
