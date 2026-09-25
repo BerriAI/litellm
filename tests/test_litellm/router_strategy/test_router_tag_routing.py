@@ -2823,7 +2823,7 @@ def test_update_router_config_schema_includes_tag_routing_prefix():
     # UpdateRouterConfig before calling update_settings; a field missing here
     # causes model_dump(exclude_none=True) to silently drop it before
     # update_settings is ever called -- the same bug shape LIT-3152 fixed for
-    # retry_policy (see tests/test_litellm/test_router_retry_policy_update.py).
+    # retry_policy (see tests/unit/test_router_retry_policy_update.py).
     from litellm.types.router import UpdateRouterConfig
 
     config = UpdateRouterConfig(tag_routing_prefix="route:")

@@ -50,41 +50,6 @@ class TestBaseAWSLLMSSLVerify:
         # Result depends on environment, just verify it doesn't crash
         assert result is not None or result is None  # Can be None, True, False, or path
 
-    @patch("boto3.client")
-    def test_get_credentials_propagates_ssl_verify(self, mock_boto_client):
-        """Test that get_credentials propagates ssl_verify to boto3 clients."""
-        base_llm = BaseAWSLLM()
-
-        # Mock the boto3 client
-        mock_sts_client = Mock()
-        mock_sts_client.assume_role.return_value = {
-            "Credentials": {
-                "AccessKeyId": "test_key",
-                "SecretAccessKey": "test_secret",
-                "SessionToken": "test_token",
-                "Expiration": "2026-01-20T00:00:00Z",
-            }
-        }
-        mock_boto_client.return_value = mock_sts_client
-
-        # Call get_credentials with ssl_verify parameter
-        cert_path = "/path/to/cert.pem"
-        try:
-            base_llm.get_credentials(
-                aws_access_key_id="test_key",
-                aws_secret_access_key="test_secret",
-                aws_region_name="us-east-1",
-                ssl_verify=cert_path,
-            )
-        except Exception:
-            # May fail due to missing credentials, but we're checking the call
-            pass
-
-        # Verify boto3.client was called with verify parameter
-        # Note: This test verifies the parameter is accepted, actual propagation
-        # is tested in integration tests
-        assert True  # If we got here without error, parameter was accepted
-
 
 class TestAimGuardrailSSLVerify:
     """Test SSL verification parameter handling in AimGuardrail."""

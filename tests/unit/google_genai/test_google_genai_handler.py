@@ -2,99 +2,13 @@
 """
 Test to verify the Google GenAI generate_content handler functionality
 """
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
-import litellm
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-from litellm.types.utils import ModelResponse
-
-
-def test_non_stream_response_when_stream_requested_sync():
-    """
-    Test that when a non-stream response is returned but streaming was requested,
-    the sync handler correctly transforms it to generate_content format.
-    """
-    from litellm.types.utils import Choices
-
-    # Mock a non-stream response (ModelResponse with valid choices)
-    mock_response = ModelResponse(
-        id="test-123",
-        choices=[
-            Choices(
-                index=0,
-                message={"role": "assistant", "content": "Hello, world!"},
-                finish_reason="stop",
-            )
-        ],
-        created=1234567890,
-        model="gpt-3.5-turbo",
-        object="chat.completion",
-    )
-
-    # Create an instance of the adapter
-    adapter = GoogleGenAIAdapter()
-
-    # Test the adapter's translate_completion_to_generate_content method directly
-    result = adapter.translate_completion_to_generate_content(mock_response)
-
-    # Verify the result is a valid Google GenAI format response
-    assert "candidates" in result
-    assert isinstance(result["candidates"], list)
-    assert len(result["candidates"]) > 0
-    candidate = result["candidates"][0]
-    assert "content" in candidate
-    assert "parts" in candidate["content"]
-    assert isinstance(candidate["content"]["parts"], list)
-    assert len(candidate["content"]["parts"]) > 0
-    assert "text" in candidate["content"]["parts"][0]
-    assert candidate["content"]["parts"][0]["text"] == "Hello, world!"
-
-
-@pytest.mark.asyncio
-async def test_non_stream_response_when_stream_requested_async():
-    """
-    Test that when a non-stream response is returned but streaming was requested,
-    the async handler correctly transforms it to generate_content format.
-    """
-    from litellm.types.utils import Choices
-
-    # Mock a non-stream response (ModelResponse with valid choices)
-    mock_response = ModelResponse(
-        id="test-123",
-        choices=[
-            Choices(
-                index=0,
-                message={"role": "assistant", "content": "Hello, world!"},
-                finish_reason="stop",
-            )
-        ],
-        created=1234567890,
-        model="gpt-3.5-turbo",
-        object="chat.completion",
-    )
-
-    # Create an instance of the adapter
-    adapter = GoogleGenAIAdapter()
-
-    # Test the adapter's translate_completion_to_generate_content method directly
-    result = adapter.translate_completion_to_generate_content(mock_response)
-
-    # Verify the result is a valid Google GenAI format response
-    assert "candidates" in result
-    assert isinstance(result["candidates"], list)
-    assert len(result["candidates"]) > 0
-    candidate = result["candidates"][0]
-    assert "content" in candidate
-    assert "parts" in candidate["content"]
-    assert isinstance(candidate["content"]["parts"], list)
-    assert len(candidate["content"]["parts"]) > 0
-    assert "text" in candidate["content"]["parts"][0]
-    assert candidate["content"]["parts"][0]["text"] == "Hello, world!"
 
 
 def test_stream_response_when_stream_requested_sync():

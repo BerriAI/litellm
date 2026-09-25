@@ -4,7 +4,7 @@ OpenAPI compliance tests for Google Interactions API.
 Validates that our SDK requests/responses match the OpenAPI spec at:
 https://ai.google.dev/static/api/interactions.openapi.json
 
-Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
+Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 """
 
 import json

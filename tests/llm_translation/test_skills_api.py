@@ -277,4 +277,4 @@ class BaseSkillsAPITest(ABC):
 #
 # Transformation logic (URL construction, headers, request/response parsing) is
 # covered by unit tests in:
-#   tests/test_litellm/test_anthropic_skills_transformation.py
+#   tests/unit/test_anthropic_skills_transformation.py
