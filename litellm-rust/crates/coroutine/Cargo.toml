@@ -1,15 +1,15 @@
 [package]
-name = "litellm-host"
+name = "litellm-coroutine"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Async coroutines on stable Rust whose every yield carries its own typed reply"
 
 [dependencies]
-litellm-auth.workspace = true
-litellm-coroutine.workspace = true
-serde_json.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 rstest.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
