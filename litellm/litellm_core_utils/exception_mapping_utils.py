@@ -2708,6 +2708,14 @@ def exception_type(
             exception=e,
         )
 
+        provider_status_code: Final = getattr(original_exception, "status_code", None)
+        if (
+            isinstance(provider_status_code, int)
+            and not isinstance(provider_status_code, bool)
+            and 100 <= provider_status_code <= 599
+        ):
+            object.__setattr__(e, "provider_status_code", provider_status_code)
+
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)

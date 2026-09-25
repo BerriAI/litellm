@@ -216,6 +216,33 @@ def test_order_fallback_status_policy_helpers() -> None:
     assert _order_fallback_provider_status_code(_StatusError(409)) == 409
     assert _order_fallback_provider_status_code(_ResponseStatusError(503)) == 503
     assert _order_fallback_provider_status_code(RouterRateLimitErrorBasic(model="test-model")) is None
+    assert (
+        _order_fallback_provider_status_code(
+            litellm.APIConnectionError(message="connection failed", model="test-model", llm_provider="openai")
+        )
+        is None
+    )
+    assert (
+        _order_fallback_provider_status_code(
+            litellm.Timeout(message="request timed out", model="test-model", llm_provider="openai")
+        )
+        is None
+    )
+    timeout_response: Final = httpx.Response(
+        status_code=408,
+        request=httpx.Request("POST", "https://provider.example/v1"),
+    )
+    assert (
+        _order_fallback_provider_status_code(
+            litellm.Timeout(
+                message="provider request timeout",
+                model="test-model",
+                llm_provider="openai",
+                response=timeout_response,
+            )
+        )
+        == 408
+    )
 
     dedicated, status_code, policy_match, skip = _evaluate_order_fallback_status_policy(
         error=_StatusError(401),
@@ -301,6 +328,51 @@ async def test_empty_order_fallback_status_codes_disable_order_fallback() -> Non
         await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
 
     assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_kind",
+    ["connection", "timeout"],
+    ids=["connection-error-500", "timeout-408"],
+)
+async def test_synthetic_status_codes_do_not_trigger_order_fallback(error_kind: str) -> None:
+    synthetic_error: Final[Exception] = (
+        litellm.APIConnectionError(message="connection failed", model="test-model", llm_provider="openai")
+        if error_kind == "connection"
+        else litellm.Timeout(message="request timed out", model="test-model", llm_provider="openai")
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "bad",
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "good",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+        order_fallback_status_codes=[408, "5xx"],
+    )
+
+    provider_call: Final = AsyncMock(side_effect=synthetic_error)
+    with patch("litellm.acompletion", provider_call):
+        with pytest.raises(openai.APIConnectionError):
+            await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    provider_call.assert_awaited_once()
 
 
 def test_order_fallback_status_codes_apply_to_sync_completion() -> None:
@@ -554,6 +626,62 @@ async def test_router_order_fallback_three_levels():
         messages=[{"role": "user", "content": "hi"}],
     )
     assert response._hidden_params["model_id"] == "3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("second_status_code", "should_reach_order_3"),
+    [(401, False), (503, True)],
+)
+async def test_order_fallback_status_policy_is_enforced_for_each_order_hop(
+    second_status_code: int,
+    should_reach_order_3: bool,
+) -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": _StatusError(429),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": _StatusError(second_status_code),
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "success from order 3",
+                    "order": 3,
+                },
+                "model_info": {"id": "3"},
+            },
+        ],
+        num_retries=0,
+        order_fallback_status_codes=[429, "5xx"],
+    )
+
+    if should_reach_order_3:
+        response = await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+        assert response._hidden_params["model_id"] == "3"
+        return
+
+    with pytest.raises(openai.APIError) as exc_info:
+        await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+    assert exc_info.value.status_code == second_status_code
 
 
 @pytest.mark.asyncio

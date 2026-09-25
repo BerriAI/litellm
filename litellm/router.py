@@ -763,12 +763,22 @@ def _coerce_http_status_code(value: object) -> int | None:
 def _order_fallback_provider_status_code(error: Exception) -> int | None:
     if isinstance(error, (RouterRateLimitError, RouterRateLimitErrorBasic)):
         return None
+    response_status_code: Final = _coerce_http_status_code(
+        getattr(getattr(error, "response", None), "status_code", None)
+    )
+    mapped_provider_status_code: Final = _coerce_http_status_code(getattr(error, "provider_status_code", None))
+    if mapped_provider_status_code is not None:
+        return mapped_provider_status_code
+    if isinstance(error, openai.APIConnectionError):
+        return response_status_code
+    if isinstance(error, openai.APIResponseValidationError):
+        return None
     return next(
         (
             status_code
             for value in (
                 getattr(error, "status_code", None),
-                getattr(getattr(error, "response", None), "status_code", None),
+                response_status_code,
             )
             if (status_code := _coerce_http_status_code(value)) is not None
         ),
@@ -7389,9 +7399,14 @@ class Router:
             # Determine which order levels have already been tried
             skip_up_to: Final = current_target if current_target is not None else order_values[0]
             # Build order-based fallback entries (skip already-tried levels)
-            order_fallback_entries: Final[list] = [
+            higher_order_fallback_entries: Final[list] = [
                 {"model": order_model_group, "_target_order": o} for o in order_values if o > skip_up_to
             ]
+            order_fallback_entries: Final[list] = (
+                higher_order_fallback_entries
+                if _configured_order_status_codes is None
+                else higher_order_fallback_entries[:1]
+            )
             # Get external fallbacks — handle both standard and non-standard formats
             external_fallback_group: list | None = None
             if fallbacks is not None and lookup_groups:
