@@ -211,6 +211,8 @@ try:
     import orjson
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import STATE_STOPPED
+    from apscheduler.triggers.base import BaseTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
@@ -7432,75 +7434,69 @@ class ProxyConfig:
         if scheduler is None:
             return
 
-        # Remove existing job if it exists
-        try:
-            scheduler.remove_job("spend_log_cleanup_job")
-            verbose_proxy_logger.info("Removed existing spend log cleanup job")
-        except Exception:
-            pass  # Job might not exist, which is fine
-
-        # Schedule new job if retention period is set (not None)
-        retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
-        autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
-        health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
-        daily_tag_spend_retention: Final = general_settings.get("maximum_daily_tag_spend_retention_period")
-        if (
-            retention_period is not None
-            or autorouter_retention is not None
-            or health_check_retention is not None
-            or daily_tag_spend_retention is not None
-        ):
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-                SpendLogCleanup,
+        wants_job: Final = any(
+            general_settings.get(key) is not None
+            for key in (
+                "maximum_spend_logs_retention_period",
+                "maximum_autorouter_session_retention_period",
+                "maximum_health_check_retention_period",
+                "maximum_daily_tag_spend_retention_period",
             )
+        )
+        if not wants_job:
+            if scheduler.get_job("spend_log_cleanup_job") is not None:
+                scheduler.remove_job("spend_log_cleanup_job")
+                verbose_proxy_logger.info("Removed existing spend log cleanup job")
+            return
 
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+        trigger: Final = self._spend_log_cleanup_trigger()
+        if trigger is None:
+            return
+        from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+            SpendLogCleanup,
+        )
 
-            if cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
+        scheduler.add_job(
+            SpendLogCleanup().cleanup_old_spend_logs,
+            trigger,
+            args=[prisma_client],
+            id="spend_log_cleanup_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import (
-                    duration_in_seconds,
-                )
+    def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
+        """The trigger for the current cleanup settings, or None (logged) when they do not parse.
+        Built before the live job is touched so a bad edit keeps the previous schedule running."""
+        cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
+        if cleanup_cron:
+            from apscheduler.triggers.cron import CronTrigger
 
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    # this runs against a started scheduler, which the startup stagger sweep
-                    # cannot reach, so the offset is applied here or the job reconverges across
-                    # replicas the first time an admin edits the retention settings
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        stagger_trigger(
-                            job_id="spend_log_cleanup_job",
-                            trigger=IntervalTrigger(seconds=interval_seconds),
-                            period_seconds=interval_seconds,
-                            settings=parse_stagger_settings(general_settings),
-                        ),
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with interval: %s", retention_interval)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+            try:
+                cron_trigger: Final[BaseTrigger] = CronTrigger.from_crontab(cleanup_cron)
+            except (ValueError, TypeError, AttributeError):
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
+                return None
+            return cron_trigger
+        retention_interval: Final[object] = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+        if not isinstance(retention_interval, str):
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
+        try:
+            interval_seconds: Final = duration_in_seconds(retention_interval)
+        except ValueError:
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
+        # this runs against a started scheduler, which the startup stagger sweep
+        # cannot reach, so the offset is applied here or the job reconverges across
+        # replicas the first time an admin edits the retention settings
+        return stagger_trigger(
+            job_id="spend_log_cleanup_job",
+            trigger=IntervalTrigger(seconds=interval_seconds),
+            period_seconds=interval_seconds,
+            settings=parse_stagger_settings(general_settings),
+        )
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
         global general_settings
@@ -7646,10 +7642,21 @@ class ProxyConfig:
         schedule: Final = self._resolved_cleanup_schedule()
         wants_job: Final = any(value is not None for value in schedule[:4])
         has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
-        job_missing: Final = wants_job and not has_job and schedule != self._last_cleanup_schedule_attempt
-        if previous_cleanup_schedule != schedule or job_missing or (has_job and not wants_job):
+        # while the scheduler is still stopped the startup block owns the first registration
+        scheduler_running: Final = scheduler is not None and scheduler.state != STATE_STOPPED
+        job_missing: Final = (
+            wants_job and not has_job and scheduler_running and schedule != self._last_cleanup_schedule_attempt
+        )
+        if not (previous_cleanup_schedule != schedule or job_missing or (has_job and not wants_job)):
+            return
+        try:
             await self._reschedule_spend_log_cleanup_job()
-            self._last_cleanup_schedule_attempt = schedule
+        except Exception as exc:
+            verbose_proxy_logger.exception(
+                "Spend log cleanup could not be rescheduled, will retry on next sync: %s", exc
+            )
+            return
+        self._last_cleanup_schedule_attempt = schedule
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         _apply_ssrf_general_settings(db_values)
