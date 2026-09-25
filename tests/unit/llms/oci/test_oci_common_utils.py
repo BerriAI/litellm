@@ -5,6 +5,8 @@ Covers schema utilities, signing helpers, and credential resolution paths
 that require no real OCI credentials or network calls.
 """
 
+import sys
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -212,6 +214,42 @@ def test_get_oci_base_url_empty_region_falls_back_to_default(monkeypatch):
 def test_get_oci_base_url_accepts_valid_region(region):
     url = get_oci_base_url({"oci_region": region})
     assert url == f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+
+
+_NON_COMMERCIAL_REALM_REGIONS = [
+    ("us-langley-1", "oraclegovcloud.com"),
+    ("us-gov-ashburn-1", "oraclegovcloud.com"),
+    ("uk-gov-london-1", "oraclegovcloud.uk"),
+]
+
+
+@pytest.mark.parametrize(("region", "second_level_domain"), _NON_COMMERCIAL_REALM_REGIONS)
+def test_get_oci_base_url_resolves_realm_from_region_via_sdk(monkeypatch, region, second_level_domain):
+    pytest.importorskip("oci")
+    monkeypatch.delenv("OCI_DEFAULT_REALM", raising=False)
+    # Realm domains per the OCI Python SDK's oci.regions_definitions (v2.184.0, checked 2026-09-25)
+    url = get_oci_base_url({"oci_region": region})
+    assert url == f"https://inference.generativeai.{region}.oci.{second_level_domain}"
+
+
+@pytest.fixture
+def without_oci_sdk(monkeypatch):
+    monkeypatch.setitem(sys.modules, "oci", None)
+    monkeypatch.setitem(sys.modules, "oci.regions", None)
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+def test_get_oci_base_url_without_sdk_uses_default_realm_env(monkeypatch):
+    monkeypatch.setenv("OCI_DEFAULT_REALM", "oraclegovcloud.com")
+    url = get_oci_base_url({"oci_region": "us-langley-1"})
+    assert url == "https://inference.generativeai.us-langley-1.oci.oraclegovcloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+def test_get_oci_base_url_without_sdk_defaults_to_commercial_realm(monkeypatch):
+    monkeypatch.delenv("OCI_DEFAULT_REALM", raising=False)
+    url = get_oci_base_url({"oci_region": "us-langley-1"})
+    assert url == "https://inference.generativeai.us-langley-1.oci.oraclecloud.com"
 
 
 # ---------------------------------------------------------------------------

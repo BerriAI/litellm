@@ -77,7 +77,9 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     Required call-time params (via optional_params or env vars):
     - ``oci_compartment_id`` / ``OCI_COMPARTMENT_ID``
-    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``)
+    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``). Government and other
+      non-commercial realms resolve through the OCI SDK when it is installed; otherwise set
+      ``OCI_DEFAULT_REALM`` (e.g. ``oraclegovcloud.com``) or pass ``api_base``.
 
     Optional call-time params:
     - ``oci_serving_mode``: ``"ON_DEMAND"`` (default) or ``"DEDICATED"``
