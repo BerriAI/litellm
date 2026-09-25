@@ -903,12 +903,10 @@
           "type": "boolean"
         },
         "supports_bedrock_runtime_chat_completions_response_format": {
-          "type": "boolean",
-          "description": "The Bedrock native /v1/chat/completions route enforces a json_schema response_format for this model; unset means LiteLLM serves those requests through Converse's json_tool_call emulation."
+          "type": "boolean"
         },
         "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
-          "type": "boolean",
-          "description": "The Bedrock native /v1/chat/completions route serves this model's function tools with any reasoning_effort; unset means LiteLLM serves a tools request through Converse unless reasoning_effort is exactly 'none'."
+          "type": "boolean"
         },
         "supports_computer_use": {
           "type": "boolean"
