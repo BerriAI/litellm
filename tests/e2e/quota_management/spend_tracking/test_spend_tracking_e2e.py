@@ -440,7 +440,8 @@ def test_end_user_header_attributes_responses_row(
     """Codex CLI has no body field for the end user, so its config.toml http_headers
     attach the customer header (and x-litellm-tags) to every /v1/responses call.
     A regression that stops reading either header on the Responses route, drops the
-    tags, or costs the row at zero fails here."""
+    tags, costs the row at zero, or leaves the customer's own spend total behind the
+    row fails here."""
     customer = resources.customer(f"e2e-codex-{unique_marker()}")
     tag = f"codex-{unique_marker()}"
     headers = ClientAttributionHeaders.model_validate(
@@ -460,6 +461,10 @@ def test_end_user_header_attributes_responses_row(
     assert row.call_type == "aresponses", f"row is not a Responses row: {_summarize(rows)}"
     assert tag in (row.request_tags or []), f"tag {tag!r} missing from {row.request_tags}"
     assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
+    customer_total = client.poll_customer_spend(customer)
+    assert _approx_equal(customer_total, row.spend or 0), (
+        f"/customer/info spend {customer_total} != the row's {row.spend}: {_summarize(rows)}"
+    )
 
 
 @pytest.mark.covers("quota_management.spend_tracking.per_model.writes_own_rows")

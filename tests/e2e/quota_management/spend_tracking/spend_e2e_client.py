@@ -37,6 +37,7 @@ from models import (
     ChatMessage,
     ChatMetadata,
     ChatResponse,
+    CustomerInfoParams,
     DateRangeParams,
     EmbedBody,
     EmbedResponse,
@@ -234,6 +235,10 @@ class TeamInfoSpendResponse(BaseModel):
     team_info: TeamInfoSpend
 
 
+class CustomerSpendResponse(BaseModel):
+    spend: float | None = None
+
+
 def _chat_body(
     model: str,
     content: str,
@@ -375,6 +380,31 @@ class SpendClient:
     def poll_team_spend(self, team_id: str, *, minimum: float = 0.0) -> float:
         outcome: Final = await_converged(
             lambda: self.team_spend(team_id),
+            converged=lambda spend: spend > minimum,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
+    def customer_spend(self, customer_id: str) -> float:
+        """0.0 until the spend writer has upserted the end-user row, which /customer/info 404s before."""
+        looked_up: Final = self.proxy.transport.get(
+            "/customer/info",
+            headers=self.proxy.transport.master,
+            params=CustomerInfoParams(end_user_id=customer_id),
+            response_type=CustomerSpendResponse,
+        )
+        match looked_up:
+            case Success(data=data):
+                return data.spend or 0.0
+            case _:
+                return 0.0
+
+    def poll_customer_spend(self, customer_id: str, *, minimum: float = 0.0) -> float:
+        outcome: Final = await_converged(
+            lambda: self.customer_spend(customer_id),
             converged=lambda spend: spend > minimum,
             timeout=self.proxy.poll_timeout,
             interval=self.proxy.poll_interval,
