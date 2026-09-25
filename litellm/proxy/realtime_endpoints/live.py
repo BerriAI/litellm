@@ -21,10 +21,8 @@ from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.chatgpt.live import LiveDeployment, LiveOperation, LiveTransport, live_session_path
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
-from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy._types import (
     LiteLLM_ProjectTableCachedObj,
-    LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
@@ -33,18 +31,16 @@ from litellm.proxy.auth.auth_checks import (
     can_org_access_model,
     can_user_call_model,
     collect_matched_model_access_groups,
+    get_model_access_group_budgets_batch,
     get_org_object,
+    get_project_object,
+    get_team_member_default_budget,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import get_websocket_api_key, user_api_key_auth
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.common_utils.user_api_key_cache import (
-    NO_TEAM_MEMBERSHIP_SENTINEL,
-    model_access_group_cache_key,
-    team_membership_reservation_cache_key,
-)
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # limiter class is the existing hook identity
 )
@@ -58,11 +54,6 @@ from litellm.proxy.realtime_endpoints.call_supervision import CALL_SUPERVISORS, 
 from litellm.proxy.spend_tracking.budget_reservation import (
     release_or_invalidate_budget_reservation,  # pyright: ignore[reportUnknownVariableType]  # budget helper accepts legacy reservation dicts
 )
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.project_repository import ProjectRepository
-from litellm.repositories.table_repositories import ModelAccessGroupBudgetRepository, TeamMembershipRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 
 _routes: Final = APIRouter()
 _JSON: Final = TypeAdapter[JsonValue](JsonValue)
@@ -685,25 +676,12 @@ async def _live_team_membership(auth: UserAPIKeyAuth) -> object | None:
 
     if auth.team_id is None or auth.user_id is None:
         return None
-    membership_key: Final = team_membership_reservation_cache_key(user_id=auth.user_id, team_id=auth.team_id)
-    membership_cached_raw: Final[object] = _OBJECT_VALUE.validate_python(
-        await server.user_api_key_cache.async_get_cache(key=membership_key)
-    )
-    membership_cached: Final = (
-        CacheCodec.deserialize(membership_cached_raw, model_type=LiteLLM_TeamMembership)
-        if membership_cached_raw is not None and membership_cached_raw != NO_TEAM_MEMBERSHIP_SENTINEL
-        else None
-    )
-    if membership_cached is not None or membership_cached_raw == NO_TEAM_MEMBERSHIP_SENTINEL:
-        return membership_cached
-    return await TeamMembershipRepository(server.prisma_client).table.find_unique(
-        where={  # mutable-ok: Prisma serializes query filters from concrete dictionaries
-            "user_id_team_id": {  # mutable-ok: Prisma serializes nested filters from concrete dictionaries
-                "user_id": auth.user_id,
-                "team_id": auth.team_id,
-            }
-        },
-        include={"litellm_budget_table": True},  # mutable-ok: Prisma serializes concrete include dictionaries
+    return await get_team_membership(
+        user_id=auth.user_id,
+        team_id=auth.team_id,
+        prisma_client=server.prisma_client,
+        user_api_key_cache=server.user_api_key_cache,
+        proxy_logging_obj=server.proxy_logging_obj,
     )
 
 
@@ -712,12 +690,17 @@ async def _live_team(auth: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
 
     if auth.team_id is None:
         return None
-    team_from_cache: Final = await server.user_api_key_cache.async_get_cache(
-        key=f"team_id:{auth.team_id}", model_type=LiteLLM_TeamTableCachedObj
-    )
-    if team_from_cache is not None:
-        return team_from_cache
-    return await TeamRepository(server.prisma_client).find_by_id(auth.team_id, id_field="team_id")
+    try:
+        return await get_team_object(
+            team_id=auth.team_id,
+            prisma_client=server.prisma_client,
+            user_api_key_cache=server.user_api_key_cache,
+            proxy_logging_obj=server.proxy_logging_obj,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None
+        raise
 
 
 def _live_team_budget_configured(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable | None) -> bool:
@@ -748,12 +731,12 @@ async def _live_default_budget(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable | N
         return None
     from litellm.proxy import proxy_server as server
 
-    default_cached: Final = await server.user_api_key_cache.async_get_cache(
-        key=f"team_member_default_budget:{default_id}", model_type=LiteLLM_BudgetTable
+    # Like chat auth, a failed default-budget read returns None; membership errors still fail closed above.
+    return await get_team_member_default_budget(
+        default_id,
+        server.prisma_client,
+        server.user_api_key_cache,
     )
-    if default_cached is not None:
-        return default_cached
-    return await BudgetRepository(server.prisma_client).find_by_id(default_id, id_field="budget_id")
 
 
 async def _live_project(auth: UserAPIKeyAuth) -> LiteLLM_ProjectTableCachedObj | None:
@@ -761,33 +744,19 @@ async def _live_project(auth: UserAPIKeyAuth) -> LiteLLM_ProjectTableCachedObj |
 
     if auth.project_id is None:
         return None
-    project_from_cache: Final = await server.user_api_key_cache.async_get_cache(
-        key=f"project_id:{auth.project_id}", model_type=LiteLLM_ProjectTableCachedObj
+    return await get_project_object(
+        project_id=auth.project_id,
+        prisma_client=server.prisma_client,
+        user_api_key_cache=server.user_api_key_cache,
+        proxy_logging_obj=server.proxy_logging_obj,
     )
-    if project_from_cache is not None:
-        return project_from_cache
-    project_row: Final = await ProjectRepository(server.prisma_client).table.find_unique(
-        where={"project_id": auth.project_id},  # mutable-ok: Prisma serializes concrete query dictionaries
-        include={"litellm_budget_table": True},  # mutable-ok: Prisma serializes concrete include dictionaries
-    )
-    if project_row is None:
-        return None
-    return LiteLLM_ProjectTableCachedObj.model_validate(project_row.model_dump())
 
 
 async def _live_project_budget_configured(auth: UserAPIKeyAuth, project: LiteLLM_ProjectTableCachedObj | None) -> bool:
     if project is None:
         return False
-    from litellm.proxy import proxy_server as server
-
     project_budget: Final = getattr(project, "litellm_budget_table", None)
-    project_budget_id: Final = getattr(project, "budget_id", None)
-    project_budget_from_db: Final = (
-        await BudgetRepository(server.prisma_client).find_by_id(project_budget_id, id_field="budget_id")
-        if project_budget is None and isinstance(project_budget_id, str)
-        else None
-    )
-    if _live_budget_configured(project_budget or project_budget_from_db, zero_is_limit=True):
+    if _live_budget_configured(project_budget, zero_is_limit=True):
         return True
     if _nonempty_limit_value(getattr(project, "model_rpm_limit", None)) or _nonempty_limit_value(
         getattr(project, "model_tpm_limit", None)
@@ -823,44 +792,13 @@ async def _live_model_group_budget_configured(
     )
     if not matched_groups:
         return False
-    cached_values: Final = await asyncio.gather(
-        *(
-            server.user_api_key_cache.async_get_cache(
-                key=model_access_group_cache_key(group), model_type=ModelAccessGroupBudget
-            )
-            for group in matched_groups
-        )
+    budgets: Final = await get_model_access_group_budgets_batch(
+        matched_groups,
+        server.prisma_client,
+        server.user_api_key_cache,
     )
-    cached_groups: Final = tuple(zip(matched_groups, cached_values))
-    uncached_groups: Final = tuple(group for group, budget in cached_groups if budget is None)
-    named_group_rows: Final = (
-        await ModelAccessGroupBudgetRepository(server.prisma_client).table.find_many(
-            where={  # mutable-ok: Prisma serializes query filters from concrete dictionaries
-                "access_group_name": {  # mutable-ok: Prisma serializes nested filters from concrete dictionaries
-                    "in": uncached_groups,
-                }
-            },
-            include={"litellm_budget_table": True},  # mutable-ok: Prisma serializes concrete include dictionaries
-        )
-        if uncached_groups
-        else ()
-    )
-    return any(
-        _live_budget_configured(
-            budget
-            if budget is not None
-            else next(
-                (
-                    getattr(row, "litellm_budget_table", None)
-                    for row in named_group_rows
-                    if getattr(row, "access_group_name", None) == group
-                ),
-                None,
-            ),
-            zero_is_limit=False,
-        )
-        for group, budget in cached_groups
-    )
+    # Match chat auth: group budget rows contribute max_budget, not rpm/tpm, to this gate.
+    return any(_live_budget_configured(budget, zero_is_limit=False) for budget in budgets.values())
 
 
 async def _managed_member_budget(auth: UserAPIKeyAuth, model: str | None = None) -> bool:
