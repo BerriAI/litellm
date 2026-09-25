@@ -4,22 +4,21 @@ import sys
 import types
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import prisma
 import pytest
 
-
-from litellm.proxy._types import LiteLLM_VerificationToken
-from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
+from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob, _RowReset
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
@@ -29,12 +28,12 @@ class MockTable:
     """A single prisma table: records reads/writes and replays canned rows."""
 
     def __init__(self):
-        self.find_many_calls: List[Dict[str, Any]] = []
-        self.update_many_calls: List[Dict[str, Any]] = []
-        self._find_many_results: List[Any] = []
-        self._find_many_error: Optional[tuple[int, Exception]] = None
+        self.find_many_calls: list[dict[str, Any]] = []
+        self.update_many_calls: list[dict[str, Any]] = []
+        self._find_many_results: list[Any] = []
+        self._find_many_error: tuple[int, Exception] | None = None
 
-    def set_find_many_results(self, results: List[Any]):
+    def set_find_many_results(self, results: list[Any]):
         self._find_many_results = results
 
     def set_find_many_error(self, after_reads: int, error: Exception):
@@ -44,10 +43,10 @@ class MockTable:
 
     async def find_many(
         self,
-        where: Dict[str, Any],
-        order: Optional[Dict[str, str]] = None,
-        take: Optional[int] = None,
-    ) -> List[Any]:
+        where: dict[str, Any],
+        order: dict[str, str] | None = None,
+        take: int | None = None,
+    ) -> list[Any]:
         """Replays canned rows, honouring the keyset cursor + ``take`` a paged
         caller relies on: without that a paged walk never advances and the
         test would hang instead of failing."""
@@ -63,7 +62,7 @@ class MockTable:
             rows.sort(key=lambda row: getattr(row, field, ""), reverse=direction == "desc")
         return rows[:take] if take is not None else rows
 
-    async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_many(self, where: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
         return {"count": 1}
 
@@ -77,7 +76,7 @@ class MockBatcher:
     """
 
     def __init__(self):
-        self.calls: List[Dict[str, Any]] = []
+        self.calls: list[dict[str, Any]] = []
         self.committed: bool = False
 
         class _Table:
@@ -103,6 +102,7 @@ class MockBatcher:
         self.litellm_tagtable = _Table("tag", self)
         self.litellm_modelaccessgroupbudgettable = _Table("model_access_group", self)
         self.litellm_projecttable = _Table("project", self)
+        self.litellm_agentstable = _Table("agent", self)
         self.litellm_endusertable = _Table("enduser", self)
 
     async def commit(self):
@@ -119,8 +119,9 @@ class MockDB:
         self.litellm_tagtable = MockTable()
         self.litellm_modelaccessgroupbudgettable = MockTable()
         self.litellm_projecttable = MockTable()
-        self.batch_calls: List[Dict[str, Any]] = []
-        self.batchers: List[MockBatcher] = []
+        self.litellm_agentstable = MockTable()
+        self.batch_calls: list[dict[str, Any]] = []
+        self.batchers: list[MockBatcher] = []
 
     def batch_(self):
         batcher = MockBatcher()
@@ -140,21 +141,21 @@ class MockDB:
 
 class MockPrismaClient:
     def __init__(self):
-        self.data: Dict[str, List[Any]] = {
+        self.data: dict[str, list[Any]] = {
             "key": [],
             "user": [],
             "team": [],
             "budget": [],
             "enduser": [],
         }
-        self.updated_data: Dict[str, List[Any]] = {
+        self.updated_data: dict[str, list[Any]] = {
             "key": [],
             "user": [],
             "team": [],
             "budget": [],
             "enduser": [],
         }
-        self.get_data_calls: List[Dict[str, Any]] = []
+        self.get_data_calls: list[dict[str, Any]] = []
         self.db = MockDB()
 
     async def get_data(self, table_name, query_type, **kwargs):
@@ -246,7 +247,7 @@ def _budget_row(
     )
 
 
-def _batch_writes(mock_prisma_client, table: str, op: str | None = None) -> List[Dict[str, Any]]:
+def _batch_writes(mock_prisma_client, table: str, op: str | None = None) -> list[dict[str, Any]]:
     """Writes that were committed to the DB, optionally narrowed to one op."""
     return [
         call
@@ -604,7 +605,7 @@ def test_budget_table_reset_zeroes_spend_on_every_linked_table(
 _POSTGRES_MAX_BIND_VARIABLES: Final = 32767
 
 
-def _bind_count(where: Dict[str, Any]) -> int:
+def _bind_count(where: dict[str, Any]) -> int:
     """Bind variables one prisma where-clause compiles to: each scalar is one
     placeholder and an ``in`` list contributes one per element."""
     return sum(len(value["in"]) if isinstance(value, dict) and "in" in value else 1 for value in where.values())
@@ -924,8 +925,8 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
 
 def _make_reset_budget_windows_job(
     monkeypatch,
-    key_rows: List[Dict[str, Any]],
-    team_rows: List[Dict[str, Any]],
+    key_rows: list[dict[str, Any]],
+    team_rows: list[dict[str, Any]],
 ):
     """Build a ResetBudgetJob with a fully-mocked prisma client and a fake
     `litellm.proxy.proxy_server` module exposing a stub `spend_counter_cache`.
@@ -1547,6 +1548,7 @@ def test_reset_budget_for_keys_writes_only_spend_and_reset_at(reset_budget_job, 
 
 
 _INVALIDATION_CASES = [
+    ("litellm_agentstable", types.SimpleNamespace(agent_id="agent-1"), "spend:agent:agent-1", set()),
     (
         "litellm_teammembership",
         type("Membership", (), {"user_id": "alice", "team_id": "team-x", "budget_id": "budget-1"}),
@@ -1589,7 +1591,7 @@ _INVALIDATION_CASES = [
 @pytest.mark.parametrize(
     "table_attr, linked_row, counter_key, cache_keys",
     _INVALIDATION_CASES,
-    ids=["team_membership", "key", "org", "tag", "model_access_group", "project"],
+    ids=["agent", "team_membership", "key", "org", "tag", "model_access_group", "project"],
 )
 def test_budget_table_reset_invalidates_counters_and_management_cache(
     reset_budget_job, mock_prisma_client, monkeypatch, table_attr, linked_row, counter_key, cache_keys
@@ -1651,9 +1653,7 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:end_user:customer-42")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:customer-42")
-    deleted: Final = {
-        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
-    }
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:customer-42" in deleted
 
 
@@ -1691,7 +1691,9 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 3
     counter_cache.async_delete_cache.assert_not_called()
 
-    invalidated: Final = {key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]}
+    invalidated: Final = {
+        key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
+    }
     assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
     evicted: Final = {
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
@@ -1699,7 +1701,9 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
-def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(mock_prisma_client, monkeypatch):
+def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
+    mock_prisma_client, monkeypatch
+):
     """A page that fails to read is not the end of the customer list.
 
     The tier's window is already advanced by the time this walk runs, so no later
@@ -1727,7 +1731,9 @@ def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_fin
     assert metadata["num_endusers_updated"] == RESET_BUDGET_JOB_BATCH_SIZE
 
 
-def test_a_failed_counter_batch_still_evicts_the_management_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+def test_a_failed_counter_batch_still_evicts_the_management_cache(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
     """The spend counters and the management cache are invalidated independently.
 
     Sharing one handler meant a Redis failure on the counters returned before the
@@ -1745,7 +1751,9 @@ def test_a_failed_counter_batch_still_evicts_the_management_cache(reset_budget_j
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     evicted: Final = {
-        key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
+        key
+        for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list
+        for key in call.args[0]
     }
     assert "end_user_id:customer-42" in evicted
 
@@ -1995,6 +2003,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
         ("tag", "update_many"),
         ("model_access_group", "update_many"),
         ("project", "update_many"),
+        ("agent", "update_many"),
         ("enduser", "update_many"),
         ("budget", "update_many"),
     }
@@ -2197,10 +2206,10 @@ class ChunkedPrismaClient(MockPrismaClient):
     seeing rows rather than quietly running out of data.
     """
 
-    def __init__(self, chunks_by_table: Dict[str, List[List[Any]]]):
+    def __init__(self, chunks_by_table: dict[str, list[list[Any]]]):
         super().__init__()
         self._chunks_by_table = chunks_by_table
-        self.fetches_by_table: Dict[str, int] = {}
+        self.fetches_by_table: dict[str, int] = {}
 
     async def get_data(self, table_name, query_type, **kwargs):
         self.get_data_calls.append({"table_name": table_name, "query_type": query_type, **kwargs})
@@ -2393,8 +2402,8 @@ class PoisonRow:
 
 class RecordingServiceLogging:
     def __init__(self):
-        self.success_calls: List[Dict[str, Any]] = []
-        self.failure_calls: List[Dict[str, Any]] = []
+        self.success_calls: list[dict[str, Any]] = []
+        self.failure_calls: list[dict[str, Any]] = []
 
     async def async_service_success_hook(self, **kwargs):
         self.success_calls.append(kwargs)
@@ -2472,8 +2481,8 @@ class FakePodLockManager:
         if self.redis_cache is not None:
             self.redis_cache.async_get_cache = AsyncMock(return_value="another-pod" if held_by_other else None)
         self._acquired = acquired
-        self.acquire_calls: List[Dict[str, str | int | None]] = []
-        self.release_calls: List[str] = []
+        self.acquire_calls: list[dict[str, str | int | None]] = []
+        self.release_calls: list[str] = []
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
@@ -2604,21 +2613,21 @@ def test_reset_budget_lease_outlives_one_scheduler_tick(monkeypatch):
     assert RESET_BUDGET_JOB_LOCK_TTL_SECONDS > PROXY_BUDGET_RESCHEDULER_MIN_TIME
 
 
-def _window_row(source_id_column: str, row_id: str, reset_at: datetime) -> Dict[str, Any]:
+def _window_row(source_id_column: str, row_id: str, reset_at: datetime) -> dict[str, Any]:
     return {
         source_id_column: row_id,
         "budget_limits": [{"budget_duration": "1h", "reset_at": reset_at.isoformat(), "max_budget": 10}],
     }
 
 
-def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict[str, Any]]]]):
+def _paginating_window_job(monkeypatch, pages_by_table: dict[str, list[list[dict[str, Any]]]]):
     """Serve each table a canned sequence of pages and record every query.
 
     Returns (job, calls) where calls is a list of (sql, cursor, limit).
     """
     prisma_client = MagicMock()
     remaining = {table: list(pages) for table, pages in pages_by_table.items()}
-    calls: List[Dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
 
     async def fake_query_raw(query: str, *args, **kwargs):
         table = "key" if '"LiteLLM_VerificationToken"' in query else "team"
@@ -2748,7 +2757,7 @@ def test_debug_row_dump_is_deferred_until_a_record_is_emitted():
     assert serialized == ["serialized"]
 
 
-def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
+def _cursor_paginating_window_job(monkeypatch, key_rows: list[dict[str, Any]]):
     """Serve real keyset pages out of one ordered table, honouring the cursor.
 
     Unlike the canned-page helper above, this models the database: a page is
@@ -2757,7 +2766,7 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
     """
     prisma_client = MagicMock()
     ordered = sorted(key_rows, key=lambda r: r["token"])
-    visited: List[str] = []
+    visited: list[str] = []
 
     async def fake_query_raw(query: str, *args, **kwargs):
         if '"LiteLLM_TeamTable"' in query:
@@ -2813,7 +2822,7 @@ class FlakyPrismaClient(MockPrismaClient):
 
     def __init__(self, *, read_failures: int = 0, commit_failures: int = 0, error: Exception | None = None):
         super().__init__()
-        self.reconnect_reasons: List[str] = []
+        self.reconnect_reasons: list[str] = []
         self.read_attempts: int = 0
         self.commit_attempts: int = 0
         self._read_failures = read_failures
@@ -2991,7 +3000,7 @@ def test_transport_error_on_window_read_reconnects_and_still_resets(monkeypatch)
     expired = (datetime.utcnow() - timedelta(minutes=5)).isoformat() + "Z"
     key_rows = [{"token": "sk-expired", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
     job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
-    reconnect_reasons: List[str] = []
+    reconnect_reasons: list[str] = []
     good_query_raw = prisma_client.db.query_raw
 
     async def failing_once_query_raw(query: str, *args, **kwargs):
@@ -3016,7 +3025,7 @@ def test_connect_error_on_window_write_reconnects_and_writes(monkeypatch):
     expired = (datetime.utcnow() - timedelta(minutes=5)).isoformat() + "Z"
     team_rows = [{"team_id": "team-expired", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
     job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=[], team_rows=team_rows)
-    reconnect_reasons: List[str] = []
+    reconnect_reasons: list[str] = []
 
     async def failing_once_update(**kwargs) -> None:
         if not reconnect_reasons:
@@ -3180,15 +3189,7 @@ def rollover_enabled(monkeypatch):
     ],
 )
 def test_direct_reset_carries_overage_when_rollover_enabled(
-    rollover_enabled,
-    reset_budget_job,
-    mock_prisma_client,
-    monkeypatch,
-    run_phase,
-    table,
-    id_field,
-    id_value,
-    row_factory,
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
 ):
     """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
     rather than zero the row, and the spend counter must be seeded with 50."""
@@ -3329,12 +3330,7 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
             "spend": 15.0,
             "user_id": "enduser-implicit",
             "budget_id": None,
-            "model_dump": lambda self=None: {
-                "spend": 15.0,
-                "user_id": "enduser-implicit",
-                "budget_id": None,
-                "blocked": False,
-            },
+            "model_dump": lambda self=None: {"spend": 15.0, "user_id": "enduser-implicit", "budget_id": None, "blocked": False},
         },
     )
     mock_prisma_client.db.litellm_endusertable.set_find_many_results([implicit_enduser])
@@ -3343,9 +3339,7 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:end_user:enduser-implicit")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:enduser-implicit")
-    deleted: Final = {
-        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
-    }
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:enduser-implicit" in deleted
 
 

@@ -2,6 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
@@ -358,6 +359,7 @@ class _ProxyDBLogger(CustomLogger):
                     team_id=team_id,
                     end_user_id=end_user_id,
                     call_type=call_type,
+                    agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
                 ):
                     ## UPDATE DATABASE
                     charged: Final = await _update_database_and_spend_counters(
@@ -377,6 +379,7 @@ class _ProxyDBLogger(CustomLogger):
                         request_tags=tags,
                         model_access_groups=model_access_groups,
                         project_id=project_id,
+                        billing_agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
                     )
                     if not charged:
                         return
@@ -610,6 +613,7 @@ def _should_track_cost_callback(
     team_id: str | None,
     end_user_id: str | None,
     call_type: str | None = None,
+    agent_id: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
@@ -626,7 +630,13 @@ def _should_track_cost_callback(
     if ProxyUpdateSpend.disable_spend_updates() is True:
         return False
 
-    if user_api_key is not None or user_id is not None or team_id is not None or end_user_id is not None:
+    if (
+        agent_id is not None
+        or user_api_key is not None
+        or user_id is not None
+        or team_id is not None
+        or end_user_id is not None
+    ):
         return True
     return call_type in _UNATTRIBUTED_TRACKABLE_CALL_TYPES
 
@@ -672,6 +682,8 @@ class _IncrementSpendCounters(Protocol):
         tags: list[str] | None = None,
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
+        project_id: str | None = None,
+        billing_agent_id: str | None = None,
     ) -> None: ...
 
 
@@ -692,6 +704,7 @@ async def _update_database_and_spend_counters(
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    billing_agent_id: str | None = None,
 ) -> bool:
     if budget_reservation is not None:
         await _reconcile_budget_reservation_before_db_update(
@@ -741,6 +754,11 @@ async def _update_database_and_spend_counters(
             request_started_at=start_time,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            **(
+                MappingProxyType({"billing_agent_id": billing_agent_id})
+                if billing_agent_id is not None
+                else MappingProxyType({})
+            ),
         )
     except Exception:
         if budget_reservation is not None:

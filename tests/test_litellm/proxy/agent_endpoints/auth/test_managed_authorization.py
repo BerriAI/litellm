@@ -94,6 +94,38 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_budget_accumulates_across_credentials_and_denies_the_next_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
+
+    counters: Final = DualCache()
+    counters.set_cache("spend:agent:agent", 0.0)
+    counters.set_cache("spend:key:first", 0.0)
+    counters.set_cache("spend:key:second", 0.0)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
+    policy: Final = agent(spend=0, litellm_budget_table={"budget_id": "budget", "max_budget": 0.5})
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    auth.billing_agent_policy = policy
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token="first", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent"
+    )
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token="second", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent"
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_agent_budget(auth)
+    assert await counters.async_get_cache("spend:agent:agent") == pytest.approx(0.6)
+    assert await counters.async_get_cache("spend:key:first") == pytest.approx(0.3)
+    assert await counters.async_get_cache("spend:key:second") == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("autonomous", (True, False))
 async def test_invocation_prepares_target_fee_for_the_correct_agent(
     monkeypatch: pytest.MonkeyPatch,
@@ -168,6 +200,18 @@ async def test_agent_history_outage_does_not_permit_legacy_fallback() -> None:
 )
 def test_invocation_routes_resolve_the_same_target(route: str, body: dict[str, object], expected: str | None) -> None:
     assert invocation_target(route, body) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("managed", [True, False])
+async def test_aggregate_budget_applies_to_both_entra_and_legacy_agent_keys(managed: bool) -> None:
+    policy: Final = agent(identity_managed=managed, litellm_budget_table={"budget_id": "budget", "max_budget": 0.5})
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
+    assert auth.billing_agent_policy == policy
+    assert auth.managed_agent_policy == (policy if managed else None)
 
 
 @pytest.mark.asyncio

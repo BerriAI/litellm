@@ -52,6 +52,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
+    AgentsRepository,
     EndUserRepository,
     ModelAccessGroupBudgetRepository,
     TagRepository,
@@ -120,6 +121,11 @@ class _ModelAccessGroupRow(_BudgetLinkedRow, Protocol):
 class _ProjectRow(_BudgetLinkedRow, Protocol):
     @property
     def project_id(self) -> str: ...
+
+
+class _AgentRow(_BudgetLinkedRow, Protocol):
+    @property
+    def agent_id(self) -> str: ...
 
 
 class _EndUserRow(_BudgetLinkedRow, Protocol):
@@ -770,6 +776,11 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="projects",
         )
+        agents: Final[tuple[_AgentRow, ...]] = await self._fetch_linked_rows(
+            table=AgentsRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            log_subject="agents",
+        )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
                 b.budget_id: cap
@@ -803,6 +814,7 @@ class ResetBudgetJob:
                     for row in model_access_groups
                 ),
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
+                *((f"spend:agent:{row.agent_id}", _row_carried_spend(row, rollover_caps)) for row in agents),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -839,6 +851,7 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.agents, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)

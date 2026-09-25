@@ -8,6 +8,8 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.agent_identity import (
+    AgentBudgetConfig,
+    AgentBudgetState,
     AgentExecutionMode,
     AgentIdentityBinding,
     EntraIdentityConfig,
@@ -256,6 +258,7 @@ class AgentConfig(TypedDict, total=False):
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
+    budget: ReadOnly[AgentBudgetConfig | None]
     agent_name: Required[str]
     agent_card_params: ReadOnly[AgentCard]
     litellm_params: dict[str, object]  # allow for any future litellm params
@@ -274,6 +277,7 @@ class PatchAgentRequest(TypedDict, total=False):
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
+    budget: ReadOnly[AgentBudgetConfig | None]
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: dict[str, object]
@@ -316,6 +320,8 @@ class AgentResponse(BaseModel):
     identity_managed: bool = False
     enabled: bool = True
     execution_mode: AgentExecutionMode = "autonomous"
+    budget_id: str | None = None
+    litellm_budget_table: AgentBudgetState | None = None
     jwt_auth_configured: bool = False
     agent_id: str
     agent_name: str
