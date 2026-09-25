@@ -6,12 +6,14 @@ import os
 import re
 from dataclasses import dataclass
 from email.utils import formatdate
+from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 try:
@@ -175,11 +177,57 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
     }
 
 
-_OCI_REGION_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+_OCI_REGION_PATTERN: Final = r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$"
+_OCI_REALM_DOMAIN_PATTERN: Final = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+_OCI_REGION_RE: Final = re.compile(_OCI_REGION_PATTERN)
 _OCI_ACTION_PATH_RE: Final = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
-_OCI_DEFAULT_REALM_ENV: Final = "OCI_DEFAULT_REALM"
 _OCI_COMMERCIAL_REALM_DOMAIN: Final = "oraclecloud.com"
 _OCI_INFERENCE_ENDPOINT_TEMPLATE: Final = "https://inference.generativeai.{region}.oci.{secondLevelDomain}"
+_OCI_REGION_METADATA_ENV: Final = "OCI_REGION_METADATA"
+_OCI_REGIONS_CONFIG_FILE: Final = "~/.oci/regions-config.json"
+
+
+class OCIRegionMetadata(BaseModel):
+    """One entry of the OCI SDK's region metadata schema, as found in
+    ``~/.oci/regions-config.json`` (a JSON array) or ``OCI_REGION_METADATA`` (one object)."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
+
+    region_identifier: str = Field(alias="regionIdentifier", pattern=_OCI_REGION_PATTERN)
+    realm_domain_component: str = Field(alias="realmDomainComponent", pattern=_OCI_REALM_DOMAIN_PATTERN)
+
+
+_OCI_REGION_METADATA_LIST: Final = TypeAdapter(tuple[OCIRegionMetadata, ...])
+
+
+def _region_metadata_from_file() -> tuple[OCIRegionMetadata, ...]:
+    path: Final = Path(_OCI_REGIONS_CONFIG_FILE).expanduser()
+    if not path.is_file():
+        return ()
+    try:
+        return _OCI_REGION_METADATA_LIST.validate_json(path.read_text())
+    except (OSError, ValidationError) as e:
+        verbose_logger.warning("Ignoring OCI region metadata in %s: %s", path, e)
+        return ()
+
+
+def _region_metadata_from_env() -> tuple[OCIRegionMetadata, ...]:
+    raw: Final = os.environ.get(_OCI_REGION_METADATA_ENV)
+    if not raw:
+        return ()
+    try:
+        return (OCIRegionMetadata.model_validate_json(raw),)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring OCI region metadata in %s: %s", _OCI_REGION_METADATA_ENV, e)
+        return ()
+
+
+def _realm_domain_from_metadata(region: str) -> str:
+    entries: Final = (*_region_metadata_from_file(), *_region_metadata_from_env())
+    return next(
+        (entry.realm_domain_component for entry in entries if entry.region_identifier == region),
+        _OCI_COMMERCIAL_REALM_DOMAIN,
+    )
 
 
 @runtime_checkable
@@ -198,15 +246,17 @@ def _load_oci_region_registry() -> _OCIRegionRegistry | None:
 def resolve_oci_inference_endpoint(region: str) -> str:
     """Return the GenAI inference endpoint for ``region`` in whichever OCI realm hosts it.
 
-    Delegates to the OCI SDK's region registry when the SDK is installed, which also
-    honours ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``. Without the SDK,
-    the realm's second-level domain comes from ``OCI_DEFAULT_REALM`` and otherwise
-    defaults to the commercial realm, mirroring the SDK's own fallback.
+    Delegates to the OCI SDK's region registry when the SDK is installed. Without the SDK,
+    the realm's second-level domain comes from the same per-region metadata sources the SDK
+    reads, ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``, and otherwise defaults
+    to the commercial realm. A region that is not described anywhere therefore keeps its
+    commercial endpoint, so one government deployment never redirects the others.
     """
     registry: Final = _load_oci_region_registry()
     if registry is None:
-        second_level_domain: Final = os.environ.get(_OCI_DEFAULT_REALM_ENV) or _OCI_COMMERCIAL_REALM_DOMAIN
-        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region, secondLevelDomain=second_level_domain)
+        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(
+            region=region, secondLevelDomain=_realm_domain_from_metadata(region)
+        )
     return registry.endpoint_for(
         "generative_ai_inference", region=region, service_endpoint_template=_OCI_INFERENCE_ENDPOINT_TEMPLATE
     )
