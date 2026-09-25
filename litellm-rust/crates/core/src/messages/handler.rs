@@ -17,8 +17,10 @@ pub(super) async fn send(
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<reqwest::Response, Error> {
+    let encoded = serde_json::to_vec(body)
+        .map_err(|err| Error::InvalidRequest(format!("failed to encode messages body: {err}")))?;
     let builder = headers.iter().fold(
-        http_client().post(url).json(body),
+        http_client().post(url).body(encoded),
         |builder, (key, value)| builder.header(key, value),
     );
     let builder = match timeout {

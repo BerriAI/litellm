@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.oauth_utils import _redact_mcp_resource_url
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -1155,6 +1156,7 @@ if MCP_AVAILABLE:
                     route_type=CallTypes.call_mcp_tool.value,
                     proxy_logging_obj=proxy_logging_obj,
                     general_settings=general_settings,
+                    skip_guardrails=True,
                 )
 
                 # Extract MCP auth headers from request and add to data dict
@@ -1196,7 +1198,7 @@ if MCP_AVAILABLE:
 
                 # Call execute_mcp_tool directly (permission checks already done)
                 _tool_start_time: Final = datetime.now()
-                result: Final = await execute_mcp_tool(
+                executed: Final = await execute_mcp_tool(
                     name=tool_name,
                     arguments=tool_arguments,
                     allowed_mcp_servers=allowed_mcp_servers,
@@ -1211,6 +1213,7 @@ if MCP_AVAILABLE:
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
                 )
+                result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
             except Exception as e:
                 request_data: Final = proxy_base_llm_response_processor.data
                 await _safe_fire_mcp_tool_call_failure_logging(
@@ -1372,7 +1375,16 @@ if MCP_AVAILABLE:
             and headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
             else None
         )
-        return _StagedServerTest(request=request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers)
+        preview_request: Final = (
+            request.model_copy(
+                update={"mcp_info": {**(request.mcp_info or {}), "protocol_version": saved_server.protocol_version}}
+            )
+            if saved_server is not None and "protocol_version" not in (request.mcp_info or {})
+            else request
+        )
+        return _StagedServerTest(
+            request=preview_request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers
+        )
 
     async def _list_tools_within(client: MCPClient, deadline: float) -> list[MCPTool] | None:
         with anyio.move_on_after(deadline):
@@ -1509,6 +1521,7 @@ if MCP_AVAILABLE:
                     extra_headers=merged_headers,
                     stdio_env=stdio_env,
                     cred_provider=preview_cred_provider,
+                    protocol_version_override=server_model.protocol_version,
                 )
 
                 return await operation(client)
