@@ -3,7 +3,8 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-from integration._support.client import Gateway, eventually
+import httpx
+from integration._support.client import Gateway, eventually, string_value
 from integration._support.process import owned_proxy
 from redis import Redis
 
@@ -109,6 +110,57 @@ def test_tag_object_rpm_limit_rejects_the_second_request_across_keys(gateway: Ga
             },
             key=key_b,
         )
+        assert control.status_code == 200, control.text
+
+
+def test_tag_object_rpm_limit_is_shared_across_teams_organizations_and_users(gateway: Gateway) -> None:
+    tag: Final = f"tag-rpm-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    def delete_organization(identity: str) -> None:
+        deleted: Final = gateway.request("DELETE", "/organization/delete", {"organization_ids": [identity]})
+        assert deleted.status_code == 200, deleted.text
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        org_a: Final = gateway.post("/organization/new", {"organization_alias": f"integration-{uuid.uuid4().hex}"})
+        org_b: Final = gateway.post("/organization/new", {"organization_alias": f"integration-{uuid.uuid4().hex}"})
+        org_a_id: Final = string_value(org_a["organization_id"])
+        org_b_id: Final = string_value(org_b["organization_id"])
+        scenario.cleanups.callback(delete_organization, org_a_id)
+        scenario.cleanups.callback(delete_organization, org_b_id)
+        team_a: Final = scenario.team(organization_id=org_a_id)
+        team_b: Final = scenario.team(organization_id=org_b_id)
+        user_1: Final = scenario.user()
+        user_2: Final = scenario.user()
+        key_team_a: Final = scenario.key(team_id=team_a)
+        key_team_b: Final = scenario.key(team_id=team_b)
+        key_user_1: Final = scenario.key(user_id=user_1)
+        key_user_2: Final = scenario.key(user_id=user_2)
+        gateway.post("/tag/new", {"name": tag, "rpm_limit": 3})
+        scenario.cleanups.callback(delete_tag)
+
+        def tagged_request(key: str, request_tag: str) -> httpx.Response:
+            return gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"tag rpm {request_tag}"}],
+                    "metadata": {"tags": [request_tag]},
+                },
+                key=key,
+            )
+
+        for scoped_key in (key_team_a, key_team_b, key_user_1):
+            admitted: Final = tagged_request(scoped_key, tag)
+            assert admitted.status_code == 200, admitted.text
+        blocked: Final = tagged_request(key_user_2, tag)
+        assert blocked.status_code == 429, blocked.text
+        assert "tag" in blocked.text.lower(), blocked.text
+        control: Final = tagged_request(key_user_2, f"other-{tag}")
         assert control.status_code == 200, control.text
 
 
