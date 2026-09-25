@@ -27,6 +27,7 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
+  userDailyActivityExportCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
@@ -121,9 +122,26 @@ vi.mock("@/components/cloudzero_export_modal", () => ({
   default: () => <div>CloudZero Export Modal</div>,
 }));
 
-vi.mock("@/components/EntityUsageExport", () => ({
-  default: () => <div>Entity Usage Export Modal</div>,
-}));
+vi.mock("@/components/EntityUsageExport", async () => {
+  const React = await import("react");
+  return {
+    default: ({ serverExport, entityType }: any) =>
+      React.createElement(
+        "div",
+        { "data-testid": "entity-usage-export-modal", "data-entity-type": entityType },
+        serverExport
+          ? React.createElement(
+              "button",
+              {
+                "data-testid": "run-server-export",
+                onClick: () => serverExport("daily_with_keys", "csv"),
+              },
+              "server export",
+            )
+          : null,
+      ),
+  };
+});
 
 vi.mock("./UsageAIChatPanel", () => ({
   default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
@@ -158,6 +176,7 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
 
 describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
+  const mockUserDailyActivityExportCall = vi.mocked(networking.userDailyActivityExportCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
@@ -374,6 +393,8 @@ describe("UsagePage", () => {
       error: null,
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
+    mockUserDailyActivityExportCall.mockClear();
+    mockUserDailyActivityExportCall.mockResolvedValue(new Blob(["csv"]));
     mockUserDailyActivityCall.mockClear();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
@@ -1363,6 +1384,42 @@ describe("UsagePage", () => {
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    });
+  });
+
+  describe("export when the aggregated key list was truncated", () => {
+    const truncatedSpendData = {
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, api_key_limit: 100, total_api_keys: 3000 },
+    };
+
+    it("enables Export Data and exports through the uncapped user export route", async () => {
+      mockUserDailyActivityAggregatedCall.mockResolvedValue(truncatedSpendData);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      const exportButton = await screen.findByRole("button", { name: /Export Data/i });
+      await waitFor(() => {
+        expect(exportButton).toBeEnabled();
+      });
+      expect(exportButton.parentElement?.getAttribute("title") ?? "").not.toMatch(/team/i);
+
+      fireEvent.click(exportButton);
+
+      const modal = screen.getByTestId("entity-usage-export-modal");
+      expect(modal).toHaveAttribute("data-entity-type", "user");
+
+      fireEvent.click(screen.getByTestId("run-server-export"));
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityExportCall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            accessToken: "test-token",
+            exportType: "daily_with_keys",
+            format: "csv",
+          }),
+        );
+      });
     });
   });
 });
