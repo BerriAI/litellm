@@ -1,17 +1,9 @@
 import ast
-import inspect
-import json
-from unittest import mock
-
-import httpx
-import pytest
-import respx
-from fastapi.testclient import TestClient
-
-
 import importlib
+import inspect
 
-import litellm
+import pytest
+
 from litellm import constants
 
 
@@ -68,3 +60,39 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
+
+
+def _cipher_suites(cipher_string: str) -> list[str]:
+    return [suite for suite in cipher_string.split(":") if suite]
+
+
+def test_default_ssl_ciphers_excludes_chacha20():
+    assert all("CHACHA" not in suite for suite in _cipher_suites(constants.DEFAULT_SSL_CIPHERS))
+
+
+def test_default_ssl_ciphers_tls12_suites_all_offer_forward_secrecy():
+    tls12_suites = [suite for suite in _cipher_suites(constants.DEFAULT_SSL_CIPHERS) if not suite.startswith("TLS_")]
+    assert tls12_suites
+    assert all(suite.startswith("ECDHE-") for suite in tls12_suites)
+
+
+def test_fips_ssl_ciphers_is_a_subset_of_default():
+    assert set(_cipher_suites(constants.FIPS_SSL_CIPHERS)) <= set(_cipher_suites(constants.DEFAULT_SSL_CIPHERS))
+
+
+def test_fips_ssl_ciphers_tls12_suites_are_all_gcm():
+    tls12_suites = [suite for suite in _cipher_suites(constants.FIPS_SSL_CIPHERS) if not suite.startswith("TLS_")]
+    assert tls12_suites
+    assert all("-GCM-" in suite for suite in tls12_suites)
+
+
+def test_ssl_ciphers_env_override_applies_to_both_lists(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_SSL_CIPHERS", "ECDHE-RSA-AES128-GCM-SHA256")
+    importlib.reload(constants)
+    try:
+        assert constants.DEFAULT_SSL_CIPHERS == "ECDHE-RSA-AES128-GCM-SHA256"
+        assert constants.FIPS_SSL_CIPHERS == "ECDHE-RSA-AES128-GCM-SHA256"
+    finally:
+        monkeypatch.delenv("LITELLM_SSL_CIPHERS")
+        importlib.reload(constants)
+    assert constants.DEFAULT_SSL_CIPHERS != "ECDHE-RSA-AES128-GCM-SHA256"

@@ -343,28 +343,18 @@ MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolve
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
-# SSL/TLS cipher configuration for faster handshakes
-# Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
-# This balances performance with broad compatibility
+FIPS_SSL_CIPHERS: Final = os.getenv(
+    "LITELLM_SSL_CIPHERS",
+    "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:"
+    "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256",
+)
 DEFAULT_SSL_CIPHERS: Final = os.getenv(
     "LITELLM_SSL_CIPHERS",
-    # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
-    "TLS_AES_256_GCM_SHA384:"  # Fastest observed in testing
-    "TLS_AES_128_GCM_SHA256:"  # Slightly faster than 256-bit
-    "TLS_CHACHA20_POLY1305_SHA256:"  # Fast on ARM/mobile
-    # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
-    "ECDHE-RSA-AES256-GCM-SHA384:"
-    "ECDHE-RSA-AES128-GCM-SHA256:"
-    "ECDHE-ECDSA-AES256-GCM-SHA384:"
-    "ECDHE-ECDSA-AES128-GCM-SHA256:"
-    # Priority 3: Additional modern ciphers (good balance)
-    "ECDHE-RSA-CHACHA20-POLY1305:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:"
-    # Priority 4: Widely compatible fallbacks (slower but universally supported)
-    "ECDHE-RSA-AES256-SHA384:"  # Common fallback
-    "ECDHE-RSA-AES128-SHA256:"  # Very widely supported
-    "AES256-GCM-SHA384:"  # Non-PFS fallback (compatibility)
-    "AES128-GCM-SHA256",  # Last resort (maximum compatibility)
+    "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:"
+    "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:"
+    "ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA256",
 )
 
 ########### v2 Architecture constants for managing writing updates to the database ###########

@@ -321,6 +321,45 @@ def test_get_ssl_configuration_integration():
     assert ssl_context.verify_mode is not None
 
 
+def _tls12_cipher_names(cipher_string: str) -> set[str]:
+    return {name for name in cipher_string.split(":") if name and not name.startswith("TLS_")}
+
+
+def _context_tls12_cipher_names(context: ssl.SSLContext) -> set[str]:
+    return {cipher["name"] for cipher in context.get_ciphers() if cipher["protocol"] == "TLSv1.2"}
+
+
+def _supported_tls12_cipher_names() -> set[str]:
+    unrestricted = ssl.create_default_context()
+    return _context_tls12_cipher_names(unrestricted)
+
+
+def test_get_ssl_configuration_uses_fips_cipher_list_only_in_fips_mode(monkeypatch: pytest.MonkeyPatch):
+    from litellm.constants import DEFAULT_SSL_CIPHERS, FIPS_SSL_CIPHERS
+    from litellm.llms.custom_httpx import http_handler
+
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+
+    supported = _supported_tls12_cipher_names()
+
+    default_context = get_ssl_configuration()
+    assert isinstance(default_context, ssl.SSLContext)
+    assert _context_tls12_cipher_names(default_context) == (_tls12_cipher_names(DEFAULT_SSL_CIPHERS) & supported)
+    assert get_ssl_configuration() is default_context
+
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    fips_context = get_ssl_configuration()
+    assert fips_context is not default_context
+    assert isinstance(fips_context, ssl.SSLContext)
+    fips_names = _context_tls12_cipher_names(fips_context)
+    assert fips_names == (_tls12_cipher_names(FIPS_SSL_CIPHERS) & supported)
+    assert all("-GCM-" in name for name in fips_names)
+    assert get_ssl_configuration() is fips_context
+
+
 # Session Reuse Tests
 class MockClientSession:
     """Mock ClientSession that is not callable"""
