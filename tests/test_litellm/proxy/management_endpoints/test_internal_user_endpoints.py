@@ -2711,6 +2711,7 @@ async def test_search_user_daily_activity_keys_passes_matched_tokens_to_aggregat
     )
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[SimpleNamespace(token="tok-a"), SimpleNamespace(token="tok-b")]
     )
@@ -2774,6 +2775,7 @@ async def test_search_user_daily_activity_keys_no_match_returns_empty_without_ag
     )
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -2818,6 +2820,7 @@ async def test_search_user_daily_activity_keys_non_admin_scoped_to_caller(monkey
     )
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[SimpleNamespace(token="tok-a")])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 

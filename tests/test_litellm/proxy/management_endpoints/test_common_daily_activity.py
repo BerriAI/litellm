@@ -2975,6 +2975,7 @@ def _team_spend_row(
 def _export_prisma(conn: psycopg.Connection, token_rows: Sequence[SimpleNamespace] = ()) -> MagicMock:
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _psycopg_query_raw(conn, [])
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(token_rows))
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
