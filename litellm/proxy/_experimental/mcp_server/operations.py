@@ -1017,11 +1017,11 @@ async def _get_tools_from_mcp_servers(
             "call_type": CallTypes.list_mcp_tools.value,
             "litellm_call_id": list_tools_call_id,
             "litellm_trace_id": effective_litellm_trace_id,
-                "metadata": {
-                    "spend_logs_metadata": spend_logs_metadata,
-                    "headers": logging_safe_mcp_headers(raw_headers),
-                    **({"tags": effective_request_tags} if effective_request_tags else {}),
-                },
+            "metadata": {
+                "spend_logs_metadata": spend_logs_metadata,
+                "headers": logging_safe_mcp_headers(raw_headers),
+                **({"tags": effective_request_tags} if effective_request_tags else {}),
+            },
             # Provide a small input payload for standard logging
             "input": [
                 {
