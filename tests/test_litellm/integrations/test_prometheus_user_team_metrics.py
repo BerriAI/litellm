@@ -195,12 +195,24 @@ class TestPrometheusUserTeamCountMetrics:
 
     @pytest.mark.asyncio
     async def test_initialize_api_key_budget_metrics_keeps_keys_without_team(self, prometheus_logger):
-        mock_find_many: Final = AsyncMock(return_value=[])
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        unscoped_key: Final = UserAPIKeyAuth(
+            token="hashed-unscoped-key",
+            key_alias="unscoped-key",
+            team_id=None,
+            spend=25.0,
+            max_budget=100.0,
+        )
+        mock_find_many: Final = AsyncMock(return_value=[unscoped_key])
         mock_prisma: Final = MagicMock()
         mock_prisma.db.litellm_verificationtoken.find_many = mock_find_many
-        mock_prisma.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+        mock_prisma.db.litellm_verificationtoken.count = AsyncMock(return_value=1)
+        prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
+        prometheus_logger.litellm_api_key_max_budget_metric = MagicMock()
 
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with patch.object(proxy_server, "prisma_client", mock_prisma):
             await prometheus_logger._initialize_api_key_budget_metrics()
 
         expected_where: Final = {
@@ -210,6 +222,18 @@ class TestPrometheusUserTeamCountMetrics:
             ]
         }
         assert mock_find_many.await_args.kwargs["where"] == expected_where
+        prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once()
+        (
+            prometheus_logger.litellm_remaining_api_key_budget_metric.labels.return_value.set.assert_called_once_with(
+                75.0
+            )
+        )
+        prometheus_logger.litellm_api_key_max_budget_metric.labels.assert_called_once()
+        (
+            prometheus_logger.litellm_api_key_max_budget_metric.labels.return_value.set.assert_called_once_with(
+                100.0
+            )
+        )
 
     def test_active_users_metric_initialized(self, prometheus_logger):
         """litellm_active_users gauge must exist alongside litellm_total_users."""
