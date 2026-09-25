@@ -1556,8 +1556,8 @@ class TestSendEmailStartTls:
 class _RecordingMCPGuardrail(CustomGuardrail):
     """Unified guardrail that masks every text it is handed."""
 
-    def __init__(self, event_hook, masked_text="<MASKED>", raises=None):
-        super().__init__(guardrail_name="mcp-output-guardrail", event_hook=event_hook, default_on=True)
+    def __init__(self, event_hook, masked_text="<MASKED>", raises=None, default_on=True):
+        super().__init__(guardrail_name="mcp-output-guardrail", event_hook=event_hook, default_on=default_on)
         self.masked_text = masked_text
         self.raises = raises
         self.call_count = 0
@@ -1687,6 +1687,133 @@ async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
             request_data={"mcp_tool_name": "echo"},
             user_api_key_dict=None,
         )
+
+
+def _mcp_logging_payload(metadata, metadata_key="metadata"):
+    """The request payload every MCP call site hands ``post_mcp_call_hook``.
+
+    ``Logging.model_call_details`` nests the request metadata under
+    ``litellm_params``; see ``litellm.utils.function_setup``. The bucket is
+    named ``litellm_metadata`` on the routes that reserve ``metadata`` for the
+    provider, which is how MCP tools invoked from /responses arrive here.
+    """
+    return {
+        "model": "MCP: echo",
+        "call_type": "call_mcp_tool",
+        "litellm_params": {"api_base": "", metadata_key: metadata},
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_guardrail_requested_through_request_metadata(restore_callbacks):
+    """A guardrail attached by key, team or policy (not default_on) must mask MCP tool output.
+
+    The MCP paths pass the logging payload, where the resolved guardrail list
+    sits under litellm_params.metadata, so gating on the top level alone left
+    masking working only for default_on guardrails.
+    """
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload({"guardrails": [guardrail.guardrail_name]}),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert [item.text for item in returned.content] == ["<MASKED>"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_skips_guardrail_absent_from_request_metadata(restore_callbacks):
+    """A non-default_on guardrail the request never asked for must leave tool output alone."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload({"guardrails": ["some-other-guardrail"]}),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_guardrail_requested_through_litellm_metadata(restore_callbacks):
+    """The same lift must work for routes whose request metadata bucket is litellm_metadata."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload(
+            {"guardrails": [guardrail.guardrail_name]}, metadata_key="litellm_metadata"
+        ),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert [item.text for item in returned.content] == ["<MASKED>"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_honors_opt_out_in_request_metadata(restore_callbacks):
+    """A key that opted out of a global guardrail must not have MCP tool output scanned by it."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload(
+            {"user_api_key_metadata": {"opted_out_global_guardrails": [guardrail.guardrail_name]}}
+        ),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_default_on_guardrail_when_payload_has_no_metadata_bucket(restore_callbacks):
+    """A logging payload carrying no metadata bucket must leave the Default On path working.
+
+    There is nothing to lift here, and that no-op must not change the verdict.
+    """
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"model": "MCP: echo", "litellm_params": {"api_base": ""}},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert [item.text for item in returned.content] == ["<MASKED>"]
 
 
 @pytest.mark.asyncio
