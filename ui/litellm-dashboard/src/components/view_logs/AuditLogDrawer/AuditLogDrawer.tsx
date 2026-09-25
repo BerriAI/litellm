@@ -6,7 +6,8 @@ import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
 import CopyButton from "@/components/shared/CopyButton";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetTitle } from "@/components/ui/sheet";
+import { ResizableSheetContent } from "@/components/ui/ResizableSheetContent";
 
 interface AuditLogDrawerProps {
   open: boolean;
@@ -176,7 +177,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
 
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <SheetContent side="right" className="w-[60%] gap-0 overflow-y-auto p-0 sm:max-w-none">
+      <ResizableSheetContent storageKey="litellm:auditLogDrawerWidth" className="gap-0 p-0">
         <SheetTitle className="sr-only">Audit log details</SheetTitle>
 
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-4">
@@ -217,7 +218,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
 
           <DiffSection log={log} />
         </div>
-      </SheetContent>
+      </ResizableSheetContent>
     </Sheet>
   );
 }
