@@ -255,3 +255,15 @@ async def test_source_username_is_independent_of_local_display_name(
     assert result.displayName == "Display Name"
     assert result.id == row.id
     assert tx.litellm_scimresource.update.call_args.kwargs["data"]["user_name"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,value", [("remove", None), ("replace", ""), ("replace", 123)])
+async def test_invalid_username_is_rejected_before_local_mutation(operation: str, value: object) -> None:
+    service, tx, row, _ = human_fixture()
+    change: Final = SCIMPatchOp(Operations=[{"op": operation, "path": "userName", "value": value}])
+    with pytest.raises(HTTPException, match="userName is required") as failure:
+        await service.update(row, change)
+    assert failure.value.status_code == 400
+    tx.litellm_usertable.find_unique.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_awaited()
