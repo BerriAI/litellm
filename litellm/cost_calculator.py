@@ -1009,6 +1009,8 @@ def _service_tier_billed_by_completion_window(
         return service_tier
     window: Final = _service_tier_from_completion_window(optional_params)
     if window is None:
+        if service_tier is None:
+            return _normalize_service_tier(optional_params.get("service_tier"))
         return service_tier
     return None if window == "asap" else window
 
@@ -1426,8 +1428,8 @@ def completion_cost(
         window_params: Final[Mapping[str, object] | None] = (
             optional_params if optional_params is not None else _hidden_optional_params(completion_response)
         )
-        if service_tier is None and window_params is not None:
-            service_tier = _normalize_service_tier(window_params.get("service_tier"))
+        if service_tier is None and optional_params is not None:
+            service_tier = _normalize_service_tier(optional_params.get("service_tier"))
 
         service_tier = _normalize_service_tier(service_tier)
 
