@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
+from mcp.server.models import InitializationOptions
 from mcp.types import (
     INVALID_REQUEST,
+    METHOD_NOT_FOUND,
     BlobResourceContents,
     CallToolResult,
     Prompt,
@@ -21,7 +23,7 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
 )
-from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION, MODERN_PROTOCOL_VERSIONS
 from pydantic import TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
@@ -6565,8 +6567,11 @@ class TestGatewayCreateInitializationOptions:
         async def connect_sse(scope, receive, send):
             yield (None, None)
 
-        async def record_request(read_stream, write_stream, options):
-            captured["server_name"] = server.create_initialization_options().server_name
+        async def record_request(
+            serving_server: object, read_stream: object, write_stream: object,
+            *, lifespan_state: object, init_options: InitializationOptions,
+        ) -> None:
+            captured["server_name"] = init_options.server_name
 
         scope = {
             "type": "http",
@@ -6612,8 +6617,8 @@ class TestGatewayCreateInitializationOptions:
                 True,
             ),
             patch.object(
-                mcp_server.server,
-                "run",
+                mcp_server,
+                "serve_loop",
                 side_effect=record_request,
             ),
         ):
@@ -10517,7 +10522,10 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix,suffix", (("", ""), ("/gateway", "/")))
-async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str) -> None:
+@pytest.mark.parametrize("opening_protocol", (None, *MODERN_PROTOCOL_VERSIONS))
+async def test_legacy_sse_mount_emits_message_endpoint(
+    prefix: str, suffix: str, opening_protocol: str | None,
+) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
@@ -10579,6 +10587,23 @@ async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str)
                 }
                 await asyncio.wait_for(app(post_scope, requests.get, messages.put), 2)
                 return (await messages.get())["status"]
+
+            if opening_protocol is not None:
+                discover: Final = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "server/discover",
+                    "params": {"_meta": {
+                        "io.modelcontextprotocol/protocolVersion": opening_protocol,
+                        "io.modelcontextprotocol/clientInfo": {"name": "modern-client", "version": "1"},
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    }},
+                }).encode()
+                assert await post(discover) == 202
+                discovered_frame: Final = (await asyncio.wait_for(outgoing.get(), 2))["body"].decode()
+                discovered: Final = json.loads(discovered_frame.split("data: ", 1)[1].splitlines()[0])
+                assert discovered["id"] == 0
+                assert discovered["error"]["code"] == METHOD_NOT_FOUND
 
             initialization: Final = json.dumps(
                 {

@@ -145,6 +145,7 @@ try:
 
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.runner import serve_loop
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
@@ -2396,8 +2397,17 @@ if MCP_AVAILABLE:
                 scoped_server_endpoint=scoped_server_endpoint,
                 is_initialize=scope.get("method") == "GET",
             ):
-                async with sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream):
-                    await server.run(read_stream, write_stream, server.create_initialization_options())
+                async with (
+                    sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream),
+                    server.lifespan(server) as lifespan_state,
+                ):
+                    await serve_loop(
+                        server,
+                        read_stream,
+                        write_stream,
+                        lifespan_state=lifespan_state,
+                        init_options=server.create_initialization_options(),
+                    )
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
