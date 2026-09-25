@@ -3342,6 +3342,7 @@
         "supports_vision": true
     },
     "azure/command-r-plus": {
+        "deprecation_date": "2025-06-30",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -3349,6 +3350,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_function_calling": true
     },
     "azure_ai/claude-haiku-4-5": {
@@ -5194,6 +5196,7 @@
         "output_cost_per_token": 2e-06
     },
     "azure/gpt-4": {
+        "deprecation_date": "2025-06-06",
         "input_cost_per_token": 3e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
@@ -5201,6 +5204,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-05,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -15811,6 +15815,7 @@
         "supports_tool_choice": true
     },
     "computer-use-preview": {
+        "deprecation_date": "2026-07-23",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 8192,
