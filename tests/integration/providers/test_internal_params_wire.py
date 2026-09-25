@@ -276,7 +276,7 @@ def provider_wire_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 @pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_stream_chunk_size_never_reaches_provider_body(
+async def test_internal_params_never_reach_provider_body(
     monkeypatch: pytest.MonkeyPatch,
     provider_wire_environment: None,
     provider: str,
@@ -289,6 +289,7 @@ async def test_stream_chunk_size_never_reaches_provider_body(
             **_request_parameters(provider, wire.url),
             "stream": stream,
             "stream_chunk_size": 64,
+            "_litellm_undeclared_sentinel": "internal",
             "extra_body": {"custom_provider_key": 1},
             "max_tokens": 16,
             "timeout": 5,
@@ -313,4 +314,5 @@ async def test_stream_chunk_size_never_reaches_provider_body(
         keys: Final = keys_at_every_depth(body)
         assert "stream_chunk_size" not in keys
         assert not INTERNAL_FIELDS.intersection(keys)
+        assert not frozenset(key for key in keys if key.startswith("_litellm_")), keys
         assert _custom_key(body, provider) == 1

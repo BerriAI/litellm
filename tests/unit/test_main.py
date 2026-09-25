@@ -295,6 +295,34 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12346/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/embeddings.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+    litellm.embedding(
+        model="openai/text-embedding-3-small",
+        input="hi",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        _litellm_undeclared_sentinel="internal",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "_litellm_undeclared_sentinel" not in sent, sent
+    assert sent["model"] == "text-embedding-3-small"
+
+
 def test_custom_provider_with_extra_headers():
 
     with patch.object(

@@ -284,7 +284,7 @@ from .types.utils import (
     LlmProviders,
     PromptTokensDetails,
     ProviderSpecificHeader,
-    all_litellm_params,
+    is_litellm_owned_kwarg,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -6351,15 +6351,10 @@ def embedding(
         "max_retries",
         "encoding_format",
     ]
-    litellm_params: Final = [
-        "aembedding",
-        "extra_headers",
-    ] + all_litellm_params
-
-    default_params: Final = openai_params + litellm_params
+    default_params: Final = [*openai_params, "aembedding", "extra_headers"]
     non_default_params: Final = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
+        k: v for k, v in kwargs.items() if k not in default_params and not is_litellm_owned_kwarg(k)
+    }
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
