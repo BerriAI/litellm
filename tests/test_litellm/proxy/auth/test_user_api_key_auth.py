@@ -9229,6 +9229,8 @@ async def test_managed_virtual_key_cannot_access_provider_resource_routes(monkey
         ("/v1/audio/transcriptions", {"moderation_model": "forbidden-model"}, None),
         ("/v1/audio/speech", {}, "forbidden-model"),
         ("/v1/chat/completions", {}, "forbidden-model"),
+        ("/v1/images/generations", {"image_generation_model": "forbidden-model"}, None),
+        ("/v1/images/edits", {"image_generation_model": "forbidden-model"}, None),
     ],
 )
 async def test_managed_agent_cannot_bypass_grants_with_server_default(

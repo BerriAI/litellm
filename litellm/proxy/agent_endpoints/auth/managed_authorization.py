@@ -41,12 +41,14 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
     )
 )
 _MANAGED_MODEL_PATHS: Final = (
-    "/engines/{model}/chat/completions",
-    "/engines/{model}/completions",
-    "/engines/{model}/embeddings",
-    "/openai/deployments/{model}/chat/completions",
-    "/openai/deployments/{model}/completions",
-    "/openai/deployments/{model}/embeddings",
+    "/engines/{model:path}/chat/completions",
+    "/engines/{model:path}/completions",
+    "/engines/{model:path}/embeddings",
+    "/openai/deployments/{model:path}/chat/completions",
+    "/openai/deployments/{model:path}/completions",
+    "/openai/deployments/{model:path}/embeddings",
+    "/openai/deployments/{model:path}/images/generations",
+    "/openai/deployments/{model:path}/images/edits",
     "/v1beta/models/{model_name:path}:countTokens",
     "/v1beta/models/{model_name:path}:generateContent",
     "/v1beta/models/{model_name:path}:streamGenerateContent",
@@ -79,21 +81,33 @@ def managed_inference_request(
     settings: Mapping[str, object],
     cli_model: str | None,
     path_model: object = None,
+    query_model: object = None,
 ) -> dict[str, object]:
     from litellm.proxy.auth.route_checks import RouteChecks
 
     if route not in _MANAGED_MODEL_ROUTES and not RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
         return dict(body)
-    if route.endswith("/messages/count_tokens"):
-        return dict(body)
-    configured: Final = (
-        cli_model or settings.get("moderation_model")
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+
+    kind: Final = (
+        "image_generation"
+        if route.endswith("/images/generations")
+        else "image_edit"
+        if route.endswith("/images/edits")
+        else "moderation"
         if route.endswith(("/moderations", "/audio/transcriptions"))
-        else cli_model
+        else "speech"
         if route.endswith("/audio/speech")
-        else settings.get("completion_model") or cli_model
+        else "body"
+        if route.endswith(("/rerank", "/messages/count_tokens"))
+        else "path"
+        if route.endswith(":countTokens")
+        else "completion"
     )
-    effective: Final = configured or path_model or body.get("model")
+    endpoint_model: Final = path_model or (
+        query_model if route.endswith(("/completions", "/embeddings", "/images/generations", "/images/edits")) else None
+    )
+    effective: Final = resolve_inference_model(body.get("model"), settings, cli_model, endpoint_model, kind=kind)
     if not isinstance(effective, str) or not effective:
         raise_identity_failure(
             AgentIdentityFailure(message="Managed inference requires an explicit or configured model")

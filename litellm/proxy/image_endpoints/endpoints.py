@@ -21,6 +21,7 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
     numeric_form_fields,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
@@ -118,14 +119,9 @@ async def image_generation(
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        data["model"] = (
-            model
-            or general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
+        data["model"] = resolve_inference_model(
+            data.get("model"), general_settings, user_model, model, kind="image_generation"
         )
-        if user_model:
-            data["model"] = user_model
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
@@ -324,12 +320,6 @@ async def image_edit_api(
     if "prompt" not in data:
         data["prompt"] = None
 
-    data["model"] = (
-        model
-        or general_settings.get("image_generation_model", None)  # server default
-        or user_model  # model name passed via cli args
-        or data.get("model", None)  # default passed in http request
-    )
     #########################################################
     # Process request
     #########################################################
@@ -346,7 +336,7 @@ async def image_edit_api(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

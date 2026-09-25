@@ -9676,7 +9676,10 @@ class TestGetUserObjectPermission:
 
     def _prisma_with_user(self, user_row):
         prisma_client = MagicMock()
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        row = LiteLLM_UserTable(user_id="human", object_permission_id=user_row.object_permission_id) if user_row is not None else None
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
         return prisma_client
 
     async def test_resolves_through_the_shared_permission_cache(self):
@@ -9691,7 +9694,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 new_callable=AsyncMock,
@@ -9718,7 +9721,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch("litellm.proxy.auth.auth_checks.get_object_permission", new_callable=AsyncMock) as mock_get_perm,
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
@@ -9737,7 +9740,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
@@ -9751,7 +9754,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
@@ -9768,7 +9771,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 new_callable=AsyncMock,
@@ -10088,3 +10091,25 @@ class TestScopedSessionAdmission:
     def test_scope_field_cannot_be_forged_through_construction(self):
         forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
         assert forged.mcp_session_resource_server_id is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    cached = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="revoked")
+    current = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="current")
+    cache = DualCache()
+    await cache.async_set_cache(key="fresh-human", value=cached)
+    database = MagicMock()
+    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=current)
+    database.db.litellm_usertable.find_unique = AsyncMock(return_value=cached)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
+    database.db.litellm_usertable.find_unique.assert_not_awaited()
+    database.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("unavailable")
+    with pytest.raises(HTTPException) as denied:
+        await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
+    assert denied.value.status_code == 503

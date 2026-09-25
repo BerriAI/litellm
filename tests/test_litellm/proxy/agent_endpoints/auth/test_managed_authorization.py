@@ -401,6 +401,9 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
         ("/v1/chat/completions", "POST", True),
         ("/v1/chat/completions", "DELETE", False),
         ("/openai/deployments/model/chat/completions", "POST", True),
+        ("/engines/openai/model/chat/completions", "POST", True),
+        ("/openai/deployments/openai/model/images/generations", "POST", True),
+        ("/openai/deployments/openai/model/images/edits", "POST", True),
         ("/v1beta/models/gemini-model:generateContent", "POST", True),
         ("/v1/realtime", "GET", True),
         ("/v1/realtime", "POST", False),
@@ -430,6 +433,11 @@ def test_managed_route_scope_excludes_provider_resources(route: str, method: str
         ("/openai/deployments/path/embeddings", {"model": "body"}, {}, None, "path", "path"),
         ("/v1/messages/count_tokens", {"model": "body"}, {"completion_model": "ignored"}, "cli", None, "body"),
         ("/mcp/tools/call", {}, {"completion_model": "ignored"}, "cli", None, None),
+        ("/v1/images/generations", {"model": "image"}, {"completion_model": "text"}, None, None, "image"),
+        ("/v1/images/generations", {}, {"image_generation_model": "image"}, None, None, "image"),
+        ("/v1/images/edits", {}, {"image_generation_model": "image"}, None, None, "image"),
+        ("/v1/rerank", {"model": "reranker"}, {"completion_model": "text"}, "cli", None, "reranker"),
+        ("/v1beta/models/path:countTokens", {"model": "body"}, {"completion_model": "text"}, "cli", "path", "path"),
     ],
 )
 def test_managed_inference_resolves_dispatch_precedence(route, body, settings, cli_model, path_model, expected):
@@ -443,3 +451,16 @@ def test_managed_inference_without_any_model_cannot_skip_model_grants():
 
     with pytest.raises(HTTPException, match="explicit or configured model"):
         managed_inference_request("/v1/moderations", {}, {}, None)
+
+
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/images/generations", "/v1/images/edits"])
+def test_managed_inference_query_model_takes_precedence_over_body(route: str):
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+
+    assert managed_inference_request(route, {"model": "body"}, {}, None, query_model="query")["model"] == "query"
+
+
+def test_managed_inference_ignores_unsupported_query_model():
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+
+    assert managed_inference_request("/v1/messages", {"model": "body"}, {}, None, query_model="query")["model"] == "body"

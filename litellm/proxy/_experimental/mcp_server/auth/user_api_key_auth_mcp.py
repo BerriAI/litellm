@@ -67,7 +67,6 @@ from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
-from litellm.repositories.user_repository import UserRepository
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
@@ -3017,6 +3016,7 @@ class MCPRequestHandler:
         whether someone is entitled is the state that existed before this level, so it places no
         ceiling. Only a link we DID resolve can make the caller deny.
         """
+        from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import user_api_key_cache
 
         cache_key: Final = user_object_permission_id_cache_key(user_id)
@@ -3026,8 +3026,12 @@ class MCPRequestHandler:
                 return None
             if isinstance(cached, str) and cached:
                 return cached
-            user_row: Final = await UserRepository(prisma_client, use_writer=check_db_only).table.find_unique(
-                where={"user_id": user_id}
+            user_row: Final = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                check_db_only=check_db_only,
             )
             linked: Final[object] = getattr(user_row, "object_permission_id", None) if user_row is not None else None
             object_permission_id: Final = linked if isinstance(linked, str) and linked else None
