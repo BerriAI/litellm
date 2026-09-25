@@ -53,6 +53,7 @@ jobs:
           - shard: mcp-integration
             artifact-name: mcp-integration
             test-path: "tests/mcp_tests tests/test_litellm/experimental_mcp_client"
+            fork-flag: mcp-integration
             workers: 2
             reruns: 0
             timeout-minutes: 20
