@@ -2344,6 +2344,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: Marketplace installationPreference, e.g. 'auto_install' (optional)
          *
          *     Returns:
          *         Registration status (action is always "created") and plugin information.
@@ -2410,6 +2411,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: Marketplace installationPreference, e.g. 'auto_install' (optional)
          *
          *     Returns:
          *         Update status (action is always "updated") and plugin information.
@@ -37902,6 +37904,8 @@ export interface components {
             homepage?: string | null;
             /** Id */
             id: string;
+            /** Installation Preference */
+            installation_preference?: string | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -39353,6 +39357,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Claude Code marketplace installationPreference for this plugin (e.g. 'auto_install')
+             */
+            installation_preference?: string | null;
             /**
              * Keywords
              * @description Search keywords
@@ -44835,6 +44844,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Claude Code marketplace installationPreference for this plugin (e.g. 'auto_install')
+             */
+            installation_preference?: string | null;
             /**
              * Keywords
              * @description Search keywords
