@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Iterator, Mapping
+from types import SimpleNamespace
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1220,6 +1221,117 @@ class TestDeleteModelClearsRouterRegistry:
 
         mock_router.delete_deployment.assert_called_once_with(id=model_id)
         assert mock_router.complexity_routers.get("shared-name") is config_router
+
+
+@pytest.fixture
+def deleted_auto_router_catalog(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_helpers.auto_router_availability import build_auto_router_catalog
+
+    rows = tuple(
+        LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=f"model_name_{team_id}_{model_id}",
+            litellm_params={
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"classifier_type": classifier},
+            },
+            model_info={"id": model_id, "team_id": team_id},
+            created_by="admin",
+            updated_by="admin",
+            blocked=True,
+        )
+        for model_id, team_id, classifier in (
+            ("deleted-router", "deleted-team", "heuristic_v2"),
+            ("surviving-router", "surviving-team", "llm_v2"),
+        )
+    )
+    config = proxy_server.ProxyConfig()
+    config.auto_router_db_catalog = build_auto_router_catalog(rows)
+    monkeypatch.setattr(proxy_server, "proxy_config", config)
+    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", asyncio.Lock())
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "_license_check", SimpleNamespace(auto_router_capability_limit=lambda: 1))
+    monkeypatch.setattr(proxy_server, "heuristic_v1_tuning_baselines", {})
+    return config, rows
+
+
+class TestDeletedAutoRouterAvailability:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("delete_succeeds,has_router", ((True, True), (True, False), (False, True)))
+    async def test_single_delete_releases_allowance_only_after_success(
+        self, monkeypatch, deleted_auto_router_catalog, delete_succeeds, has_router
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_availability
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+        from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
+
+        config, rows = deleted_auto_router_catalog
+        original = config.auto_router_db_catalog
+        row = rows[0].model_copy(update={"model_info": {"id": rows[0].model_id}})
+        table = SimpleNamespace(
+            find_unique=AsyncMock(return_value=row),
+            delete=AsyncMock(return_value=row, side_effect=None if delete_succeeds else RuntimeError("delete failed")),
+        )
+        prisma = SimpleNamespace(
+            db=SimpleNamespace(litellm_proxymodeltable=table, query_raw=AsyncMock(return_value=[]))
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        request = AutoRouterAvailabilityRequest(complexity_router_config={"classifier_type": "heuristic_v2"})
+        before = await get_auto_router_availability(request, admin)
+        assert before.error is not None
+        if not has_router:
+            monkeypatch.setattr(proxy_server, "llm_router", None)
+
+        if not delete_succeeds:
+            with pytest.raises(ProxyException, match="delete failed"):
+                await delete_model(ModelInfoDelete(id=row.model_id), admin)
+            assert config.auto_router_db_catalog == original
+            return
+
+        await delete_model(ModelInfoDelete(id=row.model_id), admin)
+        monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[]))
+        after = await get_auto_router_availability(request, admin)
+        assert after.error is None
+        assert {slot.key: slot.remaining for slot in after.allowances} == {
+            "heuristic_v2": 1,
+            "capability": 1,
+            "llm_v2": 0,
+            "tier_or_classifier_prompt": 1,
+            "heuristic_tuning": 1,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("has_router", (True, False))
+    async def test_team_delete_releases_only_its_routers_allowance(
+        self, monkeypatch, deleted_auto_router_catalog, has_router
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_availability
+        from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
+
+        _, rows = deleted_auto_router_catalog
+        prisma = _TxPrismaClient(rows)
+        deleted = await delete_team_models(
+            team_ids=["deleted-team"], prisma_client=prisma, llm_router=proxy_server.llm_router if has_router else None
+        )
+
+        assert deleted == ["deleted-router"]
+        after = await get_auto_router_availability(
+            AutoRouterAvailabilityRequest(complexity_router_config={"classifier_type": "heuristic_v2"}),
+            UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert after.error is None
+        assert {slot.key: slot.remaining for slot in after.allowances} == {
+            "heuristic_v2": 1,
+            "capability": 1,
+            "llm_v2": 0,
+            "tier_or_classifier_prompt": 1,
+            "heuristic_tuning": 1,
+        }
 
 
 class TestUpdateModel:
@@ -4699,6 +4811,30 @@ class TestPatchModelCredentialName:
         credentials_repository.find_by_name.assert_awaited_once_with("ghost-credential")
 
     @pytest.mark.asyncio
+    async def test_patch_model_resending_unchanged_dangling_credential_name_is_not_validated(self, monkeypatch):
+        credentials_repository = MagicMock()
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="ghost-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        persisted: Final = await self._patch_model(
+            monkeypatch,
+            db_model,
+            self._admin_user(),
+            "ghost-credential",
+            credentials_repository=credentials_repository,
+        )
+        params: Final = json.loads(persisted[0]["litellm_params"])
+        assert params["litellm_credential_name"] == "ghost-credential"
+        credentials_repository.find_by_name.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_patch_model_accepts_credential_known_only_in_db(self, monkeypatch):
         db_model: Final = Deployment(
             model_name="gpt-4",
@@ -5288,7 +5424,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
     """
 
     @staticmethod
-    async def _assert_evicts_under_lock(monkeypatch, call_endpoint, model_id: str) -> None:
+    async def _assert_evicts_under_lock(monkeypatch, call_endpoint, model_id: str, config) -> None:
         """Run ``call_endpoint`` with the lock already held and assert it blocks.
 
         Holding MODEL_RECONCILE_LOCK stands in for a reconcile that is mid-flight. If
@@ -5305,6 +5441,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
         """
         lock = asyncio.Lock()
         monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
+        stale_catalog = config.auto_router_db_catalog
 
         async with lock:
             task = asyncio.create_task(call_endpoint())
@@ -5315,16 +5452,19 @@ class TestDeleteEvictionsHoldTheReconcileLock:
                 f"deleting {model_id} did not wait for MODEL_RECONCILE_LOCK -- an "
                 f"in-flight reconcile can resurrect the deployment it just evicted"
             )
+            config.auto_router_db_catalog = stale_catalog
         await asyncio.wait_for(task, timeout=5)
+        assert tuple(row.model_id for row in config.auto_router_db_catalog) == ("surviving-router",)
 
     @pytest.mark.asyncio
-    async def test_delete_model_waits_for_an_in_flight_reconcile(self, monkeypatch):
+    async def test_delete_model_waits_for_an_in_flight_reconcile(self, monkeypatch, deleted_auto_router_catalog):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
             delete_model,
         )
 
-        model_id = "m-doomed"
+        config, rows = deleted_auto_router_catalog
+        model_id = rows[0].model_id
         row = MagicMock()
         row.model_dump.return_value = {
             "model_name": "gpt-4o",
@@ -5361,16 +5501,17 @@ class TestDeleteEvictionsHoldTheReconcileLock:
                 ),
             )
 
-        await self._assert_evicts_under_lock(monkeypatch, call, model_id)
+        await self._assert_evicts_under_lock(monkeypatch, call, model_id, config)
         router.delete_deployment.assert_called_once_with(id=model_id)
 
     @pytest.mark.asyncio
-    async def test_delete_team_models_waits_for_an_in_flight_reconcile(self, monkeypatch):
+    async def test_delete_team_models_waits_for_an_in_flight_reconcile(self, monkeypatch, deleted_auto_router_catalog):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_team_models,
         )
 
-        model_id = "m-team-doomed"
+        config, rows = deleted_auto_router_catalog
+        model_id = rows[0].model_id
         router = MagicMock()
         router.delete_deployment = MagicMock(return_value=True)
 
@@ -5406,7 +5547,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
                 team_ids=["team-1"], prisma_client=prisma, llm_router=router
             )
 
-        await self._assert_evicts_under_lock(monkeypatch, call, model_id)
+        await self._assert_evicts_under_lock(monkeypatch, call, model_id, config)
         router.delete_deployment.assert_called_once_with(id=model_id)
 
 
@@ -6106,7 +6247,8 @@ class TestStrategyRouterWriteValidation:
     _TUNED_A = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}}
     _TUNED_A_EDITED = {**_TUNED_A, "dimension_weights": {"codePresence": 0.9}}
     _TUNED_B = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4.1"}}
-    _TUNED_B_EDITED = {**_TUNED_B, "tiers": {"SIMPLE": "gpt-4o", "MEDIUM": "gpt-4.1"}}
+    _TUNED_B_EDITED = {**_TUNED_B, "code_keywords": ["internal-api"]}
+    _MODELS_ONLY_B = {**_TUNED_B, "tiers": {"SIMPLE": "fast-model", "MEDIUM": "capable-model"}}
 
     @staticmethod
     def _db_router_row(model_id: str, config: Mapping[str, object]) -> dict[str, object]:
@@ -6124,7 +6266,9 @@ class TestStrategyRouterWriteValidation:
             (1, ["a", "b"], {"a": "_TUNED_A", "b": "_TUNED_B"}, "a", "_TUNED_A_EDITED", "allowed"),
             (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "a", "_TUNED_A_EDITED", "allowed"),
             (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B_EDITED", "refused"),
-            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B", "refused"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B_EDITED", "refused"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B", "allowed"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_MODELS_ONLY_B", "allowed"),
             (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B", "allowed"),
             (None, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B_EDITED", "allowed"),
             (1, [], {}, "c", "_TUNED_B", "allowed"),
@@ -6152,6 +6296,7 @@ class TestStrategyRouterWriteValidation:
             "_TUNED_A_EDITED": self._TUNED_A_EDITED,
             "_TUNED_B": self._TUNED_B,
             "_TUNED_B_EDITED": self._TUNED_B_EDITED,
+            "_MODELS_ONLY_B": self._MODELS_ONLY_B,
         }
         baselines = snapshot_tuning_baselines(
             [self._db_router_row(row_id, configs["_TUNED_A" if row_id == "a" else "_TUNED_B"]) for row_id in baseline_rows]
@@ -6186,7 +6331,7 @@ class TestStrategyRouterWriteValidation:
                     async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=candidate_id):
                         pass
                 assert exc_info.value.status_code == 403
-                assert "changed heuristic scorer settings or tier models" in str(exc_info.value.detail)
+                assert "changed heuristic scoring rules" in str(exc_info.value.detail)
                 assert "'auto_router' feature lifts the limit" in str(exc_info.value.detail)
                 return
             async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=candidate_id) as table:
@@ -6236,13 +6381,13 @@ class TestStrategyRouterWriteValidation:
                     model_params=Deployment(
                         model_name="second-tuned",
                         litellm_params=LiteLLM_Params(
-                            model="auto_router/complexity_router", complexity_router_config=self._TUNED_B
+                            model="auto_router/complexity_router", complexity_router_config=self._TUNED_B_EDITED
                         ),
                     ),
                     user_api_key_dict=admin,
                 )
             assert exc_info.value.code == "403"
-            assert "changed heuristic scorer settings or tier models" in str(exc_info.value.message)
+            assert "changed heuristic scoring rules" in str(exc_info.value.message)
             fake.tx_obj.litellm_proxymodeltable.create.assert_not_awaited()
             fake.litellm_proxymodeltable.create.assert_not_awaited()
 

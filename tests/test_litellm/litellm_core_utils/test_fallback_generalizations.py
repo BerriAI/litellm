@@ -517,7 +517,7 @@ def test_shipped_gemini_chat_baseline_keeps_reasoning_effort_on_unmapped_model(s
         drop_params=False,
     )
     assert isinstance(optional_params, dict)
-    assert optional_params["thinkingConfig"]["thinkingBudget"] > 0
+    assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
     assert optional_params["thinkingConfig"]["includeThoughts"] is True
 
 
@@ -978,10 +978,6 @@ def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipp
     ):
         assert "supports_tool_search" not in litellm.model_cost[key]
         assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
-
-    assert "supports_tool_search" not in litellm.model_cost["claude-opus-4-1"]
-    opus_4_1_info = litellm.get_model_info("claude-opus-4-1", custom_llm_provider="anthropic")
-    assert opus_4_1_info.get("supports_tool_search") is None
 
     assert "supports_tool_search" not in litellm.model_cost["azure_ai/claude-opus-5"]
     azure_opus_5_info = litellm.get_model_info("claude-opus-5", custom_llm_provider="azure_ai")

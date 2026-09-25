@@ -51,6 +51,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -238,6 +239,7 @@ class LitellmTableNames(str, enum.Enum):
     CONFIG_TABLE_NAME = "LiteLLM_Config"
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
+    AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -307,6 +309,8 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
+    TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
+    TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -533,6 +537,9 @@ class LiteLLMRoutes(enum.Enum):
     mcp_inference_routes = [
         "/mcp",
         "/mcp/",
+        "/mcp/sse/",
+        "/mcp/sse/messages",
+        "/mcp/sse/messages/",
         "/mcp/proxy",
         "/mcp/{subpath}",
         "/mcp/tools",
@@ -573,6 +580,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/agents/{agent_id}",
         "/v1/agents/make_public",
         "/v1/agents/{agent_id}/make_public",
+        "/v1/agents/{agent_id}/kill_switch",
     )
 
     # Backwards-compat union — virtual keys may be configured with
@@ -670,6 +678,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -696,6 +705,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
+            "/user/daily/activity/aggregated/search",
             # team
             "/team/new",
             "/team/update",
@@ -713,6 +723,8 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/export",
+            "/team/daily/activity/aggregated/search",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
@@ -768,6 +780,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
         "/global/spend/tags",
         "/global/spend/all_tag_names",
+        "/spend/capture_rate",
     ]
 
     public_routes = frozenset(
@@ -883,6 +896,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/daily/activity/export",
+        "/team/daily/activity/aggregated/search",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
@@ -898,6 +913,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        "/user/daily/activity/aggregated/search",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -910,6 +926,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/user/password/change",  # endpoint only ever writes the caller's own row
+        "/session/logout",  # endpoint only ever revokes the caller's own session key
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -934,6 +951,7 @@ class LiteLLMRoutes(enum.Enum):
         # proxy admin, or team admin naming their own team via team_id
         "/auto_router/test_routing",
         "/auto_router/validate_complexity_router_config",
+        "/auto_router/availability",
         # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
         "/auto_router/session",
         "/cost/predict-cache",
@@ -979,6 +997,8 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/export",
+            "/team/daily/activity/aggregated/search",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -1128,6 +1148,7 @@ class ModelInfo(LiteLLMPydanticObjectBase):
         ]
         | None
     )
+    discoverable: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=(), extra="allow")
 
@@ -1941,6 +1962,10 @@ class ChangePasswordRequest(LiteLLMPydanticObjectBase):
 
 class ChangePasswordResponse(LiteLLMPydanticObjectBase):
     user_id: str
+    message: str
+
+
+class SessionLogoutResponse(LiteLLMPydanticObjectBase):
     message: str
 
 
@@ -2925,6 +2950,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "every replica. On by default; set to tune the window, pin a job, or turn it off."
         ),
     )
+    spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(
+        None,
+        description=(
+            "Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). "
+            "Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window "
+            "falls under the threshold (default 0.9). Off unless set."
+        ),
+    )
     maximum_spend_logs_retention_period: str | None = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -3667,7 +3700,7 @@ from litellm.models.spend_logs import (  # noqa: E402
 )
 from litellm.models.tag import LiteLLM_TagTable as LiteLLM_TagTable  # noqa: E402
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated"]
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):

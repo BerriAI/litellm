@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from unittest.mock import MagicMock
@@ -6,8 +7,9 @@ import pytest
 
 import litellm.caching.redis_cache as redis_cache_module
 from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
-from litellm.types.caching import LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 
@@ -363,3 +365,112 @@ def test_reasoning_field_cache_identity(semantic: bool, provider: str):
             **{**request, "metadata": {**request["metadata"], "user_api_key": "tenant-b"}},
             reasoning_content_field="reasoning",
         )
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings(monkeypatch):
+    """A cross-encoder behind /embeddings returns one score per document for a single
+    input string; caching data[0] per input would make the second call return 1 score."""
+    import litellm
+    from litellm import CustomLLM
+
+    class ScoreEveryDocument(CustomLLM):
+        provider_calls: int = 0
+
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            self.provider_calls += 1
+            return EmbeddingResponse(
+                model=model,
+                data=[Embedding(embedding=[float(i)], index=i, object="embedding") for i in range(5)],
+            )
+
+    scorer = ScoreEveryDocument()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "score-every-doc", "custom_handler": scorer}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "score-every-doc"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "score-every-doc"])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    batch = '{"query": "q", "documents": ["a", "b", "c", "d", "e"]}'
+    first = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+
+    assert scorer.provider_calls == 2
+    assert [len(first.data), len(second.data)] == [5, 5]
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_refetches_entries_written_without_format_version(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+
+    class EmbedLength(CustomLLM):
+        provider_calls: int = 0
+
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            self.provider_calls += 1
+            return EmbeddingResponse(
+                model=model,
+                data=[
+                    Embedding(embedding=[float(len(text))], index=idx, object="embedding")
+                    for idx, text in enumerate(input)
+                ],
+            )
+
+    embedder = EmbedLength()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "embed-length", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "embed-length"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "embed-length"])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    await litellm.aembedding(model="embed-length/m", input=["abcd"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    store = litellm.cache.cache.cache_dict
+    stored = [entry["response"] for entry in store.values()]
+    assert [entry["format_version"] for entry in stored] == [EMBEDDING_CACHE_FORMAT_VERSION], stored
+    legacy_store = {
+        key: {
+            **entry,
+            "response": {
+                field: value
+                for field, value in {**entry["response"], "embedding": [-1.0]}.items()
+                if field != "format_version"
+            },
+        }
+        for key, entry in store.items()
+    }
+    monkeypatch.setattr(litellm.cache.cache, "cache_dict", legacy_store)
+
+    refetched = await litellm.aembedding(model="embed-length/m", input=["abcd"])
+
+    assert embedder.provider_calls == 2, "an entry written without format_version must be a cache miss"
+    assert [item["embedding"] for item in refetched.data] == [[4.0]]
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+
+    class Base64Embedder(CustomLLM):
+        provider_calls: int = 0
+
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            self.provider_calls += 1
+            return EmbeddingResponse(
+                model=model,
+                data=[Embedding(embedding="AACAPwAAAEA=", index=idx, object="embedding") for idx, _ in enumerate(input)],
+            )
+
+    embedder = Base64Embedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "embed-b64", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "embed-b64"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "embed-b64"])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    first = await litellm.aembedding(model="embed-b64/m", input=["abcd"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second = await litellm.aembedding(model="embed-b64/m", input=["abcd"])
+
+    assert embedder.provider_calls == 1, "a string embedding written to the cache must be served on repeat"
+    assert [item["embedding"] for item in second.data] == [item["embedding"] for item in first.data] == ["AACAPwAAAEA="]

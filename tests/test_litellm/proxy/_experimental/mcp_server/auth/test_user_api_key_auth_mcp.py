@@ -2,6 +2,7 @@ import contextlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -341,6 +342,15 @@ class TestMCPRequestHandler:
         mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
         return mock_manager
 
+    def _real_manager_with_toolsets(self, toolset_perms):
+        """A real MCPServerManager so the real expand_tool_permissions runs;
+        only the DB-backed toolset lookup is stubbed"""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        manager = MCPServerManager()
+        manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
+        return manager
+
     async def test_get_allowed_mcp_servers_for_key_includes_toolset_servers(self):
         """A key granted only mcp_toolsets must reach the toolset's servers on
         every path (list, call, REST); regression for the list-ok/call-403 bug"""
@@ -506,6 +516,141 @@ class TestMCPRequestHandler:
             )
 
         assert result is None
+
+    @pytest.mark.parametrize(
+        "direct,via_toolsets,expected",
+        [
+            (["*"], None, None),
+            (["*"], ["read_file"], None),
+            (None, None, None),
+            ([], None, ()),
+            (None, ["read_file"], ("read_file",)),
+        ],
+    )
+    def test_union_tool_grants_wildcard_and_union_cases(self, direct, via_toolsets, expected):
+        """A direct ["*"] makes the level unrestricted even beside a toolset
+        list (regression: mapping ["*"] to None in expand_tool_permissions let
+        a same-level toolset list deny every other tool)"""
+        result = MCPRequestHandler._union_tool_grants(direct, via_toolsets)
+
+        if expected is None:
+            assert result is None
+        else:
+            assert result is not None
+            assert set(result) == set(expected)
+
+    def test_union_tool_grants_unions_two_concrete_lists(self):
+        result = MCPRequestHandler._union_tool_grants(["read_file"], ["write_file"])
+
+        assert result is not None
+        assert set(result) == {"read_file", "write_file"}
+
+    async def test_key_wildcard_allows_a_tool_never_enumerated(self):
+        """End to end at the key level: object_permission sits on the auth
+        object already, no team named, so no patching is needed; the real
+        global manager expands ["*"] and the level reads unrestricted"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["*"]},
+            ),
+        )
+
+        allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+        brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+            tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+
+        assert allowed is None
+        assert brand_new_tool_allowed is True
+
+    async def test_key_wildcard_stays_capped_by_team_allowlist(self):
+        """A wildcard on the key must never widen a team's enumerated ceiling:
+        the intersection keeps only the team's named tools"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["*"]},
+            ),
+        )
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_permissions = {"server-a": ["read_file"]}
+        manager = self._real_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert allowed == ["read_file"]
+        assert brand_new_tool_allowed is False
+
+    async def test_team_wildcard_stays_capped_by_key_allowlist(self):
+        """A wildcard on the team leaves the key's enumerated list as the
+        effective ceiling"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["read_file"]},
+            ),
+        )
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_permissions = {"server-a": ["*"]}
+        manager = self._real_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert allowed == ["read_file"]
+
+    async def test_key_empty_tool_list_stays_deny_all(self):
+        """[] on the key is deny-all, distinct from the wildcard: it must not
+        be widened into allow-all"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": []},
+            ),
+        )
+
+        allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+        read_file_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+            tool_name="read_file", server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+
+        assert allowed == []
+        assert read_file_allowed is False
 
     # ------------------------------------------------------------------
     # LIT-5749: toolsets attached to a TEAM, ORG, or internal USER must be
@@ -3057,6 +3202,11 @@ class TestMCPDelegateAuthToUpstream:
         )
 
         cases = [
+            ("/mcp/sse", []),
+            ("/mcp/sse/", []),
+            ("/mcp/sse/messages", []),
+            ("/mcp/sse/messages/", []),
+            ("/sse/mcp", ["sse"]),
             # Single server, single segment.
             ("/mcp/foo", ["foo"]),
             # Server name with one embedded slash (two segments).
@@ -4279,6 +4429,105 @@ class TestAgentMCPPermissions:
         ):
             assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == []
 
+    @staticmethod
+    def _tool_grants(grants: dict[str, dict[str, list[str]]], keyed_by: Literal["team_id", "user_id"]) -> AsyncMock:
+        """Object permissions keyed by the ``team_id`` or ``user_id`` being asked about; anyone else has none."""
+
+        async def by_principal(user_api_key_auth: UserAPIKeyAuth | None = None) -> LiteLLM_ObjectPermissionTable | None:
+            assert user_api_key_auth is not None
+            principal = (user_api_key_auth.team_id if keyed_by == "team_id" else user_api_key_auth.user_id) or ""
+            tools = grants.get(principal)
+            if tools is None:
+                return None
+            return LiteLLM_ObjectPermissionTable(object_permission_id=f"perm-{principal}", mcp_tool_permissions=tools)
+
+        return AsyncMock(side_effect=by_principal)
+
+    @contextlib.contextmanager
+    def _caller_tool_levels(
+        self, team_grants: dict[str, dict[str, list[str]]], user_grants: dict[str, dict[str, list[str]]]
+    ):
+        with (
+            patch.object(  # test-quality-ok: the level loaders read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which team is being asked about
+                MCPRequestHandler, "_get_team_object_permission", self._tool_grants(team_grants, keyed_by="team_id")
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
+                MCPRequestHandler, "_get_user_object_permission", self._tool_grants(user_grants, keyed_by="user_id")
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+        ):
+            yield
+
+    async def test_agent_key_acting_for_a_user_only_sees_the_tools_that_user_may_call(self):
+        """The agent's key may call every tool on server-a, the invoking team grants two of them and the
+        invoking user only one, so on that user's behalf the agent sees exactly that one tool."""
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with self._caller_tool_levels(
+            team_grants={"callers": {"server-a": ["read_wiki_structure", "ask_wiki_question"]}},
+            user_grants={"alice": {"server-a": ["read_wiki_structure", "read_wiki_contents"]}},
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == [
+                "read_wiki_structure"
+            ]
+
+    async def test_agent_key_acting_for_a_user_without_tool_grants_keeps_its_own_tools(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with self._caller_tool_levels(team_grants={}, user_grants={}):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+
+    async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_tools_on_the_server(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with self._caller_tool_levels(
+            team_grants={"callers": {"server-a": ["ask_wiki_question"], "server-b": ["other"]}}, user_grants={}
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == ["ask_wiki_question"]
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) is None
+
+    async def test_agent_key_not_acting_for_anyone_ignores_the_caller_tool_ceiling(self):
+        agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
+
+        with self._caller_tool_levels(
+            team_grants={"callers": {"server-a": ["ask_wiki_question"]}},
+            user_grants={"alice": {"server-a": ["read_wiki_structure"]}},
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+
+    async def test_agent_key_acting_for_a_caller_whose_team_is_unreadable_gets_no_tools(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        async def only_the_callers_team_is_unreadable(
+            user_api_key_auth: UserAPIKeyAuth | None = None,
+        ) -> LiteLLM_ObjectPermissionTable | None:
+            if user_api_key_auth is not None and user_api_key_auth.team_id == "callers":
+                raise RuntimeError("db down")
+            return None
+
+        with (
+            patch.object(  # test-quality-ok: the level loaders read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: same seam; the agent's own team resolves, the caller's team does not
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                AsyncMock(side_effect=only_the_callers_team_is_unreadable),
+            ),
+            patch.object(  # test-quality-ok: same seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == []
+
     async def test_get_allowed_mcp_servers_agent_intersection(self):
         """Key/team allow [server_1, server_2]; agent allows [server_1]. Result = [server_1]."""
         user_api_key_auth = UserAPIKeyAuth(
@@ -4349,8 +4598,7 @@ class TestAgentMCPPermissions:
         assert result == frozenset({"ag-server-id"})
         assert asked == ["agent-ag"]
         assert (
-            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve)
-            is None
+            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve) is None
         )
         assert asked == ["agent-ag"]
 
@@ -4487,7 +4735,9 @@ class TestAgentMCPPermissions:
                 stack.enter_context(patcher)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4513,7 +4763,9 @@ class TestAgentMCPPermissions:
                 await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4537,9 +4789,15 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-a", user_api_key_auth)
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-b", user_api_key_auth)
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-c", user_api_key_auth)
+            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-a", user_api_key_auth
+            )
+            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-b", user_api_key_auth
+            )
+            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-c", user_api_key_auth
+            )
 
         assert sorted(server_a_tools) == ["tool_direct", "tool_via_toolset"]
         assert server_b_tools == ["tool_b"]
@@ -6524,6 +6782,53 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 503
 
+    async def test_reload_admitted_key_returns_admin_for_master_key_hash(self):
+        """An envelope sealed under the master key has no DB row to reload; the reload resolves it
+        to the PROXY_ADMIN auth context (api_key is the alias, never the hash) rather than failing.
+        A hash that is NOT the master key's still reaches the prisma gate and fails the same as
+        before (500 with no database connection)."""
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+        from litellm.proxy._types import LitellmUserRoles, hash_token
+
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
+            admitted = await MCPRequestHandler._reload_admitted_key(hash_token(self._MASTER_KEY))
+            assert admitted.user_role == LitellmUserRoles.PROXY_ADMIN
+            assert admitted.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler._reload_admitted_key("not-the-master-hash")
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.parametrize(
+        "flag_enabled, scope, expected",
+        [(True, "scoped", []), (False, "scoped", ["public"]), (True, "unscoped", ["public"])],
+    )
+    async def test_master_envelope_respects_allow_all_scope(self, flag_enabled, scope, expected):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import hash_token
+
+        manager = MCPServerManager()
+        with patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY):
+            admitted = await MCPRequestHandler._reload_admitted_key(hash_token(self._MASTER_KEY))
+        with (
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["public"]),
+            patch.object(manager, "_get_active_submitted_mcp_server_ids_for_user", new=AsyncMock(return_value=[])),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_user",
+                new=AsyncMock(return_value=["granted"] if scope == "scoped" else []),
+            ),
+        ):
+            servers = await manager.get_allowed_mcp_servers(
+                admitted,
+                access=MCPServerAccess(server_ids=(), scope=scope),
+                general_settings={"mcp_allow_all_keys_respects_mcp_scope": flag_enabled},
+            )
+        assert servers == expected
+
     async def test_envelope_for_key_barred_from_mcp_routes_is_rejected_403(self):
         """A key whose allowed_routes exclude MCP must not reach tools via an envelope: the arm runs
         RouteChecks.should_call_route before admitting, exactly as the standard pipeline does between
@@ -6954,10 +7259,12 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert exc_info.value.status_code == 403
         assert not exc_info.value.headers
 
-    async def test_explicit_litellm_key_wins_over_envelope_arm(self):
-        """An explicit x-litellm-api-key is always a LiteLLM credential and its arm precedes the
-        envelope arm: user_api_key_auth validates the key and NO inner token is injected, even
-        though the Authorization header carries a valid envelope."""
+    async def test_explicit_litellm_key_matching_envelope_admits_under_explicit_key(self):
+        """The dual-credential arm: an explicit x-litellm-api-key paired with an envelope sealing the
+        SAME key hash admits under the explicit key's auth context AND injects the sealed upstream
+        token for egress. When the envelope seals a different principal the request is a 403 instead
+        (covered by the mismatch tests), and the explicit key never silently drops the envelope the
+        way the pre-fix ordering did."""
         envelope = self._mint_bridge_envelope()
         scope = {
             "type": "http",
@@ -6970,7 +7277,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         }
 
         async def mock_user_api_key_auth(api_key, request):
-            return UserAPIKeyAuth(api_key=api_key, user_id="litellm-key-user")
+            return UserAPIKeyAuth(api_key=self._KEY_HASH, user_id="litellm-key-user")
 
         with (
             patch(
@@ -6992,9 +7299,10 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         mock_auth.assert_called_once()
         assert mock_auth.call_args.kwargs["api_key"] == "Bearer sk-explicit-litellm-key"
-        # The explicit-key arm admitted; the envelope arm never ran, so no inner token is injected.
         assert auth_result.user_id == "litellm-key-user"
-        assert mcp_server_auth_headers == {}
+        assert mcp_server_auth_headers == {
+            "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
+        }
 
     async def test_non_bridge_oauth_delegate_server_does_not_take_envelope_arm(self):
         """An oauth_delegate server that is NOT a DCR bridge (``dcr_bridge`` unset) must not take the
@@ -7132,6 +7440,199 @@ class TestMCPDcrBridgeDelegateAdmission:
                     route="/mcp/bridge_delegate_server",
                 )
         assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestMCPDcrBridgeDualCredential:
+    """Dual-credential arm: ``x-litellm-api-key`` alongside an ``llm_env_`` bearer on a
+    DCR-bridge ``oauth_delegate`` route (issue #38208).
+
+    Real MCP clients send their litellm key on every request, so the envelope minted at
+    ``/{server}/token`` arrives paired with the key rather than alone. The explicit credential
+    is the admission context and the envelope supplies the upstream token, but only when both
+    name the same principal; a mismatch is a 403, an invalid envelope is the scope's
+    ``invalid_token`` challenge, and the envelope itself never reaches egress.
+    """
+
+    _DELEGATE = TestMCPDcrBridgeDelegateAdmission
+    _MASTER_KEY = TestMCPDcrBridgeDelegateAdmission._MASTER_KEY
+    _KEY_HASH = TestMCPDcrBridgeDelegateAdmission._KEY_HASH
+
+    @staticmethod
+    def _dual_scope(envelope: str, explicit_key: str):
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [
+                (b"authorization", f"Bearer {envelope}".encode("latin-1")),
+                (b"x-litellm-api-key", explicit_key.encode("latin-1")),
+            ],
+        }
+
+    @pytest.mark.parametrize("dual_credential", [False, True])
+    async def test_admission_rejects_server_without_routable_name(self, dual_credential):
+        envelope = self._DELEGATE._mint_bridge_envelope()
+        server = self._DELEGATE._bridge_delegate_server(server_name=None)
+        admission = (
+            MCPRequestHandler._admit_dcr_bridge_dual_credential(
+                server=server,
+                requested_name="bridge_delegate_server",
+                authorization_value=f"Bearer {envelope}",
+                litellm_api_key="sk-explicit-key",
+                mcp_server_auth_headers=None,
+                request=self._DELEGATE._mcp_request(),
+                route="/mcp/bridge_delegate_server",
+            )
+            if dual_credential
+            else MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=server,
+                requested_name="bridge_delegate_server",
+                authorization_value=f"Bearer {envelope}",
+                mcp_server_auth_headers=None,
+                request=self._DELEGATE._mcp_request(),
+                route="/mcp/bridge_delegate_server",
+            )
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new=AsyncMock(return_value=self._DELEGATE._reloaded_key()),
+            ),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._DELEGATE._patch_key_reload() as reload_key,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await admission
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Server misconfigured: MCP server has no routable name"
+        reload_key.assert_not_awaited()
+
+    @pytest.mark.parametrize("mapped_jwt", [False, True])
+    async def test_dual_credential_matching_key_admits_under_explicit_key_and_forwards_upstream_token(self, mapped_jwt):
+        """The reported bug: before the fix this request validated the key and dropped the
+        envelope, so egress forwarded no upstream credential and the upstream 401 yielded
+        ``tools: []``. Now the explicit key's auth context wins admission AND the sealed
+        upstream token is injected per-server, while the envelope bearer is scrubbed from
+        every egress header context."""
+        envelope = self._DELEGATE._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        explicit_auth = self._DELEGATE._reloaded_key(
+            api_key=None if mapped_jwt else self._KEY_HASH,
+            token=self._KEY_HASH,
+            user_id=None if mapped_jwt else "explicit-key-user",
+        )
+        presented_token = "aaa.bbb.ccc" if mapped_jwt else "sk-explicit-key"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=explicit_auth,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._DELEGATE._patch_key_reload() as get_key_object,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._DELEGATE._bridge_delegate_server()
+            (
+                auth_result,
+                _mcp_auth_header,
+                _mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            ) = await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, presented_token))
+
+        mock_auth.assert_awaited_once()
+        assert mock_auth.await_args.kwargs["api_key"] == f"Bearer {presented_token}"
+        assert auth_result is explicit_auth
+        get_key_object.assert_not_awaited()
+        assert mcp_server_auth_headers == {
+            "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
+        }
+        assert oauth2_headers is None
+        assert all("llm_env_" not in str(v) for v in raw_headers.values())
+
+    async def test_dual_credential_principal_mismatch_is_403(self):
+        """An envelope minted under one key presented alongside a different key must not admit:
+        the request names two different principals, so it fails closed with
+        ``oauth_principal_mismatch`` rather than falling back onto either credential."""
+        envelope = self._DELEGATE._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=self._DELEGATE._reloaded_key(api_key="a-different-key-hash"),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._DELEGATE._patch_key_reload(),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._DELEGATE._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, "sk-other-key"))
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "oauth_principal_mismatch"}
+
+    async def test_dual_credential_user_subject_envelope_matches_on_user_id(self):
+        """An interactive (user_id) envelope pairs with an explicit credential whose resolved
+        user_id is the same user; a different user is a 403, never a silent admit."""
+        for presented_user, expected_status in (("sso-user-7", None), ("sso-user-9", 403)):
+            envelope = self._DELEGATE._mint_bridge_envelope(user_id="sso-user-7")
+            with (
+                patch(
+                    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                    new_callable=AsyncMock,
+                    return_value=UserAPIKeyAuth(user_id=presented_user, api_key="any-hash"),
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                ) as mock_mgr,
+                patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            ):
+                mock_mgr.get_mcp_server_by_name.return_value = self._DELEGATE._bridge_delegate_server()
+                if expected_status is not None:
+                    with pytest.raises(HTTPException) as exc_info:
+                        await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, "sk-key"))
+                    assert exc_info.value.status_code == expected_status
+                    assert exc_info.value.detail == {"error": "oauth_principal_mismatch"}
+                else:
+                    (
+                        auth_result,
+                        _h,
+                        _s,
+                        mcp_server_auth_headers,
+                        _o,
+                        _r,
+                    ) = await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, "sk-key"))
+                    assert auth_result.user_id == "sso-user-7"
+                    assert mcp_server_auth_headers == {
+                        "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
+                    }
+
+    async def test_dual_credential_invalid_envelope_is_401_challenge_not_silent_admit(self):
+        """A tampered envelope next to a perfectly valid key must still fail closed with the
+        scope's ``invalid_token`` challenge; the explicit key alone never unlocks a bridge
+        server's upstream token."""
+        envelope = self._DELEGATE._mint_bridge_envelope(key_hash=self._KEY_HASH)
+        tampered = envelope[:-4] + "AAAA"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=self._DELEGATE._reloaded_key(),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._DELEGATE._patch_key_reload(),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._DELEGATE._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._dual_scope(tampered, "sk-explicit-key"))
+
+        assert exc_info.value.status_code == 401
+        assert "invalid_token" in str(exc_info.value.headers)
 
 
 @pytest.mark.asyncio

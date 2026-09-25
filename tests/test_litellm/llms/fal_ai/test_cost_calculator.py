@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
+
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -203,3 +204,115 @@ def test_passthrough_trellis_2_without_resolution_falls_back_to_default_rate():
 
 def test_passthrough_unknown_model_returns_none():
     assert fal_ai_passthrough_cost("fal-ai/no-such-model", {"resolution": 512}) is None
+
+
+def test_passthrough_string_resolution_is_priced_like_the_integer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/keyed-model",
+        {
+            "litellm_provider": "fal_ai",
+            "mode": "image_generation",
+            "output_cost_per_image": 0.3,
+            "output_cost_per_image_512": 0.25,
+            "output_cost_per_image_1536": 0.35,
+        },
+    )
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": "512"}) == 0.25
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512}) == 0.25
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": "1536"}) == 0.35
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": True}) == 0.3
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512.0}) == 0.3
+
+
+def test_passthrough_cost_is_none_only_when_no_price_applies_to_the_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/priceless-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation"},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/keyed-only-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_image_512": 0.02},
+    )
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {"resolution": 512}) is None
+    assert fal_ai_passthrough_cost("fal-ai/no-such-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": 1024}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": "512"}) == 0.02
+
+
+NANO_BANANA_RESOLUTION_MODELS: Final = ("fal-ai/nano-banana-2", "fal-ai/nano-banana-pro")
+
+
+@pytest.mark.parametrize("model", NANO_BANANA_RESOLUTION_MODELS)
+def test_nano_banana_default_request_charges_the_1k_rate_per_image(model):
+    entry: Final = litellm.model_cost[f"fal_ai/{model}"]
+    cost: Final = cost_calculator(
+        model=f"fal_ai/{model}",
+        image_response=_image_response(num_images=2),
+        optional_params={"num_images": 2, "aspect_ratio": "1:1"},
+    )
+    assert cost == 2 * entry["output_cost_per_image"] == 2 * entry["output_cost_per_image_1K"] > 0
+
+
+@pytest.mark.parametrize("model", NANO_BANANA_RESOLUTION_MODELS)
+def test_nano_banana_4k_request_charges_the_4k_rate_above_1k(model):
+    one_k: Final = cost_calculator(
+        model=f"fal_ai/{model}", image_response=_image_response(), optional_params={"resolution": "1K"}
+    )
+    four_k: Final = cost_calculator(
+        model=f"fal_ai/{model}", image_response=_image_response(), optional_params={"resolution": "4K"}
+    )
+    assert four_k == litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_image_4K"]
+    assert four_k > one_k > 0
+
+
+@pytest.mark.parametrize("model", NANO_BANANA_RESOLUTION_MODELS)
+@pytest.mark.parametrize("resolution", ("1K", "2K", "4K"))
+def test_nano_banana_images_generations_and_passthrough_charge_the_same_tier(model, resolution):
+    images_generations_cost: Final = cost_calculator(
+        model=f"fal_ai/{model}", image_response=_image_response(), optional_params={"resolution": resolution}
+    )
+    assert images_generations_cost == fal_ai_passthrough_cost(model, {"resolution": resolution}) > 0
+
+
+def test_nano_banana_2_resolution_tiers_are_monotonic():
+    costs: Final = tuple(
+        cost_calculator(
+            model="fal_ai/fal-ai/nano-banana-2",
+            image_response=_image_response(),
+            optional_params={"resolution": resolution},
+        )
+        for resolution in ("0.5K", "1K", "2K", "4K")
+    )
+    assert costs == tuple(sorted(costs)) and len(set(costs)) == len(costs)
+
+
+@pytest.mark.parametrize("model", NANO_BANANA_RESOLUTION_MODELS)
+def test_nano_banana_unpriced_resolution_falls_back_to_the_default_rate(model):
+    cost: Final = cost_calculator(
+        model=f"fal_ai/{model}", image_response=_image_response(), optional_params={"resolution": "8K"}
+    )
+    assert cost == litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_image"] > 0
+
+
+@pytest.mark.parametrize("model", NANO_BANANA_RESOLUTION_MODELS)
+def test_passthrough_num_images_multiplies_the_per_image_rate(model):
+    entry: Final = litellm.model_cost[f"fal_ai/{model}"]
+    assert fal_ai_passthrough_cost(model, {"num_images": 3}) == 3 * entry["output_cost_per_image"] > 0
+    assert (
+        fal_ai_passthrough_cost(model, {"resolution": "4K", "num_images": 2}) == 2 * entry["output_cost_per_image_4K"] > 0
+    )
+
+
+@pytest.mark.parametrize("num_images", (None, 0, -2, True, 2.0, "2"))
+def test_passthrough_without_a_positive_integer_num_images_charges_one_image(num_images):
+    body: Final = {} if num_images is None else {"num_images": num_images}
+    assert (
+        fal_ai_passthrough_cost("fal-ai/nano-banana-2", body)
+        == litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]["output_cost_per_image"]
+        > 0
+    )

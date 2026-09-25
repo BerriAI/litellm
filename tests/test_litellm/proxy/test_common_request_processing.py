@@ -3,7 +3,7 @@ import copy
 import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
+from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -35,10 +35,12 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
+    attach_guardrail_information,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    include_guardrail_response_requested,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
@@ -59,6 +61,132 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+
+def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(response=response, request_data={})
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == []
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_sets_key_on_dict_response():
+    recorded = [{"guardrail_name": "first", "guardrail_status": "success"}]
+    response = {"id": "x"}
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    assert result == {"id": "x", "guardrail_information": recorded}
+    assert response == {"id": "x"}
+
+
+def test_attach_guardrail_information_redacts_matched_content():
+    recorded = [
+        {
+            "guardrail_name": "cf",
+            "guardrail_status": "success",
+            "guardrail_response": [
+                {"type": "blocked_word", "keyword": "secret-word", "action": "MASK"}
+            ],
+            "match_details": [{"snippet": "secret-word", "detection_method": "keyword"}],
+        }
+    ]
+
+    result = attach_guardrail_information(
+        response={"id": "x"},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    guardrail_information = result["guardrail_information"]
+    assert isinstance(guardrail_information, list)
+    assert guardrail_information[0]["guardrail_response"][0]["keyword"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["snippet"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["detection_method"] == "keyword"
+    assert "secret-word" not in json.dumps(result)
+
+
+def test_attach_guardrail_information_leaves_cached_dict_response_untouched():
+    recorded = [{"guardrail_name": "cf", "guardrail_status": "success"}]
+    cached = {"id": "x", "content": []}
+
+    result = attach_guardrail_information(
+        response=cached,
+        request_data={
+            "metadata": {
+                "include_guardrail_response": True,
+                "standard_logging_guardrail_information": recorded,
+            }
+        },
+    )
+
+    assert "guardrail_information" not in cached
+    assert result is not cached
+    assert isinstance(result, dict)
+    assert result["guardrail_information"] == recorded
+
+    original = litellm.ModelResponse()
+    copied = attach_guardrail_information(
+        response=original,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert "guardrail_information" not in original.model_dump()
+    assert isinstance(copied, litellm.ModelResponse)
+    assert copied.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_reads_flag_from_metadata_when_router_seeded_litellm_metadata():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    request_data = {
+        "metadata": {
+            "include_guardrail_response": True,
+            "standard_logging_guardrail_information": recorded,
+        },
+        "litellm_metadata": {},
+    }
+
+    assert include_guardrail_response_requested(request_data) is True
+
+    response = litellm.ModelResponse()
+    result = attach_guardrail_information(response=response, request_data=request_data)
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_is_false_without_exact_true():
+    assert include_guardrail_response_requested(
+        {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
+    ) is False
+    assert include_guardrail_response_requested({}) is False
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -296,7 +424,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -367,60 +495,92 @@ class TestProxyBaseLLMRequestProcessing:
         add_litellm_data_to_request.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("safe_memory_mode", [False, True])
+    @pytest.mark.parametrize(
+        "route_type,input_key,system_key,token_key",
+        [
+            ("acompletion", "messages", "system", "max_tokens"),
+            ("anthropic_messages", "messages", "system", "max_tokens"),
+            ("aresponses", "input", "instructions", "max_output_tokens"),
+        ],
+    )
     async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
-        self, monkeypatch
-    ):
-        """
-        A guardrail (e.g. Presidio PII masking) mutates data["messages"] in place inside
-        pre_call_hook. The proxy_server_request.body snapshot is taken before that hook
-        runs, so it must be refreshed afterward or SpendLogs (when store_prompts_in_spend_logs
-        is enabled) persists the raw pre-guardrail body, bypassing the masking entirely.
-        """
-        processing_obj = ProxyBaseLLMRequestProcessing(data={})
-        mock_request = MagicMock(spec=Request)
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        safe_memory_mode: bool,
+        route_type: Literal["acompletion", "anthropic_messages", "aresponses"],
+        input_key: str,
+        system_key: str,
+        token_key: str,
+    ) -> None:
+        from litellm.integrations.shadow_eval_logger import request_guardrail_fingerprint
+
+        monkeypatch.setattr(litellm, "safe_memory_mode", safe_memory_mode)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={})
+        mock_request: Final = MagicMock(spec=Request)
         mock_request.headers = {}
+        metadata_key: Final = "metadata" if route_type == "acompletion" else "litellm_metadata"
+        raw_body: Final = {
+            input_key: [{"role": "user", "content": "private input"}],
+            system_key: "private system",
+            "tools": [{"name": "private", "description": "private tool"}],
+            "tool_choice": {"type": "tool", "name": "private"},
+            token_key: 100,
+        }
+        approved_messages: Final = [{"role": "user", "content": "<MASKED>"}]
+        approved_tools: Final = [{"name": "allowed", "description": "<MASKED>"}]
+        approved_body: Final = {input_key: approved_messages, "tools": approved_tools, token_key: 64}
+        recorded: Final = [{"guardrail_name": "mask", "guardrail_mode": "pre_call", "guardrail_status": "success"}]
 
-        raw_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
-
-        async def mock_add_litellm_data_to_request(*args, **kwargs):
+        async def mock_pre_call_hook(
+            user_api_key_dict: UserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
+        ) -> dict[str, object]:
+            logging_obj: Final = data["litellm_logging_obj"]
+            assert isinstance(logging_obj, LiteLLMLoggingObj)
+            assert logging_obj.shadow_eval_request_snapshot is None
             return {
-                "messages": raw_messages,
-                "proxy_server_request": {
-                    "url": "http://testserver/chat/completions",
-                    "method": "POST",
-                    "body": {"messages": raw_messages},
-                },
+                **{key: value for key, value in data.items() if key not in (system_key, "tool_choice")},
+                **approved_body,
+                metadata_key: {"standard_logging_guardrail_information": recorded},
             }
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
-            data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
-            return data
-
-        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
         mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
             "add_litellm_data_to_request",
-            mock_add_litellm_data_to_request,
+            AsyncMock(return_value={**raw_body, metadata_key: {}, "proxy_server_request": {"body": raw_body}}),
         )
 
-        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+        returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=MagicMock(spec=ProxyConfig),
-            route_type="acompletion",
+            route_type=route_type,
         )
 
-        persisted_body = returned_data["proxy_server_request"]["body"]
-        assert persisted_body["messages"] == returned_data["messages"]
-        assert "123-45-6789" not in json.dumps(persisted_body["messages"])
-        # litellm_logging_obj is stamped onto `data` by function_setup between the
-        # initial snapshot and pre_call_hook; it must never leak into the persisted
-        # audit body, which needs to stay plain-JSON-serializable end to end.
+        proxy_request: Final = returned_data["proxy_server_request"]
+        persisted_body: Final = proxy_request["body"]
+        snapshot: Final = logging_obj.shadow_eval_request_snapshot
+        expected_content: Final = copy.deepcopy(approved_body)
+        assert snapshot is not None
+        assert {key: persisted_body[key] for key in raw_body if key in persisted_body} == expected_content
+        assert {key: snapshot.body[key] for key in raw_body if key in snapshot.body} == expected_content
+        assert snapshot.fingerprint == request_guardrail_fingerprint(
+            {"standard_logging_guardrail_information": recorded}
+        )
         assert "litellm_logging_obj" not in persisted_body
-        json.dumps(persisted_body)
+        assert "private" not in json.dumps(persisted_body)
+        approved_messages[0]["content"] = "later input mutation"
+        approved_tools[0]["description"] = "later tool mutation"
+        assert {key: snapshot.body[key] for key in raw_body if key in snapshot.body} == expected_content
+        assert persisted_body[input_key][0]["content"] == "later input mutation"
+        assert persisted_body["tools"][0]["description"] == "later tool mutation"
 
     @staticmethod
     def _guardrail_tag_budget_harness(
@@ -437,7 +597,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return copy.deepcopy(request_body)
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             data.setdefault("metadata", {}).setdefault("tags", []).extend(guardrail_tags)
             return data
 
@@ -617,7 +777,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def retry_add_litellm_data_to_request(*args, **kwargs):
             return first_pass_data
 
-        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type):
+        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return data
 
         monkeypatch.setattr(
@@ -760,7 +920,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         seen_metadata: dict = {}
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             seen_metadata.update(data.get("metadata") or {})
             return data
 
@@ -831,7 +991,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -1832,7 +1992,7 @@ class TestProxyBaseLLMRequestProcessing:
             data["metadata"] = data.get("metadata", {})
             return data
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -6784,7 +6944,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         limiter_models: list[str] = []
 
         async def run_limiter(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             limiter_models.append(str(data["model"]))
             await limiter.async_pre_call_hook(
@@ -7004,7 +7167,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         run_limiter = rig[0].pre_call_hook
 
         async def limiter_then_guardrail(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             limited = await run_limiter(user_api_key_dict=user_api_key_dict, data=data, call_type=call_type)
             if guardrail not in (limited["metadata"].get("guardrails") or []):
@@ -7830,7 +7996,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -7879,7 +8045,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -7918,7 +8084,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -9601,7 +9767,10 @@ class TestBackgroundResponseRetrievalGovernance:
             return data
 
         async def decrypting_pre_call_hook(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             if data.get("response_id") == client_facing_response_id:
                 data["response_id"] = encoded_response_id

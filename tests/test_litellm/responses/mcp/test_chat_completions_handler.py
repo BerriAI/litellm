@@ -159,6 +159,7 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
             secret_fields=secret_fields,
         )
 
+    assert captured_process_kwargs["raw_headers"] == secret_fields["raw_headers"]
     assert "mcp_server_auth_headers" in captured_process_kwargs
     mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
     assert mcp_server_auth_headers is not None

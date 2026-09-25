@@ -3,7 +3,9 @@ pub enum Error {
     #[error("HashiCorp Vault requires an enterprise license")]
     EnterpriseRequired,
     #[error("invalid secret name")]
-    InvalidSecretName(#[from] litellm_secrets_types::Error),
+    InvalidSecretName(litellm_secrets_types::Error),
+    #[error(transparent)]
+    Operation(#[from] litellm_secrets_types::Error),
     #[error("HashiCorp Vault client failed")]
     Client(
         #[from]
@@ -29,6 +31,12 @@ pub enum Error {
     MalformedPayload,
     #[error("HashiCorp Vault secret value is not a string")]
     NonStringValue,
+    #[error("HashiCorp Vault data key conflicts with description")]
+    DataKeyConflictsWithDescription,
+    #[error("HashiCorp Vault secret version exceeds CAS range")]
+    CasVersionOverflow,
+    #[error("HashiCorp Vault operation timed out")]
+    Timeout,
     #[error("invalid HashiCorp Vault refresh interval")]
     RefreshInterval,
 }

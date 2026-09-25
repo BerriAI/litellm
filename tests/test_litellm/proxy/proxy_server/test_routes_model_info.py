@@ -322,7 +322,9 @@ def test_get_proxy_model_info_shows_litellm_params_pricing_and_names_it_as_an_ov
 def test_get_proxy_model_info_names_config_model_info_pricing_as_an_override(monkeypatch, local_model_cost_map):
     """Pricing declared under ``model_info`` in config.yaml overrides the cost map too."""
     info = _enriched_model_info(
-        monkeypatch, {"model": "openai/gpt-5.6"}, {"id": "dep-config", "db_model": False, "output_cost_per_token": 7e-06}
+        monkeypatch,
+        {"model": "openai/gpt-5.6"},
+        {"id": "dep-config", "db_model": False, "output_cost_per_token": 7e-06},
     )
     assert info["pricing_overrides"] == ("output_cost_per_token",)
     assert info["output_cost_per_token"] == 7e-06
@@ -399,7 +401,9 @@ def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_decla
 
     def enriched_cost(model_name: str) -> tuple:
         deployment = router.get_model_list(model_name=model_name)[0]
-        info = proxy_server._enrich_model_info_with_litellm_data({**deployment, "model_info": dict(deployment["model_info"])})["model_info"]
+        info = proxy_server._enrich_model_info_with_litellm_data(
+            {**deployment, "model_info": dict(deployment["model_info"])}
+        )["model_info"]
         return info.get("input_cost_per_token"), info.get("output_cost_per_token")
 
     assert enriched_cost("vllm-unpriced") == (None, None)
@@ -643,7 +647,6 @@ def model_group_info_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", None)
     monkeypatch.setattr(proxy_server, "_get_model_group_info", model_group_info)
 
@@ -671,7 +674,9 @@ def test_model_group_info_proxy_admin_ignores_key_model_restriction(
 
 
 @pytest.mark.parametrize("admin_role", ["proxy_admin", "proxy_admin_viewer"])
-def test_model_group_info_proxy_admin_expands_wildcard_deployments(client, auth_as, model_group_info_router, admin_role):
+def test_model_group_info_proxy_admin_expands_wildcard_deployments(
+    client, auth_as, model_group_info_router, admin_role
+):
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 

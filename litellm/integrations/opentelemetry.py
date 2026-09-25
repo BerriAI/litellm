@@ -26,6 +26,7 @@ from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -61,10 +62,10 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span | Any
-    Tracer = _Tracer | Any
-    Context = _Context | Any
-    SpanExporter = _SpanExporter | Any
-    UserAPIKeyAuth = _UserAPIKeyAuth | Any
+    Tracer = _Tracer
+    Context = _Context
+    SpanExporter = _SpanExporter
+    UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload | Any
 else:
     Span = Any
@@ -98,6 +99,7 @@ _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
+
 
 LITELLM_TRACER_NAME: Final = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME: Final = os.getenv("LITELLM_METER_NAME", "litellm")
@@ -1240,6 +1242,25 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     # End of Team/Key Based Logging Control Flow
     #########################################################
 
+    def _otel_internal_state(self, kwargs: dict[str, object]) -> dict[str, object]:
+        """Return the request-local ``_otel_internal`` marker dict, creating it if absent."""
+        litellm_params = kwargs.get("litellm_params")
+        if not isinstance(litellm_params, dict):
+            litellm_params = {}
+            kwargs["litellm_params"] = litellm_params
+
+        _metadata = litellm_params.get("metadata")
+        if not isinstance(_metadata, dict):
+            _metadata = {}
+            litellm_params["metadata"] = _metadata
+
+        _otel_internal = _metadata.get("_otel_internal")
+        if not isinstance(_otel_internal, dict):
+            _otel_internal = {}
+            _metadata["_otel_internal"] = _otel_internal
+
+        return _otel_internal
+
     def _emit_once(self, kwargs: dict, *scope: object) -> bool:
         """Return True the first time this handler is asked to emit a span
         for the given (handler, scope) on this kwargs; False on repeats.
@@ -1264,20 +1285,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         request-local (kwargs is shared across the sync/async callbacks and
         lifecycle hooks for one request).
         """
-        litellm_params = kwargs.get("litellm_params")
-        if not isinstance(litellm_params, dict):
-            litellm_params = {}
-            kwargs["litellm_params"] = litellm_params
-
-        _metadata = litellm_params.get("metadata")
-        if not isinstance(_metadata, dict):
-            _metadata = {}
-            litellm_params["metadata"] = _metadata
-
-        _otel_internal = _metadata.get("_otel_internal")
-        if not isinstance(_otel_internal, dict):
-            _otel_internal = {}
-            _metadata["_otel_internal"] = _otel_internal
+        _otel_internal = self._otel_internal_state(kwargs)
 
         spans_logged = _otel_internal.get("spans_logged")
         if not isinstance(spans_logged, dict):
@@ -2722,7 +2730,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")
             verbose_logger.exception("OpenTelemetry logging error in set_attributes %s", str(e))
 
-    def _cast_as_primitive_value_type(self, value) -> str | bool | int | float:
+    def _cast_as_primitive_value_type(self, value: object) -> str | bool | int | float:
         """
         Casts the value to a primitive OTEL type if it is not already a primitive type.
 
@@ -3084,8 +3092,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 otel_exporter,
             )
             normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
+            tls: Final = resolve_otlp_http_tls("TRACES")
             return BatchSpanProcessor(
-                OTLPSpanExporterHTTP(endpoint=normalized_endpoint, headers=_split_otel_headers),
+                OTLPSpanExporterHTTP(
+                    endpoint=normalized_endpoint,
+                    headers=_split_otel_headers,
+                    certificate_file=tls.certificate_file,
+                    session=tls.session,
+                ),
             )
         elif otel_exporter == "otlp_grpc" or otel_exporter == "grpc":
             try:
@@ -3166,7 +3180,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
                 normalized_endpoint,
             )
-            return OTLPLogExporter(endpoint=normalized_endpoint, headers=_split_otel_headers)
+            tls: Final = resolve_otlp_http_tls("LOGS")
+            return OTLPLogExporter(
+                endpoint=normalized_endpoint,
+                headers=_split_otel_headers,
+                certificate_file=tls.certificate_file,
+                session=tls.session,
+            )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
             try:
                 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
@@ -3229,9 +3249,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 OTLPMetricExporter,
             )
 
+            tls: Final = resolve_otlp_http_tls("METRICS")
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
+                certificate_file=tls.certificate_file,
+                session=tls.session,
             )
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 

@@ -27,7 +27,8 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from itertools import chain
+from itertools import chain, groupby
+from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
@@ -1451,6 +1452,35 @@ def _warn_on_server_name_fields(
 
     _warn("alias", alias)
     _warn("server_name", server_name)
+
+
+def _warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
+    """Warn once per identifier that several servers share.
+
+    ``get_server_prefix`` resolves alias first, so two servers sharing a
+    lowercased ``alias or server_name`` publish the same tool prefix and calls
+    routed by that prefix are ambiguous. A write-time uniqueness check keeps
+    new collisions out; this surfaces the ones already stored.
+    """
+    pairs: Final = tuple(
+        ((server.alias or server.server_name or "").lower(), server.server_id)
+        for server in servers
+        if server.alias or server.server_name
+    )
+    groups: Final = MappingProxyType(
+        {
+            identifier: tuple(sorted(server_id for key, server_id in pairs if key == identifier))
+            for identifier in frozenset(key for key, _server_id in pairs)
+        }
+    )
+    for identifier, server_ids in groups.items():
+        if len(server_ids) > 1:
+            verbose_logger.warning(
+                "MCP servers %s share the identifier '%s'; tool routing for that prefix is ambiguous. "
+                "Rename or delete all but one.",
+                sorted(server_ids),
+                identifier,
+            )
 
 
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
@@ -3461,7 +3491,7 @@ class MCPServerManager:
                 passthrough_server_ids: Final = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if getattr(server, "auth_type", None) == MCPAuth.true_passthrough
+                    if server.auth_type == MCPAuth.true_passthrough
                 ]
                 combined_servers.update(passthrough_server_ids)
 
@@ -6613,6 +6643,7 @@ class MCPServerManager:
             if previous_registry.get(server_id) != registered_registry.get(server_id):
                 self._invalidate_discovery_lists(server_id)
         self.registry = registered_registry
+        _warn_on_shared_identifier_prefixes(registered_registry.values())
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry
         # synchronously after the swap so a lost publication cannot also leave
@@ -6782,9 +6813,11 @@ class MCPServerManager:
         """
         Rewrite an ``mcp_tool_permissions`` dict keyed by id/name/alias so
         every key is a concrete server_id where possible. Tool lists from
-        keys that point at the same server are unioned, matching the
-        "duplicate names grant access to all matches" semantics of
-        ``expand_permission_list``.
+        keys that point at the same server are unioned and deduplicated
+        first-seen, matching the "duplicate names grant access to all
+        matches" semantics of ``expand_permission_list``; the
+        ``MCP_ALL_TOOLS_WILDCARD`` entry is preserved as an ordinary list
+        entry for the caller to interpret.
 
         Required so name-based keys don't silently drop their tool
         restrictions when the lookup uses the resolved server_id. Unresolved
@@ -6793,11 +6826,15 @@ class MCPServerManager:
         """
         if not tool_permissions:
             return {}
-        result: Final[dict[str, list[str]]] = {}
-        for key, tools in tool_permissions.items():
-            for server_id in self.expand_permission_list([key]):
-                result.setdefault(server_id, []).extend(tools or [])
-        return result
+        expanded: Final = tuple(
+            (server_id, tuple(tools or ()))
+            for key, tools in tool_permissions.items()
+            for server_id in self.expand_permission_list([key])
+        )
+        return {
+            server_id: list(dict.fromkeys(tool for _, tools in group for tool in tools))
+            for server_id, group in groupby(sorted(expanded, key=itemgetter(0)), key=itemgetter(0))
+        }
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         """
