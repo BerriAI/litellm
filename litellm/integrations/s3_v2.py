@@ -75,6 +75,7 @@ _TERMINAL_ERROR_CODES: Final = frozenset(
 _BODY_CODED_STATUSES: Final = frozenset({400, 403})
 _RETRYABLE_STATUSES: Final = frozenset({403, 408, 429, 500, 502, 503, 504})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
+_NO_SLOT: Final = nullcontext()
 
 
 def _s3_error_code(response: httpx.Response) -> str | None:
@@ -485,7 +486,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     async def async_upload_data_to_s3(
         self,
         batch_logging_element: s3BatchLoggingElement,
-        slot: AbstractAsyncContextManager[object] = nullcontext(),
+        slot: AbstractAsyncContextManager[object] = _NO_SLOT,
     ) -> UploadOutcome:
         try:
             import base64
