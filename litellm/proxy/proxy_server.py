@@ -11234,6 +11234,7 @@ async def model_list(
     fallback_type: str | None = None,
     scope: str | None = None,
     healthy_only: bool | None = False,
+    include_pricing: bool | None = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -11242,6 +11243,13 @@ async def model_list(
 
     Query Parameters:
     - include_metadata: Include additional metadata in the response with fallback information
+    - include_pricing: Include a `pricing` object per model, carrying
+                    `input_cost_per_token` and `output_cost_per_token` in USD per token.
+                    Custom pricing configured on a deployment takes precedence over the
+                    built-in cost map. A price the proxy does not know is reported as
+                    `null`, never 0, so an unmapped model is not read as free. When a
+                    model group's deployments disagree on price, the highest is
+                    reported, matching `/model_group/info`.
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
     - scope: Optional scope parameter. Currently only accepts "expand".
@@ -11379,6 +11387,7 @@ async def model_list(
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
+                include_pricing=include_pricing or False,
             )
             model_info["id"] = response_id
             model_data.append(model_info)
@@ -11439,6 +11448,7 @@ async def model_list(
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
+            include_pricing=include_pricing or False,
         )
         model_info["id"] = response_id
         model_data.append(model_info)

@@ -74,6 +74,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
+    coerce_token_price,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -278,6 +279,7 @@ from litellm.types.router import (
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
+    DeploymentListingPrice,
     DeploymentModelListingInfo,
     DeploymentTypedDict,
     DiscoveredDeploymentModelInfo,
@@ -10281,6 +10283,10 @@ class Router:
             cost_map_keys=cost_map_keys,
             max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+            deployment_prices=tuple(
+                self._deployment_listing_price(model_info, litellm_params)
+                for model_info, litellm_params in zip(model_infos, params)
+            ),
         )
 
     @staticmethod
@@ -10292,6 +10298,72 @@ class Router:
             if limit is not None
         )
         return max(limits) if limits else None
+
+    @staticmethod
+    def _configured_price(
+        model_info: Mapping[str, Any],
+        litellm_params: Mapping[str, Any],
+        field: str,
+    ) -> float | None:
+        """One deployment's custom price for ``field``, or None when it configures none.
+
+        Both sources are read because custom pricing is accepted in ``model_info`` and in
+        ``litellm_params``; the router itself copies the latter onto the former when it
+        builds a deployment's cost-map entry. ``litellm_params`` wins, matching that copy.
+        """
+        from_params: Final = coerce_token_price(litellm_params.get(field))
+        return from_params if from_params is not None else coerce_token_price(model_info.get(field))
+
+    @staticmethod
+    def _deployment_listing_price(
+        model_info: Mapping[str, Any],
+        litellm_params: Mapping[str, Any],
+    ) -> DeploymentListingPrice:
+        """What one deployment contributes to its listed name's price."""
+        cost_map_key: Final = (
+            model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+        )
+        return DeploymentListingPrice(
+            cost_map_key=cost_map_key if isinstance(cost_map_key, str) and cost_map_key else None,
+            input_cost_per_token=Router._configured_price(model_info, litellm_params, "input_cost_per_token"),
+            output_cost_per_token=Router._configured_price(model_info, litellm_params, "output_cost_per_token"),
+        )
+
+    def get_wildcard_listing_prices(self, model_name: str) -> tuple[DeploymentListingPrice, ...]:
+        """One record per wildcard deployment that a name expands from, in match order.
+
+        Wildcard-expanded rows are absent from the model-name index, so their deployments'
+        overrides are invisible to ``get_model_listing_info`` and the listing would quote
+        the catalog while the request is billed at an override.
+
+        Every matched deployment is returned rather than the first, because a request can
+        route to any of them: the caller resolves each one and reports the dearest, the same
+        way it treats a group the index does know.
+
+        Pattern matching is the expensive path this listing exists to avoid, so it only
+        runs when a wildcard deployment actually configures a price: with none, the catalog
+        is already the right answer and nothing here can change it.
+        """
+        if not any(
+            price.input_cost_per_token is not None or price.output_cost_per_token is not None
+            for price in (
+                Router._deployment_listing_price(
+                    deployment.get("model_info") or MappingProxyType({}),
+                    deployment.get("litellm_params") or MappingProxyType({}),
+                )
+                for deployments in self.pattern_router.patterns.values()
+                for deployment in deployments
+            )
+        ):
+            return ()
+
+        return tuple(
+            Router._deployment_listing_price(
+                deployment.get("model_info") or MappingProxyType({}),
+                deployment.get("litellm_params") or MappingProxyType({}),
+            )
+            for deployment in (self.pattern_router.route(model_name) or ())
+        )
 
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """

@@ -704,6 +704,22 @@ class DiscoveredDeploymentModelInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentListingPrice:
+    """What one deployment behind a listed name contributes to its price.
+
+    ``cost_map_key`` names the catalog entry that deployment resolves to, so a caller can
+    fall back to the catalog for a deployment that configures no price of its own. The
+    prices are whatever that single deployment configures, never a group aggregate: a
+    group's price is only correct once each member resolves its own effective price
+    first, since a deployment without an override can still be the dearest one.
+    """
+
+    cost_map_key: str | None
+    input_cost_per_token: float | None
+    output_cost_per_token: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
     """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 
@@ -714,11 +730,18 @@ class DeploymentModelListingInfo:
     order, so the ordinary group -- several interchangeable deployments of one model --
     carries exactly one. The token limits are the widest explicitly set in any
     deployment's ``model_info``, which outrank anything the cost map says.
+
+    ``deployment_prices`` carries one entry per deployment, in config order, rather than a
+    group aggregate: the cost map cannot supply custom pricing on its own, because a
+    deployment's override is registered only under its own model id and is deliberately
+    stripped from the shared backend key so one deployment's override never becomes
+    another's price.
     """
 
     cost_map_keys: tuple[str, ...]
     max_input_tokens: int | None
     max_output_tokens: int | None
+    deployment_prices: tuple[DeploymentListingPrice, ...] = ()
 
 
 class RouterErrors(enum.Enum):

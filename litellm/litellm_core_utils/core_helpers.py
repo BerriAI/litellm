@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
@@ -192,6 +193,31 @@ def coerce_token_limit(value: object) -> int | None:
         except (TypeError, ValueError, OverflowError):
             return None
     return None
+
+
+def coerce_token_price(value: object) -> float | None:
+    """
+    Coerce a per-token price to a float, treating a malformed value as absent.
+
+    Prices reach the /v1/models listing from the same uncoerced sources as token limits
+    (a deployment's model_info is registered into litellm.model_cost verbatim), so a
+    config value like "0.000003" has to survive while "" does not fail the listing.
+
+    Negative and non-finite values are rejected: a caller pricing a request would read a
+    negative rate as a discount, and NaN/inf serialize to invalid JSON. Bools are rejected
+    because True/False is never a meaningful price.
+    """
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        price: Final = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(price) or price < 0:
+        return None
+    return price
 
 
 _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
