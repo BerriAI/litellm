@@ -8328,6 +8328,12 @@ def validate_chat_completion_tool_choice(
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
 
+        # OpenAI also allows constraining which tools the model may call:
+        # {"type": "allowed_tools", "allowed_tools": {"mode": ..., "tools": [...]}}.
+        # Pass it through untouched so downstream providers see the full payload.
+        if tool_choice_type == "allowed_tools" and isinstance(tool_choice.get("allowed_tools"), dict):
+            return tool_choice
+
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
             raise BadRequestError(
