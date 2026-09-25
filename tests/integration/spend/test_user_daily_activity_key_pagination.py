@@ -29,6 +29,7 @@ def _range_params() -> dict[str, str]:
         "timezone": "0",
     }
 
+
 def test_aggregated_key_pages_reach_every_key_through_cursor(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         expensive: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
