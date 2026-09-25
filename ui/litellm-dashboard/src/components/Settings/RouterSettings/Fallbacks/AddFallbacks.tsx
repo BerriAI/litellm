@@ -5,6 +5,7 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { ConfigOwnedField } from "@/components/shared/ConfigOwnedField";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { toast } from "@/lib/toast";
@@ -20,9 +21,10 @@ interface AddFallbacksProps {
   accessToken: string;
   value?: Fallbacks; // Current fallbacks value from form
   onChange?: (fallbacks: Fallbacks) => Promise<void>; // Callback to update form value
+  disabled?: boolean;
 }
 
-export default function AddFallbacks({ accessToken, value = [], onChange }: AddFallbacksProps) {
+export default function AddFallbacks({ accessToken, value = [], onChange, disabled = false }: AddFallbacksProps) {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
@@ -116,10 +118,12 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        <span>+</span>
-        Add Fallbacks
-      </Button>
+      <ConfigOwnedField frozen={disabled} className="inline-flex">
+        <Button className="mx-auto" disabled={disabled} onClick={() => setIsModalVisible(true)}>
+          <span>+</span>
+          Add Fallbacks
+        </Button>
+      </ConfigOwnedField>
       <AddFallbacksModal open={isModalVisible} onCancel={handleCancel}>
         <FallbackSelectionForm
           key={modalKey}

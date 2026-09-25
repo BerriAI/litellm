@@ -7,7 +7,8 @@ import React, { useEffect, useState } from "react";
 import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
 import { toast } from "@/lib/toast";
-import { getCallbacksCall, setCallbacksCall } from "../../../networking";
+import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../../../networking";
+import { CONFIG_OWNED_MESSAGE, isConfigOwned, type SourcesState } from "@/components/shared/ConfigOwnedField";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
 import EditFallbacks from "./EditFallbacks";
@@ -121,6 +122,11 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
 
 const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
+  const [sourcesState, setSourcesState] = useState<SourcesState | null>(null);
+  const sessionKey = `${accessToken}:${userRole}:${userID}`;
+  const loadedSources = sourcesState?.sessionKey === sessionKey ? sourcesState : null;
+  const routerSources = loadedSources?.sources ?? null;
+  const sourcesFailed = loadedSources?.failed ?? false;
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -145,7 +151,18 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       }
       setRouterSettings(router_settings);
     });
-  }, [accessToken, userRole, userID]);
+    let cancelled = false;
+    getRouterSettingsCall(accessToken)
+      .then((data) => {
+        if (!cancelled) setSourcesState({ sessionKey, sources: data.source ?? {}, failed: false });
+      })
+      .catch(() => {
+        if (!cancelled) setSourcesState({ sessionKey, sources: null, failed: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, userRole, userID, sessionKey]);
 
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
     setFallbackToDelete(fallbackEntry);
@@ -249,15 +266,23 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
 
   const hasFallbacks = Array.isArray(routerSettings.fallbacks) && routerSettings.fallbacks.length > 0;
   // Admin Viewer follows the read-parity rule: see fallbacks, no writes.
-  const canModify = isProxyAdminRole(userRole ?? "");
+  const canModify = isProxyAdminRole(userRole ?? "") && routerSources !== null;
+  const fallbacksFrozen = isConfigOwned(routerSources, "fallbacks");
+  const frozenActionClass = `${iconWrapperClass} cursor-not-allowed opacity-50`;
 
   return (
     <TooltipProvider>
+      {sourcesFailed && (
+        <div role="alert" className="text-sm text-destructive">
+          Failed to load router settings. Reload the page to edit fallbacks
+        </div>
+      )}
       {canModify && (
         <AddFallbacks
           accessToken={accessToken || ""}
           value={routerSettings.fallbacks || []}
           onChange={handleFallbacksChange}
+          disabled={fallbacksFrozen}
         />
       )}
       {!hasFallbacks ? (
@@ -309,15 +334,20 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                                 data-testid="edit-fallback-button"
                                 role="button"
                                 tabIndex={0}
-                                onClick={() => handleEditClick(item)}
-                                onKeyDown={(e) => e.key === "Enter" && handleEditClick(item)}
-                                className={`${iconWrapperClass} cursor-pointer hover:text-info`}
+                                aria-disabled={fallbacksFrozen}
+                                onClick={() => !fallbacksFrozen && handleEditClick(item)}
+                                onKeyDown={(e) => e.key === "Enter" && !fallbacksFrozen && handleEditClick(item)}
+                                className={
+                                  fallbacksFrozen
+                                    ? frozenActionClass
+                                    : `${iconWrapperClass} cursor-pointer hover:text-info`
+                                }
                               />
                             }
                           >
                             <Pencil className="h-5 w-5 shrink-0" />
                           </TooltipTrigger>
-                          <TooltipContent>Edit fallback</TooltipContent>
+                          <TooltipContent>{fallbacksFrozen ? CONFIG_OWNED_MESSAGE : "Edit fallback"}</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger
@@ -326,15 +356,20 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                                 data-testid="delete-fallback-button"
                                 role="button"
                                 tabIndex={0}
-                                onClick={() => handleDeleteClick(item)}
-                                onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
-                                className={`${iconWrapperClass} cursor-pointer hover:text-destructive`}
+                                aria-disabled={fallbacksFrozen}
+                                onClick={() => !fallbacksFrozen && handleDeleteClick(item)}
+                                onKeyDown={(e) => e.key === "Enter" && !fallbacksFrozen && handleDeleteClick(item)}
+                                className={
+                                  fallbacksFrozen
+                                    ? frozenActionClass
+                                    : `${iconWrapperClass} cursor-pointer hover:text-destructive`
+                                }
                               />
                             }
                           >
                             <Trash2 className="h-5 w-5 shrink-0" />
                           </TooltipTrigger>
-                          <TooltipContent>Delete fallback</TooltipContent>
+                          <TooltipContent>{fallbacksFrozen ? CONFIG_OWNED_MESSAGE : "Delete fallback"}</TooltipContent>
                         </Tooltip>
                       </>
                     )}

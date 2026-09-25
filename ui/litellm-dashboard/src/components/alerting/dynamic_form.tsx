@@ -1,6 +1,7 @@
 import React from "react";
 import { useForm } from "react-hook-form";
 import { CircleCheck, Trash2 } from "lucide-react";
+import { ConfigOwnedField, type FieldSource } from "@/components/shared/ConfigOwnedField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,7 @@ interface AlertingSetting {
   field_value: any;
   stored_in_db: boolean | null;
   premium_field: boolean;
+  source?: FieldSource;
 }
 
 interface DynamicFormProps {
@@ -62,27 +64,44 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     handleInputChange(setting.field_name, checked);
   };
 
+  const isFrozen = (setting: AlertingSetting) => setting.source === "config";
+
   const renderControl = (setting: AlertingSetting) => {
+    const frozen = isFrozen(setting);
     if (setting.field_type === "Integer" || setting.field_type === "Float") {
       return (
-        <Input
-          type="number"
-          step={setting.field_type === "Integer" ? 1 : "any"}
-          value={setting.field_value ?? ""}
-          onChange={(event) => handleNumericChange(setting, event.target.value)}
-        />
+        <ConfigOwnedField frozen={frozen}>
+          <Input
+            type="number"
+            step={setting.field_type === "Integer" ? 1 : "any"}
+            value={setting.field_value ?? ""}
+            disabled={frozen}
+            onChange={(event) => handleNumericChange(setting, event.target.value)}
+          />
+        </ConfigOwnedField>
       );
     }
     if (setting.field_type === "Boolean") {
       return (
-        <Switch
-          aria-label={setting.field_name}
-          checked={setting.field_value}
-          onCheckedChange={(checked) => handleToggle(setting, checked)}
-        />
+        <ConfigOwnedField frozen={frozen} className="inline-flex">
+          <Switch
+            aria-label={setting.field_name}
+            checked={setting.field_value}
+            disabled={frozen}
+            onCheckedChange={(checked) => handleToggle(setting, checked)}
+          />
+        </ConfigOwnedField>
       );
     }
-    return <Input value={setting.field_value ?? ""} onChange={(event) => handleTextChange(setting, event)} />;
+    return (
+      <ConfigOwnedField frozen={frozen}>
+        <Input
+          value={setting.field_value ?? ""}
+          disabled={frozen}
+          onChange={(event) => handleTextChange(setting, event)}
+        />
+      </ConfigOwnedField>
+    );
   };
 
   return (
@@ -117,16 +136,19 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
             )}
           </TableCell>
           <TableCell>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Reset ${value.field_name}`}
-              onClick={() => handleResetField(value.field_name, index)}
-              className="text-destructive"
-            >
-              <Trash2 className="size-5" />
-            </Button>
+            <ConfigOwnedField frozen={isFrozen(value)} className="inline-flex">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Reset ${value.field_name}`}
+                disabled={isFrozen(value)}
+                onClick={() => handleResetField(value.field_name, index)}
+                className="text-destructive"
+              >
+                <Trash2 className="size-5" />
+              </Button>
+            </ConfigOwnedField>
           </TableCell>
         </TableRow>
       ))}

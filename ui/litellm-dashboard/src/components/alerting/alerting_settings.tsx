@@ -7,6 +7,7 @@ import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
+import type { FieldSource } from "@/components/shared/ConfigOwnedField";
 interface alertingSettingsItem {
   field_name: string;
   field_type: string;
@@ -15,6 +16,7 @@ interface alertingSettingsItem {
   field_description: string;
   stored_in_db: boolean | null;
   premium_field: boolean;
+  source?: FieldSource;
 }
 
 interface AlertingSettingsProps {

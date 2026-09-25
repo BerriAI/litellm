@@ -1,4 +1,5 @@
 import React from "react";
+import { ConfigOwnedField } from "@/components/shared/ConfigOwnedField";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface RoutingStrategySelectorProps {
@@ -6,6 +7,7 @@ interface RoutingStrategySelectorProps {
   availableStrategies: string[];
   routingStrategyDescriptions: { [key: string]: string };
   routerFieldsMetadata: { [key: string]: any };
+  disabled?: boolean;
   onStrategyChange: (strategy: string) => void;
 }
 
@@ -14,6 +16,7 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
   availableStrategies,
   routingStrategyDescriptions,
   routerFieldsMetadata,
+  disabled = false,
   onStrategyChange,
 }) => {
   return (
@@ -26,9 +29,10 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
           {routerFieldsMetadata["routing_strategy"]?.field_description || ""}
         </p>
       </div>
-      <div className="routing-strategy-select max-w-3xl">
+      <ConfigOwnedField frozen={disabled} className="block max-w-3xl">
         <Select
           value={selectedStrategy}
+          disabled={disabled}
           onValueChange={(strategy: string | null) => strategy && onStrategyChange(strategy)}
         >
           <SelectTrigger className="w-full">
@@ -49,7 +53,7 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </ConfigOwnedField>
     </div>
   );
 };
