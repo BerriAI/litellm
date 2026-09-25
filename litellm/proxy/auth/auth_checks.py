@@ -4471,6 +4471,7 @@ async def _check_agent_access_group_model_access(
         models=sorted(ceiling.models),
         team_id=valid_token.team_id,
         object_type="agent",
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
     )
 
 
