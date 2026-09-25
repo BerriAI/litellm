@@ -1,9 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip, toTopApiKeyData } from "./activity_metrics";
+import {
+  ActivityMetrics,
+  formatKeyLabel,
+  processActivityData,
+  ResponseTimeTooltip,
+  toTopApiKeyData,
+} from "./activity_metrics";
 import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
+import type { ModelTopApiKeysResponse } from "./networking";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
 
 beforeAll(() => {
@@ -1630,7 +1637,7 @@ describe("formatKeyLabel", () => {
 
 describe("toTopApiKeyData", () => {
   it("maps the server response to TopApiKeyData in order", () => {
-    const result = toTopApiKeyData({
+    const response: ModelTopApiKeysResponse = {
       model: "claude-sonnet-4-5",
       group_by: "model",
       limit: 5,
@@ -1638,7 +1645,8 @@ describe("toTopApiKeyData", () => {
         { api_key: "hash-c", key_alias: "key-c", team_id: "team-8618", spend: 50, api_requests: 5, total_tokens: 750 },
         { api_key: "hash-a", key_alias: null, team_id: null, spend: 0.1, api_requests: 1, total_tokens: 2 },
       ],
-    });
+    };
+    const result = toTopApiKeyData(response);
 
     expect(result).toEqual([
       { api_key: "hash-c", key_alias: "key-c", team_id: "team-8618", spend: 50, requests: 5, tokens: 750 },

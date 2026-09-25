@@ -3237,10 +3237,7 @@ async def get_user_daily_activity_model_top_keys(
         min_length=1,
         description="Model or model group to rank keys by spend for",
     ),
-    group_by: ModelTopApiKeysGroupBy = fastapi.Query(
-        default="model",
-        description="Match `model` on the raw model column or `model_group` on the public model name",
-    ),
+    group_by: ModelTopApiKeysGroupBy = "model",
     start_date: str | None = fastapi.Query(
         default=None,
         description="Start date in YYYY-MM-DD format",

@@ -81,11 +81,7 @@ const TopApiKeysCard = ({
     };
   }, [modelName, fetchTopApiKeys]);
 
-  const isCurrent =
-    fetchTopApiKeys !== undefined &&
-    result !== null &&
-    result.source[0] === modelName &&
-    result.source[1] === fetchTopApiKeys;
+  const isCurrent = result !== null && result.source[0] === modelName && result.source[1] === fetchTopApiKeys;
   const fetched = isCurrent ? result : null;
 
   if (fetchTopApiKeys !== undefined && fetched?.status === "error") {
