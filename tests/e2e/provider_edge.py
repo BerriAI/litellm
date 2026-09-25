@@ -549,8 +549,8 @@ class StreamCut:
     wrapper to the client: it holds the lifecycle frames before it back and drops them when
     the transport fails first, so a cut after a fixed number of chunks landed on either side
     of that commit depending on how the provider batched its frames. With ``mid_chunk`` set
-    the hang-up comes part way through a line of the chunk after that one, so the client is
-    left inside an SSE frame the way a dropped transport leaves it.
+    the hang-up comes part way through the next ``data:`` line the provider sends after that,
+    so the client is left inside an SSE frame the way a dropped transport leaves it.
 
     Whatever was relayed sits on the wire for ``_CUT_SETTLE_SECONDS`` before the hang-up, so
     the client has read it by then instead of receiving the data and the close in one burst,
@@ -813,16 +813,45 @@ def _handle_record(
             assert_never(head)
 
 
+def _data_line_start(data: bytes) -> int:
+    if data.startswith(b"data:"):
+        return 0
+    at_line_start: Final = data.find(b"\ndata:")
+    return -1 if at_line_start < 0 else at_line_start + 1
+
+
 def _torn_prefix(data: bytes) -> bytes:
-    return data[: len(data) // 2].rstrip(b"\r\n") or data[:1]
+    start: Final = _data_line_start(data)
+    line_end: Final = data.find(b"\n", start)
+    end: Final = len(data) if line_end < 0 else line_end
+    return data[: start + (end - start) // 2]
 
 
 def _is_content_delta(value: JsonValue | None) -> bool:
     return isinstance(value, dict) and value.get("type") == "content_block_delta"
 
 
-def _anthropic_chunk_carries_content(data: bytes) -> bool:
-    return any(line == b"event: content_block_delta" for line in data.splitlines())
+def _sse_data_carries_content(line: bytes) -> bool:
+    if not line.startswith(b"data:"):
+        return False
+    try:
+        return _is_content_delta(JSON_VALUE.validate_json(line[len(b"data:"):].strip()))
+    except ValidationError:
+        return False
+
+
+class _AnthropicContentDetector:
+    __slots__ = ("_unfinished_line",)
+
+    _unfinished_line: bytes
+
+    def __init__(self) -> None:
+        self._unfinished_line = b""
+
+    def __call__(self, data: bytes) -> bool:
+        lines: Final = (self._unfinished_line + data).split(b"\n")
+        self._unfinished_line = lines[-1]
+        return any(_sse_data_carries_content(line.rstrip(b"\r")) for line in lines[:-1])
 
 
 def _invoke_frame_carries_content(payload: bytes) -> bool:
@@ -845,7 +874,7 @@ def _bedrock_content_detector() -> Callable[[bytes], bool]:
 
 
 def _content_detector(mount: str) -> Callable[[bytes], bool]:
-    return _bedrock_content_detector() if is_bedrock(mount) else _anthropic_chunk_carries_content
+    return _bedrock_content_detector() if is_bedrock(mount) else _AnthropicContentDetector()
 
 
 def _cut_steps(
@@ -862,14 +891,17 @@ def _cut_steps(
             else:
                 return
         if cut.mid_chunk:
-            match next(source, None):
-                case StreamChunk(data=data):
-                    yield StreamChunk(data=_torn_prefix(data))
-                case StreamTruncation() as truncation:
-                    yield truncation
+            for step in source:
+                if isinstance(step, StreamTruncation):
+                    yield step
                     return
-                case None:
-                    return
+                if _data_line_start(step.data) < 0:
+                    yield step
+                    continue
+                yield StreamChunk(data=_torn_prefix(step.data))
+                break
+            else:
+                return
         if cut.after_content or cut.mid_chunk:
             time.sleep(_CUT_SETTLE_SECONDS)
         yield StreamTruncation(reason=f"edge cut the upstream stream: {cut!r}")

@@ -550,9 +550,10 @@ class TestMessagesUpstreamStreamFailure:
                 f'the last SSE frame was not an Anthropic {{"type": "error", "error": ...}} envelope; frames={frames}'
             )
         torn: Final = tuple(index for index, frame in enumerate(frames) if _payload(frame) is None)
-        assert len(torn) <= (1 if cut.mid_chunk else 0), (
-            f"the proxy relayed data lines that are not JSON where the upstream was not cut mid-frame: "
-            f"{[frames[index] for index in torn]}; all frames={frames}"
+        expected_torn: Final = 1 if cut.mid_chunk else 0
+        assert len(torn) == expected_torn, (
+            f"expected {expected_torn} data line(s) that are not JSON, since the edge tears one only when it "
+            f"cuts mid-frame, but the proxy relayed {[frames[index] for index in torn]}; all frames={frames}"
         )
         for index in torn:
             assert _payload(frames[index + 1]) == {"type": "ping"}, (
