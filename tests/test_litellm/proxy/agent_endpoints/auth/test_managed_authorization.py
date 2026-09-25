@@ -205,11 +205,16 @@ def test_invocation_routes_resolve_the_same_target(route: str, body: dict[str, o
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("managed", [True, False])
-async def test_aggregate_budget_applies_to_both_entra_and_legacy_agent_keys(managed: bool) -> None:
-    policy: Final = agent(identity_managed=managed, litellm_budget_table={"budget_id": "budget", "max_budget": 0.5})
+async def test_aggregate_budget_applies_to_entra_tokens_and_unbound_agent_keys(managed: bool) -> None:
+    policy: Final = agent(
+        identity_managed=managed, identity=BINDING if managed else None,
+        litellm_budget_table={"budget_id": "budget", "max_budget": 0.5},
+    )
     database: Final = MagicMock()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
     auth: Final = UserAPIKeyAuth(agent_id="agent")
+    if managed:
+        auth.managed_agent_context = ManagedAgentContext(agent_id="agent", binding_revision="current", mode="autonomous")
     await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
     assert auth.billing_agent_policy == policy
     assert auth.managed_agent_policy == (policy if managed else None)
