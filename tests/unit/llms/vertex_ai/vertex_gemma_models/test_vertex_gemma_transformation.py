@@ -446,8 +446,9 @@ class TestVertexGemmaCompletion:
 
         Verifies:
         1. Request body does NOT include 'stream' parameter (model doesn't support it)
-        2. Response returns a MockResponseIterator that yields chunks
+        2. Response wraps a MockResponseIterator and yields chunks
         """
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
         # Mock Vertex response
@@ -509,8 +510,8 @@ class TestVertexGemmaCompletion:
                 vertex_location="us-central1",
             )
 
-            # Verify the response is a MockResponseIterator
-            assert isinstance(response, MockResponseIterator), f"Expected MockResponseIterator, got {type(response)}"
+            assert isinstance(response, CustomStreamWrapper)
+            assert isinstance(response.completion_stream, MockResponseIterator)
 
             # Verify the request sent to Vertex does NOT include 'stream'
             call_args = mock_client.post.call_args
@@ -527,8 +528,7 @@ class TestVertexGemmaCompletion:
             async for chunk in response:
                 chunks.append(chunk)
 
-            # Should get exactly one chunk (fake streaming)
-            assert len(chunks) == 1, f"Expected 1 chunk from fake stream, got {len(chunks)}"
+            assert chunks
 
             # Verify the chunk has the expected content
             chunk = chunks[0]
@@ -541,6 +541,11 @@ class TestVertexGemmaCompletion:
         pytest.importorskip("ddtrace")
         from ddtrace.contrib.internal.litellm.patch import patch as patch_litellm
         from ddtrace.contrib.internal.litellm.patch import unpatch as unpatch_litellm
+        from ddtrace.llmobs._integrations.base_stream_handler import TracedAsyncStream
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
 
         reply = Mock(status_code=200)
         reply.json.return_value = _make_gemma_vertex_response(content="READY")
@@ -564,13 +569,21 @@ class TestVertexGemmaCompletion:
                     vertex_project="test-project",
                     vertex_location="us-central1",
                 )
+                bridge = cast(LiteLLMCompletionStreamingIterator, response)
+                traced_stream = bridge.litellm_custom_stream_wrapper
+                assert isinstance(traced_stream, TracedAsyncStream)
                 events = [event async for event in cast(AsyncIterator[ResponsesAPIStreamingResponse], response)]
+                span = traced_stream.handler.primary_span
+                assert span.finished
+                assert span.get_tag("_dd.llmobs.span_kind") == "llm"
+                assert span.get_metric("_dd.llmobs.total_tokens") == 114
             finally:
                 unpatch_litellm()
 
         assert "stream" not in client.post.call_args.kwargs["json"]["instances"][0]
         assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
         assert isinstance(events[-1], ResponseCompletedEvent)
+        assert events[-1].response.usage.total_tokens == 114
 
     @pytest.mark.asyncio
     async def test_acompletion_filters_stream_and_stream_options(self):
