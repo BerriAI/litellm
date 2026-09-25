@@ -9,14 +9,17 @@ mode, and supports_prompt_caching were dropped, causing incorrect cost
 calculations for DB-sourced models with prompt caching pricing.
 """
 
+import contextlib
 import copy
 import os
+import queue
 
 import pytest
 
 
 import litellm
 from litellm.main import _build_custom_pricing_entry
+from litellm.types.utils import ModelResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
@@ -990,6 +993,214 @@ def test_completion_cost_applies_off_peak_only_deployment_pricing():
             router_model_id=deployment_id,
         )
         assert cost == pytest.approx(100 * 5e-05 + 50 * 1e-04)
+    finally:
+        _restore_model_cost_entries(original_entries)
+        del router
+
+
+_41605_DEPLOYMENT_ID = "dep-41605"
+_41605_MODEL = "azure_ai/gpt-5.6-luna"
+_41605_INPUT_COST_PER_TOKEN = 2.5e-7
+_41605_OUTPUT_COST_PER_TOKEN = 1e-6
+_41605_CACHE_READ_COST_PER_TOKEN = 2.5e-8
+_41605_PROMPT_TOKENS = 13955
+_41605_CACHED_TOKENS = 2092
+_41605_COMPLETION_TOKENS = 2347
+_41605_EXPECTED_COST = (
+    (_41605_PROMPT_TOKENS - _41605_CACHED_TOKENS) * _41605_INPUT_COST_PER_TOKEN
+    + _41605_CACHED_TOKENS * _41605_CACHE_READ_COST_PER_TOKEN
+    + _41605_COMPLETION_TOKENS * _41605_OUTPUT_COST_PER_TOKEN
+)
+
+
+def _41605_mock_model_response() -> ModelResponse:
+    from litellm.types.utils import (
+        CompletionTokensDetailsWrapper,
+        Message,
+        ModelResponse,
+        PromptTokensDetails,
+        Usage,
+    )
+
+    return ModelResponse(
+        id="chatcmpl-41605",
+        created=1758120000,
+        model="gpt-5.6-luna",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "message": Message(role="assistant", content="hello"),
+                "finish_reason": "stop",
+            }
+        ],
+        usage=Usage(
+            prompt_tokens=_41605_PROMPT_TOKENS,
+            completion_tokens=_41605_COMPLETION_TOKENS,
+            total_tokens=_41605_PROMPT_TOKENS + _41605_COMPLETION_TOKENS,
+            prompt_tokens_details=PromptTokensDetails(
+                cached_tokens=_41605_CACHED_TOKENS
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=1536
+            ),
+        ),
+    )
+
+
+def _41605_fake_http_completion(*args: object, **kwargs: object) -> object:
+    response = _41605_mock_model_response()
+    if kwargs.get("acompletion") is True:
+
+        async def _coro():
+            return response
+
+        return _coro()
+    return response
+
+
+def _41605_azure_router() -> "litellm.Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": _41605_MODEL,
+                "litellm_params": {
+                    "model": _41605_MODEL,
+                    "api_key": "fake-key",
+                    "api_base": "https://fake-foundry.services.ai.azure.com/openai",
+                },
+                "model_info": {
+                    "id": _41605_DEPLOYMENT_ID,
+                    "input_cost_per_token": _41605_INPUT_COST_PER_TOKEN,
+                    "output_cost_per_token": _41605_OUTPUT_COST_PER_TOKEN,
+                    "cache_read_input_token_cost": _41605_CACHE_READ_COST_PER_TOKEN,
+                },
+            }
+        ]
+    )
+
+
+# The model-cost key the Router actually mutates for this deployment
+# (register_model() merges the deployment's shared backend info into the
+# existing "gpt-5.6-luna" catalog entry instead of an "azure_ai/..." key).
+_41605_SHARED_KEYS = ["gpt-5.6-luna"]
+
+
+@contextlib.contextmanager
+def _41605_recording_hidden_params_at_submit(
+    submit_target: str,
+) -> "contextlib.AbstractContextManager[queue.SimpleQueue[dict[str, object]]]":
+    """Mirror of the upstream `_recording_hidden_params_at_submit` helper in
+    tests/test_litellm/test_utils.py: snapshot what the logging thread sees.
+
+    Records ``dict(response._hidden_params)`` at ``executor.submit`` time —
+    the success-handler thread's actual view — rather than asserting on the
+    returned response, which is always stamped correctly on the main thread
+    even when the logging handoff races ahead of the stamp.
+    """
+    from unittest.mock import MagicMock, patch
+
+    seen = queue.SimpleQueue()
+
+    def record_submit(_fn, *args, **_kwargs):
+        response = next(arg for arg in args if isinstance(arg, litellm.ModelResponse))
+        seen.put(dict(response._hidden_params))
+        return MagicMock()
+
+    with patch(submit_target, side_effect=record_submit):
+        yield seen
+
+
+def _41605_assert_logging_thread_saw_deployment_cost(
+    snapshot: dict[str, object],
+) -> None:
+    """Assert the logging thread's view carried the deployment id and cost.
+
+    Regression for BerriAI/litellm#41605: synchronous completion once recorded
+    $0 for Azure AI Foundry deployments because the sync logging thread could
+    read the response before update_response_metadata() stamped the deployment
+    id into _hidden_params, so the cost calculator fell back to the zero-valued
+    public model-map entry. Fixed in v1.101.0 by stamping response metadata
+    before handing the response to the success-handler thread; this fails if
+    that ordering regresses.
+    """
+    assert snapshot.get("model_id") == _41605_DEPLOYMENT_ID, (
+        f"logging thread saw model_id={snapshot.get('model_id')!r}, expected deployment {_41605_DEPLOYMENT_ID!r}"
+    )
+    cost = snapshot.get("response_cost")
+    assert cost is not None, "logging thread saw no response_cost"
+    assert cost > 0, f"expected positive deployment-scoped cost, got {cost}"
+    assert cost == pytest.approx(_41605_EXPECTED_COST)
+
+
+def test_41605_sync_router_completion_records_deployment_cost_on_logging_thread():
+    """The sync success-handler thread must see the stamped deployment id/cost.
+
+    Patches litellm.utils.executor.submit (the sync logging handoff) and
+    snapshots _hidden_params at submit time. On pre-fix code the thread read
+    the response before the stamp, so the snapshot would carry no model_id and
+    this test would fail.
+    """
+    from unittest.mock import patch
+
+    original_entries = _snapshot_model_cost_entries(
+        _41605_SHARED_KEYS + [_41605_DEPLOYMENT_ID]
+    )
+    router = _41605_azure_router()
+    try:
+        with (
+            patch(  # test-quality-ok: fakes the HTTP transport at this file's established handler seam, same as the sibling ordering test
+                "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.completion",
+                side_effect=_41605_fake_http_completion,
+            ),
+            _41605_recording_hidden_params_at_submit(
+                "litellm.utils.executor.submit"
+            ) as seen,
+        ):
+            router.completion(
+                model=_41605_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        _41605_assert_logging_thread_saw_deployment_cost(seen.get_nowait())
+    finally:
+        _restore_model_cost_entries(original_entries)
+        del router
+
+
+async def test_41605_async_router_acompletion_records_deployment_cost_on_logging_thread(
+    monkeypatch,
+):
+    """The async success-handler thread must see the same stamped view."""
+    from unittest.mock import patch
+
+    # A sync success callback forces handle_sync_success_callbacks_for_async_calls
+    # to hand the response to the executor, like the upstream ordering test does.
+    monkeypatch.setattr(
+        litellm,
+        "success_callback",
+        [lambda kwargs, response, start_time, end_time: None],
+    )
+    original_entries = _snapshot_model_cost_entries(
+        _41605_SHARED_KEYS + [_41605_DEPLOYMENT_ID]
+    )
+    router = _41605_azure_router()
+    try:
+        with (
+            patch(  # test-quality-ok: fakes the HTTP transport at this file's established handler seam, same as the sibling ordering test
+                "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.completion",
+                side_effect=_41605_fake_http_completion,
+            ),
+            _41605_recording_hidden_params_at_submit(
+                "litellm.litellm_core_utils.litellm_logging.executor.submit"
+            ) as seen,
+        ):
+            await router.acompletion(
+                model=_41605_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        _41605_assert_logging_thread_saw_deployment_cost(seen.get_nowait())
     finally:
         _restore_model_cost_entries(original_entries)
         del router
