@@ -1,21 +1,16 @@
 use std::{convert::Infallible, sync::Mutex};
 
 use bytes::Bytes;
-use litellm_core::messages::route::{Messages, MessagesStreamHead};
+use litellm_core::messages::route::Messages;
 use litellm_host::host::{Demand, Host};
 use rstest::rstest;
 
 use super::*;
 
-const UPSTREAM_HEADERS: [(&str, &str); 2] = [
-    ("request-id", "req_upstream_123"),
-    ("anthropic-ratelimit-requests-remaining", "41"),
-];
-
 const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 enum Seen {
-    Open(Vec<(String, String)>),
+    Open,
     Deliver(Bytes),
 }
 
@@ -55,8 +50,8 @@ impl Host<Messages> for RecordingStreamHost {
         match op {}
     }
 
-    async fn open(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
-        Ok(self.record(Seen::Open(head.headers)))
+    async fn open(&self, (): ()) -> Result<Demand, Error> {
+        Ok(self.record(Seen::Open))
     }
 
     async fn deliver(&self, chunk: Bytes) -> Result<Demand, Error> {
@@ -76,10 +71,7 @@ fn streaming(call: MessagesCall, api_base: String) -> MessagesCall {
 }
 
 fn sse_response() -> ResponseTemplate {
-    UPSTREAM_HEADERS.iter().fold(
-        ResponseTemplate::new(200).set_body_raw(SSE_BODY, "text/event-stream"),
-        |response, (name, value)| response.insert_header(*name, *value),
-    )
+    ResponseTemplate::new(200).set_body_raw(SSE_BODY, "text/event-stream")
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
@@ -88,7 +80,7 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
 
 #[rstest]
 #[tokio::test]
-async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
+async fn the_stream_opens_once_before_relaying_the_upstream_body(call: MessagesCall) {
     let upstream = upstream([sse_response()]).await;
     let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
 
@@ -96,24 +88,14 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
 
     assert!(matches!(outcome, MessagesOutput::Streamed));
     let seen = host.seen.into_inner().unwrap();
-    let [Seen::Open(headers), chunks @ ..] = seen.as_slice() else {
+    let [Seen::Open, chunks @ ..] = seen.as_slice() else {
         panic!("the stream opens before any chunk is delivered");
     };
-    let surfaced: Vec<(&str, &str)> = headers
-        .iter()
-        .filter(|(name, _)| {
-            UPSTREAM_HEADERS
-                .iter()
-                .any(|(upstream, _)| upstream == name)
-        })
-        .map(|(name, value)| (name.as_str(), value.as_str()))
-        .collect();
-    assert_eq!(surfaced, UPSTREAM_HEADERS);
     let delivered: Vec<u8> = chunks
         .iter()
         .flat_map(|step| match step {
             Seen::Deliver(chunk) => chunk.to_vec(),
-            Seen::Open(_) => panic!("the stream opens exactly once"),
+            Seen::Open => panic!("the stream opens exactly once"),
         })
         .collect();
     assert_eq!(delivered, SSE_BODY.as_bytes());
