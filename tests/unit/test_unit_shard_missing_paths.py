@@ -40,7 +40,6 @@ def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.Compl
             "TEST_PATH": test_path,
             "UNIT_FLAG": "",
             "WORKERS": workers,
-            "UNIT_FLAG": "",
         },
         capture_output=True,
         text=True,
