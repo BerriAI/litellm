@@ -6,10 +6,12 @@ import logging
 from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Final, List, Optional, cast
+from typing import Final, List, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from respx import MockRouter
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -4290,6 +4292,92 @@ async def test_health_discovery_respects_route_restricted_key_grants(
     assert {server_id for server_id, route in routes.items() if route.called} == set(expected)
     expected_status: Final = {200: "healthy", 503: "unhealthy"}[upstream_status]
     assert all(row["status"] == expected_status for row in result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["restricted", "view_all"])
+@pytest.mark.parametrize("detail", [False, True])
+@pytest.mark.parametrize("flag", [None, "false", "true"])
+async def test_health_reachability_requires_explicit_api_opt_in(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    detail: bool,
+    flag: str | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    class HealthResponse(BaseModel):
+        server_id: str
+        status: str | None
+
+    class LegacyHealthResponse(BaseModel):
+        server_id: str
+        status: Literal["healthy", "unhealthy", "unknown"] | None
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = mcp_server_manager.MCPServerManager()
+    server: Final = MCPServer(
+        server_id="health-compatibility",
+        name="health-compatibility",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        url="https://mcp.example.test/mcp",
+    )
+    manager.registry[server.server_id] = server
+    route: Final = respx_mock.get(server.url).respond(401)
+    caller: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="test-health-compatibility",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="health-compatibility", mcp_servers=[server.server_id]
+        ),
+    )
+
+    def authenticated_caller() -> UserAPIKeyAuth:
+        return caller
+
+    app: Final = FastAPI()
+    app.include_router(mgmt_endpoints.router)
+    app.dependency_overrides[mgmt_endpoints.user_api_key_auth] = authenticated_caller
+    suffix: Final = server.server_id if detail else "health"
+    query: Final = {} if flag is None else {"include_reachability": flag}
+    with (
+        patch.object(  # test-quality-ok: TQ008 inject the real registry into the legacy route binding
+            mgmt_endpoints, "global_mcp_server_manager", manager
+        ),
+        patch.object(  # test-quality-ok: TQ008 permission resolution uses the shared registry
+            mcp_server_manager, "global_mcp_server_manager", manager
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": mode}),
+        patch.object(  # test-quality-ok: TQ008 select the config-backed detail path without a database
+            mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+        ),
+        patch.object(  # test-quality-ok: TQ008 a missing database row falls back to the real registry
+            mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+        ),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response: Final = await client.get(f"/v1/mcp/server/{suffix}", params=query)
+
+    assert response.status_code == 200, response.text
+    rows: Final = (
+        [HealthResponse.model_validate_json(response.content)]
+        if detail else TypeAdapter(list[HealthResponse]).validate_json(response.content)
+    )
+    expected_status: Final = "reachable" if flag == "true" else "unknown"
+    assert [row.model_dump() for row in rows] == [{"server_id": server.server_id, "status": expected_status}]
+    assert route.call_count == 1
+    legacy_parser: Final = (
+        LegacyHealthResponse.model_validate_json
+        if detail else TypeAdapter(list[LegacyHealthResponse]).validate_json
+    )
+    if flag == "true":
+        with pytest.raises(ValidationError, match="literal_error"):
+            legacy_parser(response.content)
+    else:
+        legacy_parser(response.content)
 
 
 class TestMCPRegistryEndpoint:
