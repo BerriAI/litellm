@@ -82,13 +82,13 @@ class ObjectPermissionUpsert:
 
 async def _convert_unversioned_object_permission(
     existing_object_permission: "LiteLLM_ObjectPermissionTable | None",
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """Manual conversion path: a save over a stored v0 row first converts its
     residual grants against discovered inventory, then applies the update on
     top. Servers whose catalog cannot be discovered reject the save with 503
     rather than silently dropping the tools admins had granted."""
     if existing_object_permission is None or existing_object_permission.mcp_permission_version:
-        return {}
+        return MappingProxyType({})
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -102,14 +102,14 @@ async def _convert_unversioned_object_permission(
 
     granted: Final = await resolve_granted_server_ids(existing_object_permission, global_mcp_server_manager)
     if not granted:
-        return {}
+        return MappingProxyType({})
     conversion: Final = convert_row(
         existing_object_permission, await gather_inventories(granted, global_mcp_server_manager)
     )
     if isinstance(conversion, Unavailable):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
+            detail={  # mutable-ok: HTTPException detail must be a JSON-serializable dict
                 "error": "Could not discover tools for servers granted by this permission; retry once the MCP servers are reachable.",
                 "server_ids": sorted(conversion.server_ids),
             },
@@ -141,15 +141,17 @@ async def prepare_object_permission_upsert(
     existing_object_permission: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
         where={"object_permission_id": object_permission_id},
     )
-    existing_fields_raw: Final[dict[str, object]] = (
+    existing_fields_raw: Final[Mapping[str, object]] = (
         existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
         if existing_object_permission is not None
-        else {}
+        else MappingProxyType({})
     )
-    existing_fields: Final[dict[str, object]] = {
-        **existing_fields_raw,
-        **await _convert_unversioned_object_permission(existing_object_permission),
-    }
+    existing_fields: Final = MappingProxyType(
+        {
+            **existing_fields_raw,
+            **await _convert_unversioned_object_permission(existing_object_permission),
+        }
+    )
     await reject_ambiguous_mcp_tool_permission_keys(
         new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
         existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
@@ -160,26 +162,22 @@ async def prepare_object_permission_upsert(
         existing_mcp_tool_overrides=existing_fields.get("mcp_tool_overrides"),
         prisma_client=prisma_client,
     )
-    merged: Final[dict[str, object]] = {
-        **existing_fields,
-        **new_object_permission,
-        "object_permission_id": object_permission_id,
-        "mcp_permission_version": 1,
-    }
-    record: Final[dict[str, object]] = {
-        **merged,
-        **(
-            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
-            if "mcp_tool_permissions" in merged
-            else {}
-        ),
-        **({"mcp_tool_overrides": safe_dumps(merged["mcp_tool_overrides"])} if "mcp_tool_overrides" in merged else {}),
-        **(
-            {"mcp_tool_permissions_archive": safe_dumps(merged["mcp_tool_permissions_archive"])}
-            if "mcp_tool_permissions_archive" in merged
-            else {}
-        ),
-    }
+    merged: Final = MappingProxyType(
+        {
+            **existing_fields,
+            **new_object_permission,
+            "object_permission_id": object_permission_id,
+            "mcp_permission_version": 1,
+        }
+    )
+    json_fields: Final = MappingProxyType(
+        {
+            field: safe_dumps(merged[field])
+            for field in ("mcp_tool_permissions", "mcp_tool_overrides", "mcp_tool_permissions_archive")
+            if field in merged
+        }
+    )
+    record: Final[dict[str, object]] = {**merged, **json_fields}  # mutable-ok: prisma upsert payload
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
 
@@ -483,7 +481,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
 
 def _drop_stale_object_permission_mcp_servers(
     object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
+    identifier_to_server_ids: Mapping[str, AbstractSet[str]],
 ) -> None:
     mcp_servers: Final = object_permission.get("mcp_servers")
     if not isinstance(mcp_servers, list):
@@ -502,7 +500,7 @@ def _drop_stale_object_permission_mcp_servers(
 
 def _drop_stale_object_permission_mcp_tool_permissions(
     object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
+    identifier_to_server_ids: Mapping[str, AbstractSet[str]],
 ) -> None:
     mcp_tool_permissions: Final = object_permission.get("mcp_tool_permissions")
     if not isinstance(mcp_tool_permissions, dict):
@@ -517,13 +515,15 @@ def _drop_stale_object_permission_mcp_tool_permissions(
 
 def _drop_stale_object_permission_mcp_tool_overrides(
     object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
+    identifier_to_server_ids: Mapping[str, AbstractSet[str]],
 ) -> None:
     mcp_tool_overrides: Final = object_permission.get("mcp_tool_overrides")
     if not isinstance(mcp_tool_overrides, dict):
         return
 
-    object_permission["mcp_tool_overrides"] = {
+    object_permission[  # rebind-ok: in-place prune of stale keys is this helper's contract
+        "mcp_tool_overrides"
+    ] = {  # mutable-ok: dict stored into the permission field
         identifier: entry
         for identifier, entry in mcp_tool_overrides.items()
         if identifier_to_server_ids.get(identifier)
@@ -579,17 +579,20 @@ async def _resolve_team_allowed_mcp_servers(
     access_group_servers: Final[list[str]] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
-    raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
-    if isinstance(raw_tool_perms, str):
-        raw_tool_perms = json.loads(raw_tool_perms)
+    stored_tool_perms: Final[Mapping[str, Sequence[str]]] = (
+        team_object_permission.mcp_tool_permissions or MappingProxyType({})
+    )
+    raw_tool_perms: Final[Mapping[str, Sequence[str]]] = (
+        json.loads(stored_tool_perms) if isinstance(stored_tool_perms, str) else stored_tool_perms
+    )
     raw_tool_overrides: Final = _mcp_tool_override_entries(team_object_permission.mcp_tool_overrides)
-    tool_perm_servers: Final[list[str]] = list(raw_tool_perms.keys()) + list(raw_tool_overrides.keys())
-    raw_servers: Final = set(direct_servers + access_group_servers + tool_perm_servers)
+    tool_perm_servers: Final[tuple[str, ...]] = tuple(raw_tool_perms.keys()) + tuple(raw_tool_overrides.keys())
+    raw_servers: Final = frozenset((*direct_servers, *access_group_servers, *tool_perm_servers))
     resolved_servers: Final = await _resolve_mcp_server_identifiers_to_ids(
         identifiers=raw_servers,
         prisma_client=prisma_client,
     )
-    unresolved_servers: Final = {server_id for server_id in raw_servers if not resolved_servers.get(server_id)}
+    unresolved_servers: Final = frozenset(server_id for server_id in raw_servers if not resolved_servers.get(server_id))
     return _flatten_resolved_mcp_server_ids(resolved_servers) | unresolved_servers
 
 

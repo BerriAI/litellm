@@ -656,7 +656,7 @@ async def _set_object_permission(
             prisma_client=prisma_client,
         )
         created_object_permission: Final = await _table(ObjectPermissionRepository(prisma_client)).create(
-            data={
+            data={  # mutable-ok: prisma create payload
                 **data.object_permission.model_dump(exclude_none=True),
                 "mcp_permission_version": 1,
             },

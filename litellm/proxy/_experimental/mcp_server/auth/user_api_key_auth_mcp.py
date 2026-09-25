@@ -71,6 +71,7 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+    from litellm.types.mcp import MCPToolOverrideEntry
 
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
@@ -113,7 +114,9 @@ def level_allowed_tools(
         return frozenset(toolset) if toolset_tools is not None else None
     if not grants_server:
         return None
-    overrides: Final = global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).get(server_id) or {}
+    overrides: Final[MCPToolOverrideEntry | Mapping[str, Sequence[str]]] = (
+        global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).get(server_id) or _EMPTY_OVERRIDE
+    )
     allow: Final[frozenset[str]] = frozenset(overrides.get("allow") or ())
     deny: Final[frozenset[str]] = frozenset(overrides.get("deny") or ())
     if toolset_tools is not None:
@@ -128,6 +131,9 @@ def level_allowed_tools(
         if tool_name not in deny and classify_tool_op(tool_name, description) != "delete"
     )
     return (convention | allow) - deny
+
+
+_EMPTY_OVERRIDE: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -2245,15 +2251,19 @@ class MCPRequestHandler:
 
         toolset_perms: Final = await MCPRequestHandler._toolset_tool_permissions(row)
         access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            row.mcp_access_groups or []
+            sorted(row.mcp_access_groups or ())
         )
-        grants_server: Final = SpecialMCPServerName.all_proxy_servers.value in (row.mcp_servers or []) or server_id in {
-            *global_mcp_server_manager.expand_permission_list(row.mcp_servers or []),
-            *access_group_servers,
-            *global_mcp_server_manager.expand_tool_permissions(row.mcp_tool_permissions).keys(),
-            *global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).keys(),
-            *toolset_perms.keys(),
-        }
+        grants_server: Final = SpecialMCPServerName.all_proxy_servers.value in (
+            row.mcp_servers or ()
+        ) or server_id in frozenset(
+            {
+                *global_mcp_server_manager.expand_permission_list(sorted(row.mcp_servers or ())),
+                *access_group_servers,
+                *global_mcp_server_manager.expand_tool_permissions(row.mcp_tool_permissions).keys(),
+                *global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).keys(),
+                *toolset_perms.keys(),
+            }
+        )
         return level_allowed_tools(
             row=row,
             server_id=server_id,
@@ -2340,31 +2350,29 @@ class MCPRequestHandler:
             key_level: Final = await MCPRequestHandler._row_level_tools(key_obj_perm, server_id, resolved_inventory)
             team_level: Final = await MCPRequestHandler._row_level_tools(team_obj_perm, server_id, resolved_inventory)
 
-            if key_level is not None and team_level is not None:
-                allowed_tools: list[str] | None = list(key_level & team_level)
-            elif key_level is not None:
-                allowed_tools = list(key_level)
-            else:
-                allowed_tools = list(team_level) if team_level is not None else None
-
-            allowed_tools = _as_list(
+            level_tools: Final = (
+                sorted(key_level & team_level)
+                if key_level is not None and team_level is not None
+                else sorted(key_level)
+                if key_level is not None
+                else (sorted(team_level) if team_level is not None else None)
+            )
+            after_end_user: Final = _as_list(
                 await MCPRequestHandler._apply_end_user_tool_ceiling(
-                    allowed_tools, server_id, user_api_key_auth, inventory=resolved_inventory
+                    level_tools, server_id, user_api_key_auth, inventory=resolved_inventory
                 )
             )
-
-            allowed_tools = _as_list(
+            after_user: Final = _as_list(
                 await MCPRequestHandler._apply_user_tool_ceiling(
-                    allowed_tools,
+                    after_end_user,
                     server_id,
                     user_api_key_auth,
                     keyless_source=keyless_source,
                     inventory=resolved_inventory,
                 )
             )
-
-            allowed_tools = await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
-                allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source, inventory=resolved_inventory
+            allowed_tools: Final = await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
+                after_user, server_id, user_api_key_auth, keyless_source=keyless_source, inventory=resolved_inventory
             )
             if allowed_tools is not None:
                 return allowed_tools
@@ -2619,10 +2627,10 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions or tool overrides should also be accessible
-            tool_perm_servers: Final = list(
+            tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
             )
-            override_servers: Final = list(
+            override_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_overrides(key_object_permission.mcp_tool_overrides).keys()
             )
 
@@ -2725,12 +2733,14 @@ class MCPRequestHandler:
             object_permissions.mcp_access_groups or []
         )
         return (
-            set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
-            | set(legacy_access_group_servers)
-            | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
-            | set(global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys())
-            | (await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys()
-            | set(team_access_group_servers)
+            frozenset(global_mcp_server_manager.expand_permission_list(sorted(object_permissions.mcp_servers or ())))
+            | frozenset(legacy_access_group_servers)
+            | frozenset(
+                global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
+            )
+            | frozenset(global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys())
+            | frozenset((await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys())
+            | frozenset(team_access_group_servers)
         )
 
     @staticmethod
@@ -2917,10 +2927,10 @@ class MCPRequestHandler:
                 object_permissions.mcp_access_groups or []
             )
 
-            tool_perm_servers: Final = list(
+            tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            override_servers: Final = list(
+            override_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys()
             )
 
@@ -3022,10 +3032,10 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions or overrides should also be accessible
-            tool_perm_servers: Final = list(
+            tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
             )
-            override_servers: Final = list(
+            override_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_overrides(object_permission.mcp_tool_overrides).keys()
             )
 
@@ -3143,10 +3153,10 @@ class MCPRequestHandler:
             access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                 object_permissions.mcp_access_groups or []
             )
-            tool_perm_servers: Final = list(
+            tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            override_servers: Final = list(
+            override_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys()
             )
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
@@ -3495,7 +3505,7 @@ class MCPRequestHandler:
                 inventory if inventory is not None else await MCPRequestHandler._manager_inventory(server_id)
             )
             agent_tools: Final = await MCPRequestHandler._row_level_tools(obj_perm, server_id, resolved_inventory)
-            return list(agent_tools) if agent_tools is not None else None
+            return sorted(agent_tools) if agent_tools is not None else None
         except Exception as e:
             if isinstance(e, UnloadableEntitlementError):
                 raise

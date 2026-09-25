@@ -1925,7 +1925,9 @@ class MCPServerManager:
         # Bare tool name -> description per server_id, replaced wholesale each
         # time _create_prefixed_tools runs for that server. Feeds the
         # tool-permission convention (allow non-deletes, deny deletes).
-        self.discovered_tool_inventory: dict[str, dict[str, str | None]] = {}
+        self.discovered_tool_inventory: dict[  # mutable-ok: inventory entries are populated per server as tools are discovered
+            str, Mapping[str, str | None]
+        ] = {}  # mutable-ok: inventory entries are populated per server as tools are discovered
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -5386,13 +5388,15 @@ class MCPServerManager:
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         if server.server_id:
-            self.discovered_tool_inventory[server.server_id] = {tool.name: tool.description for tool in tools}
+            self.discovered_tool_inventory[server.server_id] = MappingProxyType(
+                {tool.name: tool.description for tool in tools}
+            )
         return prefixed_tools
 
     def discovered_inventory(self, server_id: str) -> Mapping[str, str | None]:
         """The last tool catalog discovered for ``server_id``, bare names to
         descriptions; empty when the server is unknown or never listed."""
-        return self.discovered_tool_inventory.get(server_id, {})
+        return self.discovered_tool_inventory.get(server_id) or MappingProxyType({})
 
     async def fetch_unfiltered_inventory(self, server_id: str) -> Mapping[str, str | None] | None:
         """List ``server_id``'s tools unfiltered by any caller's permissions.
@@ -5403,12 +5407,14 @@ class MCPServerManager:
         server: Final = self.get_mcp_server_by_id(server_id)
         if server is None:
             return None
-        if server.auth_type in {
-            MCPAuth.oauth2_token_exchange,
-            MCPAuth.oauth_delegate,
-            MCPAuth.oauth2_id_jag,
-            MCPAuth.true_passthrough,
-        }:
+        if server.auth_type in frozenset(
+            {
+                MCPAuth.oauth2_token_exchange,
+                MCPAuth.oauth_delegate,
+                MCPAuth.oauth2_id_jag,
+                MCPAuth.true_passthrough,
+            }
+        ):
             return None
         try:
             await self._get_tools_from_server(server)
@@ -6802,7 +6808,9 @@ class MCPServerManager:
             if server.available_on_public_internet or server.server_id in public_ids
         ]
 
-    def expand_permission_list(self, identifiers: list[str]) -> list[str]:
+    def expand_permission_list(
+        self, identifiers: Sequence[str]
+    ) -> list[str]:  # mutable-ok: callers concatenate the returned list
         """
         Expand a permission list of server_ids/names/aliases into concrete
         server_ids against the current region's config + DB registry union.
@@ -6862,14 +6870,14 @@ class MCPServerManager:
             return {}
         result: Final[dict[str, list[str]]] = {}
         for key, tools in tool_permissions.items():
-            for server_id in self.expand_permission_list([key]):
+            for server_id in self.expand_permission_list((key,)):
                 result.setdefault(server_id, []).extend(tools or [])
         return result
 
     def expand_tool_overrides(
         self,
-        tool_overrides: dict[str, MCPToolOverrideEntry] | None,
-    ) -> dict[str, MCPToolOverrideEntry]:
+        tool_overrides: Mapping[str, MCPToolOverrideEntry] | None,
+    ) -> Mapping[str, MCPToolOverrideEntry]:
         """
         Rewrite an ``mcp_tool_overrides`` dict keyed by id/name/alias so every
         key is a concrete server_id, same expansion as
@@ -6877,18 +6885,30 @@ class MCPServerManager:
         merge their allow/deny lists (deny still wins at evaluation time).
         """
         if not tool_overrides:
-            return {}
-        grouped: Final[dict[str, list[MCPToolOverrideEntry | None]]] = {}
-        for key, entry in tool_overrides.items():
-            for server_id in self.expand_permission_list([key]):
-                grouped.setdefault(server_id, []).append(entry)
-        return {
-            server_id: {
-                "allow": [tool for entry in entries if entry for tool in (entry.get("allow") or [])],
-                "deny": [tool for entry in entries if entry for tool in (entry.get("deny") or [])],
+            return MappingProxyType({})
+        expanded: Final[tuple[tuple[str, MCPToolOverrideEntry], ...]] = tuple(
+            (server_id, entry)
+            for key, entry in tool_overrides.items()
+            for server_id in self.expand_permission_list((key,))
+            if entry is not None
+        )
+        return MappingProxyType(
+            {
+                server_id: MCPToolOverrideEntry(
+                    allow=sorted(
+                        frozenset(
+                            tool for sid, entry in expanded if sid == server_id for tool in (entry.get("allow") or ())
+                        )
+                    ),
+                    deny=sorted(
+                        frozenset(
+                            tool for sid, entry in expanded if sid == server_id for tool in (entry.get("deny") or ())
+                        )
+                    ),
+                )
+                for server_id in frozenset(sid for sid, _ in expanded)
             }
-            for server_id, entries in grouped.items()
-        }
+        )
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         """

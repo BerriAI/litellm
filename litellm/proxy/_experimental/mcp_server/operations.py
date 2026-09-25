@@ -1419,7 +1419,7 @@ async def filter_tools_by_key_team_permissions(
     the prefix before comparing.
     """
     server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-    inventory: Final = {strip_known_server_prefix(t.name, server): t.description for t in tools}
+    inventory: Final = types.MappingProxyType({strip_known_server_prefix(t.name, server): t.description for t in tools})
 
     # Filter by key/team tool-level permissions
     allowed_tool_names: Final = await MCPRequestHandler.get_allowed_tools_for_server(

@@ -6,9 +6,10 @@ single exported function is all callers need.
 """
 
 import re
-from typing import Final, Literal
+from collections.abc import Iterable
+from typing import Final, Literal, TypeAlias
 
-ToolOperation = Literal["read", "create", "update", "delete", "unknown"]
+ToolOperation: TypeAlias = Literal["read", "create", "update", "delete", "unknown"]
 
 _READ_TOKENS: Final = frozenset(
     {
@@ -91,29 +92,28 @@ _SPLIT_RE: Final = re.compile(r"[_\-./\s]+")
 _CAMEL_BOUNDARY_RE: Final = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
-def _name_tokens(name: str) -> list[str]:
-    pieces: Final[list[str]] = []
-    for chunk in _SPLIT_RE.split(name):
-        pieces.extend(_CAMEL_BOUNDARY_RE.split(chunk))
-    return [token.lower() for token in pieces if token]
+def _name_tokens(name: str) -> tuple[str, ...]:
+    return tuple(token.lower() for chunk in _SPLIT_RE.split(name) for token in _CAMEL_BOUNDARY_RE.split(chunk) if token)
 
 
-def _description_tokens(description: str) -> list[str]:
-    return [token.lower() for token in re.split(r"[^\w]+", description) if token]
+def _description_tokens(description: str) -> tuple[str, ...]:
+    return tuple(token.lower() for token in re.split(r"[^\w]+", description) if token)
 
 
 def _token_variants(token: str) -> frozenset[str]:
-    variants: Final = {
-        token,
-        token.removesuffix("es"),
-        token.removesuffix("s"),
-        token.removesuffix("ed"),
-        token.removesuffix("ing"),
-    }
+    variants: Final = frozenset(
+        (
+            token,
+            token.removesuffix("es"),
+            token.removesuffix("s"),
+            token.removesuffix("ed"),
+            token.removesuffix("ing"),
+        )
+    )
     return frozenset(variant for variant in variants if variant)
 
 
-def _classify_tokens(tokens: list[str]) -> ToolOperation:
+def _classify_tokens(tokens: Iterable[str]) -> ToolOperation:
     token_set: Final = frozenset(variant for token in tokens for variant in _token_variants(token))
     if token_set & _READ_TOKENS:
         return "read"

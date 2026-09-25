@@ -14,9 +14,10 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -27,14 +28,15 @@ from litellm.types.mcp import MCPToolOverrideEntry
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+    from prisma import types as prisma_types
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy.utils import PrismaClient
 
-    RawRow = LiteLLM_ObjectPermissionTable | prisma_models.LiteLLM_ObjectPermissionTable
+    RawRow: TypeAlias = LiteLLM_ObjectPermissionTable | prisma_models.LiteLLM_ObjectPermissionTable
 
-ToolInventory = Mapping[str, str | None]
-Inventories = Mapping[str, ToolInventory | None]
+ToolInventory: TypeAlias = Mapping[str, str | None]
+Inventories: TypeAlias = Mapping[str, ToolInventory | None]
 
 _ROW_DUMP_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -52,7 +54,14 @@ class Unavailable:
     server_ids: frozenset[str]
 
 
-ConversionResult = ConvertedRow | Unavailable
+class _ConvertedRowRecord(TypedDict, total=False):
+    mcp_tool_overrides: ReadOnly[Mapping[str, MCPToolOverrideEntry]]
+    mcp_tool_permissions: ReadOnly[Mapping[str, Sequence[str]]]
+    mcp_tool_permissions_archive: ReadOnly[Mapping[str, Sequence[str]]]
+    mcp_permission_version: ReadOnly[int]
+
+
+ConversionResult: TypeAlias = ConvertedRow | Unavailable
 
 
 def _server_override_entry(
@@ -79,7 +88,8 @@ def _server_override_entry(
     )
     if not allow and not deny:
         return None
-    return {"allow": sorted(allow), "deny": sorted(deny)}
+    entry: Final[MCPToolOverrideEntry] = {"allow": sorted(allow), "deny": sorted(deny)}
+    return entry
 
 
 @dataclass(frozen=True)
@@ -108,7 +118,7 @@ def convert_row(
     if missing:
         return Unavailable(server_ids=missing)
 
-    legacy: Final = row.mcp_tool_permissions or {}
+    legacy: Final = row.mcp_tool_permissions or MappingProxyType({})
     remaining_permissions: Final[Mapping[str, Sequence[str]]] = MappingProxyType(
         {server_id: stored for server_id, stored in legacy.items() if server_id not in inventories or not stored}
     )
@@ -116,7 +126,7 @@ def convert_row(
         {
             server_id: entry
             for server_id, inventory in inventories.items()
-            if legacy.get(server_id) != []
+            if server_id not in legacy or legacy[server_id]
             for entry in (_server_override_entry(legacy.get(server_id), inventory or MappingProxyType({})),)
             if entry is not None
         }
@@ -137,47 +147,52 @@ async def resolve_granted_server_ids(
         MCPRequestHandler,
     )
 
-    direct: Final[set[str]] = set()  # mutable-ok: accumulation
-    for identifier in manager.expand_permission_list(list(row.mcp_servers or ())):
-        if identifier == SpecialMCPServerName.all_proxy_servers.value:
-            direct.update(manager.get_registry().keys())
-        else:
-            direct.add(identifier)
+    direct: Final = frozenset(
+        server_id
+        for identifier in manager.expand_permission_list(sorted(row.mcp_servers or ()))
+        for server_id in (
+            manager.get_registry().keys()
+            if identifier == SpecialMCPServerName.all_proxy_servers.value
+            else (identifier,)
+        )
+    )
     access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(  # pyright: ignore[reportPrivateUsage]  # shared access-group resolution owned by MCPRequestHandler
-        row.mcp_access_groups or []
+        sorted(row.mcp_access_groups or ())
     )
     return frozenset(
         direct
-        | set(access_group_servers)
-        | set(manager.expand_tool_permissions(row.mcp_tool_permissions).keys())
-        | set(manager.expand_tool_overrides(row.mcp_tool_overrides).keys())
+        | frozenset(access_group_servers)
+        | frozenset(manager.expand_tool_permissions(row.mcp_tool_permissions).keys())
+        | frozenset(manager.expand_tool_overrides(row.mcp_tool_overrides).keys())
     )
 
 
 async def gather_inventories(
     server_ids: frozenset[str],
     manager: "MCPServerManager",
-    cache: dict[str, ToolInventory | None] | None = None,
-) -> dict[str, ToolInventory | None]:
+    cache: dict[str, ToolInventory | None] | None = None,  # mutable-ok: caller-owned fetch cache updated in place
+) -> Mapping[str, ToolInventory | None]:
     if cache is None:
-        return {server_id: await manager.fetch_unfiltered_inventory(server_id) for server_id in server_ids}
-    return {
-        server_id: (
-            cache[server_id]
-            if server_id in cache
-            else cache.setdefault(
-                server_id, await manager.fetch_unfiltered_inventory(server_id)
-            )  # mutable-ok: run-scoped fetch cache
+        return MappingProxyType(
+            {server_id: await manager.fetch_unfiltered_inventory(server_id) for server_id in server_ids}
         )
-        for server_id in server_ids
-    }
+    return MappingProxyType(
+        {
+            server_id: (
+                cache[server_id]
+                if server_id in cache
+                else cache.setdefault(server_id, await manager.fetch_unfiltered_inventory(server_id))
+            )
+            for server_id in server_ids
+        }
+    )
 
 
-def converted_row_record(conversion: ConvertedRow) -> dict[str, object]:
-    record: Final[dict[str, object]] = {
-        "mcp_tool_overrides": dict(conversion.mcp_tool_overrides),
-        "mcp_tool_permissions": dict(conversion.mcp_tool_permissions),
-        "mcp_tool_permissions_archive": dict(conversion.mcp_tool_permissions_archive),
+def converted_row_record(conversion: ConvertedRow) -> Mapping[str, object]:
+    record: Final[_ConvertedRowRecord] = {
+        "mcp_tool_overrides": {**conversion.mcp_tool_overrides},
+        "mcp_tool_permissions": {**conversion.mcp_tool_permissions},
+        "mcp_tool_permissions_archive": {**conversion.mcp_tool_permissions_archive},
         "mcp_permission_version": 1,
     }
     return record
@@ -190,10 +205,12 @@ def _to_model(row: "RawRow") -> LiteLLM_ObjectPermissionTable:
         "mcp_tool_overrides",
         "mcp_tool_permissions_archive",
     )
-    normalized: Final = {
-        key: (json.loads(value) if key in json_fields and isinstance(value, str) else value)
-        for key, value in data.items()
-    }
+    normalized: Final = MappingProxyType(
+        {
+            key: (json.loads(value) if key in json_fields and isinstance(value, str) else value)
+            for key, value in data.items()
+        }
+    )
     return LiteLLM_ObjectPermissionTable.model_validate(normalized)
 
 
@@ -201,13 +218,15 @@ async def _converted_page(
     rows: Sequence["RawRow"],
     prisma_client: "PrismaClient",
     manager: "MCPServerManager",
-    inventory_cache: dict[str, ToolInventory | None],
+    inventory_cache: dict[str, ToolInventory | None],  # mutable-ok: caller-owned fetch cache updated in place
 ) -> BackfillReport:
-    models: Final[Sequence[LiteLLM_ObjectPermissionTable]] = [_to_model(row) for row in rows]
-    outcomes: Final = [
-        await _convert_one_row(raw, model, prisma_client, manager, inventory_cache)
-        for raw, model in zip(rows, models, strict=True)
-    ]
+    models: Final[Sequence[LiteLLM_ObjectPermissionTable]] = tuple(_to_model(row) for row in rows)
+    outcomes: Final = tuple(
+        [
+            await _convert_one_row(raw, model, prisma_client, manager, inventory_cache)
+            for raw, model in zip(rows, models, strict=True)
+        ]
+    )
     return BackfillReport(
         converted=frozenset(
             model.object_permission_id
@@ -237,7 +256,7 @@ async def _convert_one_row(
     row: LiteLLM_ObjectPermissionTable,
     prisma_client: "PrismaClient",
     manager: "MCPServerManager",
-    inventory_cache: dict[str, ToolInventory | None],
+    inventory_cache: dict[str, ToolInventory | None],  # mutable-ok: caller-owned fetch cache updated in place
 ) -> str | frozenset[str]:
     """Convert one row and CAS-write it. Returns the outcome tag, or the
     unavailable server ids as a frozenset when the row cannot be converted."""
@@ -253,19 +272,21 @@ async def _convert_one_row(
         ("mcp_toolsets", raw_row.mcp_toolsets),
         ("mcp_tool_permissions", raw_row.mcp_tool_permissions),
     )
-    updated: Final = await ObjectPermissionRepository(prisma_client).table.update_many(
-        where={
-            "object_permission_id": row.object_permission_id,
-            "mcp_permission_version": {"in": [0, None]},
-            **{field: {"equals": value} for field, value in stored_fields if value is not None},
-        },
-        data={
-            "mcp_tool_overrides": json.dumps(dict(conversion.mcp_tool_overrides)),
-            "mcp_tool_permissions": json.dumps(dict(conversion.mcp_tool_permissions)),
-            "mcp_tool_permissions_archive": json.dumps(dict(conversion.mcp_tool_permissions_archive)),
-            "mcp_permission_version": 1,
-        },
+    equals_filters: Final = MappingProxyType(
+        {field: MappingProxyType({"equals": value}) for field, value in stored_fields if value is not None}
     )
+    where: Final[prisma_types.LiteLLM_ObjectPermissionTableWhereInput] = {
+        "object_permission_id": row.object_permission_id,
+        "mcp_permission_version": 0,
+        **equals_filters,
+    }
+    data: Final[prisma_types.LiteLLM_ObjectPermissionTableUpdateManyMutationInput] = {
+        "mcp_tool_overrides": json.dumps({**conversion.mcp_tool_overrides}),
+        "mcp_tool_permissions": json.dumps({**conversion.mcp_tool_permissions}),
+        "mcp_tool_permissions_archive": json.dumps({**conversion.mcp_tool_permissions_archive}),
+        "mcp_permission_version": 1,
+    }
+    updated: Final = await ObjectPermissionRepository(prisma_client).table.update_many(where=where, data=data)
     return "cas_missed" if updated == 0 else "converted"
 
 
@@ -294,10 +315,10 @@ async def run_mcp_tool_permission_backfill(
     cursor: str | None = None  # rebind-ok: cursor pagination
     while True:
         rows = await table.find_many(
-            where={"OR": [{"mcp_permission_version": 0}, {"mcp_permission_version": None}]},
-            order={"object_permission_id": "asc"},
+            where={"mcp_permission_version": 0},  # mutable-ok: prisma where kwarg
+            order={"object_permission_id": "asc"},  # mutable-ok: prisma order kwarg
             take=batch_size,
-            cursor={"object_permission_id": cursor} if cursor is not None else None,
+            cursor={"object_permission_id": cursor} if cursor is not None else None,  # mutable-ok: prisma cursor kwarg
             skip=1 if cursor is not None else None,
         )
         if not rows:
@@ -313,6 +334,6 @@ async def run_mcp_tool_permission_backfill(
         sorted(report.converted),
         sorted(report.cas_missed),
         sorted(report.skipped_no_grants),
-        {row_id: sorted(server_ids) for row_id, server_ids in report.unavailable.items()},
+        MappingProxyType({row_id: tuple(sorted(server_ids)) for row_id, server_ids in report.unavailable.items()}),
     )
     return report

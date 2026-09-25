@@ -5,6 +5,8 @@ Canonical definition for ``litellm_objectpermissiontable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Mapping, Sequence
+
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPToolOverrideEntry
 
@@ -16,8 +18,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     mcp_servers: list[str] | None = []
     mcp_access_groups: list[str] | None = []
     mcp_tool_permissions: dict[str, list[str]] | None = None
-    mcp_tool_overrides: dict[str, MCPToolOverrideEntry] | None = None
-    mcp_tool_permissions_archive: dict[str, list[str]] | None = None
+    mcp_tool_overrides: Mapping[str, MCPToolOverrideEntry] | None = None
+    mcp_tool_permissions_archive: Mapping[str, Sequence[str]] | None = None
     mcp_permission_version: int | None = None
     vector_stores: list[str] | None = []
     agents: list[str] | None = []

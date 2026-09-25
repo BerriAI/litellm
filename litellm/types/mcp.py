@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
@@ -498,5 +498,5 @@ class MCPToolOverrideEntry(TypedDict, total=False):
     ``mcp_tool_overrides``: ``allow`` re-arms names the convention denies,
     ``deny`` disables names the convention or an allowlist would permit."""
 
-    allow: ReadOnly[list[str]]
-    deny: ReadOnly[list[str]]
+    allow: ReadOnly[Sequence[str]]
+    deny: ReadOnly[Sequence[str]]

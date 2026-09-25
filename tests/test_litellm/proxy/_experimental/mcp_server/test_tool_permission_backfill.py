@@ -140,7 +140,7 @@ async def test_runner_converts_row_with_cas_update():
     assert data["mcp_permission_version"] == 1
     where = prisma.db.litellm_objectpermissiontable.update_many.await_args.kwargs["where"]
     assert where["object_permission_id"] == "perm-1"
-    assert where["mcp_permission_version"] == {"in": [0, None]}
+    assert where["mcp_permission_version"] == 0
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,7 @@ async def test_runner_omits_cas_equals_filter_for_null_fields():
     assert report.converted == {"perm-1"}
     where = prisma.db.litellm_objectpermissiontable.update_many.await_args.kwargs["where"]
     assert "mcp_tool_permissions" not in where
-    assert where["mcp_permission_version"] == {"in": [0, None]}
+    assert where["mcp_permission_version"] == 0
 
 
 @pytest.mark.asyncio
