@@ -134,6 +134,7 @@ class AzureOpenAIConfig(BaseConfig):
             "web_search_options",
             "prompt_cache_key",
             "store",
+            "service_tier",
         ]
 
     @classmethod
