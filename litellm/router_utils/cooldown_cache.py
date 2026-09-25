@@ -110,12 +110,39 @@ class CooldownCache:
                 _cooldown_time = self.default_cooldown_time
             #########################################################
 
+            # A deployment that is already cooling down can fail again while the
+            # first cooldown is still live (e.g. a slow in-flight request, or a
+            # retry that surfaces a second error). The new entry must never make
+            # the deployment leave cooldown EARLIER than the current entry
+            # already guarantees: a 429 without Retry-After (default cooldown)
+            # would otherwise cut short a longer cooldown set moments before
+            # (e.g. one parsed from Retry-After or a quota-recovery timestamp).
+            # Keep whichever deadline is later.
+            try:
+                current_time: Final = time.time()
+                active = self.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
+                if active:
+                    _, live_value = active[0]
+                    live_end = live_value["timestamp"] + live_value["cooldown_time"]
+                    if current_time + _cooldown_time < live_end:
+                        _cooldown_time = max(live_end - current_time, 0.001)
+            except Exception:  # noqa: BLE001, S110  # reading the live cooldown must never break writing the new one
+                pass
+
             cooldown_key, cooldown_data = self._common_add_cooldown_logic(
                 model_id=model_id,
                 original_exception=original_exception,
                 exception_status=exception_status,
                 cooldown_time=_cooldown_time,
             )
+
+            # InMemoryCache.set_cache does not refresh the TTL of a live entry
+            # (allow_ttl_override returns False while the old TTL stands), so a
+            # re-cooldown would keep the FIRST deadline for cache expiry even
+            # though the stored value says the newer (possibly longer) one.
+            # Delete first so the new TTL takes effect (mirrors
+            # _corrected_active_cooldown). Fixes #40130.
+            self.in_memory_cache.delete_cache(cooldown_key)
 
             # Set the cache with a TTL equal to the cooldown time
             self.cooldown_store.set_cache(

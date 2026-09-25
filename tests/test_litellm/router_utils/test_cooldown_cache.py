@@ -582,3 +582,102 @@ class TestCooldownSurvivesUnrelatedCacheTraffic:
         assert [model_id] == [entry[0] for entry in active], (
             "unrelated router cache traffic must not evict a cooldown that is still running"
         )
+
+
+class TestCooldownExpiryIsRespected:
+    """Regression tests: a re-cooldown must not leave the deployment benched
+    for less time than a previously live cooldown guaranteed (and the in-memory
+    TTL must actually take the new value, #40130)."""
+
+    @pytest.fixture
+    def cooldown_cache(self):
+        return CooldownCache(cache=DualCache(), default_cooldown_time=60.0)
+
+    def test_ttl_is_refreshed_when_cooldown_re_recorded(self, cooldown_cache):
+        """A second cooldown write while one is live must move the in-memory
+        expiry to the new deadline (InMemoryCache.set_cache alone keeps the
+        first TTL — issue #40130)."""
+        model_id = "dep-ttl-refresh"
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("429 quota exceeded"),
+            exception_status=429,
+            cooldown_time=1.0,
+        )
+        key = CooldownCache.get_cooldown_cache_key(model_id)
+        first_expiry = cooldown_cache.in_memory_cache.ttl_dict.get(key)
+        assert first_expiry is not None
+
+        # re-cooldown for 30s well before the 1s entry expires
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("429 quota exceeded again"),
+            exception_status=429,
+            cooldown_time=30.0,
+        )
+        second_expiry = cooldown_cache.in_memory_cache.ttl_dict.get(key)
+        assert second_expiry is not None
+        assert second_expiry > first_expiry + 20  # TTL actually refreshed
+
+    def test_default_cooldown_does_not_shorten_live_longer_cooldown(self, cooldown_cache):
+        """A 429 without a parsed cooldown (router default 60s) arriving while
+        a longer cooldown is live must not cut the deadline short."""
+        model_id = "dep-no-shorten"
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("429 with Retry-After 3600"),
+            exception_status=429,
+            cooldown_time=3600.0,
+        )
+        # second failure carries no explicit cooldown_time -> default 60s
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("429 without Retry-After"),
+            exception_status=429,
+            cooldown_time=None,
+        )
+        active = dict(cooldown_cache.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None))
+        assert model_id in active
+        value = active[model_id]
+        remaining = value["timestamp"] + value["cooldown_time"] - time.time()
+        assert remaining > 3000  # still benched for ~the original hour
+
+    def test_shorter_explicit_cooldown_does_not_shorten_live_one(self, cooldown_cache):
+        """Same guard for an explicit shorter cooldown_time (not just None)."""
+        model_id = "dep-explicit-shorter"
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("cooldown 300s"),
+            exception_status=429,
+            cooldown_time=300.0,
+        )
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("cooldown 5s"),
+            exception_status=429,
+            cooldown_time=5.0,
+        )
+        active = dict(cooldown_cache.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None))
+        value = active[model_id]
+        remaining = value["timestamp"] + value["cooldown_time"] - time.time()
+        assert remaining > 240  # the 300s deadline is preserved
+
+    def test_new_episode_after_expiry_uses_new_cooldown(self, cooldown_cache):
+        """Once the live cooldown has expired, a fresh short cooldown must be
+        honoured as-is (the guard only protects LIVE entries)."""
+        model_id = "dep-fresh-episode"
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("old failure"),
+            exception_status=429,
+            cooldown_time=0.05,
+        )
+        time.sleep(0.1)  # let it fully expire
+        cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=Exception("new failure"),
+            exception_status=429,
+            cooldown_time=10.0,
+        )
+        active = dict(cooldown_cache.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None))
+        assert model_id in active
