@@ -35,6 +35,7 @@ GET /team/spend/report
 GET /user/daily/activity
 GET /user/daily/activity/aggregated
 GET /user/daily/activity/aggregated/search
+GET /user/daily/activity/cache_leakage
 GET /user/spend/report
 
 # Admin UI helper endpoints; serve UI forms and caller-scoped views, not desired state
