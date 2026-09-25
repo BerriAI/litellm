@@ -658,29 +658,25 @@ def _make_config():
 
 
 def _mock_client(*names: str):
-    """Fake httpx client that returns deployment/config payloads for given names."""
+    """Fake httpx client returning a /lm/deployments response for the given deployment names.
+
+    The backend filters by scenarioId/executableIds/status, so there is no
+    second call to /lm/configurations; the mock only needs one response shape.
+    """
     resources = [
         {
             "scenarioId": "orchestration",
             "configurationId": f"cfg-{n}",
             "deploymentUrl": f"https://deploy-{n}.sap.com",
             "createdAt": f"2024-01-{i + 1:02d}T00:00:00Z",
+            "configurationName": n,
         }
         for i, n in enumerate(names)
     ]
-    configs = {f"cfg-{n}": {"executableId": "orchestration", "name": n} for n in names}
-
-    def fake_get(url, headers=None):
-        resp = MagicMock()
-        if "/lm/deployments" in url:
-            resp.json.return_value = {"resources": resources}
-        else:
-            cfg_id = url.split("/")[-1]
-            resp.json.return_value = configs.get(cfg_id, {})
-        return resp
-
+    resp = MagicMock()
+    resp.json.return_value = {"resources": resources}
     client = MagicMock()
-    client.get.side_effect = fake_get
+    client.get.return_value = resp
     return client
 
 
@@ -715,6 +711,19 @@ class TestDeploymentResolution:
             with pytest.raises(GenAIHubOrchestrationError) as exc:
                 cfg._resolve_deployment_url()
         assert "No orchestration deployment found" in str(exc.value)
+
+    def test_query_params_sent_to_backend(self):
+        """The whole point of this refactor: filtering must happen server-side."""
+        cfg = _make_config()
+        mock = _mock_client("orch-a")
+        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            cfg._resolve_deployment_url()
+        _, kwargs = mock.get.call_args
+        assert kwargs["params"] == {
+            "scenarioId": "orchestration",
+            "executableIds": ["orchestration"],
+            "status": "RUNNING",
+        }
 
 
 class TestGetCompleteUrl:
