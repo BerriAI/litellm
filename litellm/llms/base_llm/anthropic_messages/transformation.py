@@ -161,6 +161,25 @@ class BaseAnthropicMessagesConfig(ABC):
         When True, async_anthropic_messages_handler will transform the request body
         and issue one more attempt (bounded by max_retry_on_anthropic_messages_http_error).
         """
+        if isinstance(litellm_params, dict):
+            thinking = litellm_params.get("thinking")
+            if isinstance(thinking, dict):
+                binding = thinking.get("block_binding")
+                if isinstance(binding, dict) and binding.get("prefix_mismatch_behavior") == "error":
+                    return False
+            binding = litellm_params.get("block_binding")
+            if isinstance(binding, dict) and binding.get("prefix_mismatch_behavior") == "error":
+                return False
+            if litellm_params.get("prefix_mismatch_behavior") == "error":
+                return False
+            extra_body = litellm_params.get("extra_body")
+            if isinstance(extra_body, dict):
+                extra_thinking = extra_body.get("thinking")
+                if isinstance(extra_thinking, dict):
+                    binding = extra_thinking.get("block_binding")
+                    if isinstance(binding, dict) and binding.get("prefix_mismatch_behavior") == "error":
+                        return False
+
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
         )

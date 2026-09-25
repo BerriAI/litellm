@@ -1926,6 +1926,19 @@ class TestAnthropicThinkingSignatureSelfHeal:
         err = httpx.HTTPStatusError("bad", request=req, response=resp)
         assert config.should_retry_anthropic_messages_on_http_error(err, {}) is True
 
+        # When client explicitly sets prefix_mismatch_behavior="error", should not retry
+        params_error = {
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 1024,
+                "block_binding": {"prefix_mismatch_behavior": "error"},
+            }
+        }
+        assert config.should_retry_anthropic_messages_on_http_error(err, params_error) is False
+
+        params_direct = {"prefix_mismatch_behavior": "error"}
+        assert config.should_retry_anthropic_messages_on_http_error(err, params_direct) is False
+
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
         assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
