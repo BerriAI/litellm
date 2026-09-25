@@ -1840,7 +1840,7 @@ class RedisCache(BaseCache):
         if cached_pubsub_client is not None:
             try:
                 await cached_pubsub_client.aclose()  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]  # redis stubs leave aclose unknown
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection
                 verbose_logger.debug("Error closing cached pub/sub Redis client: %s", e)
         try:
             self.redis_client.close()
