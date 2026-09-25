@@ -1,7 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import * as networking from "@/components/networking";
 import * as roles from "@/utils/roles";
 import SearchTools from "./SearchTools";
@@ -54,14 +54,7 @@ const providers = [
   { provider_name: "tavily", ui_friendly_name: "Tavily Search" },
 ];
 
-const renderPage = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <SearchTools accessToken="test-token" userRole="Admin" userID="user-1" />
-    </QueryClientProvider>,
-  );
-};
+const renderPage = () => renderWithProviders(<SearchTools accessToken="test-token" userRole="Admin" userID="user-1" />);
 
 const openEditModal = async (user: ReturnType<typeof userEvent.setup>) => {
   await screen.findByText("Perplexity Search");
@@ -73,6 +66,7 @@ const openEditModal = async (user: ReturnType<typeof userEvent.setup>) => {
 describe("SearchTools edit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
     vi.mocked(networking.fetchSearchTools).mockResolvedValue({ search_tools: [toolWithServerOnlyParams] });
     vi.mocked(networking.fetchAvailableSearchProviders).mockResolvedValue({ providers });
     vi.mocked(networking.updateSearchTool).mockResolvedValue({});
