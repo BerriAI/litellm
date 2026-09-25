@@ -1,10 +1,13 @@
 import json
 import os
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -13,6 +16,7 @@ from litellm.llms.azure.common_utils import (
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_oidc,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -219,15 +223,14 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         is_async=False,
     )
 
+    assert result["azure_ad_token"] is None
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id=None,
         azure_tenant_id=None,
         scope="https://cognitiveservices.azure.com/.default",
     )
-
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_oidc_token_and_client_params(setup_mocks):
@@ -246,16 +249,14 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
         is_async=False,
     )
 
-    # Verify that get_azure_ad_token_from_oidc was called with the correct parameters
+    assert result["azure_ad_token"] is None
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id="test-client-id",
         azure_tenant_id="test-tenant-id",
         scope="test-azure-scope",
     )
-
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
@@ -275,16 +276,14 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
         is_async=False,
     )
 
-    # Verify that get_azure_ad_token_from_oidc was called with environment variables
+    assert result["azure_ad_token"] is None
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id="env-client-id",
         azure_tenant_id="env-tenant-id",
         scope="https://cognitiveservices.azure.com/.default",
     )
-
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
@@ -2188,3 +2187,178 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+class OidcTokenService:
+    def __init__(self) -> None:
+        self.seconds = 0.0
+        self.expires_in = 3600
+        self.exchange_delay = 0.0
+        self.scopes: tuple[str, ...] = ()
+        self.authorization_headers: tuple[str, ...] = ()
+
+    def now(self) -> float:
+        return self.seconds
+
+    def exchange(self, request: httpx.Request) -> httpx.Response:
+        scope: Final = parse_qs(request.content.decode())["scope"][0]
+        self.scopes += (scope,)
+        self.seconds += self.exchange_delay
+        return httpx.Response(200, json={"access_token": f"token-{len(self.scopes)}", "expires_in": self.expires_in})
+
+    def completion(self, request: httpx.Request) -> httpx.Response:
+        self.authorization_headers += (request.headers["Authorization"],)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test-deployment",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+            },
+        )
+
+
+@pytest.fixture
+def oidc_service(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> OidcTokenService:
+    from litellm.caching.caching import DualCache
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.llms.azure import common_utils
+    from litellm.secret_managers import main as secret_manager
+
+    service: Final = OidcTokenService()
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test-client")
+    monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(common_utils, "azure_ad_cache", DualCache(in_memory_cache=InMemoryCache(clock=service.now)))
+    monkeypatch.setattr(common_utils, "monotonic", service.now, raising=False)
+    monkeypatch.setattr(secret_manager, "oidc_cache", DualCache(in_memory_cache=InMemoryCache(clock=service.now)))
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", InMemoryCache(clock=service.now))
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    respx_mock.get(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+    ).respond(200, text="synthetic-google-assertion")
+    respx_mock.post("https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token").mock(
+        side_effect=service.exchange
+    )
+    respx_mock.route(method="POST", host="test.openai.azure.com").mock(side_effect=service.completion)
+    return service
+
+
+def test_oidc_tokens_are_isolated_by_scope(oidc_service: OidcTokenService) -> None:
+    reference: Final = "oidc/google/api://AzureADTokenExchange"
+    cognitive_token: Final = get_azure_ad_token_from_oidc(reference)
+    ai_token: Final = get_azure_ad_token_from_oidc(reference, scope="https://ai.azure.com/.default")
+
+    assert cognitive_token == "token-1"
+    assert ai_token == "token-2"
+    assert get_azure_ad_token_from_oidc(reference) == cognitive_token
+    assert oidc_service.scopes == ("https://cognitiveservices.azure.com/.default", "https://ai.azure.com/.default")
+
+
+def test_oidc_refresh_margin_includes_exchange_time(oidc_service: OidcTokenService) -> None:
+    reference: Final = "oidc/google/api://AzureADTokenExchange"
+    oidc_service.exchange_delay = 20
+    assert get_azure_ad_token_from_oidc(reference) == "token-1"
+    oidc_service.seconds = 3539
+    assert get_azure_ad_token_from_oidc(reference) == "token-1"
+    oidc_service.seconds = 3541
+    assert get_azure_ad_token_from_oidc(reference) == "token-2"
+
+
+@pytest.mark.parametrize("expires_in", [1, 60])
+def test_oidc_short_lived_tokens_are_not_cached(oidc_service: OidcTokenService, expires_in: int) -> None:
+    oidc_service.expires_in = expires_in
+    reference: Final = "oidc/google/api://AzureADTokenExchange"
+    assert get_azure_ad_token_from_oidc(reference) == "token-1"
+    assert get_azure_ad_token_from_oidc(reference) == "token-2"
+
+
+@pytest.mark.parametrize("api_version", ["2024-10-21", "v1"])
+def test_oidc_cached_sdk_client_refreshes_authorization(oidc_service: OidcTokenService, api_version: str) -> None:
+    from openai import AzureOpenAI, OpenAI
+
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        api_version=api_version,
+        model="test-deployment",
+        litellm_params={"azure_ad_token": "oidc/google/api://AzureADTokenExchange"},
+    )
+    assert isinstance(client, (AzureOpenAI, OpenAI))
+    with client:
+        client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "Hi"}])
+        oidc_service.seconds = 3590
+        client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "Hi"}])
+    assert oidc_service.authorization_headers == ("Bearer token-1", "Bearer token-2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-10-21", "v1"])
+async def test_oidc_cached_async_sdk_client_refreshes_authorization(
+    oidc_service: OidcTokenService, api_version: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+    http_client: Final = httpx.AsyncClient(transport=httpx.MockTransport(oidc_service.completion))
+    monkeypatch.setattr(litellm, "aclient_session", http_client)
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        api_version=api_version,
+        model="test-deployment",
+        litellm_params={"azure_ad_token": "oidc/google/api://AzureADTokenExchange"},
+        _is_async=True,
+    )
+    assert isinstance(client, (AsyncAzureOpenAI, AsyncOpenAI))
+    async with client:
+        await client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "Hi"}])
+        oidc_service.seconds = 3590
+        await client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "Hi"}])
+    assert oidc_service.authorization_headers == ("Bearer token-1", "Bearer token-2")
+
+
+def test_oidc_shared_headers_refresh_and_keep_scopes_separate(oidc_service: OidcTokenService) -> None:
+    cognitive_params: Final = GenericLiteLLMParams(azure_ad_token="oidc/google/api://AzureADTokenExchange")
+    ai_params: Final = GenericLiteLLMParams(
+        azure_ad_token="oidc/google/api://AzureADTokenExchange", azure_scope="https://ai.azure.com/.default"
+    )
+    assert BaseAzureLLM._base_validate_azure_environment({}, cognitive_params)["Authorization"] == "Bearer token-1"
+    assert BaseAzureLLM._base_validate_azure_environment({}, ai_params)["Authorization"] == "Bearer token-2"
+    oidc_service.seconds = 3590
+    assert BaseAzureLLM._base_validate_azure_environment({}, cognitive_params)["Authorization"] == "Bearer token-3"
+
+
+@pytest.mark.parametrize(
+    ("token", "expected_headers"),
+    [
+        ("oidc/google/api://AzureADTokenExchange", ("Bearer token-1", "Bearer token-2")),
+        ("static-token", ("Bearer static-token", "Bearer static-token")),
+    ],
+)
+def test_oidc_cloudflare_client_refreshes_without_changing_static_tokens(
+    oidc_service: OidcTokenService, token: str, expected_headers: tuple[str, str]
+) -> None:
+    from openai import AzureOpenAI
+
+    client: Final = BaseAzureLLM()._init_azure_client_for_cloudflare_ai_gateway(
+        api_base="https://test.openai.azure.com",
+        model="test-deployment",
+        api_version="2024-10-21",
+        max_retries=0,
+        timeout=30,
+        litellm_params={},
+        api_key=None,
+        azure_ad_token=token,
+        azure_ad_token_provider=None,
+        acompletion=False,
+    )
+    assert isinstance(client, AzureOpenAI)
+    with client:
+        client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "Hi"}])
+        oidc_service.seconds = 3590
+        client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "Hi"}])
+    assert oidc_service.authorization_headers == expected_headers
