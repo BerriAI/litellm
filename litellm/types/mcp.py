@@ -285,8 +285,6 @@ class MCPCredentials(TypedDict, total=False):
 
 DEFAULT_CREDENTIAL_HEADER: Final = "Authorization"
 
-MCP_ALL_TOOLS_WILDCARD: Final = "*"
-
 _HEADER_NAME_TOKEN: Final = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 

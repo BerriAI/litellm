@@ -152,7 +152,10 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   // equivalent keys that may name it.
   const writeAllowedTools = (entry: EffectiveMcpServer, allowed: string[]) => {
     const names = (serverTools[entry.server.server_id] ?? []).map((t) => t.name);
-    const next = names.length > 0 && names.every((n) => allowed.includes(n)) ? [MCP_ALL_TOOLS_WILDCARD] : allowed;
+    const next =
+      entry.source.kind !== "toolset" && names.length > 0 && names.every((n) => allowed.includes(n))
+        ? [MCP_ALL_TOOLS_WILDCARD]
+        : allowed;
     onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }));
   };
 

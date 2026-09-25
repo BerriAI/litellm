@@ -500,9 +500,9 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       await userEvent.click(screen.getByText("Select All"));
 
-      // The write holds the wildcard rather than copying the toolset's tool into the entry as
-      // a standing grant.
-      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["*"] });
+      // A toolset-sourced server never writes the wildcard: that would create a standing direct
+      // grant outliving the toolset. The write keeps only the tools this level grants itself.
+      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["delete_issue"] });
     });
 
     // The default narrows an unrestricted server; against a toolset-restricted one it would widen

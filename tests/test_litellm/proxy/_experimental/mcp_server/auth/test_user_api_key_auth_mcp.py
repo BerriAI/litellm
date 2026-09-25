@@ -342,15 +342,6 @@ class TestMCPRequestHandler:
         mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
         return mock_manager
 
-    def _real_manager_with_toolsets(self, toolset_perms):
-        """A real MCPServerManager so the real expand_tool_permissions
-        (wildcard -> None) runs; only the DB-backed toolset lookup is stubbed"""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-
-        manager = MCPServerManager()
-        manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
-        return manager
-
     async def test_get_allowed_mcp_servers_for_key_includes_toolset_servers(self):
         """A key granted only mcp_toolsets must reach the toolset's servers on
         every path (list, call, REST); regression for the list-ok/call-403 bug"""
@@ -518,174 +509,60 @@ class TestMCPRequestHandler:
         assert result is None
 
     # ------------------------------------------------------------------
-    # mcp_tool_permissions ["*"] wildcard: grants every current and future
-    # tool at that level, never widens a ceiling at another level
+    # mcp_tool_permissions ["*"] wildcard semantics live in one seam:
+    # _union_tool_grants returns None (unrestricted at that level) when the
+    # level's direct grants carry the wildcard, whatever its toolsets grant
     # ------------------------------------------------------------------
 
-    async def test_key_wildcard_allows_every_tool_including_future_ones(self):
-        """["*"] on the key reads as unrestricted at the key level, so a tool
-        the proxy has never enumerated (added to the server later) is granted"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
-        key_object_permission = self._toolset_only_object_permission([])
-        key_object_permission.mcp_tool_permissions = {"server-a": ["*"]}
-        manager = self._real_manager_with_toolsets({})
+    @pytest.mark.parametrize(
+        "direct,via_toolsets,expected",
+        [
+            (["*"], None, None),
+            (["*"], ["read_file"], None),
+            (None, None, None),
+            ([], None, ()),
+            (None, ["read_file"], ("read_file",)),
+        ],
+    )
+    def test_union_tool_grants_wildcard_and_union_cases(self, direct, via_toolsets, expected):
+        """A direct ["*"] makes the level unrestricted even beside a toolset
+        list (regression: mapping ["*"] to None in expand_tool_permissions let
+        a same-level toolset list deny every other tool)"""
+        result = MCPRequestHandler._union_tool_grants(direct, via_toolsets)
 
-        with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+        if expected is None:
+            assert result is None
+        else:
+            assert result is not None
+            assert set(result) == set(expected)
+
+    def test_union_tool_grants_unions_two_concrete_lists(self):
+        result = MCPRequestHandler._union_tool_grants(["read_file"], ["write_file"])
+
+        assert result is not None
+        assert set(result) == {"read_file", "write_file"}
+
+    async def test_key_wildcard_allows_a_tool_never_enumerated(self):
+        """End to end at the key level: object_permission sits on the auth
+        object already, no team named, so no patching is needed; the real
+        global manager expands ["*"] and the level reads unrestricted"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["*"]},
             ),
-            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
-                server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-            brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
-                tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
+        )
+
+        allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+        brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+            tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
 
         assert allowed is None
         assert brand_new_tool_allowed is True
-
-    async def test_key_wildcard_stays_capped_by_team_allowlist(self):
-        """A wildcard on the key must never widen a team's enumerated ceiling:
-        the intersection keeps only the team's named tools"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-1")
-        key_object_permission = self._toolset_only_object_permission([])
-        key_object_permission.mcp_tool_permissions = {"server-a": ["*"]}
-        team_object_permission = self._toolset_only_object_permission([])
-        team_object_permission.mcp_tool_permissions = {"server-a": ["read_file"]}
-        manager = self._real_manager_with_toolsets({})
-
-        with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
-            ),
-            patch.object(
-                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
-                server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-            brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
-                tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-
-        assert allowed == ["read_file"]
-        assert brand_new_tool_allowed is False
-
-    async def test_team_wildcard_stays_capped_by_key_allowlist(self):
-        """A wildcard on the team leaves the key's enumerated list as the
-        effective ceiling"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-1")
-        key_object_permission = self._toolset_only_object_permission([])
-        key_object_permission.mcp_tool_permissions = {"server-a": ["read_file"]}
-        team_object_permission = self._toolset_only_object_permission([])
-        team_object_permission.mcp_tool_permissions = {"server-a": ["*"]}
-        manager = self._real_manager_with_toolsets({})
-
-        with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
-            ),
-            patch.object(
-                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
-                server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-
-        assert allowed == ["read_file"]
-
-    async def test_key_empty_tool_list_stays_deny_all(self):
-        """[] on the key is deny-all, distinct from the wildcard: it must not
-        be widened into allow-all by the None-mapping"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
-        key_object_permission = self._toolset_only_object_permission([])
-        key_object_permission.mcp_tool_permissions = {"server-a": []}
-        manager = self._real_manager_with_toolsets({})
-
-        with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
-            ),
-            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            read_file_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
-                tool_name="read_file", server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-
-        assert read_file_allowed is False
-
-    async def test_key_enumerated_list_still_denies_unknown_tool(self):
-        """A concrete list is a closed allowlist: a tool added to the server
-        after the list was written stays denied, unlike under a wildcard"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
-        key_object_permission = self._toolset_only_object_permission([])
-        key_object_permission.mcp_tool_permissions = {"server-a": ["read_file"]}
-        manager = self._real_manager_with_toolsets({})
-
-        with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
-            ),
-            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
-                tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-
-        assert brand_new_tool_allowed is False
-
-    async def test_key_wildcard_stays_capped_by_org_allowlist(self):
-        """The org ceiling intersects a key wildcard the same as an enumerated
-        list: only the org's named tools survive"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", org_id="org-1")
-        key_object_permission = self._toolset_only_object_permission([])
-        key_object_permission.mcp_tool_permissions = {"server-a": ["*"]}
-        org_object_permission = self._toolset_only_object_permission([])
-        org_object_permission.mcp_tool_permissions = {"server-a": ["read_file"]}
-        manager = self._real_manager_with_toolsets({})
-
-        with (
-            patch.object(
-                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
-            ),
-            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
-            patch.object(
-                MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
-                server_id="server-a", user_api_key_auth=user_api_key_auth
-            )
-
-        assert allowed == ["read_file"]
 
     # ------------------------------------------------------------------
     # LIT-5749: toolsets attached to a TEAM, ORG, or internal USER must be

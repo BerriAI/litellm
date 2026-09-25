@@ -8709,29 +8709,29 @@ class TestMCPServerManagerExpandToolPermissions:
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["write_file"]})
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
 
-    def test_wildcard_maps_to_none_keeping_server_key(self):
-        """["*"] grants every current and future tool: the value reads None
-        (no restriction from this level) while the key stays present so the
-        server entitlement itself is preserved."""
+    def test_wildcard_survives_expansion_as_list_entry(self):
+        """["*"] stays in the expanded list so the caller's wildcard check
+        (``_union_tool_grants``) can read it; this function only normalizes
+        keys and never maps grants to None."""
         manager = MCPServerManager()
         manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
 
         result = manager.expand_tool_permissions({"uuid-a": ["*"]})
-        assert result == {"uuid-a": None}
+        assert result == {"uuid-a": ["*"]}
 
-    def test_wildcard_wins_the_union_across_keys_for_same_server(self):
+    def test_wildcard_unions_with_concrete_names_across_keys_for_same_server(self):
         """An alias key carrying ["*"] unioned with an id key naming one tool
-        still maps to None; a wildcard grant is never narrowed by a
-        sibling enumerated list at the same level."""
+        keeps both entries; interpretation of the wildcard belongs to the
+        caller, not the expansion."""
         manager = MCPServerManager()
         manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alias-a", alias="alias-a")
 
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["*"]})
-        assert result == {"uuid-a": None}
+        assert sorted(result["uuid-a"]) == ["*", "read_file"]
 
     def test_empty_list_stays_deny_all(self):
-        """[] is deny-all, a distinct meaning from None (unrestricted); it
-        must never be widened into a wildcard."""
+        """[] is deny-all, a distinct meaning from no entry (unrestricted);
+        the key must survive expansion rather than disappear."""
         manager = MCPServerManager()
         manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
 
