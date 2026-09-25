@@ -181,6 +181,7 @@ from litellm.utils import (
     ImageResponse,
     ModelResponse,
     ProviderConfigManager,
+    add_openai_metadata,
     async_pre_call_deployment_hook,
 )
 
@@ -6356,7 +6357,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Exception | None:
         """
         Handles Responses API WebSocket mode.
@@ -10359,16 +10360,13 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: Final[dict[str, Any]] = dict(vector_store_update_optional_params)
-
         # Clean metadata to only include string values (OpenAI requirement)
-        if "metadata" in request_body and request_body["metadata"] is not None:
-            from litellm.utils import add_openai_metadata
-
-            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
-
-        if extra_body:
-            request_body.update(extra_body)
+        metadata: Final[dict[str, str] | None] = vector_store_update_optional_params.get("metadata")
+        request_body: Final[dict[str, object]] = {
+            **vector_store_update_optional_params,
+            **({"metadata": add_openai_metadata(metadata)} if metadata is not None else {}),
+            **(extra_body or {}),
+        }
 
         logging_obj.pre_call(
             input="",
@@ -10437,16 +10435,13 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: Final[dict[str, Any]] = dict(vector_store_update_optional_params)
-
         # Clean metadata to only include string values (OpenAI requirement)
-        if "metadata" in request_body and request_body["metadata"] is not None:
-            from litellm.utils import add_openai_metadata
-
-            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
-
-        if extra_body:
-            request_body.update(extra_body)
+        metadata: Final[dict[str, str] | None] = vector_store_update_optional_params.get("metadata")
+        request_body: Final[dict[str, object]] = {
+            **vector_store_update_optional_params,
+            **({"metadata": add_openai_metadata(metadata)} if metadata is not None else {}),
+            **(extra_body or {}),
+        }
 
         logging_obj.pre_call(
             input="",
