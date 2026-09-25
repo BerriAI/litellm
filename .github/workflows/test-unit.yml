@@ -108,6 +108,7 @@ jobs:
           - shard: misc
             artifact-name: misc
             test-path: >-
+              tests/test_litellm/integrations
               tests/test_litellm/interactions
               tests/test_litellm/ocr
               tests/test_litellm/passthrough
