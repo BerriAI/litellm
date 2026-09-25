@@ -1206,7 +1206,9 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
     def __init__(self, anthropic_wrapper: AnthropicStreamWrapper) -> None:
         self._anthropic_wrapper = anthropic_wrapper
         self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
-        self._hidden_params: dict[str, object] = {}  # mutable-ok: the proxy merges provider headers onto _hidden_params in place
+        self._hidden_params: dict[
+            str, object
+        ] = {}  # mutable-ok: the proxy merges provider headers onto _hidden_params in place
 
     @property
     def chunks(self) -> list | None:
