@@ -1,15 +1,54 @@
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.gemini import GeminiCountTokensRequest
+from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.types.google_genai.main import GenerateContentContentListUnionDict
 else:
     GenerateContentContentListUnionDict = Any
+
+
+def build_count_tokens_request(
+    model: str,
+    contents: Sequence[ContentType],
+    system_instruction: SystemInstructions | None,
+    tools: Sequence[Tools] | None,
+) -> GeminiCountTokensRequest:
+    model_name: Final = f"models/{model}"
+    if tools is None:
+        if system_instruction is None:
+            bare: Final[GeminiCountTokensRequest] = {"contents": contents}
+            return bare
+        with_system: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {
+                "model": model_name,
+                "contents": contents,
+                "systemInstruction": system_instruction,
+            }
+        }
+        return with_system
+    if system_instruction is None:
+        with_tools: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {"model": model_name, "contents": contents, "tools": tools}
+        }
+        return with_tools
+    with_both: Final[GeminiCountTokensRequest] = {
+        "generateContentRequest": {
+            "model": model_name,
+            "contents": contents,
+            "systemInstruction": system_instruction,
+            "tools": tools,
+        }
+    }
+    return with_both
 
 
 class GoogleAIStudioTokenCounter:
@@ -28,8 +67,6 @@ class GoogleAIStudioTokenCounter:
         """
         import copy
 
-        from google.genai.types import FunctionResponse
-
         # Handle None or empty contents
         if not contents:
             return contents
@@ -40,6 +77,8 @@ class GoogleAIStudioTokenCounter:
             parts = content["parts"]
             for part in parts:
                 if "functionResponse" in part:
+                    from google.genai.types import FunctionResponse
+
                     function_response_data = part["functionResponse"]
                     function_response_part = FunctionResponse(**function_response_data)
                     function_response_part.id = None
@@ -51,7 +90,7 @@ class GoogleAIStudioTokenCounter:
         """
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
-        base_url: Final = api_base or "https://generativelanguage.googleapis.com"
+        base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
         return f"{base_url}/v1beta/models/{model}:countTokens"
 
     async def validate_environment(
@@ -84,6 +123,9 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: SystemInstructions | None = None,
+        tools: Sequence[Tools] | None = None,
+        client: httpx.AsyncClient | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -119,33 +161,49 @@ class GoogleAIStudioTokenCounter:
             Exception: For any other unexpected errors
         """
 
-        # Prepare headers
-        headers, url = await self.validate_environment(
-            api_key=api_key,
-            api_base=api_base,
-            headers={},
-            model=model,
-            litellm_params=kwargs,
-        )
-
-        # Prepare request body - clean up contents to remove unsupported fields
-        cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
-
-        async_httpx_client: Final = get_async_httpx_client(
-            llm_provider=LlmProviders.GEMINI,
-        )
-
         try:
-            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
+            headers, url = await self.validate_environment(
+                api_key=api_key,
+                api_base=api_base,
+                headers={},  # mutable-ok: validate_environment merges into this dict
+                model=model,
+                litellm_params=kwargs,
+            )
+
+            request_body: Final = build_count_tokens_request(
+                model=model,
+                contents=self._clean_contents_for_gemini_api(contents),
+                system_instruction=system_instruction,
+                tools=tools,
+            )
+
+            async_httpx_client: Final = client or get_async_httpx_client(
+                llm_provider=LlmProviders.GEMINI,
+            )
+
+            response: Final = await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_body,  # pyright: ignore[reportArgumentType]  # post() takes a bare dict; a TypedDict is one at runtime
+            )
 
             # Check for HTTP errors
             response.raise_for_status()
 
             # Parse response
-            result: Final = response.json()
+            try:
+                result: Final = response.json()
+            except ValueError as e:
+                raise litellm.APIError(
+                    message=f"Google Gen AI Studio API returned a non-JSON body: {response.text}",
+                    llm_provider="gemini",
+                    model=model,
+                    status_code=response.status_code,
+                ) from e
             return result
 
+        except litellm.APIError:
+            raise
         except httpx.HTTPStatusError as e:
             error_msg = f"Google Gen AI Studio API error: {e.response.status_code} - {e.response.text}"
             raise litellm.APIError(
@@ -158,5 +216,9 @@ class GoogleAIStudioTokenCounter:
             error_msg = f"Request to Google Gen AI Studio failed: {e}"
             raise litellm.APIConnectionError(message=error_msg, llm_provider="gemini", model=model) from e
         except Exception as e:
-            error_msg = f"Unexpected error during token counting: {e}"
-            raise Exception(error_msg) from e
+            raise litellm.APIError(
+                message=f"Unexpected error during token counting: {e}",
+                llm_provider="gemini",
+                model=model,
+                status_code=500,
+            ) from e
