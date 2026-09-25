@@ -1651,9 +1651,7 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:end_user:customer-42")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:customer-42")
-    deleted: Final = {
-        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
-    }
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:customer-42" in deleted
 
 
@@ -1691,7 +1689,9 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 3
     counter_cache.async_delete_cache.assert_not_called()
 
-    invalidated: Final = {key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]}
+    invalidated: Final = {
+        key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
+    }
     assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
     evicted: Final = {
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
@@ -1699,7 +1699,10 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
-def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(mock_prisma_client, monkeypatch):
+
+def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
+    mock_prisma_client, monkeypatch
+):
     """A page that fails to read is not the end of the customer list.
 
     The tier's window is already advanced by the time this walk runs, so no later
@@ -1727,7 +1730,9 @@ def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_fin
     assert metadata["num_endusers_updated"] == RESET_BUDGET_JOB_BATCH_SIZE
 
 
-def test_a_failed_counter_batch_still_evicts_the_management_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+def test_a_failed_counter_batch_still_evicts_the_management_cache(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
     """The spend counters and the management cache are invalidated independently.
 
     Sharing one handler meant a Redis failure on the counters returned before the
@@ -1745,7 +1750,9 @@ def test_a_failed_counter_batch_still_evicts_the_management_cache(reset_budget_j
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     evicted: Final = {
-        key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
+        key
+        for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list
+        for key in call.args[0]
     }
     assert "end_user_id:customer-42" in evicted
 
@@ -1976,11 +1983,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
     budget = _budget_row(budget_id="budget-1", budget_duration="7d")
     mock_prisma_client.data["budget"] = [budget]
     mock_prisma_client.data["enduser"] = [
-        type(
-            "EndUser",
-            (),
-            {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"},
-        )
+        type("EndUser", (), {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"})
     ]
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
@@ -3180,15 +3183,7 @@ def rollover_enabled(monkeypatch):
     ],
 )
 def test_direct_reset_carries_overage_when_rollover_enabled(
-    rollover_enabled,
-    reset_budget_job,
-    mock_prisma_client,
-    monkeypatch,
-    run_phase,
-    table,
-    id_field,
-    id_value,
-    row_factory,
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
 ):
     """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
     rather than zero the row, and the spend counter must be seeded with 50."""
@@ -3329,12 +3324,7 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
             "spend": 15.0,
             "user_id": "enduser-implicit",
             "budget_id": None,
-            "model_dump": lambda self=None: {
-                "spend": 15.0,
-                "user_id": "enduser-implicit",
-                "budget_id": None,
-                "blocked": False,
-            },
+            "model_dump": lambda self=None: {"spend": 15.0, "user_id": "enduser-implicit", "budget_id": None, "blocked": False},
         },
     )
     mock_prisma_client.db.litellm_endusertable.set_find_many_results([implicit_enduser])
@@ -3343,9 +3333,7 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:end_user:enduser-implicit")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:enduser-implicit")
-    deleted: Final = {
-        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
-    }
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:enduser-implicit" in deleted
 
 
