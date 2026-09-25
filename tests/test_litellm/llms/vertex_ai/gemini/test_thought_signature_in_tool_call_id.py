@@ -9,9 +9,10 @@ Note: Embedding signatures in tool call IDs is a beta feature that requires
 enable_preview_features=True to be enabled.
 """
 
-import pytest
+import base64
 
 import litellm
+import pytest
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _encode_tool_call_id_with_signature,
@@ -94,10 +95,7 @@ def test_tool_call_id_includes_signature_in_response(enable_preview_features):
     tool_call_id = tools[0]["id"]
 
     # Verify signature is always in provider_specific_fields
-    assert (
-        tools[0].get("provider_specific_fields", {}).get("thought_signature")
-        == test_signature
-    )
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
 
     # When preview features enabled, signature should be embedded in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
@@ -234,9 +232,7 @@ def test_openai_client_e2e_flow(enable_preview_features):
         ],
     }
     # Step 4: LiteLLM converts back to Gemini format, extracting signature
-    gemini_parts_converted = convert_to_gemini_tool_call_invoke(
-        openai_assistant_message
-    )
+    gemini_parts_converted = convert_to_gemini_tool_call_invoke(openai_assistant_message)
 
     # Verify signature is preserved through the round trip
     assert len(gemini_parts_converted) == 1
@@ -271,10 +267,7 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert len(tools) == 2
 
     # First tool call should have signature in provider_specific_fields
-    assert (
-        tools[0].get("provider_specific_fields", {}).get("thought_signature")
-        == signature1
-    )
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
 
     # When preview features enabled, first tool call has signature in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
@@ -285,3 +278,118 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
+
+
+def test_get_valid_base64_thought_signature_helper():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _get_valid_base64_thought_signature,
+    )
+
+    valid_sig = base64.b64encode(b"valid_thought_signature_content").decode("utf-8")
+    assert _get_valid_base64_thought_signature(valid_sig) == valid_sig
+
+    assert _get_valid_base64_thought_signature(f"  {valid_sig}  \n") == valid_sig
+
+    urlsafe_sig = base64.urlsafe_b64encode(b"valid_thought_signature_content").decode("utf-8")
+    assert _get_valid_base64_thought_signature(urlsafe_sig) == urlsafe_sig
+
+    unpadded_sig = valid_sig.rstrip("=")
+    assert _get_valid_base64_thought_signature(unpadded_sig) == valid_sig
+
+    assert _get_valid_base64_thought_signature(None) is None
+    assert _get_valid_base64_thought_signature("") is None
+    assert _get_valid_base64_thought_signature("   ") is None
+    assert _get_valid_base64_thought_signature("not_base64_content!@#") is None
+    assert _get_valid_base64_thought_signature("abc") == "abc="
+    assert _get_valid_base64_thought_signature("abcde") is None
+    assert _get_valid_base64_thought_signature("====") is None
+    assert _get_valid_base64_thought_signature(12345) is None
+
+
+def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_history():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    def _get_part_val(part: object, key: str) -> object:
+        if isinstance(part, dict):
+            return part.get(key)
+        return getattr(part, key, None)
+
+    valid_sig = base64.b64encode(b"gemini_replayed_thought_sig").decode("utf-8")
+    malformed_sig = "malformed_base64_thought_sig_!@#"
+
+    # 1. Malformed signature in provider_specific_fields["thought_signatures"]
+    messages_malformed = [
+        {"role": "user", "content": "Analyze this data."},
+        {
+            "role": "assistant",
+            "content": "Analysis complete.",
+            "provider_specific_fields": {"thought_signatures": [malformed_sig]},
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages_malformed)
+    model_parts = [part for content in contents if content["role"] == "model" for part in content["parts"]]
+    assert len(model_parts) >= 1
+    assert _get_part_val(model_parts[0], "text") == "Analysis complete."
+    assert _get_part_val(model_parts[0], "thoughtSignature") is None
+
+    # 2. Valid signature in provider_specific_fields["thought_signatures"]
+    messages_valid = [
+        {"role": "user", "content": "Analyze this data."},
+        {
+            "role": "assistant",
+            "content": "Analysis complete.",
+            "provider_specific_fields": {"thought_signatures": [valid_sig]},
+        },
+    ]
+
+    contents_valid = _gemini_convert_messages_with_history(messages=messages_valid)
+    model_parts_valid = [part for content in contents_valid if content["role"] == "model" for part in content["parts"]]
+    assert len(model_parts_valid) >= 1
+    assert _get_part_val(model_parts_valid[0], "thoughtSignature") == valid_sig
+
+    # 3. Malformed signature in thinking_blocks
+    messages_thinking_malformed = [
+        {"role": "user", "content": "Plan next steps."},
+        {
+            "role": "assistant",
+            "content": "Here is the plan.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1: Check constraints.",
+                    "signature": malformed_sig,
+                }
+            ],
+        },
+    ]
+
+    contents_thinking = _gemini_convert_messages_with_history(messages=messages_thinking_malformed)
+    thinking_parts = [part for content in contents_thinking if content["role"] == "model" for part in content["parts"]]
+    assert len(thinking_parts) >= 1
+    assert _get_part_val(thinking_parts[0], "thoughtSignature") is None
+
+    # 4. Valid signature in thinking_blocks
+    messages_thinking_valid = [
+        {"role": "user", "content": "Plan next steps."},
+        {
+            "role": "assistant",
+            "content": "Here is the plan.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1: Check constraints.",
+                    "signature": valid_sig,
+                }
+            ],
+        },
+    ]
+
+    contents_thinking_valid = _gemini_convert_messages_with_history(messages=messages_thinking_valid)
+    thinking_parts_valid = [
+        part for content in contents_thinking_valid if content["role"] == "model" for part in content["parts"]
+    ]
+    assert len(thinking_parts_valid) >= 1
+    assert _get_part_val(thinking_parts_valid[0], "thoughtSignature") == valid_sig
