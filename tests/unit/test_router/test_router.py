@@ -6470,6 +6470,51 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
+def test_get_deployment_credentials_with_provider_keeps_legacy_bucket_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "bucket_name": "my-legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["bucket_name"] == "my-legacy-bucket"
+    assert "gcs_bucket_name" not in credentials
+
+
+def test_get_deployment_credentials_with_provider_keeps_both_bucket_keys():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "new-bucket",
+                    "bucket_name": "legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "new-bucket"
+    assert credentials["bucket_name"] == "legacy-bucket"
+
+
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves
