@@ -87,7 +87,12 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
-async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
+async def test_anthropic_async_completion_forwards_http_images_as_url_sources(async_only_image_fetch):
+    """http:// image URLs are forwarded as URL sources, never downloaded.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/43098: the
+    proxy used to download http:// URLs and send them as base64 without notice.
+    """
     http_image_url = f"http://img.example/{uuid.uuid4()}.png"
     https_image_url = f"https://img.example/{uuid.uuid4()}.png"
     captured = {}
@@ -127,10 +132,10 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
     )
 
     assert response.choices[0].message.content == "Green"
-    assert async_only_image_fetch.fetched == [http_image_url]
+    assert async_only_image_fetch.fetched == []
     sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
     assert sources == [
-        {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+        {"type": "url", "url": http_image_url},
         {"type": "url", "url": https_image_url},
     ]
 
