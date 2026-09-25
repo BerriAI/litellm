@@ -2995,6 +2995,7 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "veil",
+ "wiremock",
 ]
 
 [[package]]
