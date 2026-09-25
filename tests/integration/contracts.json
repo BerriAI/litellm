@@ -1321,6 +1321,72 @@
     "tests/integration/observability/test_guardrail_effects.py::test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls": [
       "other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution"
     ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h1_chat_completions_nonstream_openai_sdk": [
+      "other.observability.otel.trace_header.chat_completions_nonstream_sdk"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h2_chat_completions_stream_openai_async_sdk": [
+      "other.observability.otel.trace_header.chat_completions_stream_async_sdk"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h3_messages_nonstream_anthropic_sdk": [
+      "other.observability.otel.trace_header.messages_nonstream_anthropic_sdk"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h4_messages_stream_anthropic_async_sdk": [
+      "other.observability.otel.trace_header.messages_stream_anthropic_async_sdk"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h5_responses_nonstream_openai_sdk": [
+      "other.observability.otel.trace_header.responses_nonstream_sdk"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h6_responses_stream_raw_sse": [
+      "other.observability.otel.trace_header.responses_stream_raw_sse"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h7_unknown_model_400_response_still_carries_trace_header": [
+      "other.observability.otel.trace_header.error_400_unknown_model"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h8_bad_key_401_response_still_carries_trace_header": [
+      "other.observability.otel.trace_header.error_401_bad_key"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h9_traceparent_trace_id_is_returned_and_parents_the_server_span": [
+      "other.observability.otel.trace_header.traceparent_propagation"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_h10_twenty_four_concurrent_mixed_requests_get_distinct_matching_traces": [
+      "other.observability.otel.trace_header.concurrent_burst_unique_traces"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_e1_health_liveliness_never_carries_trace_header": [
+      "other.observability.otel.trace_header.excluded_route_no_header"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_e2_otel_v2_disabled_serves_call_id_but_no_trace_header": [
+      "other.observability.otel.trace_header.otel_v2_off_no_header"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_e3_always_off_sampler_suppresses_header_and_exports": [
+      "other.observability.otel.trace_header.always_off_sampler_no_header_no_spans"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s1_x_litellm_trace_id_request_header_still_lands_as_spend_session": [
+      "other.observability.otel.trace_header.request_header_stays_session_id"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s2_five_kilobyte_trace_header_value": [
+      "other.observability.otel.trace_header.hostile_header_five_kb"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s2_numeric_trace_header_value": [
+      "other.observability.otel.trace_header.hostile_header_numeric"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s2_duplicate_trace_header_values": [
+      "other.observability.otel.trace_header.hostile_header_duplicate"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s2_empty_trace_header_value": [
+      "other.observability.otel.trace_header.hostile_header_empty"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s2_unauthenticated_trace_header": [
+      "other.observability.otel.trace_header.hostile_header_unauthenticated"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_s3_cors_expose_headers_lists_trace_id": [
+      "other.observability.otel.trace_header.cors_expose_headers"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_c1_sink_outage_during_burst_never_duplicates_a_server_span": [
+      "other.observability.otel.trace_header.sink_outage_burst"
+    ],
+    "tests/integration/observability/test_otel_trace_id_header.py::test_c2_killing_one_worker_mid_burst_keeps_serving_with_headers": [
+      "other.observability.otel.trace_header.worker_kill_burst"
+    ],
     "tests/integration/mcp/test_oauth_configuration.py::test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_server[revoke]": [
       "other.mcp.oauth.same_url_credentials_are_isolated_by_user_and_server"
     ],
