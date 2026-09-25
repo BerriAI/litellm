@@ -43,8 +43,6 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
     PROVIDER_REQUEST_ID_HEADERS,
-    SENTRY_DENYLIST,
-    SENTRY_PII_DENYLIST,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
@@ -213,6 +211,7 @@ from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
+from ..integrations.zerobus import ZerobusLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     get_trusted_callback_params,
@@ -380,9 +379,12 @@ _DEPLOYMENT_PRICING_KEYS: Final = (
     "output_cost_per_token",
     "input_cost_per_token_batches",
     "output_cost_per_token_batches",
+    "input_cost_per_token_above_200k_tokens_batches",
     "input_cost_per_token_above_272k_tokens_batches",
+    "output_cost_per_token_above_200k_tokens_batches",
     "output_cost_per_token_above_272k_tokens_batches",
     "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_200k_tokens_batches",
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_creation_input_token_cost_batches",
     "cache_creation_input_token_cost_above_272k_tokens_batches",
@@ -4215,6 +4217,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+        elif result is None:
+            verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
+            return litellm.ModelResponse(model=self.model)
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
 
@@ -4423,21 +4428,10 @@ def set_callbacks(callback_list, function_id=None):
                     print_verbose("Package 'sentry_sdk' is missing. Installing it...")
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
                     import sentry_sdk
-                from sentry_sdk.scrubber import EventScrubber
+                from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
 
                 sentry_sdk_instance = sentry_sdk
-                sentry_trace_rate = os.environ.get("SENTRY_API_TRACE_RATE", "1.0")
-                sentry_sample_rate = (
-                    os.environ.get("SENTRY_API_SAMPLE_RATE") if "SENTRY_API_SAMPLE_RATE" in os.environ else "1.0"
-                )
-                sentry_sdk_instance.init(
-                    dsn=os.environ.get("SENTRY_DSN"),
-                    traces_sample_rate=float(sentry_trace_rate),
-                    sample_rate=float(sentry_sample_rate if sentry_sample_rate else 1.0),
-                    send_default_pii=False,  # Prevent sending Personal Identifiable Information
-                    event_scrubber=EventScrubber(denylist=SENTRY_DENYLIST, pii_denylist=SENTRY_PII_DENYLIST),
-                    environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
-                )
+                sentry_sdk_instance.init(**build_sentry_init_options(os.environ))
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
             elif callback == "slack":
@@ -4660,6 +4654,14 @@ def _init_custom_logger_compatible_class(
             _pointfive_logger: Final = PointFiveLogger()
             _in_memory_loggers.append(_pointfive_logger)
             return _pointfive_logger
+        elif logging_integration == "zerobus":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ZerobusLogger):
+                    return callback
+
+            _zerobus_logger: Final = ZerobusLogger()
+            _in_memory_loggers.append(_zerobus_logger)
+            return _zerobus_logger
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SQSLogger):
@@ -5351,6 +5353,10 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PointFiveLogger):
+                    return callback
+        elif logging_integration == "zerobus":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ZerobusLogger):
                     return callback
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:

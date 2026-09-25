@@ -20,7 +20,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
 from litellm._logging import session_id_var, trace_id_var
-from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+from litellm.constants import SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -357,108 +357,23 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
-def test_sentry_sample_rate(monkeypatch):
-    existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
-    try:
-        # test with default value by removing the environment variable
-        if existing_sample_rate:
-            del os.environ["SENTRY_API_SAMPLE_RATE"]
-
-        set_callbacks(["sentry"])
-        # Check if the default sample rate is set to 1.0
-        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "1.0"
-
-        # test with custom value
-        monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", "0.5")
-
-        set_callbacks(["sentry"])
-        # Check if the custom sample rate is set correctly
-        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "0.5"
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # Restore the original environment variable
-        if existing_sample_rate:
-            monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", existing_sample_rate)
-        else:
-            if "SENTRY_API_SAMPLE_RATE" in os.environ:
-                del os.environ["SENTRY_API_SAMPLE_RATE"]
-
-
 def test_sentry_environment(monkeypatch):
-    """Test that SENTRY_ENVIRONMENT is properly handled during Sentry initialization"""
-    existing_environment = os.getenv("SENTRY_ENVIRONMENT")
-    existing_dsn = os.getenv("SENTRY_DSN")
+    import sentry_sdk
 
-    # Create mock sentry_sdk module
-    mock_event_scrubber_instance = MagicMock()
-    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
-
-    mock_scrubber_module = MagicMock()
-    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
-
-    mock_sentry_sdk = MagicMock()
-    mock_sentry_sdk.scrubber = mock_scrubber_module
     mock_init = MagicMock()
-    mock_sentry_sdk.init = mock_init
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
+    monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
 
-    # Inject mocks into sys.modules
-    sys.modules["sentry_sdk"] = mock_sentry_sdk
-    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
+    set_callbacks(["sentry"])
+    assert mock_init.call_args[1]["environment"] == "production"
 
-    try:
-        # Set a mock DSN to allow Sentry initialization
-        monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
-
-        # Test with default value (no environment set)
-        if existing_environment:
-            del os.environ["SENTRY_ENVIRONMENT"]
-
+    for environment in ("development", "staging"):
+        monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
         mock_init.reset_mock()
         set_callbacks(["sentry"])
-        # Check that init was called with default environment "production"
         mock_init.assert_called_once()
-        call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "production"
-
-        # Test with custom environment value
-        monkeypatch.setenv("SENTRY_ENVIRONMENT", "development")
-
-        mock_init.reset_mock()
-        set_callbacks(["sentry"])
-        # Check that init was called with custom environment "development"
-        mock_init.assert_called_once()
-        call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "development"
-
-        # Test with staging environment
-        monkeypatch.setenv("SENTRY_ENVIRONMENT", "staging")
-
-        mock_init.reset_mock()
-        set_callbacks(["sentry"])
-        # Check that init was called with custom environment "staging"
-        mock_init.assert_called_once()
-        call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "staging"
-
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
-    finally:
-        # Restore the original environment variables
-        if existing_environment:
-            monkeypatch.setenv("SENTRY_ENVIRONMENT", existing_environment)
-        else:
-            if "SENTRY_ENVIRONMENT" in os.environ:
-                del os.environ["SENTRY_ENVIRONMENT"]
-
-        if existing_dsn:
-            monkeypatch.setenv("SENTRY_DSN", existing_dsn)
-        else:
-            if "SENTRY_DSN" in os.environ:
-                del os.environ["SENTRY_DSN"]
-
-
+        assert mock_init.call_args[1]["environment"] == environment
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
@@ -3100,37 +3015,34 @@ def test_speech_call_is_still_priced_from_input_characters(call_type):
 
 
 def test_sentry_event_scrubber_initialization(monkeypatch):
-    # Step 1: Create a fake sentry_sdk.scrubber module
-    mock_event_scrubber_instance = MagicMock()
-    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
+    import sentry_sdk
 
-    mock_scrubber_module = MagicMock()
-    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
-
-    # Step 2: Create a fake sentry_sdk module and insert into sys.modules
-    mock_sentry_sdk = MagicMock()
-    mock_sentry_sdk.scrubber = mock_scrubber_module
     mock_init = MagicMock()
-    mock_sentry_sdk.init = mock_init
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.delenv("SENTRY_SEND_DEFAULT_PII", raising=False)
 
-    # Step 3: Inject both into sys.modules BEFORE import occurs
-    sys.modules["sentry_sdk"] = mock_sentry_sdk
-    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
-
-    # Step 4: Run the actual sentry setup code
     set_callbacks(["sentry"])
 
-    # Step 5: Assert the EventScrubber was constructed correctly
-    mock_event_scrubber_cls.assert_called_once_with(
-        denylist=SENTRY_DENYLIST,
-        pii_denylist=SENTRY_PII_DENYLIST,
-    )
-
-    # Step 6: Assert the event_scrubber and PII args were passed
     mock_init.assert_called_once()
     call_args = mock_init.call_args[1]
-    assert call_args["event_scrubber"] == mock_event_scrubber_instance
     assert call_args["send_default_pii"] is False
+    assert call_args["event_scrubber"].recursive is True
+    assert {name.lower() for name in SENTRY_PII_DENYLIST} <= {name.lower() for name in call_args["event_scrubber"].denylist}
+    assert call_args["before_send"] is call_args["before_send_transaction"]
+
+
+def test_sentry_send_default_pii_opt_in(monkeypatch):
+    import sentry_sdk
+
+    mock_init = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+
+    set_callbacks(["sentry"])
+
+    call_args = mock_init.call_args[1]
+    assert call_args["send_default_pii"] is True
+    assert not {name.lower() for name in SENTRY_PII_DENYLIST} & {name.lower() for name in call_args["event_scrubber"].denylist}
 
 
 def test_get_masked_values():
@@ -5394,6 +5306,19 @@ def test_handle_anthropic_messages_response_logging_passes_model_response_throug
     logging_obj = _anthropic_messages_logging_obj()
     model_response = ModelResponse()
     assert logging_obj._handle_anthropic_messages_response_logging(result=model_response) is model_response
+
+
+def test_anthropic_messages_logged_response_tolerates_a_stream_that_assembled_nothing():
+    """A /v1/messages stream whose upstream yielded no chunks assembles to None; the spend
+    row must still land under the message id the caller was served instead of crashing."""
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_streamed_anthropic_message_id("msg_served")
+
+    result = logging_obj._anthropic_messages_logged_response(result=None)
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_served"
+    assert result.model == "openai/my-local"
 
 
 def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_responses_payload():
@@ -7856,6 +7781,9 @@ _PUBLISHED_BATCH_RATES: Final = MappingProxyType(
         "output_cost_per_token_batches": 4.1e-6,
         "cache_read_input_token_cost_batches": 1.2e-7,
         "cache_creation_input_token_cost_batches": 1.3e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 2.1e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 5.1e-6,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 2.2e-7,
         "input_cost_per_token_above_272k_tokens_batches": 3.1e-6,
         "output_cost_per_token_above_272k_tokens_batches": 7.1e-6,
         "cache_read_input_token_cost_above_272k_tokens_batches": 3.2e-7,
@@ -7864,14 +7792,17 @@ _PUBLISHED_BATCH_RATES: Final = MappingProxyType(
 )
 _PUBLISHED_INPUT_BATCH_KEYS: Final = (
     "input_cost_per_token_batches",
+    "input_cost_per_token_above_200k_tokens_batches",
     "input_cost_per_token_above_272k_tokens_batches",
     "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_200k_tokens_batches",
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_creation_input_token_cost_batches",
     "cache_creation_input_token_cost_above_272k_tokens_batches",
 )
 _PUBLISHED_OUTPUT_BATCH_KEYS: Final = (
     "output_cost_per_token_batches",
+    "output_cost_per_token_above_200k_tokens_batches",
     "output_cost_per_token_above_272k_tokens_batches",
 )
 
@@ -7960,22 +7891,22 @@ def test_batch_cost_calculator_bills_the_carried_output_tier_when_the_deployment
     )
 
 
+@pytest.mark.parametrize(
+    "tier_key",
+    ["input_cost_per_token_above_200k_tokens_batches", "input_cost_per_token_above_272k_tokens_batches"],
+)
 def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_the_published_flat_rates(
-    _published_batch_model: None,
+    _published_batch_model: None, tier_key: str
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
 
-    info: Final = deployment_pricing_model_info(
-        _batch_deployment_id({"input_cost_per_token_above_272k_tokens_batches": 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT
-    )
+    info: Final = deployment_pricing_model_info(_batch_deployment_id({tier_key: 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT)
     carried_keys: Final = tuple(
-        key
-        for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS)
-        if key != "input_cost_per_token_above_272k_tokens_batches"
+        key for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS) if key != tier_key
     )
 
     assert info is not None
-    assert info["input_cost_per_token_above_272k_tokens_batches"] == 1e-3
+    assert info[tier_key] == 1e-3
     assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 

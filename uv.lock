@@ -4743,6 +4743,7 @@ proxy-dev = [
     { name = "opentelemetry-sdk" },
     { name = "prisma" },
     { name = "prometheus-client" },
+    { name = "sentry-sdk" },
 ]
 
 [package.metadata]
@@ -4956,6 +4957,7 @@ proxy-dev = [
     { name = "opentelemetry-sdk", specifier = "==1.33.1" },
     { name = "prisma", specifier = "==0.11.0" },
     { name = "prometheus-client", specifier = "==0.20.0" },
+    { name = "sentry-sdk", specifier = "==2.21.0" },
 ]
 
 [[package]]

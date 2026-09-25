@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -1166,6 +1167,29 @@ def test_resolve_llm_passthrough_timeout_precedence():
         {"pass_through_request_timeout": 6},
     ):
         assert resolve_llm_passthrough_timeout() == 6.0
+
+
+def test_resolve_llm_passthrough_timeout_honors_explicit_global_request_timeout(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.request_timeout", 44.0, raising=False)
+    monkeypatch.setattr("litellm.request_timeout_explicitly_set", True, raising=False)
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"pass_through_request_timeout": 6}):
+        assert resolve_llm_passthrough_timeout() == 44.0
+        assert resolve_llm_passthrough_timeout(kwargs={"stream": True}) == 44.0
+        assert resolve_llm_passthrough_timeout(router_timeout=120) == 120.0
+        assert resolve_llm_passthrough_timeout(kwargs={"stream": True}, router_stream_timeout=900) == 900.0
+        assert resolve_llm_passthrough_timeout(litellm_params={"timeout": 90}) == 90.0
+        assert resolve_llm_passthrough_timeout(kwargs={"timeout": 45}) == 45.0
+
+
+def test_resolve_llm_passthrough_timeout_skips_unset_global_request_timeout(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS), raising=False)
+    monkeypatch.setattr("litellm.request_timeout_explicitly_set", False, raising=False)
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"pass_through_request_timeout": 6}):
+        assert resolve_llm_passthrough_timeout() == 6.0
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert resolve_llm_passthrough_timeout() == DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS
 
 
 def test_resolve_llm_passthrough_timeout_stream_timeout_precedence():
