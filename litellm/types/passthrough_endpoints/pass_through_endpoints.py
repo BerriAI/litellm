@@ -32,6 +32,23 @@ class EndpointType(str, Enum):
     GENERIC = "generic"
 
 
+class PassThroughAuthMode(str, Enum):
+    PUBLIC = "public"
+    ANY_KEY = "any_key"
+    GRANTED_KEYS = "granted_keys"
+
+
+def pass_through_auth_mode(auth: object) -> PassThroughAuthMode:
+    normalized: Final = auth.strip().lower() if isinstance(auth, str) else auth
+    match normalized:
+        case True | "true":
+            return PassThroughAuthMode.GRANTED_KEYS
+        case False | "false":
+            return PassThroughAuthMode.PUBLIC
+        case _:
+            return PassThroughAuthMode.ANY_KEY
+
+
 class PassthroughStandardLoggingPayload(TypedDict, total=False):
     """
     Standard logging payload for all pass through endpoints

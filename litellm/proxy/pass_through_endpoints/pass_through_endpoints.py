@@ -114,7 +114,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
+    PassThroughAuthMode,
     PassthroughStandardLoggingPayload,
+    pass_through_auth_mode,
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
 
@@ -3260,18 +3262,12 @@ async def _register_pass_through_endpoint(
     forward_headers: Final = endpoint_data.get("forward_headers")
     merge_query_params: Final = endpoint_data.get("merge_query_params")
     default_query_params: Final = endpoint_data.get("default_query_params")
-    auth: Final[bool | str | None] = endpoint_data.get("auth")
-    dependencies = None
-    auth_enforced: Final = auth is not None and str(auth).lower() == "true"
+    auth_mode: Final = pass_through_auth_mode(endpoint_data.get("auth"))
+    auth_enforced: Final = auth_mode is PassThroughAuthMode.GRANTED_KEYS
+    dependencies: Final = [Depends(user_api_key_auth)] if auth_enforced else None
 
-    if auth_enforced:
-        # Authentication on a pass-through endpoint used to be enterprise-only.
-        # That left OSS with no safe configuration: auth=True raised at startup
-        # unless the operator had a license. The safe option must always be free,
-        # and unauthenticated forwarding should require explicit opt-in.
-        dependencies = [Depends(user_api_key_auth)]
-        if path not in LiteLLMRoutes.openai_routes.value:
-            LiteLLMRoutes.openai_routes.value.append(path)
+    if auth_mode is not PassThroughAuthMode.PUBLIC and path not in LiteLLMRoutes.openai_routes.value:
+        LiteLLMRoutes.openai_routes.value.append(path)
 
     if target is None:
         return
@@ -3305,10 +3301,9 @@ async def _register_pass_through_endpoint(
     visited_endpoints.add(f"{endpoint_id}:exact:{path}:{methods_str}")
 
     if endpoint_data.get("include_subpath", False) is True:
-        if auth is not None and str(auth).lower() == "true":
-            wildcard_path: Final = path.rstrip("/") + "/*"
-            if wildcard_path not in LiteLLMRoutes.openai_routes.value:
-                LiteLLMRoutes.openai_routes.value.append(wildcard_path)
+        wildcard_path: Final = path.rstrip("/") + "/*"
+        if auth_mode is not PassThroughAuthMode.PUBLIC and wildcard_path not in LiteLLMRoutes.openai_routes.value:
+            LiteLLMRoutes.openai_routes.value.append(wildcard_path)
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=app,
             path=path,
@@ -3457,6 +3452,9 @@ async def _get_pass_through_endpoints_from_db(
             field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
         )
     except Exception:
+        return []
+
+    if response.source == "config":
         return []
 
     pass_through_endpoint_data: Final = _config_field_endpoints(response)
