@@ -498,7 +498,6 @@ def ledger_gateway(monkeypatch: pytest.MonkeyPatch) -> _LedgerGateway:
             server_name="ledger",
             transport="http",
             url="https://ledger.example/mcp",
-            # a spec_path server runs its tools from the local tool registry instead of over the network
             spec_path="ledger.json",
             auth_type="none",
         )
@@ -649,7 +648,6 @@ def _serve(model: _FakeModel) -> None:
 def _mcp_router(num_retries: int, fallbacks: list[dict[str, list[str]]] | None = None) -> litellm.Router:
     deployment: Final = {"model": "openai/gpt-4.1-mini", "api_key": "sk-test", "api_base": _UPSTREAM}
     return litellm.Router(
-        # two replicas, so the router retries right away instead of backing off
         model_list=[
             {"model_name": "repro-model", "litellm_params": deployment},
             {"model_name": "repro-model", "litellm_params": deployment},

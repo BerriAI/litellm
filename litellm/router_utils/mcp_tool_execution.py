@@ -4,7 +4,6 @@ from typing import Final
 
 _MCP_TOOLS_EXECUTED_ATTR: Final = "_litellm_mcp_tools_executed"
 
-# Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
 _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
 
 
