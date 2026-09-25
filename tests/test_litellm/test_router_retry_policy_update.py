@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
@@ -201,6 +202,63 @@ def test_update_settings_replaces_toggleable_pre_call_checks():
     assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
     assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
     assert any(isinstance(callback, ModelRateLimitingCheck) for callback in (router.optional_callbacks or []))
+
+
+def test_update_settings_clears_omitted_encrypted_content_affinity_check():
+    router = _build_router()
+
+    router.update_settings(optional_pre_call_checks=["encrypted_content_affinity"])
+    router.update_settings(optional_pre_call_checks=[])
+
+    assert not any(
+        isinstance(callback, EncryptedContentAffinityCheck) for callback in (router.optional_callbacks or [])
+    )
+    assert not any(isinstance(callback, EncryptedContentAffinityCheck) for callback in litellm.callbacks)
+
+
+@pytest.mark.asyncio
+async def test_update_settings_turning_off_encrypted_content_affinity_stops_flagging_requests():
+    router = _build_router()
+
+    router.update_settings(optional_pre_call_checks=["encrypted_content_affinity"])
+    enabled_request: Final = {"litellm_metadata": {}, "input": "hello"}
+    await router.async_get_available_deployment(model="test-model", request_kwargs=enabled_request)
+    assert enabled_request["litellm_metadata"]["encrypted_content_affinity_enabled"] is True
+
+    router.update_settings(optional_pre_call_checks=[])
+    disabled_request: Final = {"litellm_metadata": {}, "input": "hello"}
+    await router.async_get_available_deployment(model="test-model", request_kwargs=disabled_request)
+    assert "encrypted_content_affinity_enabled" not in disabled_request["litellm_metadata"]
+
+    router.update_settings(optional_pre_call_checks=["encrypted_content_affinity"])
+    reenabled_request: Final = {"litellm_metadata": {}, "input": "hello"}
+    await router.async_get_available_deployment(model="test-model", request_kwargs=reenabled_request)
+    assert reenabled_request["litellm_metadata"]["encrypted_content_affinity_enabled"] is True
+
+
+def test_update_settings_keeps_per_group_encrypted_content_affinity_when_global_toggle_is_omitted():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "api_key": "sk-fake",
+                    "api_base": "http://localhost:9999",
+                },
+            }
+        ],
+        model_group_affinity_config={"test-model": ["encrypted_content_affinity"]},
+    )
+
+    router.update_settings(optional_pre_call_checks=["encrypted_content_affinity"])
+    router.update_settings(optional_pre_call_checks=[])
+
+    affinity_checks: Final = [
+        callback for callback in (router.optional_callbacks or []) if isinstance(callback, EncryptedContentAffinityCheck)
+    ]
+    assert len(affinity_checks) == 1
+    assert affinity_checks[0].enable_global_affinity is False
 
 
 @pytest.mark.asyncio
