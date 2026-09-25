@@ -2836,7 +2836,32 @@ async def _relay_passthrough_response_bytes(
         bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
 
-def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:
+def _get_proxy_router() -> litellm.Router | None:
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except (ImportError, AttributeError):
+        return None
+    else:
+        return llm_router
+
+
+def _extract_model_path_from_setup(setup_response: Mapping[str, object]) -> str | None:
+    if isinstance(setup_response, dict):
+        direct_model: Final = setup_response.get("model")
+        if isinstance(direct_model, str):
+            return direct_model
+        setup_obj: Final = setup_response.get("setup")
+        if isinstance(setup_obj, dict):
+            nested_model: Final = setup_obj.get("model")
+            if isinstance(nested_model, str):
+                return nested_model
+    return None
+
+
+def _extract_model_from_vertex_ai_setup(
+    setup_response: Mapping[str, object],
+    llm_router: litellm.Router | None = None,
+) -> str | None:
     """
     Extract the model name from Vertex AI Live setup response.
 
@@ -2847,22 +2872,26 @@ def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) ->
     We extract just the model name: "gemini-2.0-flash-live-preview-04-09"
     """
     try:
-        # Handle both direct model field and nested setup.model field
-        model_path = None
-        if isinstance(setup_response, dict):
-            if "model" in setup_response:
-                model_path = setup_response["model"]
-            elif (
-                "setup" in setup_response
-                and isinstance(setup_response["setup"], dict)
-                and "model" in setup_response["setup"]
-            ):
-                model_path = setup_response["setup"]["model"]
+        model_path: Final = _extract_model_path_from_setup(setup_response)
 
-        if isinstance(model_path, str) and "/models/" in model_path:
-            # Extract the model name after the last "/models/"
-            model_name: Final = model_path.split("/models/")[-1]
-            return model_name
+        if isinstance(model_path, str):
+            if "/models/" in model_path:
+                # Extract the model name after the last "/models/"
+                model_name: Final = model_path.split("/models/")[-1]
+                return model_name
+
+            active_router: Final[litellm.Router | None] = llm_router if llm_router is not None else _get_proxy_router()
+
+            if active_router is not None:
+                from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                    resolve_alias_to_upstream_model,
+                )
+
+                resolved: Final = resolve_alias_to_upstream_model(model_path, active_router)
+                if resolved != model_path:
+                    return resolved
+
+            return model_path.rsplit("/", 1)[-1]
     except Exception as e:
         verbose_proxy_logger.debug("Error extracting model from setup response: %s", e)
     return None

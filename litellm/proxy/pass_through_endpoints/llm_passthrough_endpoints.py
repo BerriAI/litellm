@@ -3574,7 +3574,7 @@ def _build_vertex_live_setup_model_rewriter(
     return rewrite
 
 
-def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
+def resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
     """
     The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
     """
@@ -3596,6 +3596,9 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None
     except litellm.exceptions.BadRequestError:
         return upstream
     return upstream.removeprefix(f"{provider}/")
+
+
+_resolve_alias_to_upstream_model: Final = resolve_alias_to_upstream_model
 
 
 async def vertex_ai_live_websocket_passthrough(
