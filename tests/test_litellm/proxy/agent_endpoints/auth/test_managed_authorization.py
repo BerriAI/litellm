@@ -271,6 +271,16 @@ async def test_invocation_cannot_bypass_missing_policy_permission_or_invalid_pri
     assert auth.agent_invocation_cost is None
 
 
+def test_native_directory_agent_cannot_authenticate_with_a_virtual_key() -> None:
+    policy: Final = agent(
+        identity=BINDING.model_copy(update={"provisioning_source_id": "source"}), execution_mode="autonomous"
+    )
+    failure: Final = actor_admission_failure(policy, None)
+    assert isinstance(failure, AgentIdentityFailure)
+    assert failure.code == "identity_denied"
+    assert "bound identity provider token" in failure.message
+
+
 @pytest.mark.asyncio
 async def test_legacy_jwt_cannot_adopt_an_agent_bound_on_another_worker() -> None:
     database: Final = MagicMock()

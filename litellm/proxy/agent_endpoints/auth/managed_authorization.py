@@ -170,7 +170,13 @@ def actor_admission_failure(
     agent: AgentResponse,
     context: ManagedAgentContext | None,
 ) -> AgentIdentityFailure | None:
-    if not agent.enabled or agent.identity is None or not agent.identity.active:
+    if (
+        not agent.enabled
+        or not agent.directory_active
+        or agent.directory_access_group_ids == ()
+        or agent.identity is None
+        or not agent.identity.active
+    ):
         return AgentIdentityFailure(message="Agent execution is disabled")
     if context is None:
         return AgentIdentityFailure(message="This agent requires its bound identity provider token")

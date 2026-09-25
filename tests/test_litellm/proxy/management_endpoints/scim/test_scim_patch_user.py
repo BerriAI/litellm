@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LiteLLM_UserTable
-from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, patch_user
+from litellm.proxy.management_endpoints.scim.scim_v2 import apply_scim_user_patch, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMPatchOp,
     SCIMPatchOperation,
@@ -342,7 +342,7 @@ def _user_with_metadata(metadata):
     )
 
 
-def test_apply_patch_ops_replace_entitlements_writes_canonical_key():
+def testapply_scim_user_patch_replace_entitlements_writes_canonical_key():
     """A PATCH on path=entitlements must persist under scim_entitlements, not
     fall through to the generic handler's raw path key"""
     patch_ops = SCIMPatchOp(
@@ -355,7 +355,7 @@ def test_apply_patch_ops_replace_entitlements_writes_canonical_key():
         ]
     )
 
-    update_data, _ = _apply_patch_ops(
+    update_data, _ = apply_scim_user_patch(
         existing_user=_user_with_metadata({}), patch_ops=patch_ops
     )
 
@@ -366,14 +366,14 @@ def test_apply_patch_ops_replace_entitlements_writes_canonical_key():
     assert "entitlements" not in metadata
 
 
-def test_apply_patch_ops_add_roles_appends_to_existing():
+def testapply_scim_user_patch_add_roles_appends_to_existing():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(op="add", path="roles", value=[{"value": "admin"}])
         ]
     )
 
-    update_data, _ = _apply_patch_ops(
+    update_data, _ = apply_scim_user_patch(
         existing_user=_user_with_metadata({"scim_roles": [{"value": "viewer"}]}),
         patch_ops=patch_ops,
     )
@@ -384,12 +384,12 @@ def test_apply_patch_ops_add_roles_appends_to_existing():
     ]
 
 
-def test_apply_patch_ops_remove_entitlements_clears_canonical_key():
+def testapply_scim_user_patch_remove_entitlements_clears_canonical_key():
     patch_ops = SCIMPatchOp(
         Operations=[SCIMPatchOperation(op="remove", path="entitlements")]
     )
 
-    update_data, _ = _apply_patch_ops(
+    update_data, _ = apply_scim_user_patch(
         existing_user=_user_with_metadata(
             {"scim_entitlements": [{"value": "jira-software"}]}
         ),
@@ -399,7 +399,7 @@ def test_apply_patch_ops_remove_entitlements_clears_canonical_key():
     assert "scim_entitlements" not in update_data["metadata"]
 
 
-def test_apply_patch_ops_pathless_value_dict_handles_roles():
+def testapply_scim_user_patch_pathless_value_dict_handles_roles():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(
@@ -409,7 +409,7 @@ def test_apply_patch_ops_pathless_value_dict_handles_roles():
         ]
     )
 
-    update_data, _ = _apply_patch_ops(
+    update_data, _ = apply_scim_user_patch(
         existing_user=_user_with_metadata({}), patch_ops=patch_ops
     )
 
@@ -418,7 +418,7 @@ def test_apply_patch_ops_pathless_value_dict_handles_roles():
     ]
 
 
-def test_apply_patch_ops_invalid_entitlements_value_raises_400():
+def testapply_scim_user_patch_invalid_entitlements_value_raises_400():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(
@@ -428,12 +428,12 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+        apply_scim_user_patch(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
 
 
-def test_apply_patch_ops_replace_entitlements_without_value_member_is_stored_as_sent():
+def testapply_scim_user_patch_replace_entitlements_without_value_member_is_stored_as_sent():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(
@@ -442,26 +442,26 @@ def test_apply_patch_ops_replace_entitlements_without_value_member_is_stored_as_
         ]
     )
 
-    update_data, _ = _apply_patch_ops(
+    update_data, _ = apply_scim_user_patch(
         existing_user=_user_with_metadata({}), patch_ops=patch_ops
     )
 
     assert update_data["metadata"]["scim_entitlements"] == [{"groups": ["S0506MKA55L"]}]
 
 
-def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
+def testapply_scim_user_patch_add_without_value_raises_400_naming_value_member():
     patch_ops = SCIMPatchOp(
         Operations=[SCIMPatchOperation(op="add", path="entitlements")]
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+        apply_scim_user_patch(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
     assert "value" in str(exc_info.value.detail)
 
 
-def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
+def testapply_scim_user_patch_filtered_path_raises_400_instead_of_junk_metadata():
     """A filtered path must fail loudly rather than fall through to the generic
     handler, which would write a junk metadata key while reporting success"""
     patch_ops = SCIMPatchOp(
@@ -473,7 +473,7 @@ def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        _apply_patch_ops(
+        apply_scim_user_patch(
             existing_user=_user_with_metadata(
                 {"scim_roles": [{"value": "engineering-admin"}]}
             ),
@@ -483,7 +483,7 @@ def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
     assert exc_info.value.status_code == 400
 
 
-def test_apply_patch_ops_remove_group_filtered_path_without_value():
+def testapply_scim_user_patch_remove_group_filtered_path_without_value():
     """Okta removes a user from a team with groups[value eq "..."] and no body
     value; the team id must be parsed from the filter so the remove takes effect"""
     user = LiteLLM_UserTable(
@@ -496,12 +496,12 @@ def test_apply_patch_ops_remove_group_filtered_path_without_value():
         Operations=[SCIMPatchOperation(op="remove", path='groups[value eq "team-1"]')]
     )
 
-    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+    _, final_team_set = apply_scim_user_patch(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == {"team-2"}
 
 
-def test_apply_patch_ops_add_group_filtered_path_without_value():
+def testapply_scim_user_patch_add_group_filtered_path_without_value():
     """A filtered add path with no body value adds the team id from the filter."""
     user = LiteLLM_UserTable(
         user_id="user-fp",
@@ -513,12 +513,12 @@ def test_apply_patch_ops_add_group_filtered_path_without_value():
         Operations=[SCIMPatchOperation(op="add", path="groups[value eq 'team-3']")]
     )
 
-    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+    _, final_team_set = apply_scim_user_patch(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == {"team-1", "team-3"}
 
 
-def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
+def testapply_scim_user_patch_replace_groups_empty_value_does_not_use_path_filter():
     """A filtered replace with an explicit empty value must not resurrect the
     filter id; the team set is replaced with the empty value as given."""
     user = LiteLLM_UserTable(
@@ -533,6 +533,6 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
         ]
     )
 
-    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+    _, final_team_set = apply_scim_user_patch(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == set()

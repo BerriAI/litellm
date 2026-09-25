@@ -1,5 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
@@ -8,6 +10,8 @@ from litellm.repositories.table_repositories import (
     AgentsRepository,
     RetiredAgentIdentityRepository,
     RetiredAgentRepository,
+    SCIMResourceRepository,
+    SCIMSourceRepository,
     VerifiedSubjectRepository,
 )
 from litellm.types.agents import AgentResponse
@@ -15,6 +19,7 @@ from litellm.types.proxy.agent_identity import (
     AgentIdentityFailure,
     ManagedAgentContext,
     MicrosoftInteractiveSubject,
+    VerifiedAgentSubject,
     VerifiedHumanSubject,
 )
 
@@ -40,6 +45,8 @@ class AgentIdentityStore:
             AgentIdentityRepository(client, use_writer=True),
             VerifiedSubjectRepository(client, use_writer=True),
             RetiredAgentIdentityRepository(client, use_writer=True),
+            SCIMSourceRepository(client, use_writer=True),
+            SCIMResourceRepository(client, use_writer=True),
             RetiredAgentRepository(client, use_writer=True),
         )
 
@@ -49,12 +56,16 @@ class AgentIdentityStore:
         identities: AgentIdentityRepository,
         humans: VerifiedSubjectRepository,
         retired: RetiredAgentIdentityRepository | None = None,
+        sources: SCIMSourceRepository | None = None,
+        resources: SCIMResourceRepository | None = None,
         retired_agents: RetiredAgentRepository | None = None,
     ) -> None:
         self.agents = agents
         self.identities = identities
         self.humans = humans
         self.retired = retired
+        self.sources = sources
+        self.resources = resources
         self.retired_agents = retired_agents
 
     async def agent(self, agent_id: str) -> AgentResponse | AgentIdentityFailure | None:
@@ -67,7 +78,10 @@ class AgentIdentityStore:
             row: Final = await self.agents.table.find_unique(where=where, include=include)
             if row is None:
                 return None
-            return AgentResponse.model_validate(row.model_dump())
+            agent: Final = AgentResponse.model_validate(row.model_dump())
+            if agent.identity is None or agent.identity.provisioning_source_id is None:
+                return agent
+            return await self.directory_policy(agent)
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent policy could not be loaded")
 
@@ -101,6 +115,12 @@ class AgentIdentityStore:
         proven: Final = await self.subject(issuer, tenant, claims.get("oid"))
         if isinstance(proven, AgentIdentityFailure):
             return proven
+        if (
+            proven is not None
+            and proven.kind == "agent_user"
+            and (row is None or proven.agent_id != row.agent_id or proven.parent_client_id != client)
+        ):
+            return AgentIdentityFailure(message="Provisioned subject does not match an active agent binding")
         if row is None:
             return await self.unbound_client(where)
         agent: Final = await self.agent(row.agent_id)
@@ -114,10 +134,21 @@ class AgentIdentityStore:
             or not agent.identity.active
         ):
             return AgentIdentityFailure(message="Agent is disabled or no longer bound to an identity")
-        subject: Final = classify_agent_subject(agent.identity, claims, agent.execution_mode)
+        native: Final = (
+            VerifiedAgentSubject.model_validate(proven.model_dump())
+            if proven is not None and proven.kind == "agent_user" and proven.agent_id is not None
+            else None
+        )
+        if native is not None and (
+            agent.identity.provisioning_source_id is None
+            or not agent.directory_active
+            or agent.directory_access_group_ids == ()
+        ):
+            return AgentIdentityFailure(message="Provisioned agent is inactive or has no mapped directory entitlement")
+        subject: Final = classify_agent_subject(agent.identity, claims, agent.execution_mode, native_subject=native)
         if isinstance(subject, AgentIdentityFailure):
             return subject
-        if subject.kind == "application":
+        if subject.kind in ("application", "agent_user"):
             return ManagedAgentContext(
                 agent_id=agent.agent_id,
                 binding_revision=agent.identity.revision,
@@ -154,6 +185,68 @@ class AgentIdentityStore:
             return await self.humans.table.find_unique(where=where)
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Subject classification is unavailable")
+
+    async def directory_policy(self, agent: AgentResponse) -> AgentResponse | AgentIdentityFailure:
+        from pydantic import TypeAdapter
+
+        from litellm.types.proxy.management_endpoints.scim_agent_provisioning import (
+            SCIMGroupMapping,
+            canonical_directory_id,
+        )
+
+        if self.sources is None or self.resources is None or agent.identity is None:
+            return AgentIdentityFailure(code="policy_unavailable", message="Provisioning state is unavailable")
+        from prisma.types import LiteLLM_SCIMResourceWhereInput, LiteLLM_SCIMSourceWhereUniqueInput
+
+        source_where: Final[LiteLLM_SCIMSourceWhereUniqueInput] = {"source_id": agent.identity.provisioning_source_id}
+        resource_where: Final[LiteLLM_SCIMResourceWhereInput] = {
+            "source_id": agent.identity.provisioning_source_id,
+            "kind": "Users",
+            "local_id": agent.agent_id,
+        }
+        source: Final = await self.sources.table.find_unique(where=source_where)
+        subjects: Final = await self.resources.table.find_many(where=resource_where)
+        live: Final = tuple(subject for subject in subjects if subject.active and not subject.deleted)
+        if source is None or not source.enabled or len(live) != 1:
+            return agent.model_copy(
+                update=MappingProxyType({"directory_active": False, "directory_access_group_ids": ()})
+            )
+        from litellm.proxy.management_endpoints.scim.agent_provisioning import user_document
+
+        directory_user: Final = user_document(live[0])
+        if (
+            source.tenant_id != agent.identity.tenant_id
+            or directory_user.agent_user is None
+            or str(directory_user.agent_user.identityParentId) != agent.identity.client_id
+        ):
+            return AgentIdentityFailure(message="Directory identity does not match the registered binding")
+        proven: Final = await self.subject(agent.identity.issuer, source.tenant_id, live[0].external_id)
+        if isinstance(proven, AgentIdentityFailure):
+            return proven
+        if (
+            proven is None
+            or proven.kind != "agent_user"
+            or proven.verified_via != "scim"
+            or proven.agent_id != agent.agent_id
+            or proven.parent_client_id != agent.identity.client_id
+            or proven.scim_resource_id != live[0].id
+        ):
+            return AgentIdentityFailure(message="Directory subject does not match the provisioned resource")
+        groups_where: Final[LiteLLM_SCIMResourceWhereInput] = {
+            "source_id": source.source_id,
+            "kind": "Groups",
+            "deleted": False,
+            "active": True,
+            "member_ids": {"has": live[0].id},
+        }
+        groups: Final = await self.resources.table.find_many(where=groups_where)
+        mappings: Final = TypeAdapter(tuple[SCIMGroupMapping, ...]).validate_python(source.group_mappings)
+        external_ids: Final = frozenset(canonical_directory_id(group.external_id) for group in groups)
+        mapped: Final = tuple(
+            mapping.access_group_ids for mapping in mappings if str(mapping.external_group_id) in external_ids
+        )
+        ids: Final = tuple(sorted(frozenset(chain.from_iterable(mapped))))
+        return agent.model_copy(update=MappingProxyType({"directory_active": True, "directory_access_group_ids": ids}))
 
     async def retired_agent(self, agent_id: str) -> bool | AgentIdentityFailure:
         if self.retired_agents is None:

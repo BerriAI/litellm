@@ -471,6 +471,17 @@ async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> t
     return tuple(user_row.teams) if user_row is not None else ()
 
 
+async def check_user_license_capacity(prisma_client: "PrismaClient") -> None:
+    from litellm.proxy.proxy_server import _license_check
+
+    billable_users: Final = await UserRepository(prisma_client).count_billable_users()
+    if billable_users and _license_check.is_over_limit(total_users=billable_users):
+        raise HTTPException(
+            status_code=403,
+            detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+        )
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -547,7 +558,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -563,13 +574,7 @@ async def new_user(
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
-        # Check if license is over limit
-        billable_users: Final = await UserRepository(prisma_client).count_billable_users()
-        if billable_users and _license_check.is_over_limit(total_users=billable_users):
-            raise HTTPException(
-                status_code=403,
-                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
-            )
+        await check_user_license_capacity(prisma_client)
 
         # Only proxy admins can create administrative users
         # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
