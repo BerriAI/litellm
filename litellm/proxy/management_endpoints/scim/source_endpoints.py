@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from prisma import Json
-from prisma.types import LiteLLM_SCIMSourceCreateInput
+from prisma.types import LiteLLM_AccessGroupTableWhereInput, LiteLLM_SCIMSourceCreateInput
 from pydantic import BaseModel
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, hash_token
@@ -71,7 +71,8 @@ async def create_source(
         group_ids: Final = tuple(
             frozenset(chain.from_iterable(mapping.access_group_ids for mapping in data.group_mappings))
         )
-        groups: Final = await tx.litellm_accessgrouptable.find_many(where={"access_group_id": {"in": list(group_ids)}})
+        group_filter: Final[LiteLLM_AccessGroupTableWhereInput] = {"access_group_id": {"in": list(group_ids)}}
+        groups: Final = await tx.litellm_accessgrouptable.find_many(where=group_filter)
         if frozenset(group.access_group_id for group in groups) != frozenset(group_ids):
             raise HTTPException(400, "A mapped access group does not exist")
         create_data: Final[LiteLLM_SCIMSourceCreateInput] = LiteLLM_SCIMSourceCreateInput(
@@ -101,7 +102,8 @@ async def update_source(
         group_ids: Final = tuple(
             frozenset(chain.from_iterable(mapping.access_group_ids for mapping in data.group_mappings))
         )
-        groups: Final = await tx.litellm_accessgrouptable.find_many(where={"access_group_id": {"in": list(group_ids)}})
+        group_filter: Final[LiteLLM_AccessGroupTableWhereInput] = {"access_group_id": {"in": list(group_ids)}}
+        groups: Final = await tx.litellm_accessgrouptable.find_many(where=group_filter)
         if frozenset(group.access_group_id for group in groups) != frozenset(group_ids):
             raise HTTPException(400, "A mapped access group does not exist")
         updated: Final = await tx.litellm_scimsource.update(

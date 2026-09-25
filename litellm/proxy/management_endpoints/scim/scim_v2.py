@@ -22,6 +22,7 @@ from fastapi import (
     Request,
     Response,
 )
+from prisma.types import LiteLLM_SCIMResourceWhereInput
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -462,12 +463,12 @@ async def _source_owned_ids(
 ) -> frozenset[str]:
     if not local_ids:
         return frozenset()
-    resources: Final = await SCIMResourceRepository(prisma_client, use_writer=True).table.find_many(
-        where={"kind": kind, "OR": [{"id": {"in": list(local_ids)}}, {"local_id": {"in": list(local_ids)}}]}
-    )
-    return frozenset(
-        identifier for resource in resources for identifier in (resource.id, resource.local_id) if identifier
-    )
+    where: Final[LiteLLM_SCIMResourceWhereInput] = {
+        "kind": kind,
+        "OR": [{"id": {"in": list(local_ids)}}, {"local_id": {"in": list(local_ids)}}],
+    }
+    resources: Final = await SCIMResourceRepository(prisma_client, use_writer=True).table.find_many(where=where)
+    return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
 
 
 async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list[str]) -> list[SCIMUserGroup]:

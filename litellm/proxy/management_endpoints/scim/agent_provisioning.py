@@ -231,7 +231,7 @@ def patch_changes_identity(patch: SCIMPatchOp) -> bool:
 
 
 class AgentProvisioningService:
-    def __init__(self, client: PrismaClient, source: LiteLLM_SCIMSource):
+    def __init__(self, client: PrismaClient, source: LiteLLM_SCIMSource) -> None:
         self.client = client
         self.source = source
 

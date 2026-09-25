@@ -2689,7 +2689,8 @@ async def test_update_user_demotes_when_default_params_lack_user_role(mocker, mo
 
 
 @pytest.mark.asyncio
-async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocker, monkeypatch):
+@pytest.mark.parametrize("source_owned", [False, True])
+async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocker, monkeypatch, source_owned: bool):
     """PATCH that drops the admin team from the resulting team set must write the
     non-admin default, mirroring the PUT demotion path."""
     from litellm.proxy.proxy_server import proxy_config
@@ -2721,6 +2722,10 @@ async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocke
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
+    mock_prisma_client.db.litellm_scimresource.find_many = AsyncMock(
+        return_value=[mocker.MagicMock(id="source-user", local_id="demote-me")] if source_owned else []
+    )
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
@@ -2751,11 +2756,15 @@ async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocke
     await patch_user(user_id="demote-me", patch_ops=patch_ops)
 
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
-    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    if source_owned:
+        assert "user_role" not in call_args[1]["data"]
+    else:
+        assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
 @pytest.mark.asyncio
-async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch):
+@pytest.mark.parametrize("source_owned", [False, True])
+async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch, source_owned: bool):
     """PATCH carries groups as team ids, so admin-group matching must fall back to
     each team's display name; an admin group configured as a human-readable alias
     grants PROXY_ADMIN even when the team id differs."""
@@ -2788,6 +2797,10 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
+    mock_prisma_client.db.litellm_scimresource.find_many = AsyncMock(
+        return_value=[mocker.MagicMock(id="source-user", local_id="promote-me")] if source_owned else []
+    )
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
@@ -2818,7 +2831,10 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
     await patch_user(user_id="promote-me", patch_ops=patch_ops)
 
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
-    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
+    if source_owned:
+        assert "user_role" not in call_args[1]["data"]
+    else:
+        assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
 
 
 def _scim_admin_prisma(mocker, *, user_teams):
