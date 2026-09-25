@@ -11968,6 +11968,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_create_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12024,6 +12027,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_create_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12083,6 +12089,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_list_skills_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12130,6 +12139,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_list_skills_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12186,6 +12198,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_get_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12231,6 +12246,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_get_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12287,6 +12305,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_delete_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12332,6 +12353,9 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        # Raise on upstream HTTP errors (auth, rate-limit, etc.) before transform
+        # parses the error body as a success payload and raises ValidationError. (#31587)
+        response.raise_for_status()
         return skills_api_provider_config.transform_delete_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
