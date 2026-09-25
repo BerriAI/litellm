@@ -843,7 +843,7 @@ def create_anthropic_image_param(
     if image_url.startswith("http://") or image_url.startswith("https://"):
         # For Bedrock invoke and Vertex AI Anthropic, always convert URLs to base64
         # as these providers don't support URL sources for images
-        if is_bedrock_invoke or image_url.startswith("http://"):
+        if is_bedrock_invoke:
             base64_url: Final = convert_url_to_base64(url=image_url)
             image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
             return AnthropicMessagesImageParam(

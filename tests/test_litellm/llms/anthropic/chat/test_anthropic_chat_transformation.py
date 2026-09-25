@@ -17,6 +17,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -6519,3 +6520,17 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
 
     assert result["tools"][0]["eager_input_streaming"] is True
     assert result["tools"][0]["name"] == "write_file"
+
+
+@pytest.mark.parametrize(
+    "url", ["http://example.com/image.png", "https://example.com/image.png"]
+)
+def test_inlines_remote_media_never_inlines_image_urls(url: str):
+    """Regular Anthropic forwards remote image URLs as url sources, so the async
+    request path must not download and inline them.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/43098.
+    """
+    media = RemoteMedia(url=url, fields={}, part_type="image_url")
+
+    assert AnthropicConfig().inlines_remote_media(media) is False
