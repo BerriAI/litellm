@@ -360,13 +360,14 @@ export default function KeyInfoView({
         formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
       }
 
-      const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey({
+      const memberKeyEditContext = {
         userRole: userRole || "",
         userId: userID || "",
         keyUserId: currentKeyData.user_id,
         keyTeamId: currentKeyData.team_id,
         teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
-      });
+      };
+      const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
       if (editingMemberKeyAsTeamAdmin) {
         const trimmed = teamAdminMemberKeyPayload(formValues, dirtyFields);
         if (trimmed.kind === "blocked") {
