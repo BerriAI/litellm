@@ -87,15 +87,11 @@ def _json_value(value: object) -> JsonValue:
             raise ValueError("Live JSON nesting exceeds the supported depth")
         converted: JsonValue
         if isinstance(source, Mapping):
-            entries: Mapping[str, object] = _MAPPING.validate_python(
-                source
-            )
+            entries: Mapping[str, object] = _MAPPING.validate_python(source)
             converted = {name: None for name in entries}  # mutable-ok: JSON wire objects require dicts
             pending.extend((item, converted, name, depth + 1) for name, item in entries.items())
         elif isinstance(source, (tuple, list)):
-            items: tuple[object, ...] = TypeAdapter(tuple[object, ...]).validate_python(
-                source
-            )
+            items: tuple[object, ...] = TypeAdapter(tuple[object, ...]).validate_python(source)
             array: list[JsonValue] = [None] * len(items)
             pending.extend((item, array, index, depth + 1) for index, item in enumerate(items))
             converted = array
@@ -592,9 +588,7 @@ def _managed_constraints(auth: UserAPIKeyAuth) -> bool:
         if len(visited) > 4096:
             return True
         if isinstance(current, Mapping):
-            entries: Mapping[str, object] = _MAPPING.validate_python(
-                current
-            )
+            entries: Mapping[str, object] = _MAPPING.validate_python(current)
             for key, item in entries.items():
                 if key in (
                     "rpm_limit",
@@ -1409,9 +1403,7 @@ async def _wait_started(
 ) -> Mapping[str, JsonValue]:
     async def receive_started() -> Mapping[str, JsonValue]:
         while True:
-            event: Mapping[str, JsonValue] = _OBJECT.validate_json(
-                await connection.recv()
-            )
+            event: Mapping[str, JsonValue] = _OBJECT.validate_json(await connection.recv())
             if event.get("type") == "session.started":
                 return event
             if startup is not None:

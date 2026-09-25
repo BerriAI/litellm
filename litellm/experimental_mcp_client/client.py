@@ -869,6 +869,7 @@ class MCPClient:
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
                 progress_callback=on_progress,
+                allow_input_required=False,
             )
 
         try:

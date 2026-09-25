@@ -1736,9 +1736,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 acquire_args: list[object] = []  # mutable-ok: Redis EVAL args are flattened per slot below
                 for key in keys:
                     acquire_args.extend((by_key[key]["limit"], PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id))
-                (raw,) = (
-                    await self.parallel_acquire_script(keys=keys, args=tuple(acquire_args)),
-                )
+                (raw,) = (await self.parallel_acquire_script(keys=keys, args=tuple(acquire_args)),)
                 if int(raw[0]) == 1:
                     await self._rollback_cluster_parallel_slots(tuple(attempted), slot_id, parent_otel_span)
                     return RateLimitResponse(
