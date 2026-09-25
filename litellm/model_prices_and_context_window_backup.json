@@ -56215,6 +56215,7 @@
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 7.5e-07,
         "input_cost_per_video_per_second": 3.3333333333333335e-05,
+        "input_cost_per_video_token": 1e-06,
         "litellm_provider": "gemini",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
