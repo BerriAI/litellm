@@ -258,9 +258,6 @@ class CustomStreamWrapper:
             "api_base": _api_base,
         }  # returned as x-litellm-model-id response header in proxy
 
-        if hasattr(logging_obj, "optional_params") and isinstance(logging_obj.optional_params, dict):
-            self._hidden_params["optional_params"] = logging_obj.optional_params
-
         self._hidden_params["additional_headers"] = process_response_headers(
             _response_headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE

@@ -1439,37 +1439,6 @@ class TestSailCallerWindowOnMergeExtraBody:
 
 
 class TestSailStreamingRebuildCost:
-    @staticmethod
-    def _expected_cost(suffix: str, prompt_tokens: int = 2, completion_tokens: int = 2) -> float:
-        rates = litellm.model_cost[MODEL]
-        return (
-            prompt_tokens * rates[f"input_cost_per_token{suffix}"]
-            + completion_tokens * rates[f"output_cost_per_token{suffix}"]
-        )
-
-    @pytest.mark.respx()
-    def test_stream_chunk_builder_bills_by_wire_window(self, respx_mock: respx.Router):
-        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(
-            content=_chat_completion_stream_with_usage(),
-            headers={"content-type": "text/event-stream"},
-        )
-
-        response = litellm.completion(
-            model=MODEL,
-            messages=_MESSAGES,
-            stream=True,
-            stream_options={"include_usage": True},
-            service_tier="flex",
-        )
-        chunks = list(response)
-
-        rebuilt = litellm.stream_chunk_builder(chunks)
-        rebuilt_cost = litellm.completion_cost(completion_response=rebuilt, model=MODEL)
-        assert rebuilt_cost == pytest.approx(self._expected_cost("_flex"))
-        assert rebuilt_cost != pytest.approx(self._expected_cost(""))
-        logged_cost = rebuilt._hidden_params.get("response_cost") or chunks[-1]._hidden_params.get("response_cost")
-        assert rebuilt_cost == pytest.approx(logged_cost)
-
     @pytest.mark.respx()
     def test_stream_chunk_builder_openai_cost_unchanged(self, respx_mock: respx.Router):
         respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
