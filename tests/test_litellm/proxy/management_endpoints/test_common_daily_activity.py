@@ -3319,3 +3319,86 @@ async def test_model_top_api_keys_maps_rows_in_sql_order_with_key_metadata():
     assert first.spend == 50.0
     assert first.api_requests == 5
     assert first.total_tokens == 750
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_resolves_entity_metadata_for_breakdown():
+    """resolve_entity_metadata labels breakdown.entities from the rollup ids.
+
+    The aggregated route returns entity ids the caller knows how to label
+    (user_id -> user_email) only after the rollup query runs, so the resolver
+    receives the ids actually present and its mapping lands on the entity
+    metadata the dashboard renders as Spend Per User.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    base = {
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "endpoint": None,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
+        "failed_requests": 0,
+    }
+    grouping_rows = [
+        {
+            **base,
+            "date": "2024-01-01",
+            "api_key": None,
+            "group_level": 63,
+            "distinct_api_keys": 1,
+            "spend": 10.0,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "api_requests": 1,
+            "successful_requests": 1,
+        },
+    ]
+    entity_rows = [
+        {
+            **base,
+            "date": "2024-01-01",
+            "entity_id": "u1",
+            "api_key": None,
+            "api_key_rolled": 1,
+            "spend": 10.0,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "api_requests": 1,
+            "successful_requests": 1,
+        },
+    ]
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[grouping_rows, entity_rows])
+
+    seen_ids = {}
+
+    async def resolver(user_ids):
+        seen_ids["ids"] = user_ids
+        return {"u1": {"user_email": "u1@example.com"}}
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        include_entity_breakdown=True,
+        resolve_entity_metadata=resolver,
+    )
+
+    assert seen_ids["ids"] == frozenset({"u1"})
+    assert result.results[0].breakdown.entities["u1"].metadata["user_email"] == "u1@example.com"

@@ -1923,11 +1923,14 @@ async def get_daily_activity_aggregated(
     timezone_offset_minutes: int | None = None,
     include_entity_breakdown: bool = False,
     include_current_utc_day: bool = False,
+    resolve_entity_metadata: Callable[[frozenset[str]], Awaitable[Mapping[str, dict[str, object]]]] | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
+
+    resolve_entity_metadata maps the entity ids found in that rollup to metadata.
 
     Matches the response model of the paginated endpoint so the UI does not need to transform.
     """
@@ -1989,12 +1992,22 @@ async def get_daily_activity_aggregated(
                 if entity_api_keys
                 else {}  # mutable-ok: matches the helper's dict return
             )
+            merged_entity_metadata: Final[Mapping[str, dict[str, object]] | None] = (
+                {
+                    **(entity_metadata_field or {}),
+                    **dict(
+                        await resolve_entity_metadata(frozenset(r.entity_id for r in entity_records if r.entity_id))
+                    ),
+                }
+                if resolve_entity_metadata is not None
+                else entity_metadata_field
+            )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,
                 results=aggregated["results"],
                 entity_rows=entity_records,
                 api_key_metadata=entity_key_metadata,
-                entity_metadata_field=entity_metadata_field,
+                entity_metadata_field=merged_entity_metadata,
             )
 
         return SpendAnalyticsPaginatedResponse(

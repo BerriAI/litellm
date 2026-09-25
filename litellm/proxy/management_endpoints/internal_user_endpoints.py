@@ -2878,18 +2878,24 @@ async def ui_view_users(
 # Using shared metric helper implementations from common_daily_activity
 
 
+async def _resolve_user_email_metadata_by_ids(
+    prisma_client: "PrismaClient", user_ids: frozenset[str]
+) -> dict[str, dict]:
+    if not user_ids:
+        return {}
+    users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
+    return {user.user_id: {"user_email": user.user_email, "user_alias": user.user_alias} for user in users}
+
+
 async def _resolve_user_email_metadata(
     prisma_client: "PrismaClient", records: Sequence[DailySpendRecord]
 ) -> dict[str, dict]:
     """Map each user_id on the page to its email/alias so the Usage dashboard can
     label the 'Spend Per User' chart with the email instead of the raw UUID."""
-    user_ids: Final = {
+    user_ids: Final = frozenset(
         user_id for record in records if isinstance(user_id := getattr(record, "user_id", None), str) and user_id
-    }
-    if not user_ids:
-        return {}
-    users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
-    return {user.user_id: {"user_email": user.user_email, "user_alias": user.user_alias} for user in users}
+    )
+    return await _resolve_user_email_metadata_by_ids(prisma_client, user_ids)
 
 
 @router.get(
@@ -3115,6 +3121,8 @@ async def get_user_daily_activity_aggregated(
             api_key=api_key,
             timezone_offset_minutes=timezone,
             include_current_utc_day=include_current_utc_day,
+            include_entity_breakdown=True,
+            resolve_entity_metadata=lambda user_ids: _resolve_user_email_metadata_by_ids(prisma_client, user_ids),
         )
 
     except HTTPException:
