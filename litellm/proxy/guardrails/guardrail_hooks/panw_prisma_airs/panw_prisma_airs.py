@@ -216,11 +216,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
 
     # MCP event → base-call compatibility map.
-    # Allows guardrails configured with mode: pre_call / during_call to
-    # automatically run on MCP tool invocations (pre_mcp_call / during_mcp_call).
+    # Allows guardrails configured with mode: pre_call / during_call / post_call to
+    # automatically run on MCP tool invocations (pre_mcp_call / during_mcp_call / post_mcp_call).
     _MCP_COMPAT_MAP = {
         GuardrailEventHooks.pre_mcp_call: GuardrailEventHooks.pre_call,
         GuardrailEventHooks.during_mcp_call: GuardrailEventHooks.during_call,
+        GuardrailEventHooks.post_mcp_call: GuardrailEventHooks.post_call,
     }
 
     def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
@@ -1952,4 +1953,5 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             GuardrailEventHooks.logging_only,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

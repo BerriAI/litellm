@@ -18,9 +18,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import HTTPException
+from mcp.types import CallToolResult, TextContent
 
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
@@ -2121,6 +2125,30 @@ class TestPanwAirsShouldRunGuardrail:
             ),
             pytest.param(
                 True,
+                "post_call",
+                _simple_data(),
+                GuardrailEventHooks.post_mcp_call,
+                True,
+                id="post_call_mode_runs_for_post_mcp_call",
+            ),
+            pytest.param(
+                True,
+                "post_mcp_call",
+                _simple_data(),
+                GuardrailEventHooks.post_mcp_call,
+                True,
+                id="explicit_post_mcp_call_mode",
+            ),
+            pytest.param(
+                True,
+                "post_mcp_call",
+                _simple_data(),
+                GuardrailEventHooks.post_call,
+                False,
+                id="post_mcp_call_mode_does_not_run_for_regular_post_call",
+            ),
+            pytest.param(
+                True,
                 "pre_call",
                 _simple_data(),
                 GuardrailEventHooks.during_mcp_call,
@@ -2142,6 +2170,78 @@ class TestPanwAirsShouldRunGuardrail:
     ):
         handler = make_handler(default_on=default_on, event_hook=event_hook)
         assert handler.should_run_guardrail(data, query_event) is expected
+
+
+class TestPanwAirsPostMcpCall:
+    """Tests for mode: post_mcp_call on MCP tool results."""
+
+    def test_post_mcp_call_mode_accepted_at_init(self):
+        handler = make_handler(event_hook="post_mcp_call", default_on=True)
+        assert (
+            handler.should_run_guardrail(_simple_data(), GuardrailEventHooks.post_mcp_call) is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_mcp_call_hook_blocks_tool_result(self):
+        handler = make_handler(event_hook="post_mcp_call", default_on=True)
+        result = CallToolResult(
+            content=[TextContent(type="text", text="ssn 123-45-6789")],
+            isError=False,
+        )
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "malicious",
+                "scan_id": "s1",
+                "report_id": "r1",
+                "profile_name": "p",
+            }
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPGuardrailTranslationHandler().process_output_response(
+                    response=result,
+                    guardrail_to_apply=handler,
+                    request_data={"litellm_call_id": "c1"},
+                )
+            assert exc_info.value.status_code == 400
+            mock_api.assert_called_once()
+            assert mock_api.call_args.kwargs.get("is_response") is True
+
+    @pytest.mark.asyncio
+    async def test_post_mcp_call_hook_masks_tool_result(self):
+        masked = "ssn ***********"
+        handler = make_handler(
+            event_hook="post_mcp_call",
+            default_on=True,
+            mask_response_content=True,
+        )
+        result = CallToolResult(
+            content=[TextContent(type="text", text="ssn 123-45-6789")],
+            isError=False,
+        )
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {
+                "action": "allow",
+                "category": "benign",
+                "scan_id": "s1",
+                "report_id": "r1",
+                "profile_name": "p",
+                "response_masked_data": {"data": masked},
+            }
+            returned = await MCPGuardrailTranslationHandler().process_output_response(
+                response=result,
+                guardrail_to_apply=handler,
+                request_data={"litellm_call_id": "c1"},
+            )
+            mock_api.assert_called_once()
+            assert mock_api.call_args.kwargs.get("is_response") is True
+
+        assert returned.content[0].text == masked
 
 
 class TestPanwAirsToolEventIsResponseFix:
