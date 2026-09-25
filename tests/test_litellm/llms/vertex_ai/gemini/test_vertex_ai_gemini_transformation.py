@@ -1,34 +1,13 @@
-import base64
-
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
-from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
-    _transform_request_body,
-    check_if_part_exists_in_parts,
-    _get_highest_media_resolution,
-    _extract_max_media_resolution_from_messages,
-)
 from litellm.types.llms.vertex_ai import BlobType
-from litellm.types.utils import Message
-
-
-# Tests for issue #14556: Labels field provider-aware filtering
-
-
-# Tests for media_resolution (detail parameter) handling - Issue #17084
-
-
-# Tests for VideoMetadata support across all Gemini models (Issue #25474)
 
 
 def test_convert_tool_response_with_url_image():
     """Test tool response with HTTP URL image (will download and convert)."""
-    import pytest
-
     # Use a publicly accessible test image URL
     test_image_url = "https://via.placeholder.com/1x1.png"
 
@@ -54,13 +33,9 @@ def test_convert_tool_response_with_url_image():
     }
 
     try:
-        result = convert_to_gemini_tool_call_result(
-            tool_message, last_message_with_tool_calls
-        )
+        result = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
 
-        assert isinstance(
-            result, list
-        ), "Should return a parts list when media is present"
+        assert isinstance(result, list), "Should return a parts list when media is present"
         assert len(result) == 1, "Should return one function_response part"
         result_part = result[0]
         assert "function_response" in result_part

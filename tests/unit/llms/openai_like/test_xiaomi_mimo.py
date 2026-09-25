@@ -82,30 +82,3 @@ class TestXiaomiMiMoProviderConfig:
         # Verify the deployment was created successfully
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "mimo-v2-flash"
-
-
-if __name__ == "__main__":
-    # Run basic tests
-    print("Testing Xiaomi MiMo Provider...")
-
-    test_config = TestXiaomiMiMoProviderConfig()
-
-    print("\n1. Testing provider in list...")
-    test_config.test_xiaomi_mimo_in_provider_list()
-    print("   ✓ xiaomi_mimo in provider list")
-
-    print("\n2. Testing JSON config...")
-    test_config.test_xiaomi_mimo_json_config_exists()
-    print("   ✓ xiaomi_mimo JSON config loaded")
-
-    print("\n3. Testing provider resolution...")
-    test_config.test_xiaomi_mimo_provider_resolution()
-    print("   ✓ Provider resolution works")
-
-    print("\n4. Testing router configuration...")
-    test_config.test_xiaomi_mimo_router_config()
-    print("   ✓ Router configuration works (issue #18794 fixed)")
-
-    print("\n" + "=" * 50)
-    print("✓ All configuration tests passed!")
-    print("=" * 50)

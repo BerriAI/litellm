@@ -3,17 +3,8 @@ Tests for JSON-based provider configuration system.
 """
 
 import os
-import sys
 
-try:
-    import pytest
-except ImportError:
-    # pytest not available, will run as standalone script
-    pytest = None
-
-# Add workspace to path
-workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, workspace_path)
+import pytest
 
 import litellm
 
@@ -157,55 +148,3 @@ class TestPublicAIIntegration:
                 pytest.fail(f"Content list conversion test failed: {str(e)}")
             else:
                 raise
-
-
-if __name__ == "__main__":
-    # Run basic tests
-    print("Testing JSON Provider System...")
-
-    test_loader = TestJSONProviderLoader()
-    print("\n1. Testing JSON provider loading...")
-    test_loader.test_load_json_providers()
-    print("   ✓ JSON providers loaded")
-
-    print("\n2. Testing dynamic config generation...")
-    test_loader.test_dynamic_config_generation()
-    print("   ✓ Dynamic config works")
-
-    print("\n3. Testing parameter mapping...")
-    test_loader.test_parameter_mapping()
-    print("   ✓ Parameter mapping works")
-
-    print("\n4. Testing excluded params...")
-    test_loader.test_excluded_params()
-    print("   ✓ Excluded params work")
-
-    print("\n5. Testing provider resolution...")
-    test_loader.test_provider_resolution()
-    print("   ✓ Provider resolution works")
-
-    print("\n6. Testing provider config manager...")
-    test_loader.test_provider_config_manager()
-    print("   ✓ Config manager works")
-
-    print("\n" + "=" * 50)
-    print("PublicAI Integration Tests...")
-    print("=" * 50)
-
-    test_integration = TestPublicAIIntegration()
-
-    print("\n7. Testing basic completion...")
-    test_integration.test_publicai_completion_basic()
-
-    print("\n8. Testing streaming...")
-    test_integration.test_publicai_completion_with_streaming()
-
-    print("\n9. Testing parameter mapping...")
-    test_integration.test_publicai_parameter_mapping()
-
-    print("\n10. Testing content list conversion...")
-    test_integration.test_publicai_content_list_conversion()
-
-    print("\n" + "=" * 50)
-    print("✓ All tests passed!")
-    print("=" * 50)

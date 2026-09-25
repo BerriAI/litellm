@@ -1193,7 +1193,6 @@ def test_logprobs():
 
 def test_process_gemini_media():
     """Test the _process_gemini_media function for different image sources"""
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     from litellm.types.llms.vertex_ai import FileDataType
 
     # Test GCS URI
