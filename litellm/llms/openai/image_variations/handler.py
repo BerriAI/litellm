@@ -23,30 +23,24 @@ class OpenAIImageVariationsHandler:
         client: OpenAI | None,
         init_client_params: dict,
     ):
-        if client is None:
-            http_client: Final = init_client_params.get("http_client")
-            openai_client = OpenAI(
-                **{
-                    **init_client_params,
-                    "http_client": http_client if http_client is not None else _OpenAIHTTPClient(),
-                },
-            )
-        else:
-            openai_client = client
-        return openai_client
+        if client is not None:
+            return client
+        return OpenAI(
+            **{
+                **init_client_params,
+                "http_client": init_client_params.get("http_client") or _OpenAIHTTPClient(),
+            },
+        )
 
     def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
-        if client is None:
-            http_client: Final = init_client_params.get("http_client")
-            openai_client = AsyncOpenAI(
-                **{
-                    **init_client_params,
-                    "http_client": http_client if http_client is not None else _OpenAIAsyncHTTPClient(),
-                },
-            )
-        else:
-            openai_client = client
-        return openai_client
+        if client is not None:
+            return client
+        return AsyncOpenAI(
+            **{
+                **init_client_params,
+                "http_client": init_client_params.get("http_client") or _OpenAIAsyncHTTPClient(),
+            },
+        )
 
     async def async_image_variations(
         self,

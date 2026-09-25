@@ -721,13 +721,14 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_base += "/"
             api_base += f"{model}"
 
-            http_client: Final = litellm.aclient_session if acompletion else litellm.client_session
             azure_client_params: Final[_AzureGatewayClientParams] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
-                "http_client": http_client
-                if http_client is not None
-                else (_OpenAIAsyncHTTPClient() if acompletion else _OpenAIHTTPClient()),
+                "http_client": (
+                    litellm.aclient_session or _OpenAIAsyncHTTPClient()
+                    if acompletion
+                    else litellm.client_session or _OpenAIHTTPClient()
+                ),
                 "max_retries": max_retries,
                 "timeout": timeout,
             }

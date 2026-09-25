@@ -7735,10 +7735,7 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
 
     openai_client = kwargs.get("client", None)
     if openai_client is None:
-        if api_base is not None:
-            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=_OpenAIHTTPClient())
-        else:
-            openai_client = openai.OpenAI(api_key=api_key, http_client=_OpenAIHTTPClient())
+        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=_OpenAIHTTPClient())
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
