@@ -4,7 +4,7 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Coroutine, Mapping
+from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from typing import Any, Final, TypeAlias
 
 import litellm
@@ -18,8 +18,8 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.utils import ProviderConfigManager
+from litellm.types.llms.openai import ChatCompletionSystemMessage, ResponsesAPIResponse
+from litellm.utils import ProviderConfigManager, verbose_logger
 
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
@@ -42,6 +42,39 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
+
+
+def _system_prompt_text(system: object) -> str:
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        return "\n".join(
+            filter(None, (b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"))
+        )
+    return ""
+
+
+def _count_anthropic_input_tokens(
+    *,
+    messages: AnthropicRequestMessages,
+    model: str,
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> int | None:
+    try:
+        provider: Final = litellm.get_llm_provider(model=model)[1]
+        system_text: Final = _system_prompt_text(system)
+        system_message: Final[ChatCompletionSystemMessage] = {"role": "system", "content": system_text}
+        prompt_messages: Final = (*((system_message,) if system_text else ()), *messages)
+        return litellm.token_counter(
+            model=local_model_name(model, provider),
+            messages=prompt_messages,
+            tools=tools,
+            use_default_image_token_count=True,
+        )
+    except Exception:  # noqa: BLE001  # counting must not block a request over an informational field
+        verbose_logger.debug("Could not count input tokens for message_start", exc_info=True)
+        return None
 
 
 def _build_responses_kwargs(
@@ -212,6 +245,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                input_tokens=_count_anthropic_input_tokens(messages=messages, model=model, system=system, tools=tools),
             )
             return wrapper.async_anthropic_sse_wrapper()
 
@@ -294,6 +328,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                input_tokens=_count_anthropic_input_tokens(messages=messages, model=model, system=system, tools=tools),
             )
             return wrapper.async_anthropic_sse_wrapper()
 

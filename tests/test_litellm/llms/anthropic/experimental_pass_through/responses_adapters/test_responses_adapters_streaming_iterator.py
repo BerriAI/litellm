@@ -452,3 +452,137 @@ class TestRefusalStreamEvents:
         message_delta = next(c for c in chunks if c["type"] == "message_delta")
         assert message_delta["delta"]["stop_reason"] == "max_tokens"
         assert "stop_details" not in message_delta["delta"]
+
+
+class TestMessageStartInputTokens:
+    def test_input_tokens_defaults_to_zero_when_not_supplied(self):
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="m")
+        chunks = [wrapper._make_message_start()]
+
+        assert chunks[0]["message"]["usage"]["input_tokens"] == 0
+
+    def test_input_tokens_are_reported_on_message_start(self):
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="m", input_tokens=1234)
+        chunks = [wrapper._make_message_start()]
+
+        assert chunks[0]["message"]["usage"]["input_tokens"] == 1234
+        assert chunks[0]["message"]["usage"]["output_tokens"] == 0
+
+    def test_input_tokens_survive_the_response_created_path(self):
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="m", input_tokens=77)
+        wrapper._process_event({"type": "response.created", "response": {"id": "r1", "model": "m"}})
+        chunks = list(wrapper._chunk_queue)
+
+        message_starts = [c for c in chunks if c["type"] == "message_start"]
+        assert len(message_starts) == 1
+        assert message_starts[0]["message"]["usage"]["input_tokens"] == 77
+
+
+class TestCountAnthropicInputTokens:
+    def test_counts_a_plain_request(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        counted = _count_anthropic_input_tokens(
+            messages=[{"role": "user", "content": "hello world"}],
+            model="gpt-4o",
+            system=None,
+            tools=None,
+        )
+
+        assert isinstance(counted, int) and counted > 0
+
+    def test_system_prompt_adds_to_the_count(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        messages = [{"role": "user", "content": "hello world"}]
+        without_system = _count_anthropic_input_tokens(messages=messages, model="gpt-4o", system=None, tools=None)
+        with_system = _count_anthropic_input_tokens(
+            messages=messages, model="gpt-4o", system="You are a helpful assistant.", tools=None
+        )
+
+        assert without_system is not None and with_system is not None
+        assert with_system > without_system
+
+    def test_list_system_blocks_are_counted(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        messages = [{"role": "user", "content": "hello world"}]
+        string_system = _count_anthropic_input_tokens(
+            messages=messages, model="gpt-4o", system="You are a helpful assistant.", tools=None
+        )
+        blocks_system = _count_anthropic_input_tokens(
+            messages=messages,
+            model="gpt-4o",
+            system=[{"type": "text", "text": "You are a helpful assistant."}],
+            tools=None,
+        )
+
+        assert string_system is not None and blocks_system is not None
+        assert blocks_system == string_system
+
+    def test_provider_prefixed_model_counts_like_the_bare_one(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        messages = [{"role": "user", "content": "hello world"}]
+        bare = _count_anthropic_input_tokens(messages=messages, model="gpt-4o", system=None, tools=None)
+        prefixed = _count_anthropic_input_tokens(messages=messages, model="openai/gpt-4o", system=None, tools=None)
+
+        assert bare is not None and prefixed is not None
+        assert prefixed == bare
+
+    def test_image_urls_are_not_fetched(self, monkeypatch):
+        import requests
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        def fail(*args, **kwargs):
+            raise AssertionError("token counting must not fetch a caller-supplied URL")
+
+        monkeypatch.setattr(requests, "get", fail)
+
+        counted = _count_anthropic_input_tokens(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://attacker.example/x.png", "detail": "high"},
+                        },
+                    ],
+                }
+            ],
+            model="gpt-4o",
+            system=None,
+            tools=None,
+        )
+
+        assert isinstance(counted, int) and counted > 0
+
+    def test_counting_failure_returns_none(self, monkeypatch):
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("tokenizer unavailable")
+
+        monkeypatch.setattr(litellm, "token_counter", boom)
+
+        assert (
+            _count_anthropic_input_tokens(
+                messages=[{"role": "user", "content": "hi"}], model="gpt-4o", system=None, tools=None
+            )
+            is None
+        )
