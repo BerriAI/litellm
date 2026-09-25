@@ -35,6 +35,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.mcp_tool_execution import mark_mcp_tools_executed
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -375,13 +376,17 @@ async def aresponses_api_with_mcp(
                         tool_calls=tool_calls, tool_results=tool_results
                     )
 
-                final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
-                    follow_up_input=follow_up_input,
-                    model=model,
-                    all_tools=all_tools,
-                    response_id=previous_response_id if persistence_disabled else response.id,
-                    **follow_up_call_params,
-                )
+                try:
+                    final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
+                        follow_up_input=follow_up_input,
+                        model=model,
+                        all_tools=all_tools,
+                        response_id=previous_response_id if persistence_disabled else response.id,
+                        **follow_up_call_params,
+                    )
+                except Exception as follow_up_exception:
+                    mark_mcp_tools_executed(follow_up_exception)
+                    raise
 
                 # If streaming and we have tool execution events, wrap the response
                 if (

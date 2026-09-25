@@ -11,12 +11,14 @@ from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent
 from openai.types.responses.tool_param import Mcp
 
+from litellm.exceptions import InternalServerError
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
+from litellm.router_utils.mcp_tool_execution import mcp_tools_executed
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import OutputFunctionToolCall
 from litellm.types.utils import ModelResponse
@@ -1295,3 +1297,39 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
     logged: Final = setup.call_args.kwargs["metadata"]["headers"]
     assert logged == {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
     assert headers["x-mcp-deepwiki-authorization"] == "upstream-sentinel"
+
+
+@pytest.mark.parametrize("failing_call", ["initial", "follow_up"])
+@pytest.mark.asyncio
+async def test_aresponses_api_with_mcp_tags_a_failure_after_tools_executed(
+    monkeypatch: pytest.MonkeyPatch, failing_call: str
+):
+    """
+    Regression test for #43153: a router retry or fallback re-runs the whole MCP loop, so
+    a follow-up failure raised after the loop executed tools must carry the tag that stops
+    the replay. A failure before any tool ran stays untagged and is still retried.
+    """
+    error: Final = InternalServerError(message="upstream failed", llm_provider="openai", model="gpt-5")
+    model_calls: Final = AsyncMock(
+        side_effect=[error] if failing_call == "initial" else [_response_with_reasoning_and_tool_call(), error]
+    )
+    execute: Final = AsyncMock(return_value=[{"tool_call_id": "call-1", "name": "foo", "result": "done"}])
+    monkeypatch.setattr(responses_main, "aresponses", model_calls)
+    monkeypatch.setattr(mcp_handler_module, "aresponses", model_calls)
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        AsyncMock(return_value=([], {"foo": "litellm_proxy"})),
+    )
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "_execute_tool_calls", execute)
+
+    with pytest.raises(InternalServerError) as exc_info:
+        await responses_main.aresponses_api_with_mcp(
+            input="hi",
+            model="gpt-5",
+            tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        )
+
+    assert exc_info.value is error
+    assert mcp_tools_executed(error) is (failing_call == "follow_up")
+    assert execute.await_count == (1 if failing_call == "follow_up" else 0)
