@@ -27,6 +27,8 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.rules import Rules
+from litellm.router_utils.mcp_tool_execution import mark_mcp_tools_executed
+from litellm.types.router import RetryPolicy
 from litellm.utils import function_setup
 
 
@@ -66,7 +68,7 @@ def _make_not_found_error(message="Model not found"):
     )
 
 
-def _create_router(num_retries=2):
+def _create_router(num_retries=2, retry_policy=None):
     """Create a Router with two deployments for testing."""
     return Router(
         model_list=[
@@ -86,6 +88,7 @@ def _create_router(num_retries=2):
             },
         ],
         num_retries=num_retries,
+        retry_policy=retry_policy,
     )
 
 
@@ -357,3 +360,95 @@ async def test_retry_attempts_accumulate_timing_in_shared_request_metadata():
     assert timing_metrics["litellm_overhead_time_ms"] == pytest.approx(
         round(total_response_time_ms - union_duration_ms, 4)
     )
+
+
+def _make_follow_up_error(tools_executed: bool) -> litellm.InternalServerError:
+    error: Final = litellm.InternalServerError(message="follow-up failed", llm_provider="openai", model="gpt-4")
+    if tools_executed:
+        mark_mcp_tools_executed(error)
+    return error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_policy", [None, RetryPolicy(InternalServerErrorRetries=2)])
+@pytest.mark.parametrize("tools_executed", [True, False])
+async def test_500_after_mcp_tool_execution_is_not_retried(retry_policy, tools_executed):
+    """
+    Regression test for #43153: a retry re-runs the whole MCP gateway loop, so a
+    failure raised after the loop executed tool calls must surface instead of
+    executing those tools again. A retry policy that retries 500s must not override
+    that, and a 500 raised before any tool ran must still be retried.
+    """
+    router: Final = _create_router(num_retries=2, retry_policy=retry_policy)
+    error: Final = _make_follow_up_error(tools_executed)
+    make_call: Final = AsyncMock(side_effect=error)
+
+    with (
+        patch.object(router, "make_call", make_call),
+        patch.object(router, "_async_get_healthy_deployments", return_value=(["d1", "d2"], ["d1", "d2"])),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        pytest.raises(litellm.InternalServerError) as exc_info,
+    ):
+        await router.async_function_with_retries(num_retries=2, **_base_kwargs())
+
+    assert exc_info.value is error
+    assert make_call.await_count == (1 if tools_executed else 3)
+
+
+@pytest.mark.asyncio
+async def test_500_after_mcp_tool_execution_stops_an_ongoing_retry_loop():
+    """
+    The first attempt fails before any tool ran and is retried; the retry executes
+    the tools and then fails, so the loop must stop there instead of running them
+    a second time.
+    """
+    router: Final = _create_router(num_retries=3)
+    after_tools: Final = _make_follow_up_error(tools_executed=True)
+    make_call: Final = AsyncMock(side_effect=[_make_follow_up_error(tools_executed=False), after_tools])
+
+    with (
+        patch.object(router, "make_call", make_call),
+        patch.object(router, "_async_get_healthy_deployments", return_value=(["d1", "d2"], ["d1", "d2"])),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        pytest.raises(litellm.InternalServerError) as exc_info,
+    ):
+        await router.async_function_with_retries(num_retries=3, **_base_kwargs())
+
+    assert exc_info.value is after_tools
+    assert make_call.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools_executed", [True, False])
+async def test_500_after_mcp_tool_execution_does_not_fall_back(tools_executed):
+    """
+    A fallback re-runs the whole MCP gateway loop on the fallback group, so it must
+    not start once the primary attempt executed tool calls.
+    """
+    router: Final = Router(
+        model_list=[
+            {"model_name": "test-model", "litellm_params": {"model": "openai/gpt-4", "api_key": "fake-key-1"}},
+            {"model_name": "backup-model", "litellm_params": {"model": "openai/gpt-4", "api_key": "fake-key-2"}},
+        ],
+        num_retries=0,
+        fallbacks=[{"test-model": ["backup-model"]}],
+    )
+    error: Final = _make_follow_up_error(tools_executed)
+
+    async def primary_fails(original_function, *args, **kwargs):
+        if kwargs["model"] == "test-model":
+            raise error
+        return "fallback response"
+
+    make_call: Final = AsyncMock(side_effect=primary_fails)
+
+    with patch.object(router, "make_call", make_call):
+        if tools_executed:
+            with pytest.raises(litellm.InternalServerError) as exc_info:
+                await router.async_function_with_fallbacks(num_retries=0, **_base_kwargs())
+            assert exc_info.value is error
+        else:
+            assert await router.async_function_with_fallbacks(num_retries=0, **_base_kwargs()) == "fallback response"
+
+    attempted_models: Final = [call.kwargs["model"] for call in make_call.await_args_list]
+    assert attempted_models == (["test-model"] if tools_executed else ["test-model", "backup-model"])
