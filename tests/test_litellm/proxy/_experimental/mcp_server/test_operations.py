@@ -35,6 +35,7 @@ async def test_oauth_prefetch_failure_does_not_log_caller_or_exception_text(capl
 @pytest.mark.asyncio
 async def test_dispatch_uses_explicit_context_when_ambient_caller_differs():
     from mcp.server.auth.middleware.auth_context import auth_context_var
+
     from litellm.proxy._experimental.mcp_server.server import set_auth_context
 
     context = prepare_context(
@@ -64,12 +65,13 @@ async def test_dispatch_uses_explicit_context_when_ambient_caller_differs():
 @pytest.mark.asyncio
 async def test_legacy_adapter_cleans_context_after_cancelled_operation():
     from types import SimpleNamespace
+
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18")
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
@@ -90,6 +92,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
 @pytest.mark.asyncio
 async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
     from types import SimpleNamespace
+
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 
@@ -111,6 +114,7 @@ async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
 @pytest.mark.asyncio
 async def test_prompt_sampling_receives_explicit_operation_caller_headers_and_ip():
     from unittest.mock import MagicMock
+
     from litellm.proxy._experimental.mcp_server import operations
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -201,9 +205,11 @@ def _catalog_case(method):
 @pytest.mark.parametrize("state", ["success", "denied", "upstream_failure", "scope_failure"])
 async def test_native_catalog_operations_preserve_context_results_and_failure_policy(method, state):
     from types import SimpleNamespace
+
     from fastapi import HTTPException
     from mcp.server.context import ServerRequestContext
     from mcp.types import PaginatedRequestParams
+
     from litellm.proxy._experimental.mcp_server import operations, server
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -260,6 +266,7 @@ async def test_native_catalog_operations_preserve_context_results_and_failure_po
 async def test_explicit_proxy_context_rejects_catalog_operations_before_upstream_access(method):
     from mcp.shared.exceptions import MCPError
     from mcp.types import METHOD_NOT_FOUND
+
     from litellm.proxy._experimental.mcp_server import operations
 
     operation, _, manager_method, _, _ = _catalog_case(method)
@@ -276,6 +283,7 @@ async def test_explicit_proxy_context_rejects_catalog_operations_before_upstream
 @pytest.mark.parametrize("failure", ["missing_env", "pii", "guardrail", "unexpected"])
 async def test_tool_operation_preserves_failure_messages_and_request_trace(failure):
     from mcp.types import CallToolRequest, CallToolRequestParams
+
     from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
     from litellm.proxy._experimental.mcp_server import operations
     from litellm.proxy._experimental.mcp_server.utils import MCPMissingUserEnvVarsError
@@ -333,6 +341,7 @@ async def test_catalog_operation_preserves_empty_result_for_malformed_upstream_i
 @pytest.mark.parametrize("catalog_unavailable", [False, True])
 async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailable_catalog(catalog_unavailable):
     from mcp.types import ListToolsRequest
+
     from litellm.proxy._experimental.mcp_server import operations
 
     allowed = AsyncMock(
@@ -352,6 +361,7 @@ async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailabl
 @pytest.mark.asyncio
 async def test_explicit_proxy_context_lists_builtin_tools_and_blocks_direct_tool_dispatch():
     from mcp.types import CallToolRequest, CallToolRequestParams, ListToolsRequest
+
     from litellm.proxy._experimental.mcp_server import operations
 
     context = prepare_context(mcp_proxy_mode=True)
@@ -486,8 +496,10 @@ class TestChallengeMissingTokenExchangeSubject:
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_challenges_missing_subject_before_cold_listing():
     """On a cold catalog the challenge fires before any listing or tool resolution is attempted."""
-    from fastapi import HTTPException
     from datetime import datetime, timezone
+
+    from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server import operations
 
     server = _server("te-exec", MCPAuth.oauth2_token_exchange)
@@ -509,3 +521,24 @@ async def test_execute_mcp_tool_challenges_missing_subject_before_cold_listing()
         )
     assert exc_info.value.status_code == 401
     listing.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compat", ["legacy", "modern"])
+async def test_local_tool_json_array_is_converted_once_for_the_caller_revision(compat: str) -> None:
+    """The local-registry arm used to convert at MODERN and let the legacy downgrade append a second
+    text block; converting at the caller's revision keeps the upstream body exactly once."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat, parse_http_body
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    body = '["a","b"]'
+    tool = MagicMock()
+    tool.handler = AsyncMock(return_value=parse_http_body(body))
+    with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+        result = await operations._handle_local_mcp_tool("reports-list_tags", {}, WireCompat(compat))
+
+    assert [block.text for block in result.content] == [body]
+    assert result.structured_content == (["a", "b"] if compat == "modern" else None)

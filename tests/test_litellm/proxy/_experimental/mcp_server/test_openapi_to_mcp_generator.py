@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_auth_header,
     _request_extra_headers,
     _request_resolved_auth_headers,
+    _request_upstream_url,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -31,6 +32,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     get_base_url,
     resolve_operation_params,
 )
+from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult, TextResult
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
@@ -38,6 +40,43 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 )
 
 GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_http_method_returns_text_without_sending_request(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    tool: Final = create_tool_function("/echo", "HEAD", {}, "https://upstream.example")
+    token: Final = _request_upstream_url.set("https://outer.example/request")
+    try:
+        assert await tool() == TextResult("Unsupported HTTP method: head")
+        assert len(respx_mock.calls) == 0
+        assert _request_upstream_url.get() == "https://outer.example/request"
+    finally:
+        _request_upstream_url.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body,expected", [
+    (' { "ok": true }\n', JsonResult({"ok": True}, ' { "ok": true }\n')),
+    (' [1, 2]\n', JsonResult([1, 2], ' [1, 2]\n')),
+    ('false', JsonResult(False, 'false')),
+    ('0', JsonResult(0, '0')),
+    ('""', JsonResult("", '""')),
+    ('null', TextResult('null')),
+    ('{"unfinished":', TextResult('{"unfinished":')),
+    ('', TextResult('')),
+])
+async def test_http_response_preserves_body_and_classifies_json(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+    body: str, expected: TextResult | JsonResult,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    tool: Final = create_tool_function("/echo", "get", {}, "https://upstream.example")
+    destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text=body)
+    assert await tool() == expected
+    assert destination.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -63,7 +102,7 @@ async def test_authorization_validates_credentials_before_http(
     caller_token: Final = _request_auth_header.set(value)
     try:
         if accepted:
-            assert await tool() == "authenticated"
+            assert await tool() == TextResult("authenticated")
             assert destination.call_count == 1
             assert destination.calls.last.request.headers["authorization"] == value
         else:
@@ -103,7 +142,7 @@ async def test_static_auth_validates_headers_after_existing_precedence(
             assert exc.value.status_code == 500
             assert destination.call_count == 0
         else:
-            assert await tool() == "authenticated"
+            assert await tool() == TextResult("authenticated")
             assert destination.call_count == 1
             assert destination.calls.last.request.headers["authorization"] == expected
     finally:
@@ -124,7 +163,7 @@ async def test_static_auth_uses_configured_custom_header(
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
     if credential:
-        assert await tool() == "authenticated"
+        assert await tool() == TextResult("authenticated")
         assert destination.call_count == 1
         assert destination.calls.last.request.headers["x-custom"] == credential
     else:
@@ -144,7 +183,7 @@ async def test_static_auth_accepts_api_key_carried_by_static_header(
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
     if credential:
-        assert await tool() == "authenticated"
+        assert await tool() == TextResult("authenticated")
         assert destination.calls.last.request.headers["apikey"] == credential
         assert "x-api-key" not in destination.calls.last.request.headers
     else:
@@ -167,7 +206,7 @@ async def test_static_validation_preserves_no_auth_and_resolved_oauth(
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="echo")
     token: Final = _request_resolved_auth_headers.set(resolved)
     try:
-        assert await tool() == "echo"
+        assert await tool() == TextResult("echo")
         assert destination.call_count == 1
         assert destination.calls.last.request.headers.get("authorization") == (resolved or {}).get("Authorization")
     finally:
@@ -220,7 +259,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func(**{"repository-id": "test-repo"})
-            assert result == '{"id": "123"}'
+            assert result == JsonResult({"id": "123"}, '{"id": "123"}')
 
             # Verify URL was constructed correctly
             call_args = async_client.get.call_args
@@ -256,7 +295,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func(**{"2fa-code": "123456"})
-            assert result == "verified"
+            assert result == TextResult("verified")
 
             # Verify query parameter was included
             call_args = async_client.post.call_args
@@ -290,7 +329,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func(**{"user.name": "john.doe"})
-            assert result == "found"
+            assert result == TextResult("found")
 
             call_args = async_client.get.call_args
             assert call_args[1]["params"]["user.name"] == "john.doe"
@@ -323,7 +362,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func(**{"$filter": "name eq 'test'"})
-            assert result == "[]"
+            assert result == JsonResult([], "[]")
 
             call_args = async_client.get.call_args
             assert call_args[1]["params"]["$filter"] == "name eq 'test'"
@@ -356,7 +395,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func(**{"class": "premium"})
-            assert result == "items"
+            assert result == TextResult("items")
 
             call_args = async_client.get.call_args
             assert call_args[1]["params"]["class"] == "premium"
@@ -407,7 +446,7 @@ class TestCreateToolFunction:
                     "$filter": "active",
                 }
             )
-            assert result == "success"
+            assert result == TextResult("success")
 
     @pytest.mark.asyncio
     async def test_request_body_parameter(self):
@@ -440,7 +479,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func(**{"body": {"name": "test"}})
-            assert result == "created"
+            assert result == TextResult("created")
 
             call_args = async_client.post.call_args
             assert call_args[1]["json"] == {"name": "test"}
@@ -464,7 +503,7 @@ class TestCreateToolFunction:
             mock_client.return_value = async_client
 
             result = await func()
-            assert result == "ok"
+            assert result == TextResult("ok")
 
     @pytest.mark.asyncio
     async def test_all_http_methods(self):
@@ -497,7 +536,7 @@ class TestCreateToolFunction:
                 mock_client.return_value = async_client
 
                 result = await func(**{"repository-id": "test"})
-                assert result == "success"
+                assert result == TextResult("success")
 
     def test_no_exec_usage(self):
         """Verify that create_tool_function does not use exec()."""
@@ -614,7 +653,7 @@ class TestPathSecurity:
 
         response = await tool_function(**{"filename": "../admin"})
 
-        assert "Invalid path parameter" in response
+        assert isinstance(response, TextResult) and "Invalid path parameter" in response.text
 
     @pytest.mark.asyncio
     async def test_should_encode_and_request_safe_path_parameters(self):
@@ -643,7 +682,7 @@ class TestPathSecurity:
 
             response = await tool_function(**{"filename": "report 2024.json"})
 
-            assert response == "dummy-response"
+            assert response == TextResult("dummy-response")
 
             # Verify URL was properly encoded
             call_args = async_client.get.call_args
@@ -1181,7 +1220,7 @@ class TestRequestExtraHeaders:
             finally:
                 _request_extra_headers.reset(token)
 
-            assert result == "ok"
+            assert result == TextResult("ok")
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert headers_sent.get("X-TOKEN") == "secret-value"
@@ -1204,7 +1243,7 @@ class TestRequestExtraHeaders:
 
             result = await func()
 
-            assert result == "ok"
+            assert result == TextResult("ok")
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert headers_sent == {"X-Static": "static-value"}
@@ -1232,7 +1271,7 @@ class TestRequestExtraHeaders:
             finally:
                 _request_extra_headers.reset(token)
 
-            assert result == "created"
+            assert result == TextResult("created")
             call_args = async_client.post.call_args
             headers_sent = call_args[1]["headers"]
             assert headers_sent.get("X-Static") == "static-value"
@@ -1260,7 +1299,7 @@ class TestRequestExtraHeaders:
             finally:
                 _request_extra_headers.reset(token)
 
-            assert result == "ok"
+            assert result == TextResult("ok")
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert headers_sent.get("X-Tenant") == "operator-tenant"
@@ -1288,7 +1327,7 @@ class TestRequestExtraHeaders:
             finally:
                 _request_extra_headers.reset(token)
 
-            assert result == "ok"
+            assert result == TextResult("ok")
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert headers_sent.get("X-Tenant") == "operator-tenant"
@@ -1320,7 +1359,7 @@ class TestRequestExtraHeaders:
                 _request_auth_header.reset(auth_token)
                 _request_extra_headers.reset(extra_token)
 
-            assert result == "secure-data"
+            assert result == TextResult("secure-data")
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert headers_sent.get("Authorization") == "Bearer byok-credential"
@@ -1380,7 +1419,7 @@ class TestRequestExtraHeaders:
                 _request_extra_headers.reset(extra_token)
                 _request_resolved_auth_headers.reset(resolved_token)
 
-            assert result == "secure-data"
+            assert result == TextResult("secure-data")
             headers_sent = async_client.get.call_args[1]["headers"]
             authorization_values = [v for k, v in headers_sent.items() if k.lower() == "authorization"]
             assert authorization_values == ["Bearer resolved-oauth"]
@@ -1436,7 +1475,7 @@ class TestUpstreamStatusIsClassified:
     async def test_success_still_returns_the_body(self):
         tool, client = self._tool(200, text='{"reports": []}')
         with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
-            assert await tool() == '{"reports": []}'
+            assert await tool() == JsonResult({"reports": []}, '{"reports": []}')
 
     @pytest.mark.asyncio
     async def test_401_raises_the_reauth_signal_carrying_the_challenge(self):
