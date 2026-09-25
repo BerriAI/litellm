@@ -170,11 +170,6 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
 
-        Exa only returns "text" when `contents.text` is requested. Requesting
-        `contents.highlights` and/or `contents.summary` instead returns those fields
-        with no "text" field at all, so we fall back to them to avoid silently
-        dropping content the caller already paid for.
-
         Args:
             raw_response: Raw httpx response from Exa AI API
             logging_obj: Logging object for tracking

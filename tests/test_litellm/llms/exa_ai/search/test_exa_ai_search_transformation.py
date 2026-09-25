@@ -27,13 +27,23 @@ def _resp(payload: _ExaSearchPayload) -> Mock:
     return r
 
 
-def _result(**overrides: str | list[str]) -> _ExaSearchResult:
-    base: Final[_ExaSearchResult] = {
+def _result(
+    text: str | None = None,
+    highlights: list[str] | None = None,
+    summary: str | None = None,
+) -> _ExaSearchResult:
+    result: Final[_ExaSearchResult] = {
         "title": "Lion Finance Group (LON:BGEO) Q1 2026 Earnings Call Transcript & Audio",
         "url": "https://stockanalysis.com/quote/lon/BGEO/transcripts/557900-q1-2026/",
         "publishedDate": "2026-05-01T00:00:00.000Z",
     }
-    return {**base, **overrides}  # type: ignore[return-value]
+    if text is not None:
+        result["text"] = text
+    if highlights is not None:
+        result["highlights"] = highlights
+    if summary is not None:
+        result["summary"] = summary
+    return result
 
 
 def test_transform_search_response_uses_text_when_present():
@@ -45,7 +55,6 @@ def test_transform_search_response_uses_text_when_present():
 
 
 def test_transform_search_response_falls_back_to_highlights_when_text_missing():
-    """Exa returns no "text" field when only contents.highlights is requested."""
     resp = _config().transform_search_response(
         _resp(
             {
@@ -68,7 +77,6 @@ def test_transform_search_response_falls_back_to_highlights_when_text_missing():
 
 
 def test_transform_search_response_falls_back_to_summary_when_text_and_highlights_missing():
-    """Exa returns no "text" field when only contents.summary is requested."""
     resp = _config().transform_search_response(
         _resp({"results": [_result(summary="The outlook for net interest margin is positive.")]}),
         logging_obj=Mock(),
