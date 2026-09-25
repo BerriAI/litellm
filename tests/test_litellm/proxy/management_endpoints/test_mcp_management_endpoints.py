@@ -8204,6 +8204,7 @@ class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
     @pytest.mark.xfail(
         strict=True,
+        raises=HTTPException,
         reason="LIT-3974 change A: detail authorization includes a server granted to the caller's team",
     )
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
@@ -8271,6 +8272,7 @@ class TestLIT3974ResolutionRegressions:
     )
     @pytest.mark.xfail(
         strict=True,
+        raises=pytest.fail.Exception,
         reason="LIT-3974 change A: detail authorization enforces key, team, and organization ceilings",
     )
     async def test_database_server_detail_obeys_authz_intersection(
@@ -8366,6 +8368,7 @@ class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
     @pytest.mark.xfail(
         strict=True,
+        raises=HTTPException,
         reason="LIT-3974 change A: dashboard detail authorization resolves team grants for config servers",
     )
     async def test_ui_session_team_grant_resolves_config_server_detail(self) -> None:
@@ -8390,12 +8393,14 @@ class TestLIT3974ResolutionRegressions:
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
         prisma: Final = _lit3974_prisma_client(server, key_permission, team, user=user)
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
         manager: Final = MCPServerManager()
         await manager.load_servers_from_config(
             {
-                "config-server": {
+                "config_server": {
                     "server_id": server_id,
-                    "alias": "Config server",
+                    "alias": "Config_server",
                     "url": "https://config.example.com/mcp",
                     "transport": "http",
                     "auth_type": MCPAuth.oauth2,
@@ -8434,11 +8439,12 @@ class TestLIT3974ResolutionRegressions:
             )
 
         assert result.server_id == server_id, "UI session team grant must resolve the config server"
-        assert result.alias == "Config server", "config detail must retain its display alias"
+        assert result.alias == "Config_server", "config detail must retain its display alias"
 
     @pytest.mark.asyncio
     @pytest.mark.xfail(
         strict=True,
+        raises=pytest.fail.Exception,
         reason="LIT-3974 change B: creation rejects an identifier already owned by a config server",
     )
     async def test_create_rejects_config_server_identifier_collision(self) -> None:
@@ -8448,11 +8454,14 @@ class TestLIT3974ResolutionRegressions:
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974-key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974-team"),
         )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
         manager: Final = MCPServerManager()
         await manager.load_servers_from_config(
             {
-                "config-server": {
+                "config_server": {
                     "server_id": server_id,
+                    "alias": "config_server",
                     "url": "http://127.0.0.1:1/mcp",
                     "transport": "http",
                     "auth_type": MCPAuth.oauth2,
@@ -8507,6 +8516,7 @@ class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
     @pytest.mark.xfail(
         strict=True,
+        raises=AssertionError,
         reason="LIT-3974 change C: credential listing resolves config-server display name and alias",
     )
     async def test_user_credential_list_includes_config_server_display_fields(self) -> None:
@@ -8517,12 +8527,13 @@ class TestLIT3974ResolutionRegressions:
             LiteLLM_TeamTable(team_id="lit3974-team"),
         )
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
         manager: Final = MCPServerManager()
         await manager.load_servers_from_config(
             {
-                "config-server": {
+                "config_server": {
                     "server_id": server_id,
-                    "alias": "Credential display name",
+                    "alias": "Credential_display_name",
                     "url": "https://config.example.com/mcp",
                     "transport": "http",
                     "auth_type": MCPAuth.oauth2,
@@ -8559,8 +8570,8 @@ class TestLIT3974ResolutionRegressions:
         assert [item.model_dump() for item in result] == [
             {
                 "server_id": server_id,
-                "server_name": "config-server",
-                "alias": "Credential display name",
+                "server_name": "config_server",
+                "alias": "Credential_display_name",
                 "credential_type": "oauth2",
                 "has_credential": True,
                 "expires_at": "2099-01-01T00:00:00+00:00",
