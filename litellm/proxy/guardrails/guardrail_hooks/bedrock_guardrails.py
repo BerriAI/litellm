@@ -18,7 +18,7 @@ import sys
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
-from itertools import accumulate, groupby
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, cast
 
@@ -269,13 +269,16 @@ def _function_call_output_parts(data: Mapping[str, object]) -> tuple[Mapping[str
     request_input: Final = data.get("input")
     if not isinstance(request_input, list):
         return ()
-    return tuple(
-        cast(Mapping[str, object], part)  # cast-ok: narrowed to dict in the generator's condition
+    outputs: Final = tuple(
+        item["output"]
         for item in request_input
         if isinstance(item, dict)
         and item.get("type") == "function_call_output"
         and isinstance(item.get("output"), list)
-        for part in item["output"]
+    )
+    return tuple(
+        cast(Mapping[str, object], part)  # cast-ok: narrowed to dict in the generator's condition
+        for part in chain.from_iterable(outputs)
         if isinstance(part, dict)
     )
 
@@ -486,7 +489,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             *(self._build_input_content_items(message=message) for message in messages)
         )
         bedrock_request["content"] = [  # mutable-ok: BedrockRequest["content"] is a list in the AWS wire format
-            item for items in per_message for item in items
+            *chain.from_iterable(per_message)
         ]
         return bedrock_request
 
@@ -580,20 +583,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     @classmethod
     def _image_urls_in(cls, messages: "Sequence[AllMessageValues] | None") -> frozenset[str]:
         """Normalized image urls already carried by these messages."""
-        return frozenset(
-            cls._normalize_image_input(url)
-            for message in messages or ()
-            for part in _content_leaf_parts(message.get("content"))
+        parts: Final = chain.from_iterable(_content_leaf_parts(message.get("content")) for message in messages or ())
+        refs: Final = (
+            cls._get_image_url(item=part) if part.get("type") == "image_url" else cls._anthropic_base64_image_ref(part)
+            for part in parts
             if isinstance(part, dict)
-            for url in (
-                (
-                    cls._get_image_url(item=part)
-                    if part.get("type") == "image_url"
-                    else cls._anthropic_base64_image_ref(part)
-                ),
-            )
-            if url is not None
         )
+        return frozenset(cls._normalize_image_input(ref) for ref in refs if ref is not None)
 
     @classmethod
     def _image_count_in(cls, messages: "Sequence[AllMessageValues] | None") -> int:

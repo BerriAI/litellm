@@ -554,7 +554,6 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                     assert calls[0]["body"]["params"]["arguments"] == arguments
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_scans_image_only_chat")
 def test_bedrock_guardrail_scans_image_only_chat_request(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
 
@@ -590,7 +589,6 @@ def test_bedrock_guardrail_scans_image_only_chat_request(gateway: Gateway, tmp_p
             assert len(policy.drain()) == 1
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_chat_file_part_without_wire_calls")
 def test_bedrock_guardrail_refuses_chat_file_part_without_reaching_guardrail_or_provider(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -630,7 +628,6 @@ def test_bedrock_guardrail_refuses_chat_file_part_without_reaching_guardrail_or_
             assert policy.drain() == ()
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_anthropic_document_block")
 def test_bedrock_guardrail_refuses_anthropic_document_block(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
 
@@ -669,7 +666,6 @@ def test_bedrock_guardrail_refuses_anthropic_document_block(gateway: Gateway, tm
             assert policy.drain() == upstream.drain() == ()
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_responses_input_file")
 def test_bedrock_guardrail_refuses_responses_input_file(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
 
@@ -706,7 +702,6 @@ def test_bedrock_guardrail_refuses_responses_input_file(gateway: Gateway, tmp_pa
             assert policy.drain() == ()
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_text_only_payload_is_texts_only")
 def test_bedrock_guardrail_text_only_request_payload_is_texts_only(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
 
@@ -729,7 +724,6 @@ def test_bedrock_guardrail_text_only_request_payload_is_texts_only(gateway: Gate
             assert len(policy.drain()) == 1
 
 
-@pytest.mark.covers("other.observability.guardrails.non_bedrock_policy_skips_image_only_request")
 def test_non_bedrock_guardrail_is_not_invoked_on_image_only_request(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
 
@@ -813,7 +807,6 @@ def _during_call_masking_config(tmp_path: Path, policy_url: str, check: str, fil
     return path
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_mask_keeps_tool_result")
 def test_bedrock_during_call_mask_keeps_tool_result(gateway: Gateway, tmp_path: Path) -> None:
     check: Final = (
         "def apply_guardrail(inputs, request_data, input_type):\n"
@@ -860,7 +853,6 @@ def test_bedrock_during_call_mask_keeps_tool_result(gateway: Gateway, tmp_path: 
             eventually(lambda: upstream.drain(), lambda values: len(values) == 1, seconds=10)
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_mask_survives_pii_in_text")
 def test_bedrock_during_call_mask_survives_pii_in_text(gateway: Gateway, tmp_path: Path) -> None:
     check: Final = (
         "def apply_guardrail(inputs, request_data, input_type):\n"
@@ -903,7 +895,6 @@ def test_bedrock_during_call_mask_survives_pii_in_text(gateway: Gateway, tmp_pat
             eventually(lambda: upstream.drain(), lambda values: len(values) == 1, seconds=10)
 
 
-@pytest.mark.covers("other.observability.guardrails.non_bedrock_policy_inputs_match_base_on_empty_tools")
 def test_non_bedrock_policy_inputs_match_base_on_empty_tools(gateway: Gateway, tmp_path: Path) -> None:
     def sink(_request: Request) -> Reply:
         return Reply(body=b'{"action":"NONE"}')
@@ -930,7 +921,6 @@ def test_non_bedrock_policy_inputs_match_base_on_empty_tools(gateway: Gateway, t
             assert json.loads(sink_requests[0].body)["tools"] is None, sink_requests[0].body
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_responses_function_call_output_file")
 def test_bedrock_refuses_responses_function_call_output_file(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_allow) as policy:
         path: Final = _guardrail_config(
@@ -966,7 +956,6 @@ def test_bedrock_refuses_responses_function_call_output_file(gateway: Gateway, t
             assert policy.drain() == ()
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_scans_responses_function_call_output_image")
 def test_bedrock_scans_responses_function_call_output_image(gateway: Gateway, tmp_path: Path) -> None:
     def guardrail(request: Request) -> Reply:
         assert request.target == "/guardrail/synthetic-guardrail/version/1/apply"
@@ -1024,7 +1013,6 @@ def test_bedrock_scans_responses_function_call_output_image(gateway: Gateway, tm
             assert len(policy.drain()) == 1
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_chat_video_part")
 def test_bedrock_refuses_chat_video_part(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_allow) as policy:
         path: Final = _guardrail_config(
@@ -1056,7 +1044,6 @@ def test_bedrock_refuses_chat_video_part(gateway: Gateway, tmp_path: Path) -> No
             assert policy.drain() == ()
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_refuses_chat_video_part")
 def test_bedrock_during_call_refuses_chat_video_part(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_allow) as policy:
         params: Final = _bedrock_policy(policy.url)
@@ -1090,7 +1077,6 @@ def test_bedrock_during_call_refuses_chat_video_part(gateway: Gateway, tmp_path:
             assert policy.drain() == ()
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_refuses_function_call_output_file")
 def test_bedrock_during_call_refuses_responses_function_call_output_file(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_allow) as policy:
         params: Final = _bedrock_policy(policy.url)
@@ -1139,7 +1125,6 @@ def test_bedrock_during_call_refuses_responses_function_call_output_file(gateway
         {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
     ],
 )
-@pytest.mark.covers("other.observability.guardrails.bedrock_latest_role_during_call_refuses_scoped_media")
 def test_bedrock_latest_role_during_call_refuses_scoped_media(
     gateway: Gateway, tmp_path: Path, media_part: dict[str, JsonValue]
 ) -> None:
@@ -1178,7 +1163,6 @@ def test_bedrock_latest_role_during_call_refuses_scoped_media(
         ({"type": "file"}, 500),  # the provider side rejects a payload-less file part downstream
     ],
 )
-@pytest.mark.covers("other.observability.guardrails.bedrock_pre_call_drops_unscannable_shell_part")
 def test_bedrock_pre_call_drops_unscannable_shell_part(
     gateway: Gateway, tmp_path: Path, shell_part: dict[str, JsonValue], expected_status: int
 ) -> None:
@@ -1211,7 +1195,6 @@ def test_bedrock_pre_call_drops_unscannable_shell_part(
             assert len(policy.drain()) == 1
 
 
-@pytest.mark.covers("other.observability.guardrails.non_bedrock_policy_forwards_non_string_image_url")
 def test_non_bedrock_policy_forwards_non_string_image_url(gateway: Gateway, tmp_path: Path) -> None:
     def sink(_request: Request) -> Reply:
         return Reply(body=b'{"action":"NONE"}')
@@ -1248,7 +1231,6 @@ def test_non_bedrock_policy_forwards_non_string_image_url(gateway: Gateway, tmp_
             assert "input_value=5" in response.text, response.text
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_tool_output_metadata_passes_as_text")
 def test_bedrock_during_call_tool_output_without_payload_keys_scans_as_text(gateway: Gateway, tmp_path: Path) -> None:
     tool_output: Final = json.dumps(
         [
@@ -1317,7 +1299,6 @@ def test_bedrock_during_call_tool_output_without_payload_keys_scans_as_text(gate
             assert len(upstream.drain()) == 1
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_tool_output_url_members_scan_as_text")
 def test_bedrock_during_call_tool_output_url_members_scan_as_text(gateway: Gateway, tmp_path: Path) -> None:
     tool_output: Final = json.dumps(
         [
@@ -1392,7 +1373,6 @@ def test_bedrock_during_call_tool_output_url_members_scan_as_text(gateway: Gatew
             assert len(upstream.drain()) == 1
 
 
-@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_responses_tool_output_string_scans_as_text")
 def test_bedrock_during_call_responses_function_call_output_string_scans_as_text(
     gateway: Gateway, tmp_path: Path
 ) -> None:

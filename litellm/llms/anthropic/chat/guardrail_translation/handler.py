@@ -595,14 +595,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         scanned: Final = (
             *top_level_system_scanned,
-            *(item for one_message in extracted for item in one_message.scanned),
+            *(chain.from_iterable(one_message.scanned for one_message in extracted)),
         )
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-        images_to_check: Final = [image for one_message in extracted for image in one_message.images]
+        images_to_check: Final = list(chain.from_iterable(one_message.images for one_message in extracted))
         files_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-            file for one_message in extracted for file in one_message.files
+            *chain.from_iterable(one_message.files for one_message in extracted)
         ]
-        scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
+        scanned_tool_calls: Final = tuple(chain.from_iterable(one_message.tool_calls for one_message in extracted))
         tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
@@ -987,9 +987,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
         )
         return ExtractedInput(
-            scanned=tuple(item for block in blocks for item in block.scanned),
-            images=tuple(image for block in blocks for image in block.images),
-            files=tuple(file for block in blocks for file in block.files),
+            scanned=tuple(chain.from_iterable(block.scanned for block in blocks)),
+            images=tuple(chain.from_iterable(block.images for block in blocks)),
+            files=tuple(chain.from_iterable(block.files for block in blocks)),
             tool_calls=tuple(
                 ScannedToolCall(
                     tool_call=AnthropicConfig.convert_tool_use_to_openai_format(content_item, tool_call_idx),
@@ -1063,16 +1063,16 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if isinstance(block.get("text"), str)
             ),
             images=tuple(
-                image
-                for _, block in blocks
-                if block.get("type") == "image"
-                for image in cls._image_sources(block, scan_attachments)
+                chain.from_iterable(
+                    cls._image_sources(block, scan_attachments) for _, block in blocks if block.get("type") == "image"
+                )
             ),
             files=tuple(
-                file
-                for _, block in blocks
-                if scan_attachments and block.get("type") == "document"
-                for file in cls._document_sources(block)
+                chain.from_iterable(
+                    cls._document_sources(block)
+                    for _, block in blocks
+                    if scan_attachments and block.get("type") == "document"
+                )
             ),
         )
 
