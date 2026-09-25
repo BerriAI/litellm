@@ -778,7 +778,7 @@ class ResetBudgetJob:
         )
         agents: Final[tuple[_AgentRow, ...]] = await self._fetch_linked_rows(
             table=AgentsRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            where=_budget_link_where(budget_ids),
             log_subject="agents",
         )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
@@ -851,14 +851,23 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.agents, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.agents, cascade)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _set_spend_counter_with_floor_and_broadcast,
+        )
+
+        for counter_key, carried_spend in cascade.counter_resets:
+            if counter_key.startswith("spend:agent:"):
+                await _set_spend_counter_with_floor_and_broadcast(counter_key, carried_spend)
         await self._invalidate_caches(
-            counter_keys=tuple(counter_key for counter_key, _ in cascade.counter_resets),
+            counter_keys=tuple(
+                counter_key for counter_key, _ in cascade.counter_resets if not counter_key.startswith("spend:agent:")
+            ),
             cache_keys=cascade.cache_keys,
         )
 
