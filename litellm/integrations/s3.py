@@ -54,12 +54,42 @@ def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
     return _resolve_positive_int("s3_max_concurrent_uploads", configured, fallback)
 
 
-def resolve_s3_max_flush_attempts(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_flush_attempts", configured, fallback)
-
-
 def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
     return _resolve_positive_int("s3_max_queue_size", configured, fallback)
+
+
+def resolve_s3_max_retry_age_seconds(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_retry_age_seconds", configured, fallback)
+
+
+def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_adaptive_concurrency", configured, fallback)
+
+
+def resolve_s3_drop_on_terminal_error(configured: object) -> bool:
+    if configured is None or configured == "":
+        return False
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_drop_on_terminal_error=%r is not a boolean, keeping all failed uploads queued",
+            configured,
+        )
+        return False
+
+
+def resolve_s3_adaptive_concurrency(configured: object) -> bool:
+    if configured is None or configured == "":
+        return False
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_adaptive_concurrency=%r is not a boolean, keeping the fixed upload width",
+            configured,
+        )
+        return False
 
 
 def resolve_s3_batch_file_upload(configured: object) -> bool:

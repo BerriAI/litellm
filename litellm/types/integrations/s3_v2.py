@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+import time
+
+from pydantic import BaseModel, Field
 
 
 class s3BatchLoggingElement(BaseModel):
@@ -11,4 +13,4 @@ class s3BatchLoggingElement(BaseModel):
     s3_object_download_filename: str
     body: str | None = None
     content_type: str = "application/json"
-    flush_attempts: int = 0
+    enqueued_at: float = Field(default_factory=time.monotonic)
