@@ -365,6 +365,26 @@ async def test_batch_health_check_uses_alist_batches_for_supported_providers():
 
 
 @pytest.mark.asyncio
+async def test_batch_health_check_hands_the_resolved_provider_to_alist_batches():
+    filtered_model_params: Final = {
+        "model": "xai/grok-4.3",
+        "api_key": "sk-test",
+        "litellm_metadata": {"tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]},
+    }
+
+    with patch("litellm.alist_batches", new_callable=AsyncMock, return_value={}) as mock_alist:
+        await HealthCheckHelpers._batch_health_check(
+            custom_llm_provider="xai",
+            model_params={**filtered_model_params, "messages": []},
+            filtered_model_params=filtered_model_params,
+        )
+
+    assert mock_alist.call_args.kwargs["custom_llm_provider"] == "xai"
+    assert mock_alist.call_args.kwargs["model"] == "xai/grok-4.3"
+    assert mock_alist.call_args.kwargs["api_key"] == "sk-test"
+
+
+@pytest.mark.asyncio
 async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
     """Providers not in LIST_BATCHES_SUPPORTED_PROVIDERS fall back to acompletion."""
     mock_logging_obj = MagicMock()
