@@ -15,6 +15,9 @@ import httpx2
 import pytest
 from mcp import MCPError
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver import MCPServer as UpstreamServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     CONNECTION_CLOSED,
@@ -39,6 +42,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCPClient,
+    PersistentMCPSession,
     _first_non_cancelled_cause,
     _TransportContext,
     as_mcp_read_timeout,
@@ -2897,3 +2901,177 @@ async def test_cancellation_delivers_termination_over_tcp(
         closed: Final = await asyncio.wait_for(asyncio.gather(*connections, return_exceptions=True), 2)
         assert all(result is None or isinstance(result, asyncio.CancelledError) for result in closed), closed
         await asyncio.wait_for(listener.wait_closed(), 2)
+
+
+class _StatefulUpstreamClient(MCPClient):
+    """An MCPClient whose streamable-HTTP transport talks to an in-process stateful MCP server."""
+
+    def __init__(self, app, **kwargs):
+        super().__init__(**kwargs)
+        self._app = app
+
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
+        http_client: Final = self._create_httpx_client_factory(transport=httpx2.ASGITransport(app=self._app))(
+            headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
+        )
+        return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+
+def _stateful_upstream():
+    service: Final = UpstreamServer("stateful")
+    selected: Final[dict[str, str]] = {}
+
+    @service.tool()
+    def select_project(name: str, ctx: Context) -> str:
+        selected[ctx.headers["mcp-session-id"]] = name
+        return f"selected {name}"
+
+    @service.tool()
+    def create_feature(title: str, ctx: Context) -> str:
+        return f"{selected[ctx.headers['mcp-session-id']]}/{title}"
+
+    return service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_keeps_upstream_state_across_tool_calls():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        per_call: Final = await client.call_tool(CallToolRequestParams(name="select_project", arguments={"name": "a"}))
+        assert per_call.is_error is False
+        fresh: Final = await client.call_tool(CallToolRequestParams(name="create_feature", arguments={"title": "b"}))
+        assert fresh.is_error is True, "a fresh upstream session per call must not see the earlier selection"
+
+        session: Final = client.open_persistent_session()
+        try:
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "a"}), persistent_session=session
+            )
+            created: Final = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "b"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False
+        assert created.is_error is False
+        assert created.content[0].text == "a/b"
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed
+
+
+def _client_with_session(app) -> tuple[_StatefulUpstreamClient, PersistentMCPSession]:
+    client: Final = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+    return client, client.open_persistent_session()
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_survives_a_caller_timeout_on_one_operation():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    client.call_tool(
+                        CallToolRequestParams(name="select_project", arguments={"name": "a"}),
+                        persistent_session=session,
+                    ),
+                    timeout=0,
+                )
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "c"}), persistent_session=session
+            )
+            created: Final = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "d"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False, "the session must outlive a timed out call"
+        assert created.content[0].text == "c/d"
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_closing_persistent_session_mid_operation_fails_the_waiter_instead_of_hanging():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        started: Final = asyncio.Event()
+
+        async def slow_operation(_: object) -> str:
+            started.set()
+            await asyncio.sleep(30)
+            return "never"
+
+        waiter: Final = asyncio.ensure_future(session.run(slow_operation))
+        await asyncio.wait_for(started.wait(), 5)
+        session.close()
+        with pytest.raises(RuntimeError, match="upstream MCP session closed"):
+            await asyncio.wait_for(waiter, 5)
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_reports_an_upstream_cancellation_as_a_runtime_error_not_a_cancelled_caller():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+
+        async def cancelled_upstream(_: object) -> str:
+            raise asyncio.CancelledError()
+
+        try:
+            with pytest.raises(RuntimeError, match="cancelled"):
+                await asyncio.wait_for(session.run(cancelled_upstream), 5)
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "e"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False, "an upstream cancellation must not be mistaken for a cancelled caller"
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_closing_persistent_session_fails_a_caller_blocked_on_a_full_queue_instead_of_hanging():
+    from litellm.experimental_mcp_client.client import _MAX_PENDING_OPERATIONS
+
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        started: Final = asyncio.Event()
+
+        async def slow_operation(_: object) -> str:
+            started.set()
+            await asyncio.sleep(30)
+            return "never"
+
+        waiters: Final = tuple(
+            asyncio.ensure_future(session.run(slow_operation)) for _ in range(_MAX_PENDING_OPERATIONS + 2)
+        )
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.sleep(0)
+        session.close()
+        outcomes: Final = await asyncio.wait_for(asyncio.gather(*waiters, return_exceptions=True), 5)
+        assert all(isinstance(outcome, RuntimeError) for outcome in outcomes), outcomes
+        await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_ends_after_a_broken_stream_so_the_next_call_gets_a_fresh_one():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+
+        async def broken_stream(_: object) -> str:
+            raise anyio.BrokenResourceError()
+
+        with pytest.raises(anyio.BrokenResourceError):
+            await asyncio.wait_for(session.run(broken_stream), 5)
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed, "a dead transport must end the session instead of being reused"

@@ -7,7 +7,8 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Final, Literal, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, Final, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,7 +28,7 @@ import contextlib
 
 import httpx
 import httpx2
-from mcp import ReadResourceResult, Resource
+from mcp import ClientSession, ReadResourceResult, Resource
 from mcp.types import (
     CallToolResult,
     GetPromptResult,
@@ -39,6 +40,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -6730,7 +6732,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None):
+        async def mock_call_tool(params, host_progress_callback=None, persistent_session=None):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
@@ -10032,7 +10034,7 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, persistent_session=None):
         self.attempts += 1
         if self._raises is not None:
             if raise_on_error:
@@ -10215,6 +10217,68 @@ class TestOBOCallToolRetry:
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
+    @pytest.mark.asyncio
+    async def test_session_closed_by_a_peers_refresh_retries_on_a_fresh_session_without_invalidating(self):
+        from litellm.experimental_mcp_client.client import UpstreamSessionClosedError
+
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=UpstreamSessionClosedError())
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_not_awaited()
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_a_401_evicts_the_cached_token_before_releasing_peers_on_the_shared_session(self):
+        """Peers woken by the shared session closing rebuild their client at once, so the stale token
+        must already be gone from the cache when the session closes or they re-exchange the same token."""
+        manager = self._manager()
+        order: list[str] = []
+
+        async def slow_invalidate(*_: object) -> None:
+            await asyncio.sleep(0.01)
+            order.append("invalidate")
+
+        manager._cred_provider.invalidate_credentials = AsyncMock(side_effect=slow_invalidate)
+        shared = MagicMock()
+        shared.close = MagicMock(side_effect=lambda: order.append("close"))
+        manager._upstream_sessions[("gw", "obo-srv", "fp")] = shared
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=CallToolResult(content=[], isError=False))
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+        manager._upstream_session_for = AsyncMock(return_value=None)
+
+        await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+            persistent_session=shared,
+        )
+
+        assert order == ["invalidate", "close"], order
+        assert ("gw", "obo-srv", "fp") not in manager._upstream_sessions
+
 
 class TestOBOConcurrencyLimit:
     """OBO (token_exchange) tool calls must honor the server's max_concurrent_requests.
@@ -10244,7 +10308,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, persistent_session=None):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:
@@ -10291,6 +10355,52 @@ class TestOBOConcurrencyLimit:
         assert peak_while_blocked == max_concurrent
         assert inflight["current"] == 0
         assert all(result.is_error is False for result in results)
+
+    @pytest.mark.asyncio
+    async def test_obo_dispatch_reuses_the_gateway_sessions_persistent_upstream_session(self):
+        server = MCPServer(
+            server_id="obo-stateful",
+            name="obo",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        sessions_seen = []
+
+        class _SessionRecordingClient:
+            async def discovery_auth_fingerprint(self):
+                return "same-token"
+
+            def open_persistent_session(self):
+                return SimpleNamespace(closed=False, close=lambda: None)
+
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, persistent_session=None):
+                sessions_seen.append(persistent_session)
+                return CallToolResult(content=[], isError=False)
+
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=_SessionRecordingClient())
+        manager.track_gateway_session("gateway-1")
+
+        for tool in ("select_project", "create_feature"):
+            result = await manager._call_regular_mcp_tool(
+                mcp_server=server,
+                original_tool_name=tool,
+                arguments={},
+                tasks=[],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers={"Authorization": "Bearer subject-jwt"},
+                raw_headers={"mcp-session-id": "gateway-1"},
+                proxy_logging_obj=None,
+            )
+            assert result.is_error is False
+
+        assert len(sessions_seen) == 2 and None not in sessions_seen, sessions_seen
+        assert sessions_seen[0] is sessions_seen[1], "OBO calls in one gateway session must share one upstream session"
 
 
 class TestOBOEndpointDiscovery:
@@ -14516,6 +14626,59 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+class _OfflineMCPClient(MCPClient):
+    """An MCPClient whose sessions never touch the network: operations run against a stand-in session."""
+
+    async def run_with_session(self, operation, *, quiet_on_error: bool = False):
+        del quiet_on_error
+        return await operation(cast(ClientSession, object()))
+
+
+@pytest.mark.asyncio
+async def test_upstream_session_is_shared_per_gateway_session_and_released_with_it():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="s1", name="stateful", url="http://upstream/mcp", transport=MCPTransport.http)
+    client: Final = _OfflineMCPClient(server_url=server.url, transport_type=MCPTransport.http)
+    try:
+        assert await manager._upstream_session_for(client, server, None) is None
+        assert await manager._upstream_session_for(client, server, {"accept": "application/json"}) is None
+        assert await manager._upstream_session_for(client, server, {"mcp-session-id": "forged"}) is None, (
+            "an mcp-session-id the gateway never issued must not open a long-lived upstream session"
+        )
+
+        manager.track_gateway_session("gw-1")
+        manager.track_gateway_session("gw-2")
+        first: Final = await manager._upstream_session_for(client, server, {"Mcp-Session-Id": "gw-1"})
+        second: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
+        other: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-2"})
+        assert first is not None and first is second, "every call of one gateway session must share one upstream session"
+        assert other is not None and other is not first, "distinct gateway sessions must not share upstream state"
+
+        manager.release_upstream_sessions("gw-1")
+        await asyncio.wait_for(first.wait_closed(), 5)
+        assert first.closed and not other.closed
+        assert await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"}) is None, (
+            "a released gateway session must not reopen upstream sessions"
+        )
+        manager.track_gateway_session("gw-1")
+        replacement: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
+        assert replacement is not first and not replacement.closed
+
+        other.close()
+        await asyncio.wait_for(other.wait_closed(), 5)
+        reopened: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-2"})
+        assert reopened is not other and not reopened.closed, "a dead upstream session must be replaced, not reused"
+
+        stdio: Final = MCPServer(server_id="s2", name="local", command="cat", transport=MCPTransport.stdio)
+        assert await manager._upstream_session_for(client, stdio, {"mcp-session-id": "gw-1"}) is None
+    finally:
+        for gateway_session_id in ("gw-1", "gw-2"):
+            manager.release_upstream_sessions(gateway_session_id)
+        await asyncio.wait_for(
+            asyncio.gather(*(s.wait_closed() for s in manager._upstream_sessions.values()), return_exceptions=True), 5
+        )
 
 
 class TestSharedIdentifierPrefixWarning:

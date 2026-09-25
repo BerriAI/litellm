@@ -1,10 +1,13 @@
+import asyncio
 import functools
 import json
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
+import httpx
+import httpx2
 import pytest
 import yaml
 from hypothesis import settings
@@ -19,10 +22,14 @@ from integration._support.mcp import (
     call_tool,
     mcp_peer,
     register_mcp,
+    stateful_mcp_peer,
     tool_calls,
     tool_names,
 )
 from integration._support.process import owned_proxy
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import CallToolResult, TextContent
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")
@@ -450,6 +457,42 @@ def test_key_grant_added_by_key_update_is_visible_to_mcp_tool_listing_before_the
             lambda: _granted_view(gateway, key), lambda view: view.tools != (), seconds=15, return_last_on_timeout=True
         )
         assert set(seen.tools) == {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}, seen.raw
+
+
+async def _select_then_create(url: str, key: str) -> tuple[CallToolResult, CallToolResult]:
+    async with httpx2.AsyncClient(headers={"x-litellm-api-key": key}, timeout=30, trust_env=False) as http:
+        async with streamable_http_client(url, http_client=http) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                names: Final = {tool.name.rsplit("-", 1)[-1]: tool.name for tool in (await session.list_tools()).tools}
+                selected: Final = await session.call_tool(names["select_project"], {"name": "alpha"})
+                created: Final = await session.call_tool(names["create_feature"], {"title": "login"})
+                return selected, created
+
+
+def _upstream_session_ids(observed: tuple[dict[str, object], ...]) -> set[str | None]:
+    headers: Final = tuple(cast(dict[bytes, bytes], item["headers"]) for item in observed)
+    return {raw.decode() if isinstance(raw := item.get(b"mcp-session-id"), bytes) else None for item in headers}
+
+
+def test_stateful_upstream_keeps_selection_across_tool_calls_through_gateway(gateway: Gateway) -> None:
+    with stateful_mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "integration" + uuid.uuid4().hex
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        peer.drain()
+        selected, created = asyncio.run(_select_then_create(f"{gateway.client.base_url}/{alias}/mcp", key))
+        observed: Final = peer.drain()
+        for session_id in _upstream_session_ids(observed):
+            if session_id is not None:
+                httpx.delete(peer.url, headers={"mcp-session-id": session_id}, trust_env=False)
+        call_sessions: Final = _upstream_session_ids(
+            tuple(item for item in observed if cast(dict[str, object], item["body"]).get("method") == "tools/call")
+        )
+        assert selected.is_error is False, selected.model_dump_json()
+        assert created.is_error is False, created.model_dump_json()
+        assert isinstance(created.content[0], TextContent) and created.content[0].text == "alpha/login"
+        assert len(call_sessions) == 1 and None not in call_sessions, call_sessions
 
 
 def _update_tool_permissions(
