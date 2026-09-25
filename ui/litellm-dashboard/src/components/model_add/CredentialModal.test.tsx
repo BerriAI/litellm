@@ -196,5 +196,33 @@ describe("CredentialModal", () => {
       await waitFor(() => expect(onSubmit).toHaveBeenCalled());
       expect(onSubmit.mock.calls[0][0].credential_alias).toBeNull();
     });
+
+    it("trims the alias before submitting in add mode", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const onSubmit = vi.fn();
+      renderModal({ mode: "add", onSubmit });
+
+      await fillRequiredAddFields(user);
+      fireEvent.change(screen.getByLabelText("Alias:"), { target: { value: "  Prod  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({ credential_name: "new-cred", credential_alias: "Prod" });
+    });
+
+    it("submits credential_alias: null when the alias is whitespace-only in edit mode", async () => {
+      const onSubmit = vi.fn();
+      renderModal({
+        mode: "edit",
+        onSubmit,
+        existingCredential: { ...mockCredential, credential_alias: "Prod OpenAI" },
+      });
+
+      fireEvent.change(screen.getByLabelText("Alias:"), { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: "Update Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].credential_alias).toBeNull();
+    });
   });
 });
