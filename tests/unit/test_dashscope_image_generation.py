@@ -2,7 +2,7 @@
 Unit tests for DashScope image generation support (qwen-image-2.0, qwen-image-2.0-pro,
 qwen-image-3.0, qwen-image-3.0-pro).
 
-Run in docker: pytest tests/test_litellm/test_dashscope_image_generation.py -v
+Run in docker: pytest tests/unit/test_dashscope_image_generation.py -v
 """
 
 from unittest.mock import MagicMock, patch

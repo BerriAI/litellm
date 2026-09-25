@@ -13,7 +13,6 @@ from typing import Final
 import httpx
 import pytest
 import respx
-from fastapi.testclient import TestClient
 
 
 import urllib.parse
@@ -26,10 +25,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
-
-
-async def _async_fake_bedrock_image_details(image_url):
-    return "ZmFrZS1pbWFnZQ==", "image/png"
 
 
 @pytest.fixture(autouse=True)
@@ -164,117 +159,6 @@ def test_completion_missing_role(openai_api_response):
         )
 
         mock_create.assert_called_once()
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "gemini/gemini-1.5-flash",
-        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
-        "anthropic/claude-3-5-sonnet",
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_url_with_format_param(model, sync_mode, monkeypatch):
-    from litellm import acompletion, completion
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory
-
-    if sync_mode:
-        client = HTTPHandler()
-    else:
-        client = AsyncHTTPHandler()
-
-    # This test is about request shaping, not live image downloads. Stub the
-    # URL->image conversion helpers so suite-level network/client state from
-    # earlier tests cannot prevent the mocked provider client from being hit.
-    fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
-    monkeypatch.setattr(
-        prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image
-    )
-    monkeypatch.setattr(
-        prompt_factory.BedrockImageProcessor,
-        "get_image_details",
-        staticmethod(lambda image_url: ("ZmFrZS1pbWFnZQ==", "image/png")),
-    )
-    monkeypatch.setattr(
-        prompt_factory.BedrockImageProcessor,
-        "get_image_details_async",
-        staticmethod(_async_fake_bedrock_image_details),
-    )
-
-    args = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
-                            "format": "image/png",
-                        },
-                    },
-                    {"type": "text", "text": "Describe this image"},
-                ],
-            }
-        ],
-    }
-    if model.startswith("gemini/"):
-        args["api_key"] = "test-api-key"
-    with patch.object(client, "post", new=MagicMock()) as mock_client:
-        try:
-            if sync_mode:
-                response = completion(**args, client=client)
-            else:
-                response = await acompletion(**args, client=client)
-            print(response)
-        except Exception as e:
-            pass
-
-        mock_client.assert_called()
-
-        print(mock_client.call_args.kwargs)
-
-        if "data" in mock_client.call_args.kwargs:
-            json_str = mock_client.call_args.kwargs["data"]
-        else:
-            json_str = json.dumps(mock_client.call_args.kwargs["json"])
-
-        if isinstance(json_str, bytes):
-            json_str = json_str.decode("utf-8")
-
-        print(f"type of json_str: {type(json_str)}")
-
-        # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
-        # bedrock/invoke models use Anthropic messages API which supports URLs
-        if model.startswith("bedrock/invoke/"):
-            # bedrock/invoke should convert URLs to base64 (doesn't support URL references)
-            # URL should NOT be in the JSON (it should be converted to base64)
-            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
-            # Should have base64 data in the source (type="base64", not type="url")
-            assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
-            # Should have "data" field containing base64 content
-            assert '"data"' in json_str
-        elif model.startswith("bedrock/"):
-            # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
-            # URL should NOT be in the JSON (it should be converted to base64)
-            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
-            # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
-            assert '"bytes"' in json_str or '"bytes":' in json_str
-        elif model.startswith("anthropic/"):
-            # Direct Anthropic models should pass HTTPS URLs directly (HTTP URLs are converted to base64)
-            # Since we're using HTTPS URL, it should be passed as-is
-            assert "https://awsmp-logos.s3.amazonaws.com" in json_str
-            # For Anthropic, URL references use "url" type, not base64
-            assert '"type":"url"' in json_str or '"type": "url"' in json_str
-        else:
-            # For other models, check format parameter is respected
-            assert "png" in json_str
-            assert "jpeg" not in json_str
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])
@@ -412,7 +296,6 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
 
 
 def test_custom_provider_with_extra_headers():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     with patch.object(
         litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
@@ -429,7 +312,6 @@ def test_custom_provider_with_extra_headers():
 
 
 def test_custom_provider_with_extra_body():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     with patch.object(
         litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"

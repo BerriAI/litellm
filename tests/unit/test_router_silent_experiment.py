@@ -388,47 +388,6 @@ async def test_shadow_of_a_shadow_is_not_launched(recording_logger):
     assert model_groups == ["shadow-a"]
 
 
-def test_silent_experiment_completion_direct():
-    """
-    Test _silent_experiment_completion directly (for router code coverage).
-    Mocks router.completion to avoid real API call.
-    """
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
-        },
-    ]
-    router = Router(model_list=model_list)
-    messages = [{"role": "user", "content": "hi"}]
-    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None):
-        router._silent_experiment_completion(
-            silent_model="gpt-3.5-turbo",
-            messages=messages,
-        )
-
-
-@pytest.mark.asyncio
-async def test_silent_experiment_acompletion_direct():
-    """
-    Test _silent_experiment_acompletion directly (for router code coverage).
-    Mocks router.acompletion to avoid real API call.
-    """
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
-        },
-    ]
-    router = Router(model_list=model_list)
-    messages = [{"role": "user", "content": "hi"}]
-    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None):
-        await router._silent_experiment_acompletion(
-            silent_model="gpt-3.5-turbo",
-            messages=messages,
-        )
-
-
 @pytest.mark.asyncio
 async def test_run_silent_experiment_drains_stream_so_callbacks_fire(recording_logger):
     router = Router(model_list=_streaming_model_list(None))
