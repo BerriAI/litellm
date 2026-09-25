@@ -2,7 +2,9 @@
 
 import datetime
 import json
+from collections.abc import Mapping
 from contextlib import ExitStack
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 from unittest.mock import patch as patch_ctx
 
@@ -14,7 +16,9 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy._types import (
     LiteLLM_ProxyModelTable,
+    LiteLLM_TeamTable,
     LitellmUserRoles,
+    ProxyException,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
@@ -27,6 +31,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _ptu_priced_deployment,
     _ptu_zeroed_pricing,
     _raise_if_ptu_cost_attribution_disabled,
+    _raise_if_ptu_share_teams_missing,
     _update_team_model_in_db,
     _validate_ptu_model_info,
     add_new_model,
@@ -651,7 +656,7 @@ class TestAddNewModelPtuGate:
         monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
 
     @staticmethod
-    def _patched_proxy(model_id: str):
+    def _patched_proxy(model_id: str, prisma_client: MagicMock | None = None):
         """Patch everything /model/new touches except the PTU gate, and hand back the DB writers."""
         db_row = LiteLLM_ProxyModelTable(
             model_id=model_id,
@@ -678,7 +683,7 @@ class TestAddNewModelPtuGate:
         proxy_server = "litellm.proxy.proxy_server"
         endpoints = "litellm.proxy.management_endpoints.model_management_endpoints"
         return (add_model_to_db, add_team_model_to_db), [
-            patch(f"{proxy_server}.prisma_client", MagicMock()),
+            patch(f"{proxy_server}.prisma_client", prisma_client if prisma_client is not None else MagicMock()),
             patch(f"{proxy_server}.store_model_in_db", True),
             patch(f"{proxy_server}.proxy_config", mock_proxy_config),
             patch(f"{proxy_server}.proxy_logging_obj", MagicMock()),
@@ -1326,6 +1331,79 @@ def test_validate_helper_refuses_shares_that_do_not_add_up_to_the_count():
         )
     assert exc.value.status_code == 400
     assert "4 of 5 allocated" in exc.value.detail
+
+
+class _TeamLookup:
+    def __init__(self, existing: frozenset[str]) -> None:
+        self.existing: Final = existing
+        self.looked_up: tuple[str, ...] = ()
+
+    async def find_unique(self, *, where: Mapping[str, object]) -> LiteLLM_TeamTable | None:
+        team_id: Final = str(where["team_id"])
+        self.looked_up = (*self.looked_up, team_id)
+        return LiteLLM_TeamTable(team_id=team_id) if team_id in self.existing else None
+
+
+def _shared_model_info(shares: Mapping[str, int]) -> Mapping[str, object]:
+    return {
+        "ptu_count": sum(shares.values()),
+        "cost_per_ptu_per_hour": 2.0,
+        "ptu_effective_from": _SHARED_START,
+        "ptu_shares": dict(shares),
+    }
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_refuses_a_team_that_does_not_exist():
+    with pytest.raises(HTTPException) as exc:
+        await _raise_if_ptu_share_teams_missing(
+            _shared_model_info({"team-a": 3, "ghost-team": 2}), lambda: _TeamLookup(frozenset({"team-a"}))
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {"error": "Team id=ghost-team does not exist in db"}
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_accepts_shares_naming_existing_teams():
+    lookup: Final = _TeamLookup(frozenset({"team-a", "team-b"}))
+    await _raise_if_ptu_share_teams_missing(_shared_model_info({"team-a": 3, "team-b": 2}), lambda: lookup)
+    assert sorted(lookup.looked_up) == ["team-a", "team-b"]
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_leaves_a_team_id_holder_to_the_team_model_check():
+    lookup: Final = _TeamLookup(frozenset())
+    await _raise_if_ptu_share_teams_missing(
+        {"team_id": "team-a", "ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "ptu_effective_from": _SHARED_START},
+        lambda: lookup,
+    )
+    assert lookup.looked_up == ()
+
+
+@pytest.mark.asyncio
+async def test_model_new_refuses_shares_naming_a_team_that_does_not_exist(monkeypatch):
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    (add_model_to_db, add_team_model_to_db), patches = TestAddNewModelPtuGate._patched_proxy(
+        "ptu-shared-model", prisma_client=prisma_client
+    )
+    admin = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    base = TestAddNewModelPtuGate._ptu_deployment("ptu-shared-model")
+    shared = base.model_copy(
+        update={"model_info": base.model_info.model_copy(update={"team_id": None, "ptu_shares": {"ghost-team": 15}})}
+    )
+
+    with ExitStack() as stack:
+        for active_patch in patches:
+            stack.enter_context(active_patch)
+        with pytest.raises(ProxyException, match="Team id=ghost-team does not exist in db") as exc:
+            await add_new_model(model_params=shared, user_api_key_dict=admin)
+
+    assert exc.value.code == "400"
+    prisma_client.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "ghost-team"})
+    add_model_to_db.assert_not_called()
+    add_team_model_to_db.assert_not_called()
 
 
 def test_validate_helper_refuses_a_team_id_beside_shares():

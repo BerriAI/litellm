@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from functools import partial
 from json import JSONDecodeError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
@@ -37,6 +38,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
+    parsed_ptu_shares,
     ptu_config_error,
 )
 from litellm.proxy._types import (
@@ -777,6 +779,21 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     error: Final = ptu_config_error(model_info)
     if error is not None:
         raise HTTPException(status_code=400, detail=error)
+
+
+async def _raise_if_ptu_share_teams_missing(
+    model_info: Mapping[str, object], team_table: Callable[[], _TeamLookupTable]
+) -> None:
+    """Hold every team named in ``ptu_shares`` to the existence check ``team_id`` already gets."""
+    shares: Final = parsed_ptu_shares(model_info.get("ptu_shares"))
+    if shares is None:
+        return
+    table: Final = team_table()
+    rows: Final = await asyncio.gather(*(table.find_unique(where={"team_id": team_id}) for team_id in shares))
+    missing: Final = tuple(team_id for team_id, row in zip(shares, rows, strict=True) if row is None)
+    if not missing:
+        return
+    raise HTTPException(status_code=400, detail={"error": f"Team id={', '.join(missing)} does not exist in db"})
 
 
 # The mirrored per-token pricing fields plus the remaining rates the public cost map or a
@@ -1614,8 +1631,10 @@ async def _update_team_model_in_db(
     # raising the rate on a configured model carries no ptu_effective_from, which the
     # stored row supplies.
     if patch_data.model_info is not None:
-        _raise_if_ptu_cost_attribution_disabled(patch_data.model_info.model_dump(exclude_none=True))
+        incoming_model_info: Final = patch_data.model_info.model_dump(exclude_none=True)
+        _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(_merged_ptu_model_info(db_model=db_model, patch_data=patch_data))
+        await _raise_if_ptu_share_teams_missing(incoming_model_info, partial(_repo_team_table, prisma_client))
     _raise_if_ptu_deployment_is_priced(
         model_info=_merged_ptu_model_info(db_model=db_model, patch_data=patch_data),
         supplied=(
@@ -2456,6 +2475,7 @@ async def add_new_model(
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(incoming_model_info)
+        await _raise_if_ptu_share_teams_missing(incoming_model_info, partial(_repo_team_table, prisma_client))
         priced_model_params: Final = _ptu_priced_deployment(model_params)
 
         if store_model_in_db is True:
