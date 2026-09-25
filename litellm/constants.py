@@ -330,6 +330,7 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
 BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
@@ -711,6 +712,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "gigachat",
     "nvidia_nim",
     "cerebras",
+    "nadir",
     "baseten",
     "ai21_chat",
     "volcengine",
@@ -904,6 +906,7 @@ openai_compatible_endpoints: Final[list] = [
     "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
     "https://integrate.api.nvidia.com/v1",
+    NADIR_DEFAULT_API_BASE,
     "api.deepseek.com/v1",
     "api.together.ai/v1",
     "api.together.xyz/v1",
