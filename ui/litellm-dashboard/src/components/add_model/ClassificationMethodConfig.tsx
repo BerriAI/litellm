@@ -477,12 +477,17 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               ))}
             </SelectContent>
           </Select>
+          <p className="text-sm text-muted-foreground">
+            A request the scorer places at or below this tier routes there without a classifier call. Anything the
+            scorer places higher, and anything it found no signal for at all, goes to the classifier instead
+          </p>
           <Label htmlFor={HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}>Max conversation tokens before classifier</Label>
           <Input
             id={HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}
             type="text"
             inputMode="numeric"
             min={1}
+            aria-describedby={`${HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}-help`}
             value={
               draft?.id === HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID
                 ? draft.raw
@@ -492,9 +497,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             onBlur={() => setDraft(null)}
             className="w-full"
           />
-          <p className="text-sm text-muted-foreground">
-            A request the scorer places at or below this tier routes there without a classifier call. Anything the
-            scorer places higher, and anything it found no signal for at all, goes to the classifier instead
+          <p id={`${HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}-help`} className="text-sm text-muted-foreground">
+            Above this estimated conversation size, consult the classifier even for a short ask. Leave blank to disable
+            this limit. With user-turn classification, tool continuations keep their pinned model
           </p>
         </div>
       )}
