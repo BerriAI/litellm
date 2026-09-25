@@ -1041,11 +1041,78 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
+            await self._mask_pii_in_history_tool_calls(
+                messages=messages,
+                presidio_config=presidio_config,
+                request_data=data,
+            )
+
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", data["messages"])
             data["messages"] = messages
             return data
         except Exception as e:
             raise e
+
+    async def _mask_pii_in_tool_input(
+        self,
+        value: object,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: dict,
+    ) -> object:
+        if isinstance(value, str):
+            return await self.check_pii(
+                text=value,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
+        if isinstance(value, list):
+            return [await self._mask_pii_in_tool_input(item, presidio_config, request_data) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: await self._mask_pii_in_tool_input(item, presidio_config, request_data)
+                for key, item in value.items()
+            }
+        return value
+
+    async def _mask_pii_in_history_tool_calls(
+        self,
+        messages: list,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: dict,
+    ) -> None:
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+
+            tool_calls = m.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    function = tool_call.get("function")
+                    if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+                        function["arguments"] = await self.check_pii(
+                            text=function["arguments"],
+                            output_parse_pii=self.output_parse_pii,
+                            presidio_config=presidio_config,
+                            request_data=request_data,
+                        )
+
+            function_call = m.get("function_call")
+            if isinstance(function_call, dict) and isinstance(function_call.get("arguments"), str):
+                function_call["arguments"] = await self.check_pii(
+                    text=function_call["arguments"],
+                    output_parse_pii=self.output_parse_pii,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                )
+
+            content = m.get("content")
+            if isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "tool_use" and "input" in c:
+                        c["input"] = await self._mask_pii_in_tool_input(c["input"], presidio_config, request_data)
 
     def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         from concurrent.futures import ThreadPoolExecutor
@@ -1697,7 +1764,61 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
                 new_texts.append(modified_text)
         inputs["texts"] = new_texts
+
+        # The unified guardrail-translation handlers extract tool-call arguments
+        # into inputs["tool_calls"] (see litellm/llms/{openai,anthropic}/chat/
+        # guardrail_translation/handler.py). apply_guardrail is the path the live
+        # proxy takes for /v1/chat/completions and /v1/messages, so PII in
+        # tool-call arguments must be masked here too - not only in
+        # async_pre_call_hook - otherwise it is forwarded in clear. Skip on the
+        # response unmasking branch above.
+        if not (input_type == "response" and pii_tokens):
+            await self._apply_guardrail_to_tool_calls(inputs=inputs, request_data=request_data or {})
         return inputs
+
+    @staticmethod
+    def _get_tool_call_arguments(tool_call: object) -> str | None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        arguments: Final[object] = (
+            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+        )
+        return arguments if isinstance(arguments, str) and arguments.strip() else None
+
+    @staticmethod
+    def _set_tool_call_arguments(tool_call: object, arguments: str) -> None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        if isinstance(function, dict):
+            function["arguments"] = arguments
+        elif function is not None and hasattr(function, "arguments"):
+            function.arguments = arguments  # type: ignore[attr-defined]
+
+    async def _apply_guardrail_to_tool_calls(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+    ) -> None:
+        """Mask PII in the argument string of each extracted tool call in place.
+
+        Handles both the OpenAI wire shape (tool_calls[].function.arguments) and
+        the Anthropic wire shape - the handlers normalise tool_use.input into the
+        same tool_calls[].function.arguments structure before calling here.
+        """
+        for tool_call in inputs.get("tool_calls") or ():
+            arguments = self._get_tool_call_arguments(tool_call)
+            if arguments is None:
+                continue
+            masked_arguments = await self.check_pii(
+                text=arguments,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data,
+            )
+            if masked_arguments != arguments:
+                self._set_tool_call_arguments(tool_call, masked_arguments)
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
