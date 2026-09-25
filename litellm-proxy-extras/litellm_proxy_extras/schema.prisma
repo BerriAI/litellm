@@ -1816,3 +1816,19 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+// Pending billing settlements for background interactions, keyed by the
+// interaction id so any replica can settle one that another replica created.
+// `claimed_at` is the exactly-once gate: the first conditional update wins.
+model LiteLLM_BackgroundInteractionSettlement {
+  interaction_id      String    @id
+  custom_llm_provider String
+  create_context      Json
+  created_at          DateTime  @default(now())
+  claimed_at          DateTime?
+  claimed_by          String?
+  settled_at          DateTime?
+  outcome             String?
+
+  @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
+}
