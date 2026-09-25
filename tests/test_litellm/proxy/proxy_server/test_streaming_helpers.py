@@ -551,6 +551,44 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
     }
 
 
+@pytest.mark.parametrize("content", ["", "answer", None])
+@pytest.mark.parametrize("finish_reason", [None, "tool_calls", "stop"])
+def test_serialize_streaming_chunk_preserves_opaque_reasoning_items(
+    content: str | None, finish_reason: str | None
+) -> None:
+    reasoning_items: Final = [
+        {
+            "id": "rs_first",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Use the tool result"}],
+            "encrypted_content": "opaque-first+/=",
+        },
+        {"id": "rs_second", "type": "reasoning", "summary": [], "encrypted_content": "opaque-second+/="},
+    ]
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-reasoning",
+        created=0,
+        model="reasoning-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=finish_reason,
+                delta=Delta(content=content, reasoning_items=reasoning_items),
+            )
+        ],
+    )
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"] == [
+        {
+            "index": 0,
+            **({"finish_reason": finish_reason} if finish_reason is not None else {}),
+            "delta": {"reasoning_items": reasoning_items, **({"content": content} if content is not None else {})},
+        }
+    ]
+
+
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
     """The helper is typed as ``BaseModel`` — handing it a plain dict trips
     the attribute-access path (no ``model_dump_json``)."""
