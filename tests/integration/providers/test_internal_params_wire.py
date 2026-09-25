@@ -10,6 +10,7 @@ from typing import Final
 
 import litellm
 import pytest
+from litellm.types.litellm_params import INTERNAL_KWARG_PREFIX
 from integration._support.upstream import INTERNAL_FIELDS
 from integration._support.wire import Reply, Request, wire_server
 from tests._support.stream_chunk_size import keys_at_every_depth, record_litellm_params, recorded_stream_chunk_size
@@ -276,7 +277,7 @@ def provider_wire_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 @pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_stream_chunk_size_never_reaches_provider_body(
+async def test_internal_params_never_reach_provider_body(
     monkeypatch: pytest.MonkeyPatch,
     provider_wire_environment: None,
     provider: str,
@@ -289,6 +290,7 @@ async def test_stream_chunk_size_never_reaches_provider_body(
             **_request_parameters(provider, wire.url),
             "stream": stream,
             "stream_chunk_size": 64,
+            f"{INTERNAL_KWARG_PREFIX}undeclared_sentinel": "internal",
             "extra_body": {"custom_provider_key": 1},
             "max_tokens": 16,
             "timeout": 5,
@@ -313,4 +315,5 @@ async def test_stream_chunk_size_never_reaches_provider_body(
         keys: Final = keys_at_every_depth(body)
         assert "stream_chunk_size" not in keys
         assert not INTERNAL_FIELDS.intersection(keys)
+        assert not frozenset(key for key in keys if key.startswith(INTERNAL_KWARG_PREFIX)), keys
         assert _custom_key(body, provider) == 1
