@@ -5137,3 +5137,236 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+def _user_export_row_instance(**overrides):
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import UserDailyActivityExportRow
+
+    fields = {
+        "date": "2026-06-01",
+        "user_id": "user-1",
+        "spend": 1.5,
+        "api_requests": 2,
+        "successful_requests": 2,
+        "failed_requests": 0,
+        "total_tokens": 30,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "cache_read_input_tokens": 5,
+        "cache_creation_input_tokens": 4,
+    }
+    fields.update(overrides)
+    return UserDailyActivityExportRow(**fields)
+
+
+def test_user_export_csv_columns_match_the_dashboard_client_layout():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
+
+    row: Final = _user_export_row_instance(
+        api_key="key-1",
+        key_alias="key-alias-1",
+        user_email="u@example.com",
+    )
+
+    records: Final = list(csv.DictReader(io.StringIO(_user_export_csv("daily_with_keys", (row,)))))
+
+    assert records == [
+        {
+            "Date": "2026-06-01",
+            "User ID": "user-1",
+            "Key Alias": "key-alias-1",
+            "Key ID": "key-1",
+            "User Email": "u@example.com",
+            "Spend ($)": "1.5000",
+            "Requests": "2",
+            "Successful Requests": "2",
+            "Failed Requests": "0",
+            "Total Tokens": "30",
+            "Prompt Tokens": "20",
+            "Completion Tokens": "10",
+            "Cache Read Input Tokens": "5",
+            "Cache Creation Input Tokens": "4",
+        }
+    ]
+
+
+def test_user_export_csv_omits_key_columns_for_the_plain_daily_scope():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
+
+    text: Final = _user_export_csv("daily", (_user_export_row_instance(),))
+
+    assert text.splitlines()[0] == (
+        "Date,User ID,Spend ($),Requests,Successful Requests,Failed Requests,"
+        "Total Tokens,Prompt Tokens,Completion Tokens,Cache Read Input Tokens,Cache Creation Input Tokens"
+    )
+    assert list(csv.reader(io.StringIO(text)))[1] == [
+        "2026-06-01",
+        "user-1",
+        "1.5000",
+        "2",
+        "2",
+        "0",
+        "30",
+        "20",
+        "10",
+        "5",
+        "4",
+    ]
+
+
+def test_user_export_csv_escapes_formula_aliases_and_keeps_dash_placeholder():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
+
+    row: Final = _user_export_row_instance(
+        key_alias='=HYPERLINK("http://evil.example","x")',
+        user_email="@cmd",
+    )
+
+    record: Final = next(csv.DictReader(io.StringIO(_user_export_csv("daily_with_keys", (row,)))))
+
+    assert record["Key Alias"] == '\'=HYPERLINK("http://evil.example","x")'
+    assert record["User Email"] == "'@cmd"
+    assert record["Key ID"] == "-"
+
+
+def test_user_export_csv_adds_flat_cost_columns_only_with_ptu_flat_cost():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
+
+    flat_header: Final = _user_export_csv("daily", (_user_export_row_instance(flat_cost=240.0),)).splitlines()[0]
+    assert "Spend ($),Flat Cost ($),Total Cost ($)" in flat_header
+
+    plain_header: Final = _user_export_csv("daily", (_user_export_row_instance(),)).splitlines()[0]
+    assert "Flat Cost" not in plain_header
+    assert "Total Cost" not in plain_header
+
+
+def test_user_export_row_maps_the_entity_column_to_user_id():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_row
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    team_row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="user-7",
+        api_key="key-1",
+        key_alias="alias-1",
+        user_email="u@example.com",
+        model="gpt-5",
+        spend=2.5,
+        flat_cost=1.0,
+        api_requests=3,
+        successful_requests=3,
+        failed_requests=0,
+        total_tokens=40,
+        prompt_tokens=25,
+        completion_tokens=15,
+        cache_read_input_tokens=6,
+        cache_creation_input_tokens=5,
+    )
+
+    user_row: Final = _user_export_row(team_row)
+
+    assert user_row.user_id == "user-7"
+    assert user_row.user_email == "u@example.com"
+    assert user_row.api_key == "key-1"
+    assert user_row.model == "gpt-5"
+    assert user_row.flat_cost == 1.0
+    assert user_row.total_tokens == 40
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_export_non_admin_cannot_view_other_users(monkeypatch):
+    """
+    Same scoping contract as the aggregated route: a non-admin naming another
+    user_id gets 403 and the export query is never reached.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_export,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_export_rows = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_export_rows",
+        mock_export_rows,
+    )
+
+    non_admin_key_dict = UserAPIKeyAuth(
+        user_id="regular-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_user_daily_activity_export(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            user_id="other-user-456",
+            user_api_key_dict=non_admin_key_dict,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Non-admin users can only view their own spend data" in str(exc_info.value.detail)
+    mock_export_rows.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_export_admin_global_view(monkeypatch):
+    """
+    An admin export without user_id forwards a global entity_id to the uncapped
+    export query on the user spend table, and answers CSV by default.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_export,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_export_rows = AsyncMock(return_value=())
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_export_rows",
+        mock_export_rows,
+    )
+
+    admin_key_dict = UserAPIKeyAuth(
+        user_id="admin-user-001",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    result = await get_user_daily_activity_export(
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        api_key="key-1",
+        timezone_offset=480,
+        user_api_key_dict=admin_key_dict,
+    )
+
+    assert result.media_type == "text/csv; charset=utf-8"
+    assert 'filename="user_usage_daily_' in result.headers["content-disposition"]
+    mock_export_rows.assert_called_once_with(
+        prisma_client=mock_prisma_client,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        api_key="key-1",
+        exclude_entity_ids=None,
+        timezone_offset_minutes=480,
+        export_type="daily",
+    )
