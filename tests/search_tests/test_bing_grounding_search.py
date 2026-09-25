@@ -85,7 +85,7 @@ class TestBingGroundingSearch(BaseSearchTest):
 class TestBingGroundingSearchTransformation:
     """
     Full-stack tests through `litellm.search` / `litellm.asearch` with the HTTP layer mocked.
-    Transformation details are unit-tested in tests/test_litellm/llms/azure/search/.
+    Transformation details are unit-tested in tests/unit/llms/azure/search/.
     """
 
     @pytest.fixture(autouse=True)

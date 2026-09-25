@@ -355,6 +355,21 @@ workflows:
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - unit:
+          name: unit-llm-vertex-ai
+          flag: llm-vertex-ai
+          shards: 2
+          workers: 1
+          reruns: 2
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-llm-other-providers
+          flag: llm-other-providers
+          shards: 3
+          reruns: 2
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
           name: unit-misc
           flag: misc
           shards: 2
