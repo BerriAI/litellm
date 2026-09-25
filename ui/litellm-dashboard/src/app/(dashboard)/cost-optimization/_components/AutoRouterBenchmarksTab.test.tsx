@@ -1,3 +1,6 @@
+vi.mock("@/components/UsagePage/useRoutingUsage", () => ({
+  useRoutingUsage: () => ({ data: undefined, isError: false }),
+}));
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import React from "react";
@@ -6,7 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { ApiError } from "@/lib/http/client";
 
-vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
+vi.mock("./useAutoRouterBenchmarks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./useAutoRouterBenchmarks")>()),
+  useAutoRouterBenchmarks: vi.fn(),
+}));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
 vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
 vi.mock("@/components/shared/advanced_date_picker", () => ({

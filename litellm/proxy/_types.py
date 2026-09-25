@@ -952,6 +952,7 @@ class LiteLLMRoutes(enum.Enum):
         "/auto_router/availability",
         # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
         "/auto_router/session",
+        "/auto_router/usage",
         "/cost/predict-cache",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py

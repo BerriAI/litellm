@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRoutingUsage } from "@/components/UsagePage/useRoutingUsage";
+import type { RoutingUsage } from "@/components/UsagePage/routingUsage";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
@@ -25,6 +27,7 @@ import {
   groupLabel,
   pctLabel,
   viewFor,
+  viewGroup,
   type AutoRouterBenchmarksResponse,
   type AutoRouterCacheStats,
   type BenchmarkView,
@@ -33,7 +36,7 @@ import {
 import { classificationRatePer1kTurns, formatRangeLabel, usd } from "./costOptimizationUtils";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
-import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+import { benchmarksWindow, useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 import { DailyActivityRange } from "./useDailyActivityRange";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -273,6 +276,8 @@ const CachingCard: React.FC<{ cache: AutoRouterCacheStats }> = ({ cache }) => {
 };
 
 interface BenchmarksBodyProps {
+  usage?: readonly RoutingUsage[];
+  usageUnavailable?: boolean;
   isPending: boolean;
   error: unknown;
   data: AutoRouterBenchmarksResponse | undefined;
@@ -280,7 +285,15 @@ interface BenchmarksBodyProps {
   autoRouters: readonly AutoRouterDeployment[];
 }
 
-const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data, selectedKey, autoRouters }) => {
+const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({
+  isPending,
+  error,
+  data,
+  selectedKey,
+  autoRouters,
+  usage,
+  usageUnavailable,
+}) => {
   if (isPending) return <Message>Loading auto-router usage...</Message>;
   if (error instanceof ApiError && error.status === 403) {
     return <Message>Auto-router usage is visible to proxy admin roles only</Message>;
@@ -293,7 +306,7 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
     <>
       <HeroCard view={view} />
 
-      <TierTurnsChart view={view} autoRouters={autoRouters} />
+      <TierTurnsChart view={view} autoRouters={autoRouters} usage={usage} usageUnavailable={usageUnavailable} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Metric
@@ -346,6 +359,18 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
+  const selected = data ? viewGroup(viewFor(data, selectedKey)) : null;
+  const window = benchmarksWindow(dateValue, new Date());
+  const usageQuery = {
+    start_date: window.start_date ?? "",
+    end_date: window.end_date ?? "",
+    router_name: selected?.router_name,
+    router_type: selected?.router_type,
+    api_key: apiKey,
+    user_id: userId,
+  };
+  const hasUsageWindow = Boolean(window.start_date && window.end_date);
+  const usage = useRoutingUsage(usageQuery, Boolean(accessToken && selected && hasUsageWindow));
   const groups = data?.groups ?? [];
   const selectedLabel = data ? viewFor(data, selectedKey).label : "All auto-routers";
   const rangeLabel = formatRangeLabel(dateValue.from, dateValue.to);
@@ -388,6 +413,8 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
         error={error}
         data={data}
         selectedKey={selectedKey}
+        usage={usage.data}
+        usageUnavailable={usage.isError}
         autoRouters={autoRouters ?? []}
       />
     </div>

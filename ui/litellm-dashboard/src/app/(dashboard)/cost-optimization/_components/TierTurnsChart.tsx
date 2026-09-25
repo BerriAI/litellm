@@ -1,6 +1,7 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
+import { routingTiers, routingSpend, trafficShare, type RoutingUsage } from "@/components/UsagePage/routingUsage";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { hydrateTierLabels } from "@/components/add_model/build_complexity_router_config";
@@ -79,31 +80,67 @@ const tierModelsFor = (
 };
 
 interface TierTurnsChartProps {
+  usage?: readonly RoutingUsage[];
+  usageUnavailable?: boolean;
   view: BenchmarkView;
   autoRouters: readonly AutoRouterDeployment[];
 }
 
-const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) => {
+const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters, usage, usageUnavailable }) => {
+  const [mode, setMode] = useState<"turns" | "spend">("turns");
   const group = viewGroup(view);
   const entries = Object.entries(group?.tier_turns ?? {}).filter(([, turns]) => turns > 0);
-  if (!group || entries.length === 0) return null;
+  if (!group || (entries.length === 0 && !usage?.length)) return null;
 
   const tierLabels = tierLabelsFor(group.router_name, group.router_type, autoRouters);
-  const total = entries.reduce((sum, [, turns]) => sum + turns, 0);
-  const slices = entries.map(([tier, turns]) => ({
-    tier: tierDisplayLabel(tier, tierLabels),
-    turns,
-    models: tierModelsFor(tier, group.router_name, group.router_type, autoRouters),
-  }));
+  const measured = usage !== undefined && usage.length > 0;
+  const spendUnavailable = !measured && (usageUnavailable || usage !== undefined);
+  const slices = measured
+    ? routingTiers(usage).map((row) => ({
+        tier: tierDisplayLabel(row.tier ?? "Default / no tier", tierLabels),
+        turns: row.requests,
+        spend: row.spend,
+        models: row.models.map((model) => model.model),
+        modelUsage: row.models,
+      }))
+    : entries.map(([tier, turns]) => ({
+        tier: tierDisplayLabel(tier, tierLabels),
+        turns,
+        spend: 0,
+        models: tierModelsFor(tier, group.router_name, group.router_type, autoRouters),
+        modelUsage: [],
+      }));
+  const category = measured ? mode : "turns";
+  const total = slices.reduce((sum, slice) => sum + slice[category], 0);
+  const requests = slices.reduce((sum, slice) => sum + slice.turns, 0);
   const colors = slices.map((_, idx) => DEFAULT_COLOR_CYCLE[idx % DEFAULT_COLOR_CYCLE.length]);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Routing by tier</CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>Routing by tier</CardTitle>
+          {measured && (
+            <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Routing distribution">
+              {(["turns", "spend"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={category === value}
+                  onClick={() => setMode(value)}
+                  className={`rounded-md px-3 py-1 text-sm transition-colors ${category === value ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {value === "turns" ? "Traffic" : "Spend"}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <p className="text-sm text-muted-foreground">
-          Turns each tier served. Turns the classifier sent to the default model belong to no tier and are not counted
-          here, so this can total less than the router&apos;s turns.
+          {measured
+            ? "Requests and model spend from retained logs in this period. Excludes classifier and shadow-evaluation calls."
+            : "Turns each tier served. Turns the classifier sent to the default model belong to no tier and are not counted here, so this can total less than the router's turns."}
+          {spendUnavailable && " Model spend is unavailable for this range."}
         </p>
       </CardHeader>
       <CardContent>
@@ -112,11 +149,15 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
             className="h-80"
             data={slices}
             index="tier"
-            category="turns"
+            category={category}
             colors={colors}
-            valueFormatter={(value) => value.toLocaleString()}
+            valueFormatter={category === "spend" ? routingSpend : (value) => value.toLocaleString()}
             showLabel
-            label={`${total.toLocaleString()} total turns`}
+            label={
+              category === "spend"
+                ? routingSpend(total)
+                : `${total.toLocaleString()} total ${measured ? "requests" : "turns"}`
+            }
           />
           <ul className="flex flex-col gap-6">
             {slices.map((slice, idx) => (
@@ -127,11 +168,19 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
                 />
                 <div className="min-w-0">
                   <p className="text-sm text-muted-foreground">
-                    {slice.tier} {Math.round((100 * slice.turns) / total).toLocaleString()}%
+                    {slice.tier} {trafficShare(slice[category], total)}
+                    {measured && ` · ${routingSpend(slice.spend)}`}
                   </p>
-                  {slice.models.length > 0 && (
-                    <p className="text-xs break-words text-muted-foreground">{slice.models.join(", ")}</p>
-                  )}
+                  {measured
+                    ? slice.modelUsage.map((model) => (
+                        <p key={model.model} className="text-xs break-words text-muted-foreground">
+                          {model.model} · {model.requests.toLocaleString()} {model.requests === 1 ? "request" : "requests"} (
+                          {trafficShare(model.requests, requests)}) · {routingSpend(model.spend)}
+                        </p>
+                      ))
+                    : slice.models.length > 0 && (
+                        <p className="text-xs break-words text-muted-foreground">{slice.models.join(", ")}</p>
+                      )}
                 </div>
               </li>
             ))}

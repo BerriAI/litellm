@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -176,4 +176,32 @@ describe("TierTurnsChart", () => {
 
     expect(container).toBeEmptyDOMElement();
   });
+});
+
+it("switches the existing donut to actual spend and shows each destination model", () => {
+  render(
+    <TierTurnsChart
+      view={groupView()}
+      autoRouters={[]}
+      usage={[
+        { model: "fast", router_name: "claude-auto", router_type: "complexity", tier: "SIMPLE", requests: 3, spend: 1 },
+        {
+          model: "strong",
+          router_name: "claude-auto",
+          router_type: "complexity",
+          tier: "SIMPLE",
+          requests: 1,
+          spend: 5,
+        },
+        { model: "fallback", router_name: "claude-auto", router_type: "complexity", tier: null, requests: 1, spend: 4 },
+      ]}
+    />,
+  );
+  expect(screen.getByText("Simple 80% · $6.00")).toBeInTheDocument();
+  expect(screen.getByText("strong · 1 request (20%) · $5.00")).toBeInTheDocument();
+  expect(screen.getByText("Default / no tier 20% · $4.00")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Spend" }));
+  expect(screen.getByTestId("donut")).toHaveTextContent("$10.00");
+  expect(screen.getByText("Simple 60% · $6.00")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Spend" })).toHaveAttribute("aria-pressed", "true");
 });

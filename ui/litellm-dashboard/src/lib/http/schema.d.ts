@@ -1493,6 +1493,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Usage
+         * @description Requests and destination-model spend from retained logs in inclusive UTC days.
+         *
+         *     Select one model or one router. Internal classifier and shadow-evaluation calls
+         *     are excluded. Non-admins can only see requests attributed to their own user.
+         */
+        get: operations["get_auto_router_usage_auto_router_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/validate_complexity_router_config": {
         parameters: {
             query?: never;
@@ -25307,6 +25330,21 @@ export interface components {
              */
             turns: number;
         };
+        /** AutoRouterUsage */
+        AutoRouterUsage: {
+            /** Model */
+            model: string;
+            /** Requests */
+            requests: number;
+            /** Router Name */
+            router_name: string | null;
+            /** Router Type */
+            router_type: string | null;
+            /** Spend */
+            spend: number;
+            /** Tier */
+            tier: string | null;
+        };
         /** AwsSessionTag */
         AwsSessionTag: {
             /** Key */
@@ -48993,6 +49031,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_usage_auto_router_usage_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                destination_model?: string | null;
+                router_name?: string | null;
+                router_type?: string | null;
+                user_id?: string | null;
+                api_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterUsage"][];
                 };
             };
             /** @description Validation Error */
