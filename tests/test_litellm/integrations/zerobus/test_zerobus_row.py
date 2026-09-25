@@ -123,8 +123,10 @@ def test_a_wrongly_typed_field_is_null_instead_of_a_rejected_record():
     assert row["start_time"] is None
 
 
-def test_the_row_is_json_serializable():
-    json.dumps(dict(trace_row(_payload())))
+def test_the_row_survives_a_json_round_trip_unchanged():
+    row = trace_row(_payload())
+
+    assert json.loads(json.dumps(dict(row))) == dict(row)
 
 
 def test_create_table_sql_declares_every_column_with_its_type():
