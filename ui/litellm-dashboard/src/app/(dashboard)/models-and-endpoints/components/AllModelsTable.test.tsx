@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelData } from "@/components/model_dashboard/types";
 
@@ -76,6 +76,33 @@ const row = (modelId: string): HTMLElement => {
 };
 
 describe("AllModelsTable", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("remembers a Source column toggle across remounts", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<AllModelsTable {...baseProps} />);
+    expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /columns/i }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: /^source$/i }));
+    expect(await screen.findByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
+    unmount();
+
+    render(<AllModelsTable {...baseProps} />);
+    expect(screen.getByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
+    expect(screen.getByText("DB Model")).toBeInTheDocument();
+  });
+
+  it("restores column choices saved under the all-models storage key", () => {
+    localStorage.setItem("litellm_table_columns_all-models", JSON.stringify({ model_info_db_model: true }));
+
+    render(<AllModelsTable {...baseProps} />);
+
+    expect(screen.getByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
+  });
+
   it("renders the nine design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);
