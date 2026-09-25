@@ -196,4 +196,5 @@ class TestBingGroundingSearchTransformation:
         ):
             response = litellm.search(query="pricing check", search_provider="bing_grounding")
 
+        # Grounding with Bing Search (G1 SKU): $14 per 1,000 transactions, https://www.microsoft.com/en-us/bing/apis, checked 2026-09-24
         assert response._hidden_params["response_cost"] == pytest.approx(0.014)
