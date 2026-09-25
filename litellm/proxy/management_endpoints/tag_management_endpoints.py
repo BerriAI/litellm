@@ -836,6 +836,7 @@ async def _resolve_tag_daily_activity_scope(
     tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
 )
 async def get_tag_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tags: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -843,7 +844,6 @@ async def get_tag_daily_activity_aggregated(
     api_key: str | None = None,
     exclude_tags: str | None = None,
     timezone: int | None = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Aggregated daily activity for tags without pagination.
@@ -888,7 +888,7 @@ async def get_tag_daily_activity_aggregated(
     tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
 )
 async def search_tag_daily_activity_keys(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     search: str = Query(..., description="Search term matching key hash, key alias or user id"),
     tags: str | None = None,
     start_date: str | None = None,
@@ -951,7 +951,7 @@ async def search_tag_daily_activity_keys(
     tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
 )
 async def get_tag_daily_activity_export(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = None,
     end_date: str | None = None,
     export_type: DailyActivityExportType = "daily",

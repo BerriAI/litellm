@@ -1331,6 +1331,7 @@ async def _resolve_agent_daily_activity_scope(
     response_model=SpendAnalyticsPaginatedResponse,
 )
 async def get_agent_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     agent_ids: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -1338,7 +1339,6 @@ async def get_agent_daily_activity_aggregated(
     api_key: str | None = None,
     exclude_agent_ids: str | None = None,
     timezone: int | None = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Aggregated daily activity for agents without pagination, including per-agent breakdown.
@@ -1386,7 +1386,7 @@ async def get_agent_daily_activity_aggregated(
     response_model=SpendAnalyticsPaginatedResponse,
 )
 async def search_agent_daily_activity_keys(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     search: str = Query(..., description="Search term matching key hash, key alias or user id"),
     agent_ids: str | None = None,
     start_date: str | None = None,
@@ -1449,7 +1449,7 @@ async def search_agent_daily_activity_keys(
     responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
 )
 async def get_agent_daily_activity_export(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = None,
     end_date: str | None = None,
     export_type: DailyActivityExportType = "daily",

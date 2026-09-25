@@ -907,9 +907,9 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         raise HTTPException(
             status_code=401,
@@ -993,6 +993,7 @@ async def _resolve_customer_daily_activity_scope(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_customer_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     end_user_ids: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -1000,15 +1001,14 @@ async def get_customer_daily_activity_aggregated(
     api_key: str | None = None,
     exclude_end_user_ids: str | None = None,
     timezone: int | None = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Aggregated daily activity for customers without pagination, including
     per-customer breakdown.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         raise HTTPException(
             status_code=401,
@@ -1059,7 +1059,7 @@ async def get_customer_daily_activity_aggregated(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def search_customer_daily_activity_keys(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     search: str = Query(..., description="Search term matching key hash, key alias or user id"),
     end_user_ids: str | None = None,
     start_date: str | None = None,
@@ -1070,9 +1070,9 @@ async def search_customer_daily_activity_keys(
     """
     Key search over aggregated customer daily activity.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         raise HTTPException(
             status_code=401,
@@ -1135,7 +1135,7 @@ async def search_customer_daily_activity_keys(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_customer_daily_activity_export(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = None,
     end_date: str | None = None,
     export_type: DailyActivityExportType = "daily",
@@ -1147,9 +1147,9 @@ async def get_customer_daily_activity_export(
     """
     Export daily activity for customers as CSV or JSON, uncapped.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     ):
         raise HTTPException(
             status_code=401,
