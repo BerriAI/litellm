@@ -182,6 +182,7 @@ from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
+    MCP_ALL_TOOLS_WILDCARD,
     MCPAuth,
     MCPStdioConfig,
     MCPTokenEndpointAuthMethod,
@@ -6808,13 +6809,16 @@ class MCPServerManager:
     def expand_tool_permissions(
         self,
         tool_permissions: dict[str, list[str]] | None,
-    ) -> dict[str, list[str]]:
+    ) -> dict[str, list[str] | None]:
         """
         Rewrite an ``mcp_tool_permissions`` dict keyed by id/name/alias so
         every key is a concrete server_id where possible. Tool lists from
         keys that point at the same server are unioned, matching the
         "duplicate names grant access to all matches" semantics of
-        ``expand_permission_list``.
+        ``expand_permission_list``. A union containing
+        ``MCP_ALL_TOOLS_WILDCARD`` maps to ``None``, granting every current
+        and future tool on that server while keeping the key present so the
+        server entitlement is preserved.
 
         Required so name-based keys don't silently drop their tool
         restrictions when the lookup uses the resolved server_id. Unresolved
@@ -6823,11 +6827,20 @@ class MCPServerManager:
         """
         if not tool_permissions:
             return {}
-        result: Final[dict[str, list[str]]] = {}
-        for key, tools in tool_permissions.items():
-            for server_id in self.expand_permission_list([key]):
-                result.setdefault(server_id, []).extend(tools or [])
-        return result
+        expanded: Final = tuple(
+            (server_id, tuple(tools or ()))
+            for key, tools in tool_permissions.items()
+            for server_id in self.expand_permission_list([key])
+        )
+        server_ids: Final = tuple(dict.fromkeys(server_id for server_id, _ in expanded))
+        return {
+            server_id: (
+                None
+                if any(MCP_ALL_TOOLS_WILDCARD in tools for sid, tools in expanded if sid == server_id)
+                else [tool for sid, tools in expanded if sid == server_id for tool in tools]
+            )
+            for server_id in server_ids
+        }
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         """
