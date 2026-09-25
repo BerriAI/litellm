@@ -14637,3 +14637,14 @@ class TestSharedIdentifierPrefixWarning:
         assert "srv-b" in shared_warnings[0]
         assert "srv-c" not in shared_warnings[0]
         assert "'shared'" in shared_warnings[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["auto", "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"])
+async def test_configured_protocol_reaches_the_upstream_client(config_only_mcp_manager_factory, revision):
+    manager = config_only_mcp_manager_factory()
+    await manager.load_servers_from_config({"versions": {"url": "http://127.0.0.1:9/mcp", "transport": "http", "protocol_version": revision}})
+    server = next(iter(manager.config_mcp_servers.values()))
+    client = await manager._create_mcp_client(server)
+    assert server.protocol_version == revision
+    assert client.protocol_version == revision

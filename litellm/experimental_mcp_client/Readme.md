@@ -38,3 +38,23 @@ HTTPX1 clients, auth objects and hooks are not adapted by a compatibility shim. 
 For streamable HTTP POST requests, the MCP SDK follows method-preserving redirects such as HTTP 307/308 within the configured endpoint's origin. Redirects to another path on the same scheme, host and port work. The SDK also permits an HTTP-to-HTTPS upgrade on the same host using the default ports
 
 Redirects to a different origin are rejected before the destination receives a request or credentials. Configure the final MCP endpoint URL directly if the server redirects to a different host or port. Setting the HTTP client's `follow_redirects` option does not override the SDK's policy
+
+### Protocol version selection
+
+`MCPClient(protocol_version="2025-06-18", ...)` offers that exact legacy revision and rejects an upstream that selects a different revision before listing or calling tools. The default `"auto"` preserves legacy initialization and accepts only `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`; it does not probe or fall back to modern discovery
+
+The gateway can restrict its enabled revisions and pin each YAML upstream independently:
+
+```yaml
+general_settings:
+  mcp_advertised_versions: ["2025-06-18", "2025-11-25"]
+mcp_servers:
+  example:
+    url: https://example.com/mcp
+    transport: http
+    protocol_version: "2025-06-18"
+```
+
+For database-backed servers, set `mcp_info.protocol_version` in the existing MCP server create/update API. YAML also accepts this metadata setting; a top-level `protocol_version` takes precedence. Omitted settings preserve the defaults. Empty gateway version lists, unknown revisions, and modern revision settings are rejected. A handshake selecting a disabled revision fails explicitly; configure every revision your clients require
+
+`2026-07-28` is represented in capability data but remains disabled for public serving. Apps and Tasks are not advertised. Discovery results use the caller's existing access checks, are private and uncached, and do not enable capabilities merely because the SDK knows their schemas

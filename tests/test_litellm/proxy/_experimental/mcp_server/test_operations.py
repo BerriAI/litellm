@@ -542,3 +542,59 @@ async def test_local_tool_json_array_is_converted_once_for_the_caller_revision(c
 
     assert [block.text for block in result.content] == [body]
     assert result.structured_content == (["a", "b"] if compat == "modern" else None)
+
+
+@pytest.mark.asyncio
+async def test_discovery_preserves_caller_scope_and_proxy_restrictions():
+    from mcp.types import DiscoverRequest, ListToolsResult, Tool
+
+    listed = AsyncMock(return_value=ListToolsResult(tools=[Tool(name="allowed", input_schema={"type": "object"})]))
+    context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["only-this"], mcp_proxy_mode=True, protocol_version="2025-06-18")
+    with patch("litellm.proxy._experimental.mcp_server.operations._execute_handle_list_tools", listed):
+        result = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert result.capabilities.tools is not None
+    assert result.capabilities.resources is None
+    assert result.capabilities.prompts is None
+    assert listed.await_args.args[0] is context
+    assert listed.await_args.args[0].user_api_key_auth.user_id == "scoped"
+    assert listed.await_args.args[0].mcp_servers == ("only-this",)
+
+
+@pytest.mark.asyncio
+async def test_discovery_denial_cannot_advertise_tools():
+    from mcp.types import DiscoverRequest
+    from fastapi import HTTPException
+
+    denied = AsyncMock(side_effect=HTTPException(status_code=403, detail="Forbidden"))
+    with patch("litellm.proxy._experimental.mcp_server.operations._execute_handle_list_tools", denied):
+        with pytest.raises(HTTPException) as error:
+            await GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="denied")))
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", ["none", "resources", "templates", "prompts"])
+async def test_discovery_lists_each_capability_with_the_same_caller(available):
+    from mcp.types import (
+        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        ListResourceTemplatesResult, Prompt, Resource, ResourceTemplate,
+    )
+    from litellm.proxy._experimental.mcp_server import operations
+
+    context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"])
+    tools = AsyncMock(return_value=ListToolsResult(tools=[]))
+    prompts = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="allowed")] if available == "prompts" else []))
+    resources = AsyncMock(return_value=ListResourcesResult(resources=[Resource(name="allowed", uri="test://allowed")] if available == "resources" else []))
+    templates = AsyncMock(return_value=ListResourceTemplatesResult(resource_templates=[ResourceTemplate(name="allowed", uri_template="test://{id}")] if available == "templates" else []))
+    with (
+        patch.object(operations, "_execute_handle_list_tools", tools),
+        patch.object(operations, "_execute_list_prompts", prompts),
+        patch.object(operations, "_execute_list_resources", resources),
+        patch.object(operations, "_execute_list_resource_templates", templates),
+    ):
+        result = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert result.capabilities.tools is None
+    assert (result.capabilities.prompts is not None) == (available == "prompts")
+    assert (result.capabilities.resources is not None) == (available in {"resources", "templates"})
+    for listing in (tools, prompts, resources, templates):
+        assert listing.await_args.args[0] is context
