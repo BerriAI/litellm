@@ -5,7 +5,12 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from prisma import Json
-from prisma.types import LiteLLM_AccessGroupTableWhereInput, LiteLLM_SCIMSourceCreateInput
+from prisma.types import (
+    LiteLLM_AccessGroupTableWhereInput,
+    LiteLLM_SCIMSourceCreateInput,
+    LiteLLM_SCIMSourceUpdateInput,
+    LiteLLM_SCIMSourceWhereUniqueInput,
+)
 from pydantic import BaseModel
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, hash_token
@@ -93,8 +98,9 @@ async def update_source(
 ) -> SCIMSourceResponse:
     _require_source_admin(auth)
     client: Final = await _client()
+    source_filter: Final[LiteLLM_SCIMSourceWhereUniqueInput] = {"source_id": source_id}
     async with client.tx() as tx:
-        source: Final = await tx.litellm_scimsource.find_unique(where={"source_id": source_id})
+        source: Final = await tx.litellm_scimsource.find_unique(where=source_filter)
         if source is None:
             raise HTTPException(404, "Provisioning source not found")
         if str(data.tenant_id) != source.tenant_id:
@@ -106,12 +112,10 @@ async def update_source(
         groups: Final = await tx.litellm_accessgrouptable.find_many(where=group_filter)
         if frozenset(group.access_group_id for group in groups) != frozenset(group_ids):
             raise HTTPException(400, "A mapped access group does not exist")
-        updated: Final = await tx.litellm_scimsource.update(
-            where={"source_id": source_id},
-            data={
-                "display_name": data.display_name,
-                "enabled": data.enabled,
-                "group_mappings": Json([mapping.model_dump(mode="json") for mapping in data.group_mappings]),
-            },
-        )
+        update_data: Final[LiteLLM_SCIMSourceUpdateInput] = {
+            "display_name": data.display_name,
+            "enabled": data.enabled,
+            "group_mappings": Json([mapping.model_dump(mode="json") for mapping in data.group_mappings]),
+        }
+        updated: Final = await tx.litellm_scimsource.update(where=source_filter, data=update_data)
     return source_response(updated)
