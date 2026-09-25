@@ -409,11 +409,18 @@ async fn synthetic_events_preserve_tools_thinking_and_usage(call: MessagesCall) 
             .as_object()
             .unwrap()
             .iter()
-            .filter(|(key, _)| !matches!(key.as_str(), "content" | "usage"))
+            .filter(|(key, _)| {
+                !matches!(
+                    key.as_str(),
+                    "content" | "usage" | "stop_reason" | "stop_sequence"
+                )
+            })
             .map(|(key, value)| (key.clone(), value.clone()))
             .chain([
                 ("content".into(), blocks.clone()),
                 ("usage".into(), usage.clone()),
+                ("stop_reason".into(), json!("stop_sequence")),
+                ("stop_sequence".into(), json!("DONE")),
             ])
             .collect(),
     );
@@ -430,9 +437,20 @@ async fn synthetic_events_preserve_tools_thinking_and_usage(call: MessagesCall) 
         .filter_map(|line| line.strip_prefix("data: "))
         .map(|data| serde_json::from_str(data).unwrap())
         .collect();
+    assert_eq!(events[0]["type"], "message_start");
+    assert_eq!(events[0]["message"]["content"], json!([]));
+    assert_eq!(events[0]["message"].get("stop_reason"), Some(&Value::Null));
     assert_eq!(
-        events[0]["message"]["usage"]["cache_read_input_tokens"],
-        usage["cache_read_input_tokens"]
+        events[0]["message"].get("stop_sequence"),
+        Some(&Value::Null)
+    );
+    assert_eq!(
+        events[0]["message"]["usage"],
+        json!({
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": 0,
+            "cache_read_input_tokens": usage["cache_read_input_tokens"],
+        })
     );
     assert_eq!(events[1]["content_block"]["id"], blocks[0]["id"]);
     assert_eq!(
@@ -443,5 +461,70 @@ async fn synthetic_events_preserve_tools_thinking_and_usage(call: MessagesCall) 
     assert_eq!(events[5]["delta"]["thinking"], blocks[1]["thinking"]);
     assert_eq!(events[6]["delta"]["signature"], blocks[1]["signature"]);
     assert_eq!(events[8]["content_block"], blocks[2]);
-    assert_eq!(events[10]["usage"], usage);
+    assert_eq!(
+        events[10],
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "stop_sequence", "stop_sequence": "DONE"},
+            "usage": usage,
+        })
+    );
+    assert_eq!(events.last(), Some(&json!({"type": "message_stop"})));
+}
+
+#[rstest]
+#[case::missing(json!({}), json!([]))]
+#[case::null(json!({"signature": null}), json!([]))]
+#[case::empty(json!({"signature": ""}), json!([]))]
+#[case::non_string(json!({"signature": 42}), json!([]))]
+#[case::valid(
+    json!({"signature": "signed"}),
+    json!([{"type": "signature_delta", "signature": "signed"}]),
+)]
+#[tokio::test]
+async fn synthetic_thinking_emits_a_signature_delta_only_for_a_nonempty_string(
+    call: MessagesCall,
+    #[case] signature_fields: Value,
+    #[case] expected_signature_deltas: Value,
+) {
+    let block = Value::Object(
+        object(json!({"type": "thinking", "thinking": "reasoning"}))
+            .into_iter()
+            .chain(object(signature_fields))
+            .collect(),
+    );
+    let body = Value::Object(
+        object(message_body())
+            .into_iter()
+            .chain([("content".into(), json!([block]))])
+            .collect(),
+    );
+    let upstream = upstream([json_response(body)]).await;
+    let host = HookingHost::new(hooked(call, upstream.uri(), json!({"stream": true})))
+        .editing(json!({"stream": false}));
+
+    assert!(matches!(
+        run_hooked(&host).await.unwrap(),
+        MessagesOutput::Streamed
+    ));
+
+    let deltas: Vec<Value> = host
+        .delivered_text()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str::<Value>(data).unwrap())
+        .filter(|event| event["type"] == "content_block_delta")
+        .map(|event| event["delta"].clone())
+        .collect();
+    let expected: Vec<Value> =
+        std::iter::once(json!({"type": "thinking_delta", "thinking": "reasoning"}))
+            .chain(
+                expected_signature_deltas
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .cloned(),
+            )
+            .collect();
+    assert_eq!(deltas, expected);
 }

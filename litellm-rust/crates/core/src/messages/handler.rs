@@ -340,6 +340,8 @@ fn block_events(index: usize, block: &Value) -> impl Iterator<Item = Value> {
     let signature = (field == "thinking")
         .then(|| block.get("signature"))
         .flatten()
+        .and_then(Value::as_str)
+        .filter(|signature| !signature.is_empty())
         .map(|signature| json!({"type": "signature_delta", "signature": signature}));
     std::iter::once(
         json!({"type": "content_block_start", "index": index, "content_block": content}),
