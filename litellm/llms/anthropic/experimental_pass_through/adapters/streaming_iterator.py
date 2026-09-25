@@ -11,6 +11,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
+    cast,
     get_args,
 )
 
@@ -35,6 +36,7 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
@@ -120,12 +122,16 @@ class _CombinedChunkSplitter:
         self._buffer: deque[ModelResponseStream] = deque()
 
     @property
-    def chunks(self) -> list | None:
-        return getattr(self._stream, "chunks", None)
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self._stream, "chunks", None)
+        )
 
     @property
-    def messages(self) -> list | None:
-        return getattr(self._stream, "messages", None)
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self._stream, "messages", None)
+        )
 
     @staticmethod
     def _is_combined(chunk: "ModelResponseStream") -> bool:
@@ -364,12 +370,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
     @property
-    def chunks(self) -> list | None:
-        return getattr(self.completion_stream, "chunks", None)
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self.completion_stream, "chunks", None)
+        )
 
     @property
-    def messages(self) -> list | None:
-        return getattr(self.completion_stream, "messages", None)
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self.completion_stream, "messages", None)
+        )
 
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> MessageBlockDelta:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
@@ -1211,11 +1221,11 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
         ] = {}  # mutable-ok: the proxy merges provider headers onto _hidden_params in place
 
     @property
-    def chunks(self) -> list | None:
+    def chunks(self) -> "list[ModelResponseStream] | None":
         return self._anthropic_wrapper.chunks
 
     @property
-    def messages(self) -> list | None:
+    def messages(self) -> "list[AllMessageValues] | None":
         return self._anthropic_wrapper.messages
 
     @property

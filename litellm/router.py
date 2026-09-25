@@ -636,15 +636,15 @@ class FallbackAwareAnthropicMessagesStream:
         return getattr(self._source_iterator, "has_buffered_provider_output", False) is True
 
     @property
-    def chunks(self) -> list | None:
-        return cast(  # cast-ok: the billing helper itself treats chunks as an opaque getattr
-            "list | None", getattr(self._source_iterator, "chunks", None)
+    def chunks(self) -> list[ModelResponseStream] | None:
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self._source_iterator, "chunks", None)
         )
 
     @property
-    def messages(self) -> list | None:
-        return cast(  # cast-ok: messages is a plain list on the inner stream
-            "list | None", getattr(self._source_iterator, "messages", None)
+    def messages(self) -> list[AllMessageValues] | None:
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self._source_iterator, "messages", None)
         )
 
     @property
