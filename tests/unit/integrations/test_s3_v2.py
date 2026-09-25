@@ -3384,7 +3384,17 @@ def test_sync_upload_404_is_single_attempt_without_sleep() -> None:
     mock_sleep.assert_not_called()
 
 
-def test_sync_upload_retries_429_with_backoff() -> None:
+@pytest.mark.parametrize(
+    ("status", "expected_puts", "expected_sleeps"),
+    [
+        pytest.param(429, 1, [], id="429-single"),
+        pytest.param(408, 1, [], id="408-single"),
+        pytest.param(502, 1, [], id="502-single"),
+        pytest.param(504, 1, [], id="504-single"),
+        pytest.param(503, 3, [call(1), call(2)], id="503-backoff"),
+    ],
+)
+def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, expected_sleeps: list) -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3393,16 +3403,16 @@ def test_sync_upload_retries_429_with_backoff() -> None:
     )
 
     mock_sync_client = MagicMock()
-    mock_sync_client.put = MagicMock(return_value=_coded_failure_response(429, "TooManyRequests"))
+    mock_sync_client.put = MagicMock(return_value=_coded_failure_response(status, "SlowDown"))
 
     with (
         patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep") as mock_sleep,
     ):
-        logger.upload_data_to_s3(_element({"id": "sync-429"}, "sync-429"))
+        logger.upload_data_to_s3(_element({"id": "sync"}, "sync"))
 
-    assert mock_sync_client.put.call_count == 3
-    assert mock_sleep.call_args_list == [call(1), call(2)]
+    assert mock_sync_client.put.call_count == expected_puts
+    assert mock_sleep.call_args_list == expected_sleeps
 
 
 @pytest.mark.asyncio
@@ -3476,6 +3486,91 @@ async def test_backoff_releases_the_limiter_slot_to_the_next_upload() -> None:
 
     assert [call_url.rsplit("/", 1)[-1] for call_url in put.calls] == ["test-a.json", "test-b.json", "test-a.json"]
     assert logger.log_queue == []
+
+
+class _FailOncePerKeyPut:
+    def __init__(self) -> None:
+        self.failed: set[str] = set()
+        self.calls: tuple[str, ...] = ()
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.calls = (*self.calls, url)
+        if url not in self.failed:
+            self.failed.add(url)
+            return _transient_failure_response()
+        return _ok_response()
+
+
+class _SlowFailOncePerKeyPut:
+    def __init__(self, delay: float, dumps_count) -> None:
+        self.failed: set[str] = set()
+        self.delay = delay
+        self.dumps_count = dumps_count
+        self.first_completed: int | None = None
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        await asyncio.sleep(self.delay)
+        if self.first_completed is None:
+            self.first_completed = self.dumps_count()
+        if url not in self.failed:
+            self.failed.add(url)
+            return _transient_failure_response()
+        return _ok_response()
+
+
+@pytest.mark.asyncio
+async def test_peak_serialized_bodies_bounded_by_upload_width() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps as real_safe_dumps
+
+    dumps_calls: list[object] = []
+
+    def counting_dumps(*args, **kwargs):
+        dumps_calls.append(args)
+        return real_safe_dumps(*args, **kwargs)
+
+    put = _SlowFailOncePerKeyPut(0.05, lambda: len(dumps_calls))
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(64)]
+
+    with patch("litellm.integrations.s3_v2.safe_dumps", side_effect=counting_dumps):
+        await logger.flush_queue()
+
+    assert put.first_completed is not None
+    assert put.first_completed <= logger.s3_max_concurrent_uploads
+    assert len(dumps_calls) == 64
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_async_flush_logs_one_retry_warning(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    put = _FailOncePerKeyPut()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(8)]
+
+    with caplog.at_level("WARNING"), patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert sum(1 for record in caplog.records if "in-call retries" in record.getMessage()) == 1
+    assert all("retrying in" not in record.getMessage() for record in caplog.records)
 
 
 class _AppendingSuffixFailingPut:

@@ -11,7 +11,9 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, cast
 from urllib.parse import quote
 from uuid import uuid4
@@ -74,8 +76,15 @@ _TERMINAL_ERROR_CODES: Final = frozenset(
 )
 _BODY_CODED_STATUSES: Final = frozenset({400, 403})
 _RETRYABLE_STATUSES: Final = frozenset({403, 408, 429, 500, 502, 503, 504})
+_SYNC_RETRYABLE_STATUSES: Final = frozenset({403, 500, 503})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
 _NO_SLOT: Final = nullcontext()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPut:
+    json_string: str
+    headers: Mapping[str, str]
 
 
 def _s3_error_code(response: httpx.Response) -> str | None:
@@ -223,6 +232,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
             self.log_queue: list[s3BatchLoggingElement] = []
             self._requeued_count: int = 0
+            self._flush_retries: int = 0
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
@@ -408,6 +418,35 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         }
         return {key: value for key, value in candidates.items() if value}
 
+    def _prepare_put(self, batch_logging_element: s3BatchLoggingElement) -> _PreparedPut:
+        try:
+            import base64
+            import hashlib
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        json_string: Final = (
+            batch_logging_element.body
+            if batch_logging_element.body is not None
+            else safe_dumps(batch_logging_element.payload)
+        )
+        content_hash: Final = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
+        content_md5: Final = base64.b64encode(
+            hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+        ).decode()
+        return _PreparedPut(
+            json_string=json_string,
+            headers={
+                "Content-Type": batch_logging_element.content_type,
+                "Content-MD5": content_md5,
+                "x-amz-content-sha256": content_hash,
+                "Content-Language": "en",
+                "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
+                "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+                **self._sse_headers(),
+            },
+        )
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._async_log_event_base(
             kwargs=kwargs,
@@ -488,11 +527,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         slot: AbstractAsyncContextManager[object] = _NO_SLOT,
     ) -> UploadOutcome:
         try:
-            import base64
-            import hashlib
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        try:
             from litellm.litellm_core_utils.asyncify import asyncify
 
             asyncified_get_credentials: Final = asyncify(self.get_credentials)
@@ -502,31 +536,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
-            # Convert JSON to string
-            json_string: Final = (
-                batch_logging_element.body
-                if batch_logging_element.body is not None
-                else safe_dumps(batch_logging_element.payload)
-            )
-
-            # Calculate SHA256 hash of the content
-            content_hash: Final = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
-            content_md5: Final = base64.b64encode(
-                hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
-            ).decode()
-
-            # Prepare the request
-            headers: Final = {
-                "Content-Type": batch_logging_element.content_type,
-                "Content-MD5": content_md5,
-                "x-amz-content-sha256": content_hash,
-                "Content-Language": "en",
-                "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
-                "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-                **self._sse_headers(),
-            }
-
-            async def signed_put() -> httpx.Response:
+            async def signed_put(prepared: _PreparedPut) -> httpx.Response:
                 credentials: Final = await asyncified_get_credentials(
                     aws_access_key_id=self.s3_aws_access_key_id,
                     aws_secret_access_key=self.s3_aws_secret_access_key,
@@ -538,23 +548,28 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     aws_web_identity_token=self.s3_aws_web_identity_token,
                     aws_sts_endpoint=self.s3_aws_sts_endpoint,
                 )
-                signed_headers: Final = await run_aws_signing(self._sign_put, credentials, url, json_string, headers)
+                signed_headers: Final = await run_aws_signing(
+                    self._sign_put, credentials, url, prepared.json_string, prepared.headers
+                )
                 try:
-                    return await self.async_httpx_client.put(url, data=json_string, headers=signed_headers)
+                    return await self.async_httpx_client.put(url, data=prepared.json_string, headers=signed_headers)
                 except httpx.HTTPStatusError as error:
                     return error.response
 
+            prepared: _PreparedPut | None = None  # rebind-ok: built once inside the first slot, reused across retries
             max_retries: Final = 3
             for attempt in range(max_retries):
                 async with slot:
-                    response = await self._recorded_put(signed_put)
+                    if prepared is None:
+                        prepared = self._prepare_put(batch_logging_element)
+                    response = await self._recorded_put(partial(signed_put, prepared))
                 if (
                     response.status_code in _RETRYABLE_STATUSES
                     and not _is_terminal(response)
                     and attempt < max_retries - 1
                 ):
                     wait_time = 2**attempt  # 1s, 2s
-                    verbose_logger.warning(
+                    verbose_logger.debug(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
                         response.status_code,
                         wait_time,
@@ -562,6 +577,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         max_retries,
                         batch_logging_element.s3_object_key,
                     )
+                    self._flush_retries += 1
                     await asyncio.sleep(wait_time)
                     continue
                 response.raise_for_status()
@@ -597,11 +613,18 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
+        self._flush_retries = 0
         stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
         order: Final = (*range(stale, len(uploads)), *range(stale))
         ordered: Final = await asyncio.gather(*(self._upload_bounded(uploads[i]) for i in order))
         outcomes: Final = dict(zip(order, ordered, strict=True))
         results: Final = tuple(outcomes[i] for i in range(len(uploads)))
+        if self._flush_retries:
+            verbose_logger.warning(
+                "s3 logging: %s in-call retries across %s uploads this flush",
+                self._flush_retries,
+                len(uploads),
+            )
         delivered: Final = sum(1 for outcome in results if outcome == "delivered")
         bucket_wide: Final = delivered == 0
         failed: Final = tuple(
@@ -769,63 +792,36 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     def upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
         try:
-            import base64
-            import hashlib
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        try:
             verbose_logger.debug("s3_v2 logger - uploading data to s3 - %s", batch_logging_element.s3_object_key)
 
             url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
-            # Convert JSON to string
-            json_string: Final = (
-                batch_logging_element.body
-                if batch_logging_element.body is not None
-                else safe_dumps(batch_logging_element.payload)
-            )
-
-            # Calculate SHA256 hash of the content
-            content_hash: Final = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
-            content_md5: Final = base64.b64encode(
-                hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
-            ).decode()
-
-            # Prepare the request
-            headers: Final = {
-                "Content-Type": batch_logging_element.content_type,
-                "Content-MD5": content_md5,
-                "x-amz-content-sha256": content_hash,
-                "Content-Language": "en",
-                "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
-                "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-                **self._sse_headers(),
-            }
+            prepared: Final = self._prepare_put(batch_logging_element)
 
             httpx_client: Final = _get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
             )
 
-            def signed_put() -> httpx.Response:
+            def signed_put(prepared_put: _PreparedPut) -> httpx.Response:
                 credentials: Final = self.get_credentials(
                     aws_access_key_id=self.s3_aws_access_key_id,
                     aws_secret_access_key=self.s3_aws_secret_access_key,
                     aws_session_token=self.s3_aws_session_token,
                     aws_region_name=self.s3_region_name,
                 )
-                signed_headers: Final = self._sign_put(credentials, url, json_string, headers)
-                return httpx_client.put(url, data=json_string, headers=signed_headers)
+                signed_headers: Final = self._sign_put(credentials, url, prepared_put.json_string, prepared_put.headers)
+                return httpx_client.put(url, data=prepared_put.json_string, headers=signed_headers)
 
             max_retries: Final = 3
             for attempt in range(max_retries):
-                response = signed_put()
+                response = signed_put(prepared)
                 if (
-                    response.status_code in _RETRYABLE_STATUSES
+                    response.status_code in _SYNC_RETRYABLE_STATUSES
                     and not _is_terminal(response)
                     and attempt < max_retries - 1
                 ):
                     wait_time = 2**attempt  # 1s, 2s
-                    verbose_logger.warning(
+                    verbose_logger.debug(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
                         response.status_code,
                         wait_time,
