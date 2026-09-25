@@ -1782,6 +1782,7 @@ def test_ProxyConfig_load_credential_list_returns_items():
     dumped = creds[0].model_dump()
     assert dumped == {
         "credential_name": "openai-key",
+        "credential_alias": None,
         "credential_info": {"provider": "openai"},
         "credential_values": {"api_key": "sk-x"},
     }
