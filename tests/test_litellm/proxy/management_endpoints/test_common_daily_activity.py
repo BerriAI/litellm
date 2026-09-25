@@ -3403,7 +3403,6 @@ async def test_get_daily_activity_aggregated_resolves_entity_metadata_for_breakd
     assert seen_ids["ids"] == frozenset({"u1"})
     entity: Final = result.results[0].breakdown.entities["u1"]
     assert entity.metadata["user_email"] == "u1@example.com"
-    # Rolled-only rows (api_key NULL, api_key_rolled 1) fold to metrics with no key fan-out
     assert entity.api_key_breakdown == {}
     assert entity.metrics.spend == 10.0
 
