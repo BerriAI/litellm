@@ -3204,8 +3204,13 @@ class ProxyBaseLLMRequestProcessing:
           dispatches success logging, matching the route's pre-existing
           hook surface.
 
-        Raw async generators from passthrough routes bypass both and would
-        orphan the closure, so they are not armed here.
+        Raw async generators are not excluded from that second shape: on
+        the routes it covers chunk_processor parks the single ready-made
+        logging coroutine for the native /v1/messages generator, and a
+        generator whose producer parks no args simply never fires the
+        closure, so an armed closure stays inert rather than orphaned. A
+        generator on a route outside anthropic_messages and aresponses is
+        left unarmed.
 
         The router wraps iterators that cannot carry _hidden_params in
         HiddenParamsAsyncIteratorWrapper, so class sniffing runs on the
