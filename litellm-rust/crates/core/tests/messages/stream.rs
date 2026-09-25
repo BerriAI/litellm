@@ -1,16 +1,25 @@
 use std::{convert::Infallible, sync::Mutex};
 
 use bytes::Bytes;
-use litellm_core::messages::route::Messages;
+use litellm_core::messages::route::{Messages, MessagesStreamHead};
 use litellm_host::host::{Demand, Host};
 use rstest::rstest;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 
 use super::*;
+
+const UPSTREAM_HEADERS: [(&str, &str); 2] = [
+    ("request-id", "req_upstream_123"),
+    ("anthropic-ratelimit-requests-remaining", "41"),
+];
 
 const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 enum Seen {
-    Open,
+    Open(Vec<(String, String)>),
     Deliver(Bytes),
 }
 
@@ -50,8 +59,8 @@ impl Host<Messages> for RecordingStreamHost {
         match op {}
     }
 
-    async fn open(&self, (): ()) -> Result<Demand, Error> {
-        Ok(self.record(Seen::Open))
+    async fn open(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
+        Ok(self.record(Seen::Open(head.headers)))
     }
 
     async fn deliver(&self, chunk: Bytes) -> Result<Demand, Error> {
@@ -71,7 +80,10 @@ fn streaming(call: MessagesCall, api_base: String) -> MessagesCall {
 }
 
 fn sse_response() -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_raw(SSE_BODY, "text/event-stream")
+    UPSTREAM_HEADERS.iter().fold(
+        ResponseTemplate::new(200).set_body_raw(SSE_BODY, "text/event-stream"),
+        |response, (name, value)| response.insert_header(*name, *value),
+    )
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
@@ -80,7 +92,7 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
 
 #[rstest]
 #[tokio::test]
-async fn the_stream_opens_once_before_relaying_the_upstream_body(call: MessagesCall) {
+async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
     let upstream = upstream([sse_response()]).await;
     let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
 
@@ -88,14 +100,24 @@ async fn the_stream_opens_once_before_relaying_the_upstream_body(call: MessagesC
 
     assert!(matches!(outcome, MessagesOutput::Streamed));
     let seen = host.seen.into_inner().unwrap();
-    let [Seen::Open, chunks @ ..] = seen.as_slice() else {
+    let [Seen::Open(headers), chunks @ ..] = seen.as_slice() else {
         panic!("the stream opens before any chunk is delivered");
     };
+    let surfaced: Vec<(&str, &str)> = headers
+        .iter()
+        .filter(|(name, _)| {
+            UPSTREAM_HEADERS
+                .iter()
+                .any(|(upstream, _)| upstream == name)
+        })
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(surfaced, UPSTREAM_HEADERS);
     let delivered: Vec<u8> = chunks
         .iter()
         .flat_map(|step| match step {
             Seen::Deliver(chunk) => chunk.to_vec(),
-            Seen::Open => panic!("the stream opens exactly once"),
+            Seen::Open(_) => panic!("the stream opens exactly once"),
         })
         .collect();
     assert_eq!(delivered, SSE_BODY.as_bytes());
@@ -118,9 +140,18 @@ async fn a_detached_caller_receives_nothing_more(call: MessagesCall, #[case] det
 }
 
 #[rstest]
+#[case::text_body(ResponseTemplate::new(429).set_body_string("slow down"), "slow down")]
+#[case::json_envelope(
+    status_response(429, json!({"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}})),
+    r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#
+)]
 #[tokio::test]
-async fn an_upstream_error_fails_the_call_without_opening_the_stream(call: MessagesCall) {
-    let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
+async fn an_upstream_error_fails_the_call_without_opening_the_stream(
+    call: MessagesCall,
+    #[case] response: ResponseTemplate,
+    #[case] body: &str,
+) {
+    let upstream = upstream([response]).await;
     let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
 
     let error = stream_through(&host)
@@ -128,14 +159,86 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(call: Messa
         .err()
         .expect("upstream error propagates");
 
-    assert!(
-        matches!(
-            error,
-            Error::Transport(litellm_http::transport::Error::Http { status: 429, .. })
-        ),
-        "{error:?}"
+    assert_eq!(
+        error,
+        Error::Transport(litellm_http::transport::Error::Http {
+            status: 429,
+            body: body.into()
+        })
     );
     assert!(host.seen.into_inner().unwrap().is_empty());
+}
+
+/// The native route relays bytes as they are. Python's synthetic `api_error` for a stream
+/// that never reaches `message_stop` lives in its SSE wrapper, above this route.
+#[rstest]
+#[tokio::test]
+async fn a_stream_that_ends_without_message_stop_is_relayed_as_is(call: MessagesCall) {
+    const INCOMPLETE: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n";
+    let upstream =
+        upstream([ResponseTemplate::new(200).set_body_raw(INCOMPLETE, "text/event-stream")]).await;
+    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+
+    stream_through(&host).await.expect("streamed call succeeds");
+
+    let delivered: Vec<u8> = host
+        .seen
+        .into_inner()
+        .unwrap()
+        .iter()
+        .flat_map(|step| match step {
+            Seen::Deliver(chunk) => chunk.to_vec(),
+            Seen::Open(_) => Vec::new(),
+        })
+        .collect();
+    assert_eq!(delivered, INCOMPLETE.as_bytes());
+}
+
+/// Serves one SSE chunk and then holds the connection open without ever finishing.
+async fn stalling_upstream() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n\
+                  1f\r\nevent: message_start\ndata: {}\n\n\r\n",
+            )
+            .await
+            .unwrap();
+        std::future::pending::<()>().await;
+    });
+    base
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
+    let base = stalling_upstream().await;
+    let host = RecordingStreamHost::new(
+        MessagesCall {
+            timeout: Some(Duration::from_millis(300)),
+            ..streaming(call, base)
+        },
+        usize::MAX,
+    );
+
+    let error = tokio::time::timeout(Duration::from_secs(5), stream_through(&host))
+        .await
+        .expect("the stalled stream gives up within the timeout")
+        .err()
+        .expect("a stalled body fails the call");
+
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    let seen = host.seen.into_inner().unwrap();
+    assert!(
+        matches!(seen.as_slice(), [Seen::Open(_), Seen::Deliver(chunk)] if chunk.as_ref() == b"event: message_start\ndata: {}\n\n"),
+        "the chunk before the stall reached the caller, saw {} ops",
+        seen.len()
+    );
 }
 
 #[rstest]

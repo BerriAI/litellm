@@ -36,9 +36,9 @@ concurrency:
 # Folding it in here is a follow-up, together with generalising that guard into
 # assert_ci_coverage.py.
 #
-# `fork-flag` names the `.circleci/tests.yml` job that now runs part of the
-# shard under the same Codecov flag. CircleCI does not build pull requests from
-# forks, so the shard still runs those files there and skips them elsewhere.
+# `unit-flag` names the `.circleci/tests.yml` job that now runs part of the
+# shard under the same Codecov flag. That pipeline is manual-only while the
+# tests migrate, so the shard also runs those files on every event.
 jobs:
   unit:
     name: ${{ matrix.shard }}
@@ -52,8 +52,8 @@ jobs:
         include:
           - shard: mcp-integration
             artifact-name: mcp-integration
-            test-path: "tests/mcp_tests tests/test_litellm/experimental_mcp_client"
-            fork-flag: mcp-integration
+            test-path: "tests/mcp_tests"
+            unit-flag: mcp-integration
             workers: 2
             reruns: 0
             timeout-minutes: 20
@@ -70,10 +70,9 @@ jobs:
           - shard: enterprise-routing
             artifact-name: enterprise-routing
             test-path: >-
-              tests/test_litellm/google_genai
               tests/test_litellm/router_utils
               tests/test_litellm/router_strategy
-            fork-flag: enterprise-routing
+            unit-flag: enterprise-routing
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -81,7 +80,8 @@ jobs:
 
           - shard: integrations
             artifact-name: integrations
-            test-path: "tests/test_litellm/integrations"
+            test-path: ""
+            unit-flag: integrations
             workers: 2
             reruns: 3
             timeout-minutes: 20
@@ -90,6 +90,7 @@ jobs:
           - shard: Vertex AI
             artifact-name: llm-vertex-ai
             test-path: "tests/test_litellm/llms/vertex_ai"
+            unit-flag: llm-vertex-ai
             workers: 1
             reruns: 2
             timeout-minutes: 20
@@ -98,6 +99,7 @@ jobs:
           - shard: All Other Providers
             artifact-name: llm-other-providers
             test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+            unit-flag: llm-other-providers
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -106,26 +108,12 @@ jobs:
           - shard: misc
             artifact-name: misc
             test-path: >-
-              tests/test_litellm/batches
-              tests/test_litellm/secret_managers
-              tests/test_litellm/a2a_protocol
-              tests/test_litellm/chat_completions
-              tests/test_litellm/completion_extras
-              tests/test_litellm/containers
-              tests/test_litellm/endpoints
-              tests/test_litellm/files
-              tests/test_litellm/images
               tests/test_litellm/interactions
-              tests/test_litellm/messages
-              tests/test_litellm/embeddings
               tests/test_litellm/ocr
               tests/test_litellm/passthrough
-              tests/test_litellm/rag
-              tests/test_litellm/rerank_api
               tests/test_litellm/rust_bridge
-              tests/test_litellm/vector_stores
-              tests/test_litellm/videos
               tests/test_litellm/test_*.py
+            unit-flag: misc
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -205,7 +193,7 @@ jobs:
               tests/test_litellm/proxy/types_utils
               tests/test_litellm/proxy/logging_endpoints
               tests/test_litellm/proxy/test_*.py
-            fork-flag: proxy-infra
+            unit-flag: proxy-infra
             workers: 4
             reruns: 2
             timeout-minutes: 20
@@ -214,7 +202,7 @@ jobs:
           - shard: caching-local
             artifact-name: caching-local
             test-path: ""
-            fork-flag: caching-local
+            unit-flag: caching-local
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -223,7 +211,7 @@ jobs:
           - shard: proxy-extras
             artifact-name: proxy-extras
             test-path: ""
-            fork-flag: proxy-extras
+            unit-flag: proxy-extras
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -232,7 +220,7 @@ jobs:
           - shard: enterprise-package
             artifact-name: enterprise-package
             test-path: ""
-            fork-flag: enterprise-package
+            unit-flag: enterprise-package
             workers: 4
             reruns: 2
             timeout-minutes: 20
@@ -243,7 +231,7 @@ jobs:
             test-path: >-
               tests/test_litellm/responses
               tests/test_litellm/caching
-              tests/test_litellm/types
+            unit-flag: responses-caching-types
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -251,7 +239,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
-      fork-flag: ${{ matrix.fork-flag || '' }}
+      unit-flag: ${{ matrix.unit-flag || '' }}
       workers: ${{ matrix.workers }}
       reruns: ${{ matrix.reruns }}
       timeout-minutes: ${{ matrix.timeout-minutes }}
@@ -294,22 +282,22 @@ jobs:
       - name: Run OpenAI SDK compatibility tests
         run: |
           uv run --no-sync pytest \
-            tests/test_litellm/llms/openai/test_openai.py \
-            tests/test_litellm/llms/openai/test_openai_common_utils.py \
-            tests/test_litellm/llms/openai/test_openai_file_content_streaming.py \
-            tests/test_litellm/test_openai_embedding_encoding_format_default.py \
+            tests/unit/llms/openai/test_openai.py \
+            tests/unit/llms/openai/test_openai_common_utils.py \
+            tests/unit/llms/openai/test_openai_file_content_streaming.py \
+            tests/unit/test_openai_embedding_encoding_format_default.py \
             tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_targets_fim_endpoint \
             tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_async \
-            tests/test_litellm/llms/azure/test_azure_exception_mapping.py \
-            tests/test_litellm/test_completion_timeout_resolution.py \
-            tests/test_litellm/types/test_router.py \
-            tests/test_litellm/test_exception_header_preservation.py \
-            tests/test_litellm/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
+            tests/unit/llms/azure/test_azure_exception_mapping.py \
+            tests/unit/test_completion_timeout_resolution.py \
+            tests/unit/types/test_router.py \
+            tests/unit/test_exception_header_preservation.py \
+            tests/unit/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
             --tb=short -q
 
       - name: Run workload identity tests with SDK 3
         if: startsWith(matrix.openai-version, '3.')
-        run: uv run --no-sync pytest tests/test_litellm/llms/openai/test_openai_workload_identity.py --tb=short -q
+        run: uv run --no-sync pytest tests/unit/llms/openai/test_openai_workload_identity.py --tb=short -q
 
       - name: Check consumer types with the installed SDK
         run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
