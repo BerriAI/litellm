@@ -384,13 +384,31 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tool_call_id = msg.get("tool_call_id")
 
             if role == "system":
-                # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
-                    if instructions:
-                        # Concatenate multiple system prompts with a space
-                        instructions = f"{instructions} {content}"
+                # Extract system message as instructions. Content can be a plain
+                # string or a list of text blocks (clients that attach
+                # cache_control breakpoints send block-shaped content); fold the
+                # text into instructions in both cases so Responses-compatible
+                # backends that only accept the system prompt via `instructions`
+                # keep working (gh-42171).
+                if index < leading_system_count:
+                    system_text = self._extract_system_text(content)
+                    if system_text is not None:
+                        if instructions:
+                            # Concatenate multiple system prompts with a space
+                            instructions = f"{instructions} {system_text}"
+                        else:
+                            instructions = system_text
                     else:
-                        instructions = content
+                        input_items.append(
+                            {
+                                "type": "message",
+                                "role": role,
+                                "content": self._convert_content_to_responses_format(
+                                    content,
+                                    role,
+                                ),
+                            }
+                        )
                 else:
                     input_items.append(
                         {
@@ -485,6 +503,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
 
         return input_items, instructions
+
+    @staticmethod
+    def _extract_system_text(content: object) -> "str | None":
+        """Return the text of a system message when content is a plain string or a
+        list of text blocks, so it can be folded into `instructions`; None when the
+        content cannot be folded (the caller then keeps an input item).
+
+        A block list is only foldable when it is pure text without cache-control
+        breakpoints: cache semantics are block-level and cannot survive being joined
+        into the `instructions` string, which is what keeps Claude Code shaped
+        prompts byte-stable (gh-40198)."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            if any(
+                not isinstance(block, dict) or block.get("type") != "text" or "cache_control" in block
+                for block in content
+            ):
+                return None
+            text_parts: Final = tuple(block["text"] for block in content if isinstance(block.get("text"), str))
+            return "".join(text_parts) if text_parts else None
+        return None
 
     def _map_optional_params_to_responses_api_request(
         self,

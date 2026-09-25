@@ -4352,3 +4352,113 @@ def test_map_optional_params_verbosity_merges_into_text():
         verbosity_only_request,
     )
     assert verbosity_only_request["text"] == {"verbosity": "low"}
+# ------------------------------------------------------------------------
+# gh-42171: fold list-format system content into instructions
+# ------------------------------------------------------------------------
+
+
+def test_system_message_list_content_folds_into_instructions():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant."}],
+            },
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    assert instructions == "You are a helpful assistant."
+    assert not any(item.get("role") == "system" for item in input_items)
+
+
+def test_system_message_list_content_multiple_blocks_and_messages():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Be concise."},
+                    {"type": "text", "text": "Speak English."},
+                ],
+            },
+            {"role": "system", "content": "Also be polite."},
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    assert instructions == "Be concise.Speak English. Also be polite."
+    assert not any(item.get("role") == "system" for item in input_items)
+
+
+def test_system_message_list_content_mid_conversation_stays_input_item():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": [{"type": "text", "text": "reminder"}]},
+        ]
+    )
+    assert instructions is None
+    assert any(item.get("role") == "system" for item in input_items)
+
+
+def test_system_message_list_content_with_cache_control_stays_input_item():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are Claude Code.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    assert instructions is None
+    assert input_items[0]["role"] == "system"
+
+
+def test_system_message_mixed_list_content_stays_input_item():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/i.png"}},
+                ],
+            },
+            {"role": "user", "content": "go"},
+        ]
+    )
+    assert instructions is None
+    assert input_items[0]["role"] == "system"
+
+
