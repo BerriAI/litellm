@@ -1220,7 +1220,7 @@ def _export_folded_user_row(
     )
 
 
-_EXPORT_CSV_METRIC_HEADERS: Final = (
+EXPORT_CSV_METRIC_HEADERS: Final = (
     "Spend ($)",
     "Requests",
     "Successful Requests",
@@ -1233,11 +1233,11 @@ _EXPORT_CSV_METRIC_HEADERS: Final = (
 )
 
 
-def _csv_safe(value: str) -> str:  # pyright: ignore[reportUnusedFunction]  # shared by the daily-activity endpoint modules
+def csv_safe(value: str) -> str:
     return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
 
 
-def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:  # pyright: ignore[reportUnusedFunction]  # shared by the daily-activity endpoint modules
+def daily_activity_error(*, status_code: int, message: str) -> HTTPException:
     """Single construction site for the `{"error": ...}` detail shape the
     daily-activity endpoints have always returned."""
     return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
@@ -1246,9 +1246,7 @@ def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:  
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
 
 
-def _aggregated_date_range_error(  # pyright: ignore[reportUnusedFunction]  # shared by the daily-activity endpoint modules
-    start_date: str | None, end_date: str | None
-) -> str | None:
+def aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
     """The aggregated endpoint has no pagination to bound its work, so malformed
     dates and ranges wider than the UI ever requests are rejected before querying."""
     if start_date is None or end_date is None:

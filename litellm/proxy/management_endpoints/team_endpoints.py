@@ -128,10 +128,10 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     resolve_model_budget,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    _EXPORT_CSV_METRIC_HEADERS,
-    _aggregated_date_range_error,
-    _csv_safe,
-    _daily_activity_error,
+    EXPORT_CSV_METRIC_HEADERS,
+    aggregated_date_range_error,
+    csv_safe,
+    daily_activity_error,
     get_daily_activity_aggregated,
     get_daily_activity_export_rows,
 )
@@ -6591,7 +6591,7 @@ async def _resolve_team_daily_activity_scope(
             check_db_only=True,
         )
         if user_info is None:
-            raise _daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
+            raise daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
 
         if team_ids_list is None:
             team_ids_list = user_info.teams
@@ -6599,7 +6599,7 @@ async def _resolve_team_daily_activity_scope(
             # check if all team_ids are in user_info.teams
             for team_id in team_ids_list:
                 if team_id not in user_info.teams:
-                    raise _daily_activity_error(
+                    raise daily_activity_error(
                         status_code=404,
                         message=f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams",
                     )
@@ -6696,7 +6696,7 @@ async def get_team_daily_activity(
     )
 
     if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -6764,11 +6764,11 @@ async def get_team_daily_activity_aggregated(
     )
 
     if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None:
-        raise _daily_activity_error(status_code=400, message=range_error)
+        raise daily_activity_error(status_code=400, message=range_error)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -6799,9 +6799,9 @@ async def get_team_daily_activity_aggregated(
 def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, ...]:
     base: Final = ("Date", "Team", "Team ID")
     if export_type == "daily_with_keys":
-        return (*base, "Key Alias", "Key ID", "User ID", "User Email", *_EXPORT_CSV_METRIC_HEADERS)
+        return (*base, "Key Alias", "Key ID", "User ID", "User Email", *EXPORT_CSV_METRIC_HEADERS)
     if export_type == "daily_with_users":
-        return (*base, "User ID", "User Email", "Keys", *_EXPORT_CSV_METRIC_HEADERS)
+        return (*base, "User ID", "User Email", "Keys", *EXPORT_CSV_METRIC_HEADERS)
     if export_type == "daily_with_models":
         return (
             *base,
@@ -6816,20 +6816,20 @@ def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, 
             "Cache Read Input Tokens",
             "Cache Creation Input Tokens",
         )
-    return (*base, *_EXPORT_CSV_METRIC_HEADERS)
+    return (*base, *EXPORT_CSV_METRIC_HEADERS)
 
 
 def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
-        "Team": _csv_safe(row.team_alias) if row.team_alias else "-",
+        "Team": csv_safe(row.team_alias) if row.team_alias else "-",
         "Team ID": row.team_id,
-        "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
+        "Key Alias": csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
-        "User ID": _csv_safe(row.user_id) if row.user_id else "-",
-        "User Email": _csv_safe(row.user_email) if row.user_email else "-",
+        "User ID": csv_safe(row.user_id) if row.user_id else "-",
+        "User Email": csv_safe(row.user_email) if row.user_email else "-",
         "Keys": row.keys,
-        "Model": _csv_safe(row.model) if row.model else "-",
+        "Model": csv_safe(row.model) if row.model else "-",
         "Spend ($)": f"{row.spend:.4f}",
         "Flat Cost ($)": f"{row.flat_cost:.4f}",
         "Total Cost ($)": f"{row.spend + row.flat_cost:.4f}",
@@ -6893,11 +6893,11 @@ async def get_team_daily_activity_export(
     )
 
     if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
-        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+        raise daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_id,
@@ -7013,11 +7013,11 @@ async def search_team_daily_activity_keys(
     )
 
     if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None:
-        raise _daily_activity_error(status_code=400, message=range_error)
+        raise daily_activity_error(status_code=400, message=range_error)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -7121,14 +7121,14 @@ async def get_team_spend_by_user(
     )
 
     if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
-        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+        raise daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     if not team_ids:
-        raise _daily_activity_error(status_code=400, message="Please provide team_ids")
+        raise daily_activity_error(status_code=400, message="Please provide team_ids")
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,

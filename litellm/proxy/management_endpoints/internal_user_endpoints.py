@@ -56,11 +56,11 @@ from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHoo
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    _EXPORT_CSV_METRIC_HEADERS,
+    EXPORT_CSV_METRIC_HEADERS,
     DailySpendRecord,
-    _aggregated_date_range_error,
-    _csv_safe,
-    _daily_activity_error,
+    aggregated_date_range_error,
+    csv_safe,
+    daily_activity_error,
     get_daily_activity,
     get_daily_activity_aggregated,
     get_daily_activity_export_rows,
@@ -3147,7 +3147,7 @@ def _user_export_row(row: TeamDailyActivityExportRow) -> UserDailyActivityExport
 def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[str, ...]:
     base: Final = ("Date", "User ID")
     if export_type == "daily_with_keys":
-        return (*base, "Key Alias", "Key ID", "User Email", *_EXPORT_CSV_METRIC_HEADERS)
+        return (*base, "Key Alias", "Key ID", "User Email", *EXPORT_CSV_METRIC_HEADERS)
     if export_type == "daily_with_models":
         return (
             *base,
@@ -3162,17 +3162,17 @@ def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[
             "Cache Read Input Tokens",
             "Cache Creation Input Tokens",
         )
-    return (*base, *_EXPORT_CSV_METRIC_HEADERS)
+    return (*base, *EXPORT_CSV_METRIC_HEADERS)
 
 
 def _user_export_csv_record(row: UserDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
         "User ID": row.user_id,
-        "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
+        "Key Alias": csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
-        "User Email": _csv_safe(row.user_email) if row.user_email else "-",
-        "Model": _csv_safe(row.model) if row.model else "-",
+        "User Email": csv_safe(row.user_email) if row.user_email else "-",
+        "Model": csv_safe(row.model) if row.model else "-",
         "Spend ($)": f"{row.spend:.4f}",
         "Flat Cost ($)": f"{row.flat_cost:.4f}",
         "Total Cost ($)": f"{row.spend + row.flat_cost:.4f}",
@@ -3235,11 +3235,13 @@ async def get_user_daily_activity_export(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
-    if range_error is not None or start_date is None or end_date is None:
-        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise daily_activity_error(status_code=400, message=range_error)
+    if start_date is None or end_date is None:
+        raise daily_activity_error(status_code=400, message="Please provide start_date and end_date")
 
     try:
         entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
