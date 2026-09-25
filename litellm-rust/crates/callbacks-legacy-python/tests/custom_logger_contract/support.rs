@@ -99,7 +99,7 @@ impl ProtocolHost for MessagesHost {
         _py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<MessagesCall, InvokeError<Error>> {
-        let body = ["model", "messages"]
+        let body = ["model"]
             .iter()
             .chain(BODY_FIELDS.iter())
             .filter_map(|name| {

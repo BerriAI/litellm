@@ -4078,7 +4078,7 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, served_stream_output_texts(served_chunks))
 
     @staticmethod
-    def _fire_deferred_stream_logging(request_data: dict) -> None:
+    def _fire_deferred_stream_logging(request_data: dict) -> asyncio.Task[object] | None:
         """
         Fire the deferred streaming logging callback after the full streaming
         pipeline (including guardrail end-of-stream blocks) has completed.
@@ -4097,7 +4097,8 @@ class ProxyLogging:
         if _deferred_cb is not None and _args is not None:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
-            asyncio.create_task(_deferred_cb(*_args))
+            return asyncio.create_task(_deferred_cb(*_args))
+        return None
 
     @staticmethod
     def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:

@@ -87,6 +87,7 @@ impl MessagesPythonHost {
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
         let fields = BODY_FIELDS
             .iter()
+            .filter(|name| **name != "messages")
             .filter_map(|name| match argument(name) {
                 Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
                 Ok(None) => None,

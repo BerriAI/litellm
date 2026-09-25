@@ -46,7 +46,7 @@ Add a row when an existing operation has a new requirement. Add a focused table 
 
 A callback can intentionally mutate caller objects, so equality and identity are separate assertions. Sequential hooks have exact event ordering. Context tests distinguish caller, executor, and logging-worker delivery without requiring an incidental ordering between independently scheduled background tasks
 
-The initial baseline has 53 passing and six failing integration cases, with no ignored cases. The six failures encode three outstanding requirements: pre-request message edits must reach the provider (three rows), proxy acceptance must release native Messages success logging (two rows), and deferred logging must survive proxy disconnect cleanup (one row). Fix production behavior in a later change, keeping these assertions intact
+All 59 integration cases pass, with no ignored cases. The initial baseline had six failures: pre-request message edits reaching the provider (three rows), proxy acceptance releasing native Messages success logging (two rows), and deferred logging surviving proxy disconnect cleanup (one row). The implementation now satisfies those requirements with the original assertions intact
 
 Three targeted mutation checks passed: skipping pre-API dispatch, ignoring returned request kwargs, and discarding deployment response replacement each made its previously passing case fail. These checks establish sensitivity for those requirements, not an overall mutation-coverage score
 

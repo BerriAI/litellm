@@ -25,7 +25,8 @@ use super::{
     prepare::{prepare, resolve_provider},
 };
 
-pub const BODY_FIELDS: [&str; 22] = [
+pub const BODY_FIELDS: [&str; 23] = [
+    "messages",
     "max_tokens",
     "metadata",
     "stop_sequences",

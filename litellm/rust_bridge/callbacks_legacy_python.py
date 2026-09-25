@@ -21,6 +21,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 
@@ -289,6 +290,15 @@ def is_internal_call() -> bool:
     return internal.get()
 
 
+async def _run_pre_request_hook(
+    callback: CustomLogger, model: str, messages: object, kwargs: Mapping[str, object]
+) -> Mapping[str, object] | None:
+    hook: Final = cast(  # cast-ok: preserve caller objects at the legacy hook boundary
+        PreRequestHook, callback.async_pre_request_hook
+    )
+    return await hook(model, messages, kwargs)
+
+
 async def pre_request_hooks(model: str, messages: object, kwargs: Mapping[str, object]) -> Mapping[str, object]:
     from litellm import callbacks
     from litellm.integrations.custom_logger import CustomLogger
@@ -297,12 +307,8 @@ async def pre_request_hooks(model: str, messages: object, kwargs: Mapping[str, o
     for callback in callbacks:
         if not isinstance(callback, CustomLogger):
             continue
-        hook: Final = cast(  # cast-ok: preserve caller objects at the legacy hook boundary
-            PreRequestHook, callback.async_pre_request_hook
-        )
-        updated: Final = await hook(model, messages, view)
-        if updated is not None:
-            view = updated  # rebind-ok: preserve replacement dict identity across sequential hooks
+        if (updated := await _run_pre_request_hook(callback, model, messages, view)) is not None:
+            view = updated
     return view
 
 

@@ -213,13 +213,17 @@ fn delta_text(sse: &str) -> String {
 }
 
 #[rstest]
+#[case::tools("tools", json!([{"name": "renamed_tool", "input_schema": {"type": "object"}}]))]
+#[case::messages("messages", json!([{"role": "user", "content": "edited"}]))]
 #[tokio::test]
 async fn the_pre_request_hook_sees_the_projected_request_and_its_edit_reaches_the_wire(
     call: MessagesCall,
+    #[case] field: &str,
+    #[case] edited: Value,
 ) {
     let upstream = upstream([message_response()]).await;
-    let host = HookingHost::new(hooked(call, upstream.uri(), json!({})))
-        .editing(json!({"tools": [{"name": "renamed_tool", "input_schema": {"type": "object"}}]}));
+    let host =
+        HookingHost::new(hooked(call, upstream.uri(), json!({}))).editing(json!({field: edited}));
 
     message_through(&host).await;
 
@@ -234,18 +238,14 @@ async fn the_pre_request_hook_sees_the_projected_request_and_its_edit_reaches_th
         object(json!({"max_tokens": 16, "tools": [original_tool()]}))
     );
     assert!(seen.fields.contains(&"tools") && seen.fields.contains(&"stream"));
-    assert!(!seen.fields.contains(&"model") && !seen.fields.contains(&"messages"));
+    assert!(!seen.fields.contains(&"model"));
     let sent = only_request(&upstream).await.json();
-    assert_eq!(sent["tools"][0]["name"], json!("renamed_tool"));
-    assert_eq!(
-        host.wire_bodies.lock().unwrap()[0]["tools"][0]["name"],
-        json!("renamed_tool")
-    );
+    assert_eq!(sent[field], edited);
+    assert_eq!(host.wire_bodies.lock().unwrap()[0][field], edited);
 }
 
 #[rstest]
 #[case::model(json!({"model": "claude-other"}))]
-#[case::messages(json!({"messages": [{"role": "user", "content": "replaced"}]}))]
 #[case::a_key_the_route_never_sends(json!({"max_agentic_loops": 3}))]
 #[tokio::test]
 async fn a_pre_request_answer_rewrites_nothing_outside_the_routes_fields(

@@ -161,7 +161,7 @@ async def test_native_messages_pre_call_guardrail_can_block_before_provider_requ
     litellm.callbacks.append(guardrail)
     messages_server.expected_requests = 0
 
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(ValueError, match="blocked prompt") as raised:
         await litellm.anthropic.messages.acreate(
             **arguments(messages_server, callbacks=[recorder], guardrails=[guardrail.guardrail_name])
         )

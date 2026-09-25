@@ -440,9 +440,11 @@ async def test_no_flag_fires_create_task_normally():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
+@pytest.mark.parametrize(
+    "call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses", "anthropic_messages"]
+)
 @pytest.mark.parametrize("exception_raised", [False, True])
-def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
+def test_native_pending_logging_is_released_once_for_any_route(call_type: str, exception_raised: bool) -> None:
     pending: Final = MagicMock()
     enqueue: Final = MagicMock()
     logger: Final = MagicMock(
@@ -460,12 +462,8 @@ def test_native_pending_logging_is_released_only_for_ocr(call_type: str, excepti
         exception_raised=exception_raised,
     )
 
-    if call_type in ("ocr", "aocr"):
-        pending.release.assert_called_once_with(not exception_raised)
-        assert logger._native_pending_logging is None
-    else:
-        pending.release.assert_not_called()
-        assert logger._native_pending_logging is pending
+    pending.release.assert_called_once_with(not exception_raised)
+    assert logger._native_pending_logging is None
     if exception_raised:
         enqueue.assert_not_called()
     else:
