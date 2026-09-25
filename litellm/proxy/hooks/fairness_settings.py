@@ -37,6 +37,7 @@ class _ConfigReservation:
 
     priority_reservation: Mapping[str, float | PriorityReservationDict] | None = None
     settings: PriorityReservationSettings | None = None
+    limiter_added_by_fairness: bool = False
 
 
 _CONFIG_RESERVATION: Final = _ConfigReservation()
@@ -53,8 +54,17 @@ def parse_fairness_settings(value: object) -> FairnessSettings | None:
 
 
 def active_fairness_limiter() -> _PROXY_DynamicRateLimitHandlerV3 | None:
+    if not _limiter_registered():
+        return None
     limiter: Final = get_custom_logger_compatible_class(_LIMITER_CALLBACK)
     return limiter if isinstance(limiter, _PROXY_DynamicRateLimitHandlerV3) else None
+
+
+def _limiter_registered() -> bool:
+    return any(
+        callback == _LIMITER_CALLBACK or isinstance(callback, _PROXY_DynamicRateLimitHandlerV3)
+        for callback in litellm.callbacks
+    )
 
 
 def apply_fairness_settings(
@@ -69,10 +79,12 @@ def apply_fairness_settings(
         if was_enabled:
             litellm.priority_reservation = _CONFIG_RESERVATION.priority_reservation
             litellm.priority_reservation_settings = _CONFIG_RESERVATION.settings or PriorityReservationSettings()
+            _unregister_fairness_limiter()
         return
     if not was_enabled:
         _CONFIG_RESERVATION.priority_reservation = litellm.priority_reservation
         _CONFIG_RESERVATION.settings = litellm.priority_reservation_settings
+        _CONFIG_RESERVATION.limiter_added_by_fairness = not _limiter_registered()
     litellm.priority_reservation = settings.reserved_shares()
     litellm.priority_reservation_settings = PriorityReservationSettings(
         default_priority=settings.default_reserved_share,
@@ -83,10 +95,7 @@ def apply_fairness_settings(
 
 
 def _ensure_limiter_registered(internal_usage_cache: DualCache | None, llm_router: Router | None) -> None:
-    already_registered: Final = any(
-        callback == _LIMITER_CALLBACK or isinstance(callback, _PROXY_DynamicRateLimitHandlerV3)
-        for callback in litellm.callbacks
-    )
+    already_registered: Final = _limiter_registered()
     existing: Final = active_fairness_limiter()
     if existing is None and (llm_router is None or internal_usage_cache is None):
         if not already_registered:
@@ -105,3 +114,14 @@ def _ensure_limiter_registered(internal_usage_cache: DualCache | None, llm_route
         initialized.update_variables(llm_router=llm_router)
     if not already_registered:
         litellm.logging_callback_manager.add_litellm_callback(initialized)
+
+
+def _unregister_fairness_limiter() -> None:
+    if not _CONFIG_RESERVATION.limiter_added_by_fairness:
+        return
+    _CONFIG_RESERVATION.limiter_added_by_fairness = False
+    manager: Final = litellm.logging_callback_manager
+    limiter: Final = active_fairness_limiter()
+    manager.remove_callback_from_list_by_object(litellm.callbacks, _LIMITER_CALLBACK, require_self=False)
+    if limiter is not None:
+        manager.remove_callback_from_all_lists(limiter)

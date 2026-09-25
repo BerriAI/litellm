@@ -208,6 +208,33 @@ def test_disabling_fairness_restores_config_file_reservations(
     assert litellm.priority_reservation_settings == PriorityReservationSettings(saturation_threshold=0.9)
 
 
+def _limiter_callbacks() -> tuple[object, ...]:
+    return tuple(
+        callback
+        for callback in litellm.callbacks
+        if callback == "dynamic_rate_limiter_v3" or isinstance(callback, _PROXY_DynamicRateLimitHandlerV3)
+    )
+
+
+def test_disabling_fairness_unregisters_the_limiter_it_added(
+    isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    apply_fairness_settings(_settings(), internal_usage_cache=DualCache(), llm_router=Router(model_list=[]))
+    assert len(_limiter_callbacks()) == 1, litellm.callbacks
+    apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
+    assert _limiter_callbacks() == (), litellm.callbacks
+
+
+def test_disabling_fairness_keeps_the_config_file_limiter(
+    isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
+    apply_fairness_settings(_settings(), internal_usage_cache=None, llm_router=None)
+    apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
+    assert _limiter_callbacks() == ("dynamic_rate_limiter_v3",), litellm.callbacks
+
+
 def test_settings_reject_duplicate_and_reserved_class_names() -> None:
     with pytest.raises(ValidationError, match="unique"):
         FairnessSettings(
