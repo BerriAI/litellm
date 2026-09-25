@@ -3,6 +3,8 @@ import shutil
 import stat
 import sys
 import time
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import click
@@ -172,7 +174,8 @@ class TestBackupRoundTrip:
 
         assert settings_path.is_symlink()
         assert json.loads(target.read_text()) == {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-theirs"}}
-        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+        if sys.platform != "win32":
+            assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
     def test_recreates_claude_dir_if_it_was_deleted_while_up_was_running(self, monkeypatch, tmp_path):
         """If ~/.claude/ is removed while `lite up` holds it open, restoring must recreate the
@@ -214,7 +217,8 @@ class TestBackupRoundTrip:
     def test_write_backup_restricts_permissions_for_a_new_file(self, monkeypatch, tmp_path):
         _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
         write_backup(BackupRecord(existed=True, content={"a": 1}))
-        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
+        if sys.platform != "win32":
+            assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
 
     def test_write_backup_restricts_permissions_of_a_preexisting_permissive_file(self, monkeypatch, tmp_path):
         _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
@@ -224,7 +228,8 @@ class TestBackupRoundTrip:
 
         write_backup(BackupRecord(existed=True, content={"a": 1}))
 
-        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
+        if sys.platform != "win32":
+            assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
 
     def test_backup_file_always_removed_after_restore(self, monkeypatch, tmp_path):
         _settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
@@ -291,6 +296,38 @@ def _capture_login(monkeypatch, on_login=lambda: None):
 
     monkeypatch.setattr(up_module, "login", fake_login)
     return login_calls
+
+
+class TestSecureCreate:
+    def test_skips_fchmod_where_the_platform_lacks_it(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Windows only gained os.fchmod in 3.13; on 3.10-3.12 writing a credential file
+        through secure_create must not die on AttributeError (the profile directory's ACL
+        protects the file there)."""
+        monkeypatch.setattr(up_module.os, "name", "nt")
+        monkeypatch.delattr(up_module.os, "fchmod", raising=False)
+        path: Final = tmp_path / "secret.json"
+
+        with up_module.secure_create(path) as f:
+            f.write("{}")
+
+        assert path.read_text() == "{}"
+
+    def test_applies_0600_before_any_content_on_posix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        modes_at_write: Final[list[tuple[int, int]]] = []
+        real_fchmod: Final = up_module.os.fchmod
+
+        def spy(fd: int, mode: int) -> None:
+            modes_at_write.append((mode, up_module.os.fstat(fd).st_size))
+            real_fchmod(fd, mode)
+
+        monkeypatch.setattr(up_module.os, "name", "posix")
+        monkeypatch.setattr(up_module.os, "fchmod", spy)
+        path: Final = tmp_path / "secret.json"
+
+        with up_module.secure_create(path) as f:
+            f.write("{}")
+
+        assert modes_at_write == [(0o600, 0)]
 
 
 class TestEnsureFreshLogin:
@@ -507,9 +544,11 @@ class TestUpCommand:
         assert captured["settings"]["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-fresh"
         # The file now carries the key, so the umask (and the file's earlier 0644) must not decide who reads it.
-        assert captured["settings_mode"] == 0o600
+        # Windows stat never reports POSIX mode bits; the profile directory's ACL protects the file there.
+        if sys.platform != "win32":
+            assert captured["settings_mode"] == 0o600
         assert "apiKeyHelper" not in captured["settings"]
-        assert captured["settings"]["statusLine"]["command"].endswith("statusline.py")
+        assert "statusline.py" in captured["settings"]["statusLine"]["command"]
         assert json.loads(settings_path.read_text()) == original
         assert not backup_path.exists()
 
