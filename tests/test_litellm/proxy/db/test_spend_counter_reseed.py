@@ -480,3 +480,13 @@ async def test_from_db_still_never_reads_the_end_user_row():
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") is None
     assert prisma.db.litellm_endusertable.where_clauses == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [None, 0.0, 7.25])
+async def test_agent_counter_reseed_uses_persisted_agent_spend(spend: float | None) -> None:
+    row: Final = None if spend is None else SimpleNamespace(agent_id="agent-1", spend=spend)
+    table: Final = _FakeFindUniqueTable(row)
+    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_agentstable=table))
+    assert await SpendCounterReseed.from_db(prisma_client=client, counter_key="spend:agent:agent-1") == spend
+    assert table.where_clauses == [{"agent_id": "agent-1"}]

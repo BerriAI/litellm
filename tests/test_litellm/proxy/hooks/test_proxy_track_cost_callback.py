@@ -2712,3 +2712,10 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
         assert "headers" in failure_debug_lines[0]
     else:
         assert failure_debug_lines == []
+
+
+@pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
+def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
+    assert _should_track_cost_callback(
+        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+    ) is expected
