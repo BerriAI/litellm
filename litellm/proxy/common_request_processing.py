@@ -32,7 +32,7 @@ from starlette.types import Receive, Scope, Send
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.anthropic_interface.exceptions import anthropic_error_sse_frame
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -1002,6 +1002,17 @@ async def create_response(
         # Now get the first chunk from the actual generator
         first_chunk_value = await _buffer_first_chunk_honoring_disconnect(generator, request)
         resolved_headers: Final = await _resolve_stream_headers(headers, refresh_headers)
+
+        if isinstance(first_chunk_value, AnthropicErrorSseFrame):
+            with contextlib.suppress(Exception):
+                await generator.aclose()
+            return JSONResponse(
+                status_code=first_chunk_value.status_code,
+                content=first_chunk_value.json_body(
+                    error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER))
+                ),
+                headers=resolved_headers,
+            )
 
         if first_chunk_value is not None:
             try:
@@ -3994,7 +4005,8 @@ class ProxyBaseLLMRequestProcessing:
             )
             stream_completed = True
             error_frame: Final = serialize_error(proxy_exception)
-            yield error_frame if seal_open_frame is None else seal_open_frame(recent_tail) + error_frame
+            seal: Final = "" if seal_open_frame is None else seal_open_frame(recent_tail)
+            yield seal + error_frame if seal else error_frame
         finally:
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,

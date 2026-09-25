@@ -9,7 +9,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-from .exceptions import AnthropicErrorResponse, AnthropicErrorType
+from .exceptions import AnthropicErrorDetail, AnthropicErrorResponse, AnthropicErrorType
 
 # HTTP status code -> Anthropic error type
 # Source: https://docs.anthropic.com/en/api/errors
@@ -169,14 +169,34 @@ class AnthropicExceptionMapping:
         )
 
 
-def anthropic_error_sse_frame(status_code: int, raw_message: str) -> str:
+class AnthropicErrorSseFrame(str):
     """One `event: error` frame, for a stream that fails once the response headers are out.
 
     Anthropic clients pick stream events by the `event:` name, so a frame carrying only a `data:`
-    line is skipped and the failure never reaches the caller
+    line is skipped and the failure never reaches the caller. The frame remembers the status and
+    body it was built from, so a stream that fails before its first byte can still answer as a
+    JSON error with that exact status instead of a 200 that only says `api_error`
     """
-    error_response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
-        status_code=status_code,
-        raw_message=raw_message,
+
+    status_code: int
+    error_response: AnthropicErrorResponse
+
+    def __new__(cls, status_code: int, error_response: AnthropicErrorResponse) -> "AnthropicErrorSseFrame":
+        frame: Final = super().__new__(cls, f"event: error\ndata: {json.dumps(error_response)}\n\n")
+        frame.status_code = status_code
+        frame.error_response = error_response
+        return frame
+
+    def json_body(self, call_id: str | None) -> AnthropicErrorResponse:
+        if call_id is None:
+            return self.error_response
+        detail: Final[AnthropicErrorDetail] = {**self.error_response["error"], "litellm_call_id": call_id}
+        body: Final[AnthropicErrorResponse] = {**self.error_response, "error": detail}
+        return body
+
+
+def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
+    return AnthropicErrorSseFrame(
+        status_code,
+        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
     )
-    return f"event: error\ndata: {json.dumps(error_response)}\n\n"

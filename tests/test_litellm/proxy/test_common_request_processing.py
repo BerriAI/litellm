@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
@@ -2544,6 +2545,63 @@ class TestCommonRequestProcessingHelpers:
         assert isinstance(response, JSONResponse)
         assert response.headers["x-litellm-call-id"] == "call-8302"
         assert json.loads(response.body) == {"error": {"code": 403, "message": "forbidden"}}
+
+    async def test_a_stream_that_fails_before_its_first_byte_answers_as_an_anthropic_json_error(self):
+        """A /v1/messages stream whose first chunk is already the error frame has nothing
+        streamed yet, so the failure answers as JSON with the status the upstream gave,
+        the shape Anthropic clients raise their status-specific errors on"""
+
+        async def stream():
+            yield anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
+            yield ANTHROPIC_PING_SSE_CHUNK
+
+        generator: Final = stream()
+        response = await create_response(generator, "text/event-stream", {"x-litellm-call-id": "call-8609"})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 503
+        assert response.headers["content-type"] == "application/json"
+        assert response.headers["x-litellm-call-id"] == "call-8609"
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "api_error", "message": "upstream unavailable"},
+        }
+        assert generator.ag_frame is None
+
+    async def test_a_stream_that_fails_before_its_first_byte_names_the_call_when_opted_in(self):
+        async def stream():
+            yield anthropic_error_sse_frame(status_code=429, raw_message="slow down")
+
+        response = await create_response(
+            stream(),
+            "text/event-stream",
+            {"x-litellm-call-id": "call-8609"},
+            general_settings={"include_call_id_in_error_body": True},
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 429
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "rate_limit_error", "message": "slow down", "litellm_call_id": "call-8609"},
+        }
+
+    async def test_an_error_event_after_a_keepalive_ping_still_streams(self):
+        """Once a keepalive ping went out the headers are committed, so the error frame
+        streams as an event instead of turning into a JSON answer"""
+
+        async def stream():
+            yield ANTHROPIC_PING_SSE_CHUNK
+            yield anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
+
+        response = await create_response(stream(), "text/event-stream", {})
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == 200
+        assert "".join(await self.consume_stream(response)) == (
+            ANTHROPIC_PING_SSE_CHUNK
+            + 'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "upstream unavailable"}}\n\n'
+        )
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -9948,6 +10006,8 @@ class TestAnthropicMessagesStreamErrorFrame:
 
         assert len(frames) == 1
         event_line, data_line, first_blank, second_blank = frames[0].split("\n")
+        assert isinstance(frames[0], AnthropicErrorSseFrame)
+        assert frames[0].status_code == status_code
         assert event_line == "event: error"
         assert (first_blank, second_blank) == ("", "")
         payload: Final = json.loads(data_line.removeprefix("data: "))
@@ -10061,6 +10121,43 @@ class TestAnthropicMessagesStreamErrorFrame:
                 model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
             ):
                 pass
+        body: Final = raised.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+    async def test_a_failure_before_the_first_byte_answers_with_its_status_as_json(self) -> None:
+        response: Final = await create_response(
+            self._sse_generator_failing_with(self._upstream_failure(502)), "text/event-stream", {}
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 502
+        body: Final = json.loads(response.body)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "api_error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+    async def test_a_failure_before_the_first_byte_raises_with_its_status_in_the_anthropic_sdk(self) -> None:
+        response: Final = await create_response(
+            self._sse_generator_failing_with(self._upstream_failure(502)), "text/event-stream", {}
+        )
+        assert isinstance(response, JSONResponse)
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(response.status_code, headers=dict(response.headers), content=response.body)
+
+        client: Final = anthropic.Anthropic(
+            api_key="sk-test",
+            base_url="http://proxy.test",
+            http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+            max_retries=0,
+        )
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
+            )
+        assert raised.value.status_code == 502
         body: Final = raised.value.body
         assert isinstance(body, dict)
         assert body["type"] == "error"

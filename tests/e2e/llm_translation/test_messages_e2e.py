@@ -405,6 +405,7 @@ _STREAM_FAILURE_PROMPT: Final = "Count from 1 to 100, one number per line."
 _FRAME_PAYLOAD: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _AT_FRAME_BOUNDARY: Final = StreamCut(after_chunks=2)
 _MID_FRAME: Final = StreamCut(after_chunks=2, mid_chunk=True)
+_BEFORE_FIRST_BYTE: Final = StreamCut(after_chunks=0)
 
 type _CutRegistration = Callable[[ProxyClient, ResourceManager, StreamCut], tuple[str, str]]
 
@@ -453,6 +454,10 @@ _DROPPED_UPSTREAMS: Final[tuple[tuple[str, _CutRegistration, StreamCut], ...]] =
     ("bedrock_at_a_frame_boundary", _register_cut_bedrock, _AT_FRAME_BOUNDARY),
     ("anthropic_at_a_frame_boundary", _register_cut_anthropic, _AT_FRAME_BOUNDARY),
     ("anthropic_mid_frame", _register_cut_anthropic, _MID_FRAME),
+)
+_DROPPED_BEFORE_FIRST_BYTE: Final[tuple[tuple[str, _CutRegistration, StreamCut], ...]] = (
+    ("bedrock_before_the_first_byte", _register_cut_bedrock, _BEFORE_FIRST_BYTE),
+    ("anthropic_before_the_first_byte", _register_cut_anthropic, _BEFORE_FIRST_BYTE),
 )
 
 
@@ -560,3 +565,76 @@ class TestMessagesUpstreamStreamFailure:
             f"the proxy emitted error frames without the Anthropic envelope, which Anthropic clients drop: "
             f"{bare}; all frames={frames}"
         )
+
+    @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_status")
+    @pytest.mark.parametrize(
+        ("register", "cut"),
+        [case[1:] for case in _DROPPED_BEFORE_FIRST_BYTE],
+        ids=[case[0] for case in _DROPPED_BEFORE_FIRST_BYTE],
+    )
+    def test_upstream_that_hangs_up_before_the_first_byte_raises_with_its_status_in_the_anthropic_sdk(
+        self,
+        proxy: ProxyClient,
+        resources: ResourceManager,
+        sdk: SdkClients,
+        register: _CutRegistration,
+        cut: StreamCut,
+    ) -> None:
+        model, key = register(proxy, resources, cut)
+        client: Final = sdk.anthropic(key)
+
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            client.messages.create(
+                model=model,
+                max_tokens=300,
+                stream=True,
+                messages=[_user_turn(_STREAM_FAILURE_PROMPT)],
+                extra_body=NO_PROXY_CACHE,
+            )
+        assert 500 <= raised.value.status_code < 600, (
+            f"an upstream that hung up before sending anything must answer with a server error status the SDK "
+            f"retries on, not {raised.value.status_code}: {raised.value}"
+        )
+        try:
+            AnthropicErrorEvent.model_validate(raised.value.body)
+        except ValidationError:
+            pytest.fail(
+                f"the SDK raised with the right status but without the Anthropic error envelope a client reads "
+                f"the failure from: body={raised.value.body!r} message={raised.value}"
+            )
+
+    @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_status")
+    @pytest.mark.parametrize(
+        ("register", "cut"),
+        [case[1:] for case in _DROPPED_BEFORE_FIRST_BYTE],
+        ids=[case[0] for case in _DROPPED_BEFORE_FIRST_BYTE],
+    )
+    def test_upstream_that_hangs_up_before_the_first_byte_is_a_json_error_with_its_status(
+        self, proxy: ProxyClient, resources: ResourceManager, register: _CutRegistration, cut: StreamCut
+    ) -> None:
+        model, key = register(proxy, resources, cut)
+
+        outcome: Final = proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                max_tokens=300,
+                stream=True,
+                messages=[ChatMessage(role="user", content=_STREAM_FAILURE_PROMPT)],
+            ),
+        )
+        assert not outcome.is_streaming, (
+            f"nothing had been streamed when the upstream hung up, yet /v1/messages opened a 200 SSE stream "
+            f"instead of answering with the failure's status: stream_error={outcome.stream_error!r} "
+            f"frames={outcome.stream_events}"
+        )
+        assert 500 <= outcome.status_code < 600, (
+            f"/v1/messages answered {outcome.status_code} for an upstream that hung up before its first byte; "
+            f"body={outcome.body}"
+        )
+        try:
+            AnthropicErrorEvent.model_validate_json(outcome.body)
+        except ValidationError:
+            pytest.fail(
+                f'the error body is not an Anthropic {{"type": "error", "error": ...}} envelope; body={outcome.body}'
+            )
