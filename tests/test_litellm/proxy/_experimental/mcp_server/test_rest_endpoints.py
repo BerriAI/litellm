@@ -1476,7 +1476,7 @@ class TestListToolsRestAPI:
         monkeypatch,
     ):
         """The REST tools/list path should include tools beyond the upstream first page."""
-        from mcp.types import ListToolsResult, PaginatedRequestParams
+        from mcp.types import Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities
         from mcp.types import Tool as MCPTool
 
         import litellm.experimental_mcp_client.client as mcp_client_module
@@ -1512,7 +1512,11 @@ class TestListToolsRestAPI:
 
         mock_session_ctx = AsyncMock()
         mock_session_instance = AsyncMock()
-        mock_session_instance.initialize = AsyncMock(return_value=None)
+        mock_session_instance.initialize = AsyncMock(return_value=InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="stub", version="1"),
+        ))
         mock_session_instance.list_tools.side_effect = [
             ListToolsResult(
                 tools=[
