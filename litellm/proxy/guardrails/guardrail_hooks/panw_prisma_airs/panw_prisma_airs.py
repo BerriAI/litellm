@@ -215,7 +215,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             self.timeout,
         )
 
-    # MCP event → base-call compatibility map.
+    # MCP event -> base-call compatibility map.
     # Allows guardrails configured with mode: pre_call / during_call / post_call to
     # automatically run on MCP tool invocations (pre_mcp_call / during_mcp_call / post_mcp_call).
     _MCP_COMPAT_MAP = {

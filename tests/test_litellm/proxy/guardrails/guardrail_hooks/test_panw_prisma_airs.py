@@ -20,16 +20,15 @@ import pytest
 from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent
 
+import litellm
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
-    MCPGuardrailTranslationHandler,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
     initialize_guardrail,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import (
     ChatCompletionCustomToolCallPayload,
@@ -2172,18 +2171,27 @@ class TestPanwAirsShouldRunGuardrail:
         assert handler.should_run_guardrail(data, query_event) is expected
 
 
+@pytest.fixture
+def restore_callbacks():
+    """Restore the process-wide callback state post_mcp_call_hook reads."""
+    original = list(litellm.callbacks)
+    yield
+    litellm.callbacks = original
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
 class TestPanwAirsPostMcpCall:
     """Tests for mode: post_mcp_call on MCP tool results."""
 
     def test_post_mcp_call_mode_accepted_at_init(self):
         handler = make_handler(event_hook="post_mcp_call", default_on=True)
-        assert (
-            handler.should_run_guardrail(_simple_data(), GuardrailEventHooks.post_mcp_call) is True
-        )
+        assert handler.should_run_guardrail(_simple_data(), GuardrailEventHooks.post_mcp_call) is True
 
     @pytest.mark.asyncio
-    async def test_post_mcp_call_hook_blocks_tool_result(self):
+    async def test_post_mcp_call_hook_blocks_tool_result(self, restore_callbacks):
         handler = make_handler(event_hook="post_mcp_call", default_on=True)
+        litellm.callbacks = [handler]
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
         result = CallToolResult(
             content=[TextContent(type="text", text="ssn 123-45-6789")],
             isError=False,
@@ -2200,23 +2208,25 @@ class TestPanwAirsPostMcpCall:
                 "profile_name": "p",
             }
             with pytest.raises(HTTPException) as exc_info:
-                await MCPGuardrailTranslationHandler().process_output_response(
+                await proxy_logging_obj.post_mcp_call_hook(
                     response=result,
-                    guardrail_to_apply=handler,
                     request_data={"litellm_call_id": "c1"},
+                    user_api_key_dict=None,
                 )
             assert exc_info.value.status_code == 400
             mock_api.assert_called_once()
             assert mock_api.call_args.kwargs.get("is_response") is True
 
     @pytest.mark.asyncio
-    async def test_post_mcp_call_hook_masks_tool_result(self):
+    async def test_post_mcp_call_hook_masks_tool_result(self, restore_callbacks):
         masked = "ssn ***********"
         handler = make_handler(
             event_hook="post_mcp_call",
             default_on=True,
             mask_response_content=True,
         )
+        litellm.callbacks = [handler]
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
         result = CallToolResult(
             content=[TextContent(type="text", text="ssn 123-45-6789")],
             isError=False,
@@ -2233,10 +2243,10 @@ class TestPanwAirsPostMcpCall:
                 "profile_name": "p",
                 "response_masked_data": {"data": masked},
             }
-            returned = await MCPGuardrailTranslationHandler().process_output_response(
+            returned = await proxy_logging_obj.post_mcp_call_hook(
                 response=result,
-                guardrail_to_apply=handler,
                 request_data={"litellm_call_id": "c1"},
+                user_api_key_dict=None,
             )
             mock_api.assert_called_once()
             assert mock_api.call_args.kwargs.get("is_response") is True
