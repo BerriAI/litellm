@@ -1516,8 +1516,6 @@ def test_arize_mcp_emitter_is_inert_without_a_standard_logging_object():
 
 
 def test_arize_session_and_user_attrs_still_emit_from_key_metadata_by_default():
-    """The emit_session_and_user split is Langfuse-only: Arize keeps session.id
-    = end user and user.id = internal key owner when no body user exists."""
     from unittest.mock import MagicMock
 
     span = MagicMock()

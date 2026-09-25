@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import pytest
 from _langfuse_otel import (
     _dedupe_spans,
     _drained_spans,
@@ -95,7 +94,6 @@ def _landed_counts(sink: Wire, batches: list[bytes], markers: tuple[str, ...]) -
     return {marker: len(_span_containing_marker(generations, marker)) for marker in markers}
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.burst_sink_outage")
 def test_langfuse_otel_sink_outage_mid_burst_never_duplicates(gateway: Gateway, tmp_path: Path) -> None:
     outage: Final = threading.Event()
 
@@ -144,7 +142,6 @@ def test_langfuse_otel_sink_outage_mid_burst_never_duplicates(gateway: Gateway, 
         assert missing <= window, (missing, window, counts)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.burst_slow_sink")
 def test_langfuse_otel_slow_sink_never_duplicates_or_loses(gateway: Gateway, tmp_path: Path) -> None:
     def slow_sink(request: Request) -> Reply:
         time.sleep(1.5)
@@ -179,7 +176,6 @@ def test_langfuse_otel_slow_sink_never_duplicates_or_loses(gateway: Gateway, tmp
         assert counts == {marker: 1 for marker in markers}, counts
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.worker_kill_mid_burst")
 def test_langfuse_otel_worker_kill_mid_burst_keeps_every_marker(gateway: Gateway, tmp_path: Path) -> None:
     with (
         wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,
@@ -234,7 +230,6 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_every_marker(gateway: Gateway
         assert counts == {marker: 1 for marker in accepted_markers}, (counts, failures)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.proxy_restart_mid_burst")
 def test_langfuse_otel_proxy_restart_mid_burst_keeps_every_marker(gateway: Gateway, tmp_path: Path) -> None:
     with (
         wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,

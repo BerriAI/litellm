@@ -2,7 +2,6 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import pytest
 from _langfuse_otel import (
     _arize_generation_span_attributes,
     _generation_marker_span_attributes,
@@ -16,7 +15,7 @@ from _langfuse_otel import (
 from anthropic import Anthropic, AsyncAnthropic
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.wire import Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 
 
@@ -80,7 +79,6 @@ def _identity(attributes: dict[str, object]) -> dict[str, object]:
     return {key: attributes.get(key) for key in ("user.id", "session.id")}
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.customer_id_header_end_user_in_user_id")
 def test_langfuse_otel_customer_id_header_lands_in_user_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -102,7 +100,6 @@ def test_langfuse_otel_customer_id_header_lands_in_user_id(gateway: Gateway, tmp
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.langfuse_trace_user_id_header_wins")
 def test_langfuse_otel_langfuse_trace_user_id_header_wins_over_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -127,7 +124,6 @@ def test_langfuse_otel_langfuse_trace_user_id_header_wins_over_the_end_user(gate
         assert _identity(attributes) == {"user.id": f"caller-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.no_end_user_no_user_id")
 def test_langfuse_otel_no_end_user_never_exposes_the_internal_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -151,7 +147,6 @@ def test_langfuse_otel_no_end_user_never_exposes_the_internal_user(gateway: Gate
         assert _identity(attributes) == {"user.id": None, "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.team_key_end_user_with_team_attributes")
 def test_langfuse_otel_team_key_end_user_keeps_the_litellm_attributes(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -179,7 +174,6 @@ def test_langfuse_otel_team_key_end_user_keeps_the_litellm_attributes(gateway: G
         assert attributes.get("litellm.key_alias") == f"key-alias-{marker[:12]}", attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.header_end_user_beats_body_user")
 def test_langfuse_otel_header_end_user_beats_the_body_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -214,7 +208,6 @@ def test_langfuse_otel_header_end_user_beats_the_body_user(gateway: Gateway, tmp
         assert attributes.get("user.id") == rows[0]["end_user"], (attributes, rows)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.openai_sdk_streaming_end_user")
 def test_langfuse_otel_openai_sdk_streaming_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -244,7 +237,6 @@ def test_langfuse_otel_openai_sdk_streaming_end_user(gateway: Gateway, tmp_path:
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.openai_async_sdk_end_user")
 async def test_langfuse_otel_openai_async_sdk_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -268,7 +260,6 @@ async def test_langfuse_otel_openai_async_sdk_end_user(gateway: Gateway, tmp_pat
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.responses_api_end_user")
 def test_langfuse_otel_responses_api_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -290,7 +281,6 @@ def test_langfuse_otel_responses_api_end_user(gateway: Gateway, tmp_path: Path) 
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.responses_api_async_streaming_end_user")
 async def test_langfuse_otel_responses_api_async_streaming_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -313,7 +303,6 @@ async def test_langfuse_otel_responses_api_async_streaming_end_user(gateway: Gat
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.anthropic_sdk_messages_end_user")
 def test_langfuse_otel_anthropic_sdk_messages_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -335,7 +324,6 @@ def test_langfuse_otel_anthropic_sdk_messages_end_user(gateway: Gateway, tmp_pat
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.anthropic_async_streaming_messages_end_user")
 async def test_langfuse_otel_anthropic_async_streaming_messages_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -358,7 +346,6 @@ async def test_langfuse_otel_anthropic_async_streaming_messages_end_user(gateway
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.v2_caller_trace_user_id_wins")
 def test_langfuse_otel_v2_caller_trace_user_id_wins_over_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -394,7 +381,6 @@ def test_langfuse_otel_v2_caller_trace_user_id_wins_over_the_end_user(gateway: G
         ), user_spans
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.arize_phoenix_unchanged_header_end_user")
 def test_arize_phoenix_header_end_user_keeps_session_mapping(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -433,7 +419,6 @@ def test_arize_phoenix_header_end_user_keeps_session_mapping(gateway: Gateway, t
         assert attributes.get("litellm.trace_id") is not None, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.arize_phoenix_unchanged_caller_session")
 def test_arize_phoenix_caller_session_id_stays_session(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -477,7 +462,6 @@ def test_arize_phoenix_caller_session_id_stays_session(gateway: Gateway, tmp_pat
         assert attributes.get("litellm.trace_id") == f"sess-{marker}", attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.dual_callbacks_arize_unchanged")
 def test_langfuse_otel_and_arize_phoenix_together_keep_each_mapping(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (

@@ -2,7 +2,6 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import pytest
 from _langfuse_otel import (
     _generation_span_attributes,
     _langfuse_proxy,
@@ -15,7 +14,6 @@ from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply, Request, wire_server
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.header_end_user_in_user_id_over_internal_user")
 def test_langfuse_otel_header_end_user_lands_in_user_id_not_session_id_for_a_key_owned_by_an_internal_user(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -56,7 +54,6 @@ def test_langfuse_otel_header_end_user_lands_in_user_id_not_session_id_for_a_key
         }, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.header_end_user_in_user_id_service_key")
 def test_langfuse_otel_header_end_user_lands_in_user_id_for_a_service_account_key(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -96,7 +93,6 @@ def test_langfuse_otel_header_end_user_lands_in_user_id_for_a_service_account_ke
         }, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.body_user_never_a_session")
 def test_langfuse_otel_body_user_is_never_a_session(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     upstream_bodies: Final[list[bytes]] = []
@@ -136,7 +132,6 @@ def test_langfuse_otel_body_user_is_never_a_session(gateway: Gateway, tmp_path: 
         }, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.caller_trace_user_id_wins")
 def test_langfuse_otel_caller_trace_user_id_wins_over_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     upstream_bodies: Final[list[bytes]] = []
@@ -177,7 +172,6 @@ def test_langfuse_otel_caller_trace_user_id_wins_over_the_end_user(gateway: Gate
         }, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.caller_session_id_stays_session")
 def test_langfuse_otel_caller_session_id_stays_the_session_beside_the_end_user(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -220,7 +214,6 @@ def test_langfuse_otel_caller_session_id_stays_the_session_beside_the_end_user(
         }, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.v2_header_end_user_in_user_id")
 def test_langfuse_otel_v2_header_end_user_lands_in_user_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     upstream_bodies: Final[list[bytes]] = []
@@ -259,7 +252,6 @@ def test_langfuse_otel_v2_header_end_user_lands_in_user_id(gateway: Gateway, tmp
         }, user_spans[0]
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.messages_caller_trace_user_id_under_litellm_metadata")
 def test_langfuse_otel_messages_caller_trace_user_id_under_litellm_metadata_wins_over_the_end_user(
     gateway: Gateway, tmp_path: Path
 ) -> None:

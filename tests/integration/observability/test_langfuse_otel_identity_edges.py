@@ -4,15 +4,14 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import pytest
 from _langfuse_otel import (
     _drained_spans,
     _generation_marker_span_attributes,
     _generation_span_attributes,
     _langfuse_proxy,
+    _marker_from_body,
     _sink,
     _span_containing_marker,
-    _marker_from_body,
     _upstream_reply_for,
 )
 from integration._support.client import Gateway, eventually
@@ -55,7 +54,6 @@ def _subsequent_request_still_lands(candidate: Gateway, collector: Wire, batches
     assert _await_generation(collector, batches, next_marker) is not None
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.end_user_5kb_header")
 def test_langfuse_otel_five_kb_end_user_header_lands_in_user_id(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     end_user: Final = "e" * 5120
@@ -78,7 +76,6 @@ def test_langfuse_otel_five_kb_end_user_header_lands_in_user_id(gateway: Gateway
         assert _identity(attributes) == {"user.id": end_user, "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.empty_end_user_header")
 def test_langfuse_otel_empty_end_user_header_writes_no_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -101,7 +98,6 @@ def test_langfuse_otel_empty_end_user_header_writes_no_identity(gateway: Gateway
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.integer_body_user")
 def test_langfuse_otel_integer_body_user_does_not_crash(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -128,7 +124,6 @@ def test_langfuse_otel_integer_body_user_does_not_crash(gateway: Gateway, tmp_pa
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.list_body_user")
 def test_langfuse_otel_list_body_user_does_not_crash(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -155,7 +150,6 @@ def test_langfuse_otel_list_body_user_does_not_crash(gateway: Gateway, tmp_path:
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.integer_trace_user_id")
 def test_langfuse_otel_integer_trace_user_id_does_not_crash(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -174,7 +168,6 @@ def test_langfuse_otel_integer_trace_user_id_does_not_crash(gateway: Gateway, tm
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.null_metadata")
 def test_langfuse_otel_null_metadata_still_maps_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -191,7 +184,6 @@ def test_langfuse_otel_null_metadata_still_maps_the_end_user(gateway: Gateway, t
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.duplicate_end_user_header")
 def test_langfuse_otel_duplicate_end_user_header_uses_the_first(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -239,7 +231,6 @@ def test_langfuse_otel_duplicate_end_user_header_uses_the_first(gateway: Gateway
         assert all(attributes.get("user.id") == f"first-{marker}" for attributes in spans), spans
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.unauthenticated_no_span")
 def test_langfuse_otel_bad_key_emits_no_generation_span(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -267,7 +258,6 @@ def test_langfuse_otel_bad_key_emits_no_generation_span(gateway: Gateway, tmp_pa
         assert offending == (), offending
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.upstream_failure_identity")
 def test_langfuse_otel_upstream_failure_never_invents_an_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -295,9 +285,7 @@ def test_langfuse_otel_upstream_failure_never_invents_an_identity(gateway: Gatew
         assert offending == (), offending
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.sink_rejections_survived")
 def test_langfuse_otel_sink_rejections_do_not_drop_the_proxy(gateway: Gateway, tmp_path: Path) -> None:
-    marker: Final = uuid.uuid4().hex
     calls: Final[dict[str, int]] = {"count": 0}
     lock: Final = threading.Lock()
 
@@ -336,7 +324,6 @@ def test_langfuse_otel_sink_rejections_do_not_drop_the_proxy(gateway: Gateway, t
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.unknown_model")
 def test_langfuse_otel_unknown_model_error_reaches_the_caller(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -352,7 +339,6 @@ def test_langfuse_otel_unknown_model_error_reaches_the_caller(gateway: Gateway, 
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.session_id_empty_null_missing")
 def test_langfuse_otel_empty_and_null_session_id_stay_absent(gateway: Gateway, tmp_path: Path) -> None:
     markers: Final = tuple(uuid.uuid4().hex for _ in range(3))
     with (
@@ -375,7 +361,6 @@ def test_langfuse_otel_empty_and_null_session_id_stay_absent(gateway: Gateway, t
             }, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.empty_trace_user_id")
 def test_langfuse_otel_empty_trace_user_id_falls_back_to_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
@@ -392,7 +377,6 @@ def test_langfuse_otel_empty_trace_user_id_falls_back_to_the_end_user(gateway: G
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.three_identical_requests")
 def test_langfuse_otel_three_identical_requests_each_land_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     markers: Final = tuple(uuid.uuid4().hex for _ in range(3))
     with (
@@ -411,7 +395,6 @@ def test_langfuse_otel_three_identical_requests_each_land_the_end_user(gateway: 
             assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.litellm_metadata_session_on_responses")
 def test_langfuse_otel_litellm_metadata_session_id_on_responses(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (
