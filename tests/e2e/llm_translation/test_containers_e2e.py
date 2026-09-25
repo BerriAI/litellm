@@ -42,12 +42,11 @@ from __future__ import annotations
 import base64
 import binascii
 import os
-import re
 from types import MappingProxyType
 from typing import Final
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import REQUEST_TIMEOUT, unique_marker
 from e2e_http import unwrap
 from lifecycle import ResourceManager
 from management.management_client import ManagementClient, build_client
@@ -58,14 +57,24 @@ from openai.types.responses.tool_param import CodeInterpreter
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
-pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
+AZURE_API_BASE: Final = os.environ.get("AZURE_API_BASE", "")
+AZURE_API_KEY: Final = os.environ.get("AZURE_API_KEY", "")
+
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.provider_live,
+    pytest.mark.skipif(
+        not AZURE_API_BASE or not AZURE_API_KEY,
+        reason="set AZURE_API_BASE and AZURE_API_KEY in the pytest env; the deployments are registered with them",
+    ),
+]
 
 AZURE_BACKEND: Final = "azure/gpt-5.4-nano"
 AZURE_API_VERSION: Final = "v1"
 AZURE_PROVIDER_QUERY: Final = MappingProxyType({"custom_llm_provider": "azure"})
 CODE_INTERPRETER: Final[CodeInterpreter] = {"type": "code_interpreter", "container": {"type": "auto"}}
 PROMPT: Final = "Use python to compute 6*7 and reply with just the number."
-NATIVE_CONTAINER_ID: Final = re.compile(r"cntr_[0-9a-f]+")
+CODE_INTERPRETER_TIMEOUT: Final = 3 * REQUEST_TIMEOUT
 
 
 def _azure_params(api_base: str, api_key: str) -> LiteLLMParamsBody:
@@ -73,16 +82,12 @@ def _azure_params(api_base: str, api_key: str) -> LiteLLMParamsBody:
 
 
 def _register_two_azure_deployments(proxy: ProxyClient, resources: ResourceManager, marker: str) -> str:
-    api_base: Final = os.environ.get("AZURE_API_BASE")
-    api_key: Final = os.environ.get("AZURE_API_KEY")
-    if not api_base or not api_key:
-        pytest.skip("set AZURE_API_BASE and AZURE_API_KEY in the pytest env; the deployments are registered with them")
     decoy_id: Final = proxy.create_model(
-        f"e2e-containers-decoy-{marker}", _azure_params(api_base, f"decoy-{marker}"), provider_live=True
+        f"e2e-containers-decoy-{marker}", _azure_params(AZURE_API_BASE, f"decoy-{marker}"), provider_live=True
     )
     resources.defer(lambda: proxy.delete_model(decoy_id))
     model: Final = f"e2e-containers-{marker}"
-    model_id: Final = proxy.create_model(model, _azure_params(api_base, api_key), provider_live=True)
+    model_id: Final = proxy.create_model(model, _azure_params(AZURE_API_BASE, AZURE_API_KEY), provider_live=True)
     resources.defer(lambda: proxy.delete_model(model_id))
     return model
 
@@ -111,7 +116,9 @@ def _service_account_key(
 
 
 def _response_with_code_interpreter(client: OpenAI, model: str) -> Response:
-    return client.responses.create(model=model, input=PROMPT, tools=[CODE_INTERPRETER], extra_body=NO_PROXY_CACHE)
+    return client.with_options(timeout=CODE_INTERPRETER_TIMEOUT).responses.create(
+        model=model, input=PROMPT, tools=[CODE_INTERPRETER], tool_choice="required", extra_body=NO_PROXY_CACHE
+    )
 
 
 def _container_id(response: Response) -> str:
@@ -120,12 +127,17 @@ def _container_id(response: Response) -> str:
     return calls[0].container_id
 
 
-def _native_container_id(container_id: str) -> str:
+def _routing_envelope(container_id: str) -> str | None:
     try:
         envelope: Final = base64.b64decode(container_id.removeprefix("cntr_"), validate=True).decode()
     except (binascii.Error, UnicodeDecodeError):
-        return container_id
-    return envelope.rpartition("container_id:")[2] if envelope.startswith("litellm:") else container_id
+        return None
+    return envelope if envelope.startswith("litellm:") else None
+
+
+def _native_container_id(container_id: str) -> str:
+    envelope: Final = _routing_envelope(container_id)
+    return container_id if envelope is None else envelope.rpartition("container_id:")[2]
 
 
 def _assert_file_round_trip(client: OpenAI, native_id: str, marker: str) -> None:
@@ -149,6 +161,8 @@ class TestAzureContainerFiles:
         key: Final = _service_account_key(proxy, resources, build_client(proxy), marker, model)
         client: Final = sdk.openai(key)
         native_id: Final = _native_container_id(_container_id(_response_with_code_interpreter(client, model)))
-        assert NATIVE_CONTAINER_ID.fullmatch(native_id), f"container id is not a native Azure id: {native_id}"
         resources.defer(lambda: client.containers.delete(native_id, extra_query=AZURE_PROVIDER_QUERY))
+        assert native_id.startswith("cntr_") and _routing_envelope(native_id) is None, (
+            f"container id is not the provider's own id: {native_id}"
+        )
         _assert_file_round_trip(client, native_id, marker)
