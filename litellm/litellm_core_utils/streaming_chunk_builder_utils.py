@@ -685,7 +685,7 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
+            if current_signature:
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",

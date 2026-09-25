@@ -236,6 +236,31 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
     assert result[2]["signature"] == "sig_block2"
 
 
+def test_get_combined_thinking_content_keeps_signed_block_without_thinking_text():
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="claude-sonnet-4-20250514",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "sig_only"}]),
+                    finish_reason=None,
+                )
+            ],
+        )
+    ]
+
+    result: Final = ChunkProcessor(chunks=chunks).get_combined_thinking_content(chunks)
+
+    assert result is not None
+    assert [(block["type"], block["thinking"], block["signature"]) for block in result] == [
+        ("thinking", "", "sig_only")
+    ]
+
+
 def test_cache_read_input_tokens_retained():
     chunk1 = ModelResponseStream(
         id="chatcmpl-95aabb85-c39f-443d-ae96-0370c404d70c",
