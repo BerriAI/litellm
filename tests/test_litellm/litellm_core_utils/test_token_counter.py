@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
     calculate_img_tokens,
+    get_image_dimensions,
     high_detail_image_token_upper_bound,
     image_dimensions_from_bytes,
     offload_token_count,
@@ -1673,3 +1674,37 @@ def test_image_dimensions_from_bytes_reads_each_header_format(image: bytes, expe
 )
 def test_image_dimensions_from_bytes_returns_none_for_unreadable_headers(image: bytes) -> None:
     assert image_dimensions_from_bytes(image) is None
+
+
+def _jpeg_sof(width: int, height: int) -> bytes:
+    return b"\xff\xc0" + struct.pack(">HBHHB", 17, 8, height, width, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        pytest.param(b"\xff\xd8" + b"\xff\xe0\x00\x02" * 1025 + _jpeg_sof(800, 600), id="too-many-segments"),
+        pytest.param(b"\xff\xd8" + b"\xff" * 2000 + _jpeg_sof(800, 600)[1:], id="too-many-fill-bytes"),
+        pytest.param(b"\xff\xd8\xff\xe0\x00\x00\x02" + _jpeg_sof(800, 600), id="segment-length-below-two"),
+    ],
+)
+def test_image_dimensions_from_bytes_gives_up_on_pathological_jpeg_headers(image: bytes) -> None:
+    assert image_dimensions_from_bytes(image) is None
+
+
+def test_image_dimensions_from_bytes_still_reads_a_jpeg_with_many_real_segments() -> None:
+    image: Final = b"\xff\xd8" + b"\xff\xe0\x00\x02" * 1000 + b"\xff" * 64 + _jpeg_sof(800, 600)[1:]
+
+    assert image_dimensions_from_bytes(image) == (800, 600)
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00", id="png-truncated"),
+        pytest.param(b"\xff\xd8\xff\xe0\x00\x10JFIF", id="jpeg-truncated"),
+    ],
+)
+def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes) -> None:
+    with pytest.raises((struct.error, TypeError)):
+        get_image_dimensions(data="data:image/png;base64," + base64.b64encode(header).decode())

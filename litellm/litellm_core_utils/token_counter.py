@@ -54,6 +54,9 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
 
+MAX_JPEG_HEADER_SEGMENTS: Final = 1024
+MAX_JPEG_FILL_BYTES: Final = 1024
+
 
 def get_modified_max_tokens(
     model: str,
@@ -248,7 +251,7 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
-    dimensions: Final = image_dimensions_from_bytes(img_data)
+    dimensions: Final = _header_dimensions(img_data)
     if dimensions is None:
         return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
     return dimensions
@@ -271,20 +274,7 @@ def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
         w, h = _unpack_ints("<HH", img_data[6:10])
         return w, h
     if img_type == "jpeg":
-        with io.BytesIO(img_data) as fhandle:
-            fhandle.seek(0)
-            size = 2
-            ftype = 0
-            while not 0xC0 <= ftype <= 0xCF or ftype in (0xC4, 0xC8, 0xCC):
-                fhandle.seek(size, 1)
-                byte = fhandle.read(1)
-                while ord(byte) == 0xFF:
-                    byte = fhandle.read(1)
-                ftype = ord(byte)
-                size = _unpack_ints(">H", fhandle.read(2))[0] - 2
-            fhandle.seek(1, 1)
-            h, w = _unpack_ints(">HH", fhandle.read(4))
-        return w, h
+        return _jpeg_dimensions(img_data)
     if img_type == "webp":
         if img_data[12:16] == b"VP8X":
             w = _unpack_ints("<I", img_data[24:27] + b"\x00")[0] + 1
@@ -299,6 +289,32 @@ def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
+    return None
+
+
+def _jpeg_dimensions(img_data: bytes) -> tuple[int, int] | None:
+    with io.BytesIO(img_data) as fhandle:
+        fhandle.seek(2)
+        for _ in range(MAX_JPEG_HEADER_SEGMENTS):
+            marker = _next_jpeg_marker(fhandle)
+            if marker is None:
+                return None
+            segment_length = _unpack_ints(">H", fhandle.read(2))[0]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                fhandle.seek(1, 1)
+                h, w = _unpack_ints(">HH", fhandle.read(4))
+                return w, h
+            if segment_length < 2:
+                return None
+            fhandle.seek(segment_length - 2, 1)
+    return None
+
+
+def _next_jpeg_marker(fhandle: io.BytesIO) -> int | None:
+    for _ in range(MAX_JPEG_FILL_BYTES):
+        byte = fhandle.read(1)
+        if byte != b"\xff":
+            return ord(byte)
     return None
 
 

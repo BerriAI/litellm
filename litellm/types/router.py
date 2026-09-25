@@ -788,6 +788,7 @@ class ModelGroupInfo(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     input_cost_per_pixel: float | None = None
+    input_cost_per_reference_pixel: float | None = None
     mode: (
         str
         | Literal["chat", "embedding", "completion", "image_generation", "audio_transcription", "rerank", "moderations"]

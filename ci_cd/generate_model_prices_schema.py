@@ -222,7 +222,7 @@ COST_DESCRIPTIONS: dict[str, str] = {
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
     "output_cost_per_token_batches": "USD per generated token via the provider's batch API.",
-    "input_cost_per_reference_pixel": "USD per pixel of each reference image sent with an image edit.",
+    "input_cost_per_reference_pixel": "USD per billable pixel of the reference images sent with an image edit (Azure AI FLUX.2 counts them in whole 1024x1024 megapixels).",
 }
 
 
