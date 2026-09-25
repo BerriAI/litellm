@@ -1,11 +1,14 @@
 import asyncio
+import base64
 import importlib
 import os
 from collections.abc import Coroutine, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
 import boto3
+import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
@@ -15,9 +18,12 @@ import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at im
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
     image_handling as image_handling_module,
 )
+from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
@@ -89,6 +95,9 @@ RESTORED_GLOBALS: Final = (
 )
 MODULE_LEVEL_CLIENTS: Final = ("module_level_client", "module_level_aclient")
 SESSION_CLIENTS: Final = ("base_llm_aiohttp_handler", "httpx_client", "aclient", "client")
+ONE_PIXEL_PNG: Final = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
 
 
 def _allow_loopback_only() -> None:
@@ -234,6 +243,47 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    reload_beta_headers_config()
+
+
+@dataclass(slots=True)
+class AsyncOnlyImageFetch:
+    fetched: list[str] = field(default_factory=list)  # mutable-ok: tests assert on the URLs fetched, in order
+    base64_png: str = base64.b64encode(ONE_PIXEL_PNG).decode()
+    data_url: str = "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode()
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch: pytest.MonkeyPatch) -> AsyncOnlyImageFetch:
+    fetch: Final = AsyncOnlyImageFetch()
+
+    def forbid_sync_fetch(client: object, url: str, **kwargs: object) -> httpx.Response:
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200, content=ONE_PIXEL_PNG, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
+
+    def forbid_sync_convert(url: str, *args: object, **kwargs: object) -> str:
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
+    monkeypatch.setattr(image_handling_module, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling_module, "async_safe_get", serve_png)
+    for module in (image_handling_module, prompt_factory_module, gemini_chat_transformation_module):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
+    return fetch
 
 
 @pytest.fixture
