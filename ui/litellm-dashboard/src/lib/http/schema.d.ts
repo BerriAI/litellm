@@ -53415,7 +53415,7 @@ export interface operations {
                 format?: "csv" | "json";
                 end_user_ids?: string | null;
                 exclude_end_user_ids?: string | null;
-                timezone_offset_minutes?: number | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;
@@ -54124,7 +54124,7 @@ export interface operations {
                 format?: "csv" | "json";
                 end_user_ids?: string | null;
                 exclude_end_user_ids?: string | null;
-                timezone_offset_minutes?: number | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;
@@ -62308,7 +62308,7 @@ export interface operations {
                 format?: "csv" | "json";
                 organization_ids?: string | null;
                 exclude_organization_ids?: string | null;
-                timezone_offset_minutes?: number | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;
@@ -67211,7 +67211,7 @@ export interface operations {
                 format?: "csv" | "json";
                 tags?: string | null;
                 exclude_tags?: string | null;
-                timezone_offset_minutes?: number | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;

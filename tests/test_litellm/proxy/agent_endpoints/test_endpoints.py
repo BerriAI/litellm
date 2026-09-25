@@ -1458,7 +1458,7 @@ async def test_get_agent_daily_activity_export_csv_headers(monkeypatch):
         format="csv",
         agent_ids="agent-1",
         exclude_agent_ids=None,
-        timezone=None,
+        timezone_offset=None,
     )
     assert csv_response.body.decode().splitlines()[0].startswith("Date,Agent,Agent ID,")
 
@@ -1470,7 +1470,7 @@ async def test_get_agent_daily_activity_export_csv_headers(monkeypatch):
         format="json",
         agent_ids="agent-1",
         exclude_agent_ids=None,
-        timezone=None,
+        timezone_offset=None,
     )
     body = _json.loads(json_response.body)
     assert body["data"][0]["entity_id"] == "agent-1"

@@ -12,7 +12,7 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -1142,7 +1142,7 @@ async def get_customer_daily_activity_export(
     format: DailyActivityExportFormat = "csv",
     end_user_ids: str | None = None,
     exclude_end_user_ids: str | None = None,
-    timezone: int | None = Query(None, alias="timezone_offset_minutes"),
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
 ) -> Response:
     """
     Export daily activity for customers as CSV or JSON, uncapped.
@@ -1185,7 +1185,7 @@ async def get_customer_daily_activity_export(
         exclude_entity_ids=scope.exclude_end_user_ids,
         start_date=start_date,
         end_date=end_date,
-        timezone_offset_minutes=timezone,
+        timezone_offset_minutes=timezone_offset,
         export_type=export_type,
         format=format,
         labels=DailyActivityExportLabels(alias_header="Customer", id_header="Customer ID"),

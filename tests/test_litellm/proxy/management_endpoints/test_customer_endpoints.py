@@ -1106,7 +1106,7 @@ async def test_customer_daily_activity_routes_reject_non_admin(monkeypatch):
             format="csv",
             end_user_ids=None,
             exclude_end_user_ids=None,
-            timezone=None,
+            timezone_offset=None,
         )
     assert exc_info.value.status_code == 401
 

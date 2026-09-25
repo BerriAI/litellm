@@ -14,7 +14,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypedDict, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
@@ -958,7 +958,7 @@ async def get_tag_daily_activity_export(
     format: DailyActivityExportFormat = "csv",
     tags: str | None = None,
     exclude_tags: str | None = None,
-    timezone: int | None = Query(None, alias="timezone_offset_minutes"),
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
 ) -> Response:
     """
     Export daily activity for tags as CSV or JSON, uncapped.
@@ -993,7 +993,7 @@ async def get_tag_daily_activity_export(
         exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
         start_date=start_date,
         end_date=end_date,
-        timezone_offset_minutes=timezone,
+        timezone_offset_minutes=timezone_offset,
         export_type=export_type,
         format=format,
         labels=DailyActivityExportLabels(alias_header=None, id_header="Tag"),

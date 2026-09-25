@@ -810,7 +810,7 @@ async def get_organization_daily_activity_export(
     format: DailyActivityExportFormat = "csv",
     organization_ids: str | None = None,
     exclude_organization_ids: str | None = None,
-    timezone: int | None = Query(None, alias="timezone_offset_minutes"),
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
 ) -> Response:
     """
     Export daily activity for organizations as CSV or JSON, uncapped.
@@ -847,7 +847,7 @@ async def get_organization_daily_activity_export(
         exclude_entity_ids=scope.exclude_organization_ids,
         start_date=start_date,
         end_date=end_date,
-        timezone_offset_minutes=timezone,
+        timezone_offset_minutes=timezone_offset,
         export_type=export_type,
         format=format,
         labels=DailyActivityExportLabels(alias_header="Organization", id_header="Organization ID"),

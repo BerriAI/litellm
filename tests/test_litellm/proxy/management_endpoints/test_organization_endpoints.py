@@ -1692,7 +1692,7 @@ async def test_get_organization_daily_activity_export_csv_headers(monkeypatch):
         format="csv",
         organization_ids="orgA",
         exclude_organization_ids=None,
-        timezone=None,
+        timezone_offset=None,
     )
     assert csv_response.body.decode().splitlines()[0].startswith("Date,Organization,Organization ID,")
 
@@ -1704,7 +1704,7 @@ async def test_get_organization_daily_activity_export_csv_headers(monkeypatch):
         format="json",
         organization_ids="orgA",
         exclude_organization_ids=None,
-        timezone=None,
+        timezone_offset=None,
     )
     body = _json.loads(json_response.body)
     assert body["data"][0]["entity_id"] == "orgA"

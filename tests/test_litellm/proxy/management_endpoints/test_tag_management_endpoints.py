@@ -1728,7 +1728,7 @@ async def test_get_tag_daily_activity_export_json_and_csv_headers():
             format="json",
             tags="tag-a",
             exclude_tags=None,
-            timezone=None,
+            timezone_offset=None,
         )
         body = json.loads(json_response.body)
         assert body["data"][0]["entity_id"] == "tag-a"
@@ -1743,7 +1743,7 @@ async def test_get_tag_daily_activity_export_json_and_csv_headers():
             format="csv",
             tags="tag-a",
             exclude_tags=None,
-            timezone=None,
+            timezone_offset=None,
         )
         header = csv_response.body.decode().splitlines()[0]
         assert header.startswith("Date,Tag,")
@@ -1754,3 +1754,38 @@ async def test_get_tag_daily_activity_export_json_and_csv_headers():
         assert call_kwargs["table_name"] == "litellm_dailytagspend"
         assert call_kwargs["entity_id_field"] == "tag"
         assert call_kwargs["alias_metadata_key"] is None
+
+
+def test_tag_daily_activity_export_reads_timezone_query_param():
+    """The frontend sends `timezone` (the team-route convention); a route that
+    listens for `timezone_offset_minutes` instead silently drops it and exports
+    UTC-shifted day buckets."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.tag_management_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+            new_callable=AsyncMock,
+            return_value=(),
+        ) as mock_rows,
+    ):
+        response = TestClient(app).get(
+            "/tag/daily/activity/export?start_date=2026-09-20&end_date=2026-09-22&timezone=480&format=json"
+        )
+
+        assert response.status_code == 200
+        assert mock_rows.call_args[1]["timezone_offset_minutes"] == 480
