@@ -2727,6 +2727,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2762,6 +2763,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2797,6 +2799,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2832,6 +2835,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2867,6 +2871,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2902,6 +2907,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
