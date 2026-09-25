@@ -29936,6 +29936,16 @@ export interface components {
              */
             confidence_threshold?: number | null;
             /**
+             * Confidence Threshold Choice
+             * @description Per-type confidence gate for choice-shaped decisions: a question with three or more options. Takes precedence over confidence_threshold for those questions; None falls back to it. Jev clips scores to 0.01-0.99, so a single number gates a wide choice and a binary decision unequally: confidence spreads across every option of a choice but only two of a yes/no.
+             */
+            confidence_threshold_choice?: number | null;
+            /**
+             * Confidence Threshold Yes No
+             * @description Per-type confidence gate for yes/no-shaped decisions: a question with exactly two options, like the built-in tier question on a two-tier custom tier set. Takes precedence over confidence_threshold for those questions; None falls back to it.
+             */
+            confidence_threshold_yes_no?: number | null;
+            /**
              * Instructions
              * @description Replaces the built-in Jev question instructions
              */

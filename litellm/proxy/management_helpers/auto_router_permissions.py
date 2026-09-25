@@ -79,6 +79,8 @@ class _MemberJevClassifierConfig(BaseModel):
     circuit_breaker_enabled: bool
     circuit_breaker_cooldown_seconds: float
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence_threshold_choice: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence_threshold_yes_no: float | None = Field(default=None, ge=0.0, le=1.0)
     complexity_max: float | None = Field(default=None, ge=0.0, le=1.0)
     complexity_confidence_min: float | None = Field(default=None, ge=0.0, le=1.0)
 

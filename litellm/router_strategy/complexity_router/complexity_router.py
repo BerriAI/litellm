@@ -2188,6 +2188,7 @@ class ComplexityRouter(CustomLogger):
                 chosen_tier=tier_name,
                 strongest_tier=self.config.tier_names()[-1],
                 confidence=answer.confidence,
+                choice_count=len(criteria),
             )
             if refusal_reason is not None:
                 # A confident-enough classifier is a healthy classifier: a gate refusal is a
@@ -2243,19 +2244,27 @@ class ComplexityRouter(CustomLogger):
         confidence: float,
         complexity_score: float | None = None,
         complexity_confidence: float | None = None,
+        choice_count: int | None = None,
     ) -> str | None:
         """Why a Jev verdict that routes below the strongest tier must not be applied, or None.
 
         A verdict naming the strongest tier is not a route-down and is never gated. Every
         configured gate must pass: the verdict's own confidence, plus the complexity answer's
-        score and confidence when the protocol carries one. Missing complexity data is hard
+        score and confidence when the protocol carries one. The confidence gate follows the
+        decision question's shape: a question with exactly two options is yes/no-shaped and
+        uses confidence_threshold_yes_no, a wider one is choice-shaped and uses
+        confidence_threshold_choice, and each per-type value falls back to the single
+        confidence_threshold. Missing complexity data is hard
         (score 1.0, confidence 0.0), so a configured complexity gate refuses every route-down
         until the wire carries a complexity answer; complexity_max=1.0 and
         complexity_confidence_min=0.0 are the values at which missing data passes.
         """
         if chosen_tier == strongest_tier:
             return None
-        if config.confidence_threshold is not None and confidence < config.confidence_threshold:
+        threshold: Final = (
+            config.confidence_threshold if choice_count is None else config.confidence_threshold_for(choice_count)
+        )
+        if threshold is not None and confidence < threshold:
             return "low-confidence"
         score: Final = 1.0 if complexity_score is None else complexity_score  # unknown complexity is hard
         if config.complexity_max is not None and score > config.complexity_max:
