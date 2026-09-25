@@ -156,7 +156,7 @@ describe("AgentInfoView update payload", () => {
       .mockResolvedValue({} as never);
   });
 
-  it("preserves the Entra binding and access groups without overwriting unopened runtime settings when renaming", async () => {
+  it.each(["complete", "empty"])("preserves the Entra binding while renaming an agent with a %s card", async (card) => {
     const user = setup();
     const identity = {
       provider: "microsoft_entra",
@@ -167,6 +167,7 @@ describe("AgentInfoView update payload", () => {
     const params = { ...A2A_AGENT.litellm_params, require_trace_id_on_calls_by_agent: true };
     vi.mocked(networking.getAgentInfo).mockResolvedValue({
       ...A2A_AGENT,
+      agent_card_params: card === "empty" ? {} : A2A_AGENT.agent_card_params,
       litellm_params: params,
       identity: { ...identity, agent_id: "agent-1", issuer: "https://issuer.example", revision: "rev", active: true },
       identity_managed: true,
