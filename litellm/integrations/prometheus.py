@@ -2605,6 +2605,7 @@ class PrometheusLogger(CustomLogger):
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         status_code: Final = self._extract_status_code(exception=original_exception)
 
@@ -2623,7 +2624,9 @@ class PrometheusLogger(CustomLogger):
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
-                hashed_api_key=None if status_code == 401 else user_api_key_dict.api_key,
+                hashed_api_key=None
+                if status_code == 401
+                else LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
