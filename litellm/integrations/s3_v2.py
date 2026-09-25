@@ -640,10 +640,22 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self._sink_failing = len(requeued) > 0
         if not requeued:
             return
-        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
-            *requeued,
-            *self.log_queue[len(batch) :],
-        ]
+        retained: Final = [*requeued, *self.log_queue[len(batch) :]]
+        overflow: Final = max(0, len(retained) - self.max_queue_size)
+        if overflow:
+            for _ in range(overflow):
+                self.handle_callback_failure(callback_name="S3Logger")
+            self._dropped_at_enqueue += overflow
+            verbose_logger.warning(
+                "s3 logging: queue exceeded max_queue_size=%s after a failed flush, dropped %s oldest events",
+                self.max_queue_size,
+                overflow,
+            )
+            self.log_queue = retained[
+                overflow:
+            ]  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        else:
+            self.log_queue = retained  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
         raise S3BatchUploadError(failed=len(failed), total=len(uploads))
 
     def _batch_file_mode_active(self) -> bool:

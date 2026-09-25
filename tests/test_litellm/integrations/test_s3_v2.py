@@ -17,7 +17,7 @@ import httpx
 import pytest
 import respx
 
-from litellm.integrations.s3_v2 import S3Logger
+from litellm.integrations.s3_v2 import S3BatchUploadError, S3Logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
@@ -2573,6 +2573,20 @@ class _LateAppendingPut:
         return _ok_response()
 
 
+class _AppendingFailingPut:
+    def __init__(self, logger: S3Logger, elements: tuple[s3BatchLoggingElement, ...]) -> None:
+        self.logger = logger
+        self.elements = elements
+        self.appended = False
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        if not self.appended:
+            self.appended = True
+            for element in self.elements:
+                self.logger._enqueue(element)
+        return _transient_failure_response()
+
+
 class _FailOnSuffixPut:
     def __init__(self, suffixes: tuple[str, ...]) -> None:
         self.failing = True
@@ -3004,7 +3018,9 @@ async def test_batch_file_mode_disabled_when_s3_v2_is_cold_storage_logger(monkey
 
 
 class _FailOnSuffixCodedPut:
-    def __init__(self, suffixes: tuple[str, ...], status: int, code: str | None = None, raw_body: str | None = None) -> None:
+    def __init__(
+        self, suffixes: tuple[str, ...], status: int, code: str | None = None, raw_body: str | None = None
+    ) -> None:
         self.suffixes = suffixes
         self.response: Final = _coded_failure_response(status, code, raw_body)
         self.calls: tuple[str, ...] = ()
@@ -3263,6 +3279,35 @@ async def test_failing_sink_drops_the_oldest_events_at_the_queue_cap(caplog) -> 
     assert mock_failure.call_count == 15
     mock_failure.assert_called_with(callback_name="S3Logger")
     assert caplog.text.count("dropping oldest events until the next flush") == 1
+
+
+@pytest.mark.asyncio
+async def test_overflow_after_a_failed_flush_drops_the_oldest_and_counts_failures(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_queue_size=4,
+    )
+
+    late = tuple(_element({"id": f"late-{index}"}, f"late-{index}") for index in range(3))
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _AppendingFailingPut(logger, late)
+    logger.log_queue = [_element({"id": "first"}, "first"), _element({"id": "second"}, "second")]
+
+    with (
+        patch.object(logger, "handle_callback_failure") as mock_failure,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(S3BatchUploadError),
+    ):
+        await logger.async_send_batch()
+
+    assert [element.payload["id"] for element in logger.log_queue] == ["second", "late-0", "late-1", "late-2"]
+    failed_uploads: Final = 2
+    assert mock_failure.call_count == failed_uploads + 1
+    mock_failure.assert_called_with(callback_name="S3Logger")
+    assert "dropped 1 oldest events" in caplog.text
 
 
 def test_sync_upload_retries_access_denied_403(caplog):
