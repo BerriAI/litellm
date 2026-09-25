@@ -941,6 +941,27 @@ def _delta_text(item):
     return item.choices[0].delta.content or ""
 
 
+def test_custom_code_initializer_forwards_streaming_rewrite_setting(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code import initialize_guardrail
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda _: None)
+    params = SimpleNamespace(
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n",
+        mode="post_call",
+        default_on=True,
+    )
+
+    guardrail = initialize_guardrail(
+        params,
+        {
+            "guardrail_name": "custom-code-configured",
+            "litellm_params": {"streaming_deliver_ended_rewrites": False},
+        },
+    )
+
+    assert guardrail.streaming_deliver_ended_rewrites is False
+
+
 class TestStreamingTransform:
     """Streaming text-transformation (incremental_diff) path on the OpenAI chat
     completions streaming surface."""
@@ -1008,6 +1029,25 @@ class TestStreamingTransform:
         streamed = "".join(_delta_text(item) for item in out)
 
         assert streamed == "restored value"
+
+    @pytest.mark.asyncio
+    async def test_custom_code_streaming_rewrite_can_be_disabled(self):
+        placeholder = "PLACEHOLDER"
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n    return modify(texts=['restored value'])\n"
+            ),
+            guardrail_name="custom-code-streaming-opt-out",
+            streaming_deliver_ended_rewrites=False,
+        )
+
+        out = await _drive_stream(
+            UnifiedLLMGuardrails(),
+            guardrail,
+            [_stream_chunk(placeholder), _stream_chunk("", finish_reason="stop")],
+        )
+
+        assert "".join(_delta_text(item) for item in out) == placeholder
 
     @pytest.mark.asyncio
     async def test_custom_code_shorter_placeholder_rewrite_buffers_fragmented_stream(self):
@@ -1142,6 +1182,58 @@ class TestStreamingTransform:
 
         assert placeholder not in repr(out)
         assert json.loads(arguments) == {"value": "restored-secret"}
+
+    @pytest.mark.asyncio
+    async def test_custom_code_undeliverable_multi_choice_tool_rewrite_releases_original_stream(self):
+        from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                '    return modify(tool_calls=[{"id": "call_0", "type": "function", '
+                '"function": {"name": "lookup", "arguments": \'{"value": "rewritten"}\'}}])\n'
+            ),
+            guardrail_name="custom-code-multi-choice-tool-rewrite",
+        )
+        original_arguments = ('{"value": "original"}', '{"value": "second"}')
+        chunks = [
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=index,
+                        delta=Delta(
+                            content=None,
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    id=f"call_{index}",
+                                    index=0,
+                                    type="function",
+                                    function=Function(name="lookup", arguments=arguments),
+                                )
+                            ],
+                        ),
+                    )
+                    for index, arguments in enumerate(original_arguments)
+                ]
+            ),
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=index, delta=Delta(content=None, tool_calls=[]), finish_reason="tool_calls")
+                    for index in range(2)
+                ]
+            ),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        arguments = tuple(
+            choice.delta.tool_calls[0].function.arguments
+            for item in out[:1]
+            for choice in item.choices
+            if choice.delta.tool_calls
+        )
+        assert arguments == original_arguments
+        assert all("rewritten" not in repr(item) for item in out)
 
     @pytest.mark.asyncio
     async def test_incremental_diff_holdback_boundary(self):

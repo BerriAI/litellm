@@ -90,6 +90,9 @@ class CustomCodeGuardrailConfigModel(GuardrailConfigModel):
     custom_code: str
     """The Python-like code containing the apply_guardrail function."""
 
+    streaming_deliver_ended_rewrites: bool = True
+    """Buffer complete streams before delivering arbitrary custom-code rewrites."""
+
 
 class CustomCodeGuardrail(CustomGuardrail):
     """
@@ -115,13 +118,11 @@ class CustomCodeGuardrail(CustomGuardrail):
             return allow()
     """
 
-    streaming_deliver_ended_rewrites: bool = True
-    """Buffer complete streams before delivering arbitrary custom-code rewrites."""
-
     def __init__(
         self,
         custom_code: str,
         guardrail_name: str | None = "custom_code",
+        streaming_deliver_ended_rewrites: bool = True,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         """
@@ -133,6 +134,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             **kwargs: Additional arguments passed to CustomGuardrail
         """
         self.custom_code: str = custom_code
+        self.streaming_deliver_ended_rewrites: bool = streaming_deliver_ended_rewrites
         self._compiled_function: Callable[..., object] | None = None
         self._compile_lock = threading.Lock()
         self._compile_error: str | None = None
