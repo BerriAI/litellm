@@ -4,6 +4,7 @@ extraction: image and document blocks in converse content must reach
 apply_guardrail so a guardrail can scan or refuse them.
 """
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import pytest
@@ -26,7 +27,7 @@ class InputRecordingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Any | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -43,7 +44,7 @@ class ScanningGuardrail(InputRecordingGuardrail):
 
 class TestBedrockConverseHandlerAttachments:
     @staticmethod
-    def _data(body: dict) -> dict:
+    def _data(body: Mapping[str, object]) -> dict[str, object]:
         return {
             "endpoint": "/bedrock/model/us.amazon.nova-lite-v1:0/converse",
             "model": "us.amazon.nova-lite-v1:0",
@@ -184,7 +185,7 @@ class TestBedrockConverseAttachmentsDefaultScope:
     """Guardrails that did not opt into attachment scanning see base behavior."""
 
     @staticmethod
-    def _data(body: dict) -> dict:
+    def _data(body: Mapping[str, object]) -> dict[str, object]:
         return {
             "endpoint": "/bedrock/model/us.amazon.nova-lite-v1:0/converse",
             "model": "us.amazon.nova-lite-v1:0",

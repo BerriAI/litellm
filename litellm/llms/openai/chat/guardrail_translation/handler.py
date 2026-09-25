@@ -87,7 +87,6 @@ def _image_part_ref(content_item: Mapping[str, object], scan_attachments: bool) 
 
 
 def _file_part_ref(content_item: Mapping[str, object]) -> str | None:
-    """Identify a ``type == "file"`` part by whichever reference field it carries."""
     file_part: Final = content_item.get("file")
     if not file_part:
         return None
