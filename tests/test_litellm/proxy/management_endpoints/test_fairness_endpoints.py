@@ -227,7 +227,8 @@ async def test_status_reports_reserved_capacity_per_class(
             }
         ]
     )
-    limiter: Final = _PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
+    usage_cache: Final = DualCache()
+    limiter: Final = _PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=usage_cache)
     limiter.update_variables(llm_router=router)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "create_config_audit_log", _noop_audit)
@@ -251,6 +252,20 @@ async def test_status_reports_reserved_capacity_per_class(
     assert by_class["batch"].reserved_rpm == 10
     assert by_class["batch"].max_queue_wait_seconds == 120.0
     assert by_class["default"].reserved_rpm == 10
+
+    await usage_cache.async_set_cache(
+        limiter.v3_limiter.create_rate_limit_keys("model_saturation_check", "fair-model", "requests"), 100
+    )
+    saturated: Final = await get_fairness_status(user_api_key_dict=_auth(LitellmUserRoles.PROXY_ADMIN))
+    assert saturated.models[0].enforcing_reservations is True
+    await update_fairness_settings(
+        settings=_settings().model_copy(update={"enabled": False}),
+        user_api_key_dict=_auth(LitellmUserRoles.PROXY_ADMIN),
+    )
+    disabled: Final = await get_fairness_status(user_api_key_dict=_auth(LitellmUserRoles.PROXY_ADMIN))
+    assert disabled.enabled is False
+    assert [row.name for row in disabled.models[0].classes] == ["default"]
+    assert disabled.models[0].enforcing_reservations is False
 
 
 async def _noop_audit(**kwargs: object) -> None:

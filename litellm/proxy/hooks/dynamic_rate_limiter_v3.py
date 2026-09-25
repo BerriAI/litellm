@@ -1092,7 +1092,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             rpm=info.rpm,
             tpm=info.tpm,
             saturation=saturation,
-            enforcing_reservations=saturation >= _get_priority_settings().saturation_threshold,
+            enforcing_reservations=bool(reserved_names) and saturation >= _get_priority_settings().saturation_threshold,
             current_requests=int(counters[0]),
             current_tokens=int(counters[1]),
             classes=tuple(class_status(index, name) for index, name in enumerate(class_names)),
