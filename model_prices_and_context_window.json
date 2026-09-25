@@ -1,4 +1,18 @@
 {
+    "lyceum/z-ai/glm-5.3-flash": {
+        "input_cost_per_token": 0.0000002,
+        "cache_read_input_token_cost": 0.00000005,
+        "output_cost_per_token": 0.0000005,
+        "max_tokens": 65536,
+        "max_output_tokens": 65536,
+        "litellm_provider": "lyceum",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true
+    },
     "sample_spec": {
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,

@@ -32,6 +32,22 @@
     }
   },
   "providers": {
+    "lyceum": {
+      "display_name": "Lyceum (`lyceum`)",
+      "url": "https://docs.litellm.ai/docs/providers/lyceum",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "a2a": {
       "display_name": "A2A (Agent-to-Agent) (`a2a`)",
       "url": "https://docs.litellm.ai/docs/providers/a2a",

@@ -1,4 +1,9 @@
 {
+  "lyceum": {
+    "base_url": "https://api.lyceum.technology/openai/v1",
+    "api_key_env": "LYCEUM_API_KEY",
+    "api_base_env": "LYCEUM_API_BASE"
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
