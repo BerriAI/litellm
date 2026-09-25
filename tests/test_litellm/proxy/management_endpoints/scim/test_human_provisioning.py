@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from prisma.models import LiteLLM_SCIMResource, LiteLLM_SCIMSource
 
+from litellm.proxy import proxy_server
 from litellm.proxy.management_endpoints.scim import scim_v2
 from litellm.proxy.management_endpoints.scim.human_provisioning import SourceHumanProvisioner, human_email
 from litellm.proxy.utils import PrismaClient
@@ -52,6 +53,9 @@ def human_fixture():
     tx.litellm_scimresource.update = AsyncMock(return_value=row)
     tx.litellm_usertable.find_many = AsyncMock(return_value=[])
     tx.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    tx.litellm_usertable.create = AsyncMock()
+    client.db = MagicMock()
+    client.db.litellm_usertable.count = AsyncMock(return_value=0)
     return SourceHumanProvisioner(client, source), tx, row, user
 
 
@@ -86,6 +90,10 @@ async def test_reservation_claims_email_subject_and_local_identity() -> None:
     assert data["human_email"] == user.userName
     assert data["human_subject_key"] == f"{TENANT}:{SUBJECT}"
     assert data["id"] == data["document"].data["id"]
+    tx.litellm_usertable.create.assert_awaited_once_with(data={
+        "user_id": user.userName, "user_email": user.userName,
+        "user_role": "internal_user_viewer", "teams": [],
+    })
 
 
 @pytest.mark.asyncio
@@ -109,22 +117,19 @@ async def test_incomplete_identity_cannot_be_reserved(missing: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_interrupted_human_create_recovers_the_reserved_local_and_scim_ids(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_missing_local_human_is_not_recreated_or_email_adopted(monkeypatch: pytest.MonkeyPatch) -> None:
     service, tx, row, user = human_fixture()
     tx.litellm_scimresource.find_unique.return_value = row
-    create: Final = AsyncMock(return_value=user.model_copy(update={"id": row.local_id}))
-    update: Final = AsyncMock(return_value=user.model_copy(update={"id": row.local_id}))
+    create: Final = AsyncMock(return_value=user.model_copy(update={"id": "unrelated-admin"}))
+    update: Final = AsyncMock()
     monkeypatch.setattr(scim_v2, "create_user", create)
     monkeypatch.setattr(scim_v2, "update_user", update)
-    result: Final = await service.create(user)
-    assert result.id == row.id
-    assert result.externalId == SUBJECT
-    assert create.call_args.kwargs["user"].userName == row.local_id
-    assert create.call_args.kwargs["user"].groups is None
-    assert update.call_args.kwargs["user_id"] == row.local_id
-    assert tx.litellm_scimresource.update.call_args.kwargs["data"]["active"] is True
+    with pytest.raises(HTTPException) as failure:
+        await service.create(user)
+    assert failure.value.status_code == 409
+    create.assert_not_awaited()
+    update.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -151,17 +156,13 @@ async def test_scoped_human_patch_cannot_modify_directory_owned_correspondence(p
 
 
 @pytest.mark.asyncio
-async def test_failed_local_creation_does_not_mark_the_snapshot_reconciled(monkeypatch: pytest.MonkeyPatch) -> None:
-    service, tx, row, user = human_fixture()
-    create: Final = AsyncMock(side_effect=RuntimeError("interrupted"))
-    update: Final = AsyncMock()
-    monkeypatch.setattr(scim_v2, "create_user", create)
-    monkeypatch.setattr(scim_v2, "update_user", update)
+async def test_local_insert_failure_aborts_resource_reservation() -> None:
+    service, tx, _, user = human_fixture()
+    tx.litellm_usertable.create.side_effect = RuntimeError("interrupted")
     with pytest.raises(RuntimeError, match="interrupted"):
-        await service.update(row, user)
-    update.assert_not_awaited()
-    assert tx.litellm_scimresource.update.await_count == 1
-    assert tx.litellm_scimresource.update.call_args.kwargs["data"] == {"human_email": user.userName}
+        await service.reserve(user)
+    tx.litellm_scimresource.create.assert_not_awaited()
+    assert service.client.tx.return_value.__aexit__.call_args.args[0] is RuntimeError
 
 
 @pytest.mark.asyncio
@@ -184,6 +185,7 @@ async def test_ownership_collision_is_a_conflict_before_legacy_user_mutation(
     else:
         tx.litellm_scimresource.find_unique.return_value = row
         tx.litellm_scimresource.update.side_effect = collision
+        tx.litellm_usertable.find_unique.return_value = SimpleNamespace(user_id=row.local_id)
     with pytest.raises(HTTPException) as failure:
         await service.create(user)
     assert failure.value.status_code == 409
@@ -279,3 +281,44 @@ async def test_human_guid_case_replays_the_same_reserved_identity() -> None:
     result: Final = await service.reserve(user.model_copy(update={"externalId": guid.upper()}))
     assert result.id == row.id
     tx.litellm_scimresource.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_email_update_cannot_claim_an_unrelated_local_human(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, tx, row, user = human_fixture()
+    tx.litellm_usertable.find_unique.return_value = SimpleNamespace(user_id=row.local_id)
+    tx.litellm_usertable.find_many.return_value = [SimpleNamespace(user_id="unrelated-admin")]
+    update: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "update_user", update)
+    with pytest.raises(HTTPException) as failure:
+        await service.update(row, SCIMUser.model_validate({**user.model_dump(), "emails": [{"value": "ADMIN@example.com"}]}))
+    assert failure.value.status_code == 409
+    update.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_source_human_creation_preserves_license_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, tx, _, user = human_fixture()
+    service.client.db.litellm_usertable.count.side_effect = [3, 0]
+    license_check: Final = MagicMock()
+    license_check.is_over_limit.return_value = True
+    monkeypatch.setattr(proxy_server, "_license_check", license_check)
+    with pytest.raises(HTTPException) as failure:
+        await service.reserve(user)
+    assert failure.value.status_code == 403
+    license_check.is_over_limit.assert_called_once_with(total_users=3)
+    tx.litellm_usertable.create.assert_not_awaited()
+    tx.litellm_scimresource.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replayed_human_does_not_consume_another_license_seat(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, tx, row, user = human_fixture()
+    tx.litellm_scimresource.find_unique.return_value = row
+    license_check: Final = MagicMock()
+    license_check.is_over_limit.return_value = True
+    monkeypatch.setattr(proxy_server, "_license_check", license_check)
+    assert await service.reserve(user) == row
+    license_check.is_over_limit.assert_not_called()
+    tx.litellm_usertable.create.assert_not_awaited()

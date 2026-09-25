@@ -11,12 +11,15 @@ from prisma.types import (
     LiteLLM_SCIMResourceCreateInput,
     LiteLLM_SCIMResourceUpdateInput,
     LiteLLM_SCIMResourceWhereUniqueInput,
+    LiteLLM_UserTableCreateInput,
     LiteLLM_UserTableWhereInput,
     LiteLLM_UserTableWhereUniqueInput,
 )
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLM_UserTable as UserPolicy
+from litellm.proxy._types import LitellmUserRoles
+from litellm.proxy.management_endpoints.internal_user_endpoints import check_user_license_capacity
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.types.proxy.management_endpoints.scim_agent_provisioning import canonical_directory_id
@@ -117,7 +120,15 @@ class SourceHumanProvisioner:
                 raise HTTPException(
                     409, "This local user already exists; automatic directory adoption is not permitted"
                 )
+            await check_user_license_capacity(self.client)
             local_id: Final = user.userName
+            local_data: Final[LiteLLM_UserTableCreateInput] = {
+                "user_id": local_id,
+                "user_email": email,
+                "user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+                "teams": [],
+            }
+            await tx.litellm_usertable.create(data=local_data)
             scim_id: Final = str(uuid4())
             document: Final = user.model_copy(update={"id": scim_id, "externalId": external_id})
             data: Final = LiteLLM_SCIMResourceCreateInput(
@@ -137,7 +148,6 @@ class SourceHumanProvisioner:
 
     async def update(self, row: LiteLLM_SCIMResource, change: SCIMUser | SCIMPatchOp) -> SCIMUser:
         from litellm.proxy.management_endpoints.scim import scim_v2
-        from litellm.proxy.management_endpoints.scim.agent_provisioning import user_document
 
         if row.local_id is None:
             raise HTTPException(409, "The human provisioned record is incomplete")
@@ -146,20 +156,15 @@ class SourceHumanProvisioner:
             if isinstance(change, SCIMUser)
             else reduce(patched_username, change.Operations, row.user_name)
         )
-        if isinstance(change, SCIMUser):
-            await self.claim_email(row, human_email(change))
-        else:
+        if isinstance(change, SCIMPatchOp):
             validate_human_patch(change)
         local_filter: Final[LiteLLM_UserTableWhereUniqueInput] = {"user_id": row.local_id}
         async with self.client.tx() as tx:
             existing: Final = await tx.litellm_usertable.find_unique(where=local_filter)
         if existing is None:
-            desired: Final = change if isinstance(change, SCIMUser) else user_document(row)
-            created: Final = await scim_v2.create_user(
-                user=desired.model_copy(update={"userName": row.local_id, "groups": None})
-            )
-            if created.id != row.local_id:
-                raise HTTPException(409, "The human local identity changed during provisioning")
+            raise HTTPException(409, "The human local identity was removed; automatic recreation is not permitted")
+        if isinstance(change, SCIMUser):
+            await self.claim_email(row, human_email(change))
         if isinstance(change, SCIMPatchOp):
             async with self.client.tx() as tx:
                 current: Final = await tx.litellm_usertable.find_unique(where=local_filter)
@@ -190,6 +195,12 @@ class SourceHumanProvisioner:
         update_data: Final[LiteLLM_SCIMResourceUpdateInput] = {"human_email": email}
         try:
             async with self.client.tx() as tx:
+                local_filter: Final[LiteLLM_UserTableWhereInput] = {
+                    "user_email": {"equals": email, "mode": "insensitive"},
+                    "NOT": {"user_id": row.local_id},
+                }
+                if await tx.litellm_usertable.find_many(where=local_filter):
+                    raise HTTPException(409, "This email belongs to another local user")
                 await tx.litellm_scimresource.update(where=resource_filter, data=update_data)
         except Exception as exc:
             if is_unique_violation(exc):
