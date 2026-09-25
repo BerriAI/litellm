@@ -395,7 +395,9 @@ async def health_services_endpoint(
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger: Final = LangFuseLogger()
-            langfuse_logger.Langfuse.auth_check()
+            auth_failure: Final = langfuse_logger.api_client.auth_check()
+            if auth_failure is not None:
+                raise ValueError(f"langfuse auth_check failed: {auth_failure.reason}")
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],

@@ -133,6 +133,62 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch):
+    """A generation finished just before a graceful restart is still queued in its batch
+    processor, so shutdown must flush every acquired export channel."""
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    flushed = MagicMock(return_value=True)
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert flushed.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_timeout(monkeypatch, caplog):
+    """The flush blocks on OTLP exports for up to its deadline, so it must run on a worker thread
+    with the shutdown deadline, and a channel that misses it is reported instead of ignored."""
+    import threading
+
+    from litellm.constants import LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    ran_on = MagicMock()
+
+    def flushed(timeout_millis: int) -> bool:
+        ran_on(threading.current_thread(), timeout_millis)
+        return False
+
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        await proxy_shutdown_event()
+
+    (flush_thread, timeout_millis), _ = ran_on.call_args
+    assert flush_thread is not threading.main_thread()
+    assert timeout_millis == LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
+    assert any("Langfuse shutdown flush incomplete" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
     """
     The gateway request fold lives in memory, so shutdown drains it to the database.
