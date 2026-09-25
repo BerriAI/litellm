@@ -297,6 +297,35 @@ def test_convert_to_azure_openai_messages():
     assert content == expected_content
 
 
+def test_convert_to_azure_openai_messages_strips_litellm_format_from_file_and_image():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_azure_openai_messages,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    input: list[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {"file_id": "assistant-xyz", "format": "application/pdf"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://x/y.png", "format": "image/png"},
+                },
+            ],
+        }
+    ]
+
+    output = convert_to_azure_openai_messages(input)
+
+    content = output[0].get("content")
+    assert content[0]["file"] == {"file_id": "assistant-xyz"}
+    assert content[1]["image_url"] == {"url": "https://x/y.png"}
+
+
 def test_bedrock_validate_format_image_or_video():
     """Test the _validate_format method for images, videos, and documents"""
 

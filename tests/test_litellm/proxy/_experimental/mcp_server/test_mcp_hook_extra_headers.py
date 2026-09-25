@@ -1229,7 +1229,7 @@ class TestResolveByokMcpAuthHeader:
         user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            "litellm.proxy._experimental.mcp_server.operations._get_byok_credential",
             new=AsyncMock(return_value="stored-cred"),
         ):
             result = await _resolve_byok_mcp_auth_header(server, user_auth, None)
@@ -1249,7 +1249,7 @@ class TestResolveByokMcpAuthHeader:
         user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            "litellm.proxy._experimental.mcp_server.operations._get_byok_credential",
             new=AsyncMock(return_value=None),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -1272,7 +1272,7 @@ class TestResolveByokMcpAuthHeader:
         check_mock = AsyncMock(return_value=None)
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._check_byok_credential",
+            "litellm.proxy._experimental.mcp_server.operations._check_byok_credential",
             new=check_mock,
         ):
             result = await _resolve_byok_mcp_auth_header(server, user_auth, "caller-header")

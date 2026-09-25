@@ -286,6 +286,182 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
     assert enriched["model_info"]["supports_parallel_function_calling"] is True
 
 
+def _enriched_model_info(monkeypatch, litellm_params: dict, model_info: dict) -> dict:
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    enriched: Final = proxy_server._get_proxy_model_info(
+        model={"model_name": "gpt-5.6", "litellm_params": litellm_params, "model_info": model_info}
+    )
+    return enriched["model_info"]
+
+
+def test_get_proxy_model_info_reports_no_pricing_overrides_for_a_cost_map_priced_deployment(
+    monkeypatch, local_model_cost_map
+):
+    """LIT-8064. A deployment with no price of its own follows the cost map, and ``/model/info``
+    says so with an empty ``pricing_overrides``."""
+    info = _enriched_model_info(monkeypatch, {"model": "openai/gpt-5.6"}, {"id": "dep-synced", "db_model": True})
+    assert info["pricing_overrides"] == ()
+    assert info["input_cost_per_token"] == litellm.model_cost["gpt-5.6"]["input_cost_per_token"]
+
+
+def test_get_proxy_model_info_shows_litellm_params_pricing_and_names_it_as_an_override(
+    monkeypatch, local_model_cost_map
+):
+    """A price on ``litellm_params`` is what the deployment bills at, so the model page shows that
+    value rather than the cost map's and lists the field under ``pricing_overrides``."""
+    info = _enriched_model_info(
+        monkeypatch,
+        {"model": "openai/gpt-5.6", "input_cost_per_token_batches": 1e-09},
+        {"id": "dep-batches", "db_model": True},
+    )
+    assert info["pricing_overrides"] == ("input_cost_per_token_batches",)
+    assert info["input_cost_per_token_batches"] == 1e-09
+    assert info["input_cost_per_token"] == litellm.model_cost["gpt-5.6"]["input_cost_per_token"]
+
+
+def test_get_proxy_model_info_names_config_model_info_pricing_as_an_override(monkeypatch, local_model_cost_map):
+    """Pricing declared under ``model_info`` in config.yaml overrides the cost map too."""
+    info = _enriched_model_info(
+        monkeypatch,
+        {"model": "openai/gpt-5.6"},
+        {"id": "dep-config", "db_model": False, "output_cost_per_token": 7e-06},
+    )
+    assert info["pricing_overrides"] == ("output_cost_per_token",)
+    assert info["output_cost_per_token"] == 7e-06
+
+
+def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as, monkeypatch, local_model_cost_map):
+    """LIT-8064. The Admin UI model page reads ``GET /v2/model/info``, so the override report
+    has to ride that route too, not only ``/model/info``."""
+    model_list: Final = [
+        {
+            "model_name": "gpt-5.6",
+            "litellm_params": {"model": "openai/gpt-5.6", "input_cost_per_token": 3e-06},
+            "model_info": {"id": "dep-typed", "db_model": True},
+        },
+        {
+            "model_name": "gpt-5.6",
+            "litellm_params": {"model": "openai/gpt-5.6"},
+            "model_info": {"id": "dep-synced", "db_model": True},
+        },
+    ]
+    router: Final = MagicMock()
+    router.model_list = model_list
+    router.get_discovered_model_info = MagicMock(return_value={})
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+
+    with auth_as():
+        response = client.get("/v2/model/info")
+
+    assert response.status_code == 200, response.text
+    by_id: Final = {m["model_info"]["id"]: m["model_info"] for m in response.json()["data"]}
+    assert by_id["dep-typed"]["pricing_overrides"] == ["input_cost_per_token"]
+    assert by_id["dep-typed"]["input_cost_per_token"] == 3e-06
+    assert by_id["dep-synced"]["pricing_overrides"] == []
+    assert by_id["dep-synced"]["input_cost_per_token"] == litellm.model_cost["gpt-5.6"]["input_cost_per_token"]
+
+
+def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_declared_zero():
+    """A deployment configured with no cost fields must not surface the 0 that ``get_model_info``
+    defaults to, since the zero-cost budget bypass only honours a declared zero. The declared zero
+    and a catalog price still come through."""
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-unpriced",
+                "litellm_params": {"model": "openai/vllm-unpriced", "api_key": "x", "api_base": "http://vllm"},
+            },
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/vllm-free",
+                    "api_key": "x",
+                    "api_base": "http://vllm",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {"model_name": "gpt-priced", "litellm_params": {"model": "gpt-4o", "api_key": "x"}},
+        ]
+    )
+
+    def enriched_cost(model_name: str) -> tuple:
+        deployment = router.get_model_list(model_name=model_name)[0]
+        info = proxy_server._enrich_model_info_with_litellm_data(
+            {**deployment, "model_info": dict(deployment["model_info"])}
+        )["model_info"]
+        return info.get("input_cost_per_token"), info.get("output_cost_per_token")
+
+    assert enriched_cost("vllm-unpriced") == (None, None)
+    assert enriched_cost("vllm-free") == (0, 0)
+    input_cost, output_cost = enriched_cost("gpt-priced")
+    assert input_cost > 0 and output_cost > 0
+
+
+def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``GET /model/info?litellm_model_id=`` must agree with the ``GET /model/info`` list, so an
+    unpriced deployment cannot read as null in the list and as free on the id lookup."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    declared: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    free: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "api_key": "x", "api_base": "http://vllm", **costs},
+                "model_info": {"id": f"{name}-id"},
+            }
+            for name, costs in (("vllm-unpriced", {}), ("vllm-free", free), ("vllm-priced", declared))
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    def costs_of(response: httpx.Response) -> dict[str, tuple[object, object]]:
+        assert response.status_code == 200, response.text
+        return {
+            row["model_info"]["id"]: (
+                row["model_info"].get("input_cost_per_token"),
+                row["model_info"].get("output_cost_per_token"),
+            )
+            for row in response.json()["data"]
+        }
+
+    with auth_as():
+        listed: Final = costs_of(client.get("/model/info"))
+        by_id: Final = {
+            model_id: costs_of(client.get("/model/info", params={"litellm_model_id": model_id}))[model_id]
+            for model_id in listed
+        }
+
+    assert listed == {
+        "vllm-unpriced-id": (None, None),
+        "vllm-free-id": (0, 0),
+        "vllm-priced-id": (declared["input_cost_per_token"], declared["output_cost_per_token"]),
+    }
+    assert by_id == listed
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
@@ -471,7 +647,6 @@ def model_group_info_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", None)
     monkeypatch.setattr(proxy_server, "_get_model_group_info", model_group_info)
 
@@ -499,7 +674,9 @@ def test_model_group_info_proxy_admin_ignores_key_model_restriction(
 
 
 @pytest.mark.parametrize("admin_role", ["proxy_admin", "proxy_admin_viewer"])
-def test_model_group_info_proxy_admin_expands_wildcard_deployments(client, auth_as, model_group_info_router, admin_role):
+def test_model_group_info_proxy_admin_expands_wildcard_deployments(
+    client, auth_as, model_group_info_router, admin_role
+):
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 

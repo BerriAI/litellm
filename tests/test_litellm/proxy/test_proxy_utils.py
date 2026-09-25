@@ -6,10 +6,12 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.bug_report import ISSUE_URL_BASE
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2178,6 +2180,41 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
 
 
 @pytest.mark.parametrize(
+    "model_group_alias",
+    [
+        {"team-embeddings": "my-embeddings"},
+        {"team-embeddings": {"model": "my-embeddings", "hidden": False}},
+    ],
+)
+def test_create_model_info_response_resolves_model_group_alias_to_target(model_group_alias, local_model_cost_map):
+    """A `model_group_alias` row must report the metadata of the group it points at,
+    not the cost-map generalization or nothing that the alias name resolves to."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-embeddings",
+                "litellm_params": {"model": "openai/text-embedding-3-small"},
+            }
+        ],
+        model_group_alias=model_group_alias,
+    )
+
+    alias_response = create_model_info_response(
+        model_id="team-embeddings", provider="openai", llm_router=router
+    )
+    target_response = create_model_info_response(
+        model_id="my-embeddings", provider="openai", llm_router=router
+    )
+
+    assert alias_response["id"] == "team-embeddings"
+    for field in ("mode", "max_input_tokens", "max_output_tokens"):
+        assert alias_response.get(field) == target_response.get(field)
+    assert alias_response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_to_run",
     [
         ({"guardrails": ["key-scoped-guardrail"]}, None, True),
@@ -2383,3 +2420,16 @@ def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expecte
     synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
     assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
     assert "request-rule" in synthetic["metadata"]["guardrails"]
+
+
+def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog):
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        provider_result = handle_exception_on_proxy(
+            InternalServerError(message="upstream 500", llm_provider="openai", model="gpt-4")
+        )
+        assert ISSUE_URL_BASE not in caplog.text
+        internal_result = handle_exception_on_proxy(KeyError("missing"))
+
+    assert provider_result.code == internal_result.code == "500"
+    assert ISSUE_URL_BASE in caplog.text
+    assert ISSUE_URL_BASE not in internal_result.message

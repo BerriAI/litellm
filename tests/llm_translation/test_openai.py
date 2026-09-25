@@ -313,7 +313,7 @@ def test_openai_max_retries_0(mock_get_openai_client):
 def test_openai_image_generation_forwards_organization(mock_get_openai_client):
     """Ensure organization flows to OpenAI client for image generation."""
 
-    class _DummyImages:
+    class _DummyRawImages:
         def generate(self, **kwargs):  # type: ignore
             class _Resp:
                 def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
@@ -327,7 +327,16 @@ def test_openai_image_generation_forwards_organization(mock_get_openai_client):
                         },
                     }
 
-            return _Resp()
+            class _RawResp:
+                headers = {}
+
+                def parse(self_inner):
+                    return _Resp()
+
+            return _RawResp()
+
+    class _DummyImages:
+        with_raw_response = _DummyRawImages()
 
     class _DummyClient:
         def __init__(self):

@@ -1,12 +1,32 @@
-- Target invariants, not completion claims; these supersede older conflicting bridge guidance
+- Target invariants, not completion claims; these supersede the crate guidance below where they conflict
 - Keep this crate the product-specific PyO3 consumer of `litellm-host-python`
   - Own registration, input projection, the route host and the caller callables it answers operations with (file readers, token providers), public response/error construction and the per-call composition of machine, route host and callback contract
-  - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, `passthrough_fields` re-aliasing) lives in `litellm-callbacks-legacy` behind `PublicCall` and `run_legacy_call`; the bridge hands the public call over and keeps no copy
+  - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, re-aliasing unchanged body keys) lives in `litellm-callbacks-legacy-python` behind `PublicCall` and `run_legacy_call`; the bridge hands the public call over and keeps no copy
   - Value-oriented execution, sync waiting, nested-runtime checks, signal polling and panic containment live in `litellm-host-python`; native async work uses `pyo3-async-runtimes`, Serde output uses `Pythonized<T>`
-  - Core owns typed native state, the route machine, provider preparation/I/O and normalization; the host driver owns terminal events; the legacy adapter in `litellm-callbacks-legacy` owns `Logging` dispatch policy
+  - Core owns typed native state, the route machine, provider preparation/I/O and normalization; the host driver owns terminal events; the legacy adapter in `litellm-callbacks-legacy-python` owns `Logging` dispatch policy
   - Python, Rust SDK and gateway use one lifecycle-bearing core route entrypoint; provider helpers stay private, never bridge-accessible transport drivers
   - Built-in provider/config/secret/auth/document preparation stays in Rust; caller-authored callbacks and focused Python-file reads run only at core-selected points
 - Target GIL-enabled CPython explicitly with `#[pymodule(gil_used = true)]`; detach Rust-only work
+  - GIL and tokio invariants, each pinned by a test in `host-python` (`execution.rs`,
+    `gil.rs`) so a regression fails there before it deadlocks a proxy:
+    - Never hold the GIL while waiting on the runtime. A sync entrypoint releases it with
+      `release_gil` around `block_on`, because every task that attaches would otherwise wait
+      on the thread that is waiting on them ([pyo3 parallelism](https://pyo3.rs/v0.29.2/parallelism.html))
+    - Never `block_on` from a tokio worker; the sync entrypoints refuse with "cannot run from
+      a Tokio context" instead of panicking inside the runtime ([tokio `Runtime::block_on`](https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html#method.block_on))
+    - Inside a future, `Python::attach` only for GIL-cheap work: cloning a `Py<T>`, building
+      a small value, reading a settings snapshot. Anything that can block (a secret manager
+      read, a callback that does I/O, an import, a network call) goes through
+      `litellm_host_python::attach_blocking`, which runs it on the blocking pool so the async
+      workers keep polling other calls ([tokio `spawn_blocking`](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html)).
+      `block_in_place` is not an alternative: it needs a multi-thread worker and still steals it
+    - `attach_blocking` work runs on a thread the interpreter did not create (pinned by the
+      `threading.get_ident()` test). Like any foreign-thread attach it therefore has no running
+      asyncio loop and a fresh `contextvars` context: do not hand it a coroutine or anything
+      bound to the caller's loop
+    - Dropping the await (an asyncio cancel) does not interrupt the Python call; it runs to
+      completion and its result is discarded. A panic in it reaches the awaiting task as a panic
+    - Add a case to `gil.rs` when a new seam changes any of these; the tests are the spec
   - Free-threading requires separate runtime/concurrency validation; omitting the attribute does not opt out on PyO3 0.28+
 - Preserve public argument binding and Python object provenance
   - Project only consumed fields at reference read points; no eager whole-graph serialization or equality-based alias reconstruction
@@ -34,3 +54,53 @@
 - References: [ownership](https://pyo3.rs/v0.29.2/types.html), [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [exception transfer](https://docs.rs/pyo3/0.29.2/pyo3/struct.PyErr.html#method.into_value), [re-entry](https://pyo3.rs/v0.29.2/class/call.html)
   - [GIL policy](https://pyo3.rs/v0.29.2/free-threading.html), [experimental async limits](https://pyo3.rs/v0.29.2/async-await.html), [task conversion](https://docs.rs/pyo3-async-runtimes/0.29.0/pyo3_async_runtimes/fn.into_future_with_locals.html), [native cancellation/delivery](https://docs.rs/pyo3-async-runtimes/0.29.0/pyo3_async_runtimes/tokio/fn.future_into_py.html)
   - [performance](https://pyo3.rs/v0.29.2/performance.html), [PyBackedBytes](https://docs.rs/pyo3/0.29.2/pyo3/pybacked/struct.PyBackedBytes.html), [typing](https://pyo3.rs/v0.29.2/python-typing-hints.html)
+
+Rules for `litellm-rust/crates/python-bridge`.
+
+## Responsibility
+
+`python-bridge` is the PyO3 boundary between Python LiteLLM and Rust transforms.
+Keep this crate thin. It exposes LiteLLM Rust APIs, assembles domain requests,
+maps domain errors to Python exceptions, and delegates generic conversion and
+GIL handling to `litellm-host-python`.
+
+## Bridge Shape
+
+- Prefer one stable method per top-level LiteLLM route, for example
+  `messages(...)`, calling the matching `litellm-core` entrypoint.
+- Do not add one exported PyO3 function per provider helper unless there is a
+  measured reason.
+- Provider dispatch belongs in the `litellm-core` route module (e.g.
+  `litellm_core::messages`), not in this PyO3 crate.
+- Python owns rollout state and fallback. Rust should return errors; Python
+  decides whether to raise or fall back. For a rust-only provider/route (no
+  Python reference), the Python side is a thin dispatch that calls Rust and
+  raises when the bridge is unavailable, with no fallback.
+  - Declare it by passing `python=NO_PYTHON` (`litellm.rust_bridge.runtime`)
+    to `PublicDispatch.run`/`arun` or `runtime.run`/`arun`, never a stand-in
+    callable that raises, and give every context of it a `RUST_REQUIRED`
+    catalog rule
+  - Any other decision, an unprojectable call, or a bypass raises
+    `NoPythonImplementationError` before native runs, so a misdeclared route
+    fails in tests instead of reaching deleted code. When deleting a route's
+    Python implementation, switch its dispatch to `NO_PYTHON` in the same change
+- Keep the Python interface minimal (well under 100 lines per route): it only
+  marshals inputs and calls Rust. Do not add per-route feature flags, and do
+  not put provider dispatch in `litellm/main.py`; it lives in a thin dispatch
+  class under `litellm/llms/<provider>/<route>/`.
+
+## Data Handling
+
+- OCR payloads can contain personal data and large base64 images. Do not log
+  payloads or provider responses.
+- Avoid copying large payloads more than needed. The current JSON round-trip is
+  acceptable for the first scaffold, but future performance work should evaluate
+  direct PyO3 conversion before expanding Rust coverage to image-heavy paths.
+- Do not expose raw Rust errors that include document contents or upstream
+  bodies.
+
+## Tests
+
+- `cargo test --workspace` must compile this crate.
+- Python tests must cover bridge disabled, bridge enabled, and module-missing
+  fallback behavior for every exposed route.

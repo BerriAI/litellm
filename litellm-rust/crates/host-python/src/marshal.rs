@@ -4,6 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use pyo3::exceptions::PyValueError;
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -32,6 +33,19 @@ where
         .map_err(PyErr::from)
 }
 
+pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (document,))?
+        .call_method1("get", (name,))
+        .map(Bound::unbind)
+}
+
+pub fn json_loads(py: Python<'_>, document: &[u8]) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (PyBytes::new(py, document),))
+        .map(Bound::unbind)
+}
+
 pub struct Pythonized<T>(pub T);
 
 impl<'py, T> IntoPyObject<'py> for Pythonized<T>
@@ -45,7 +59,7 @@ where
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         catch_unwind(AssertUnwindSafe(|| pythonize::pythonize(py, &self.0)))
             .map_err(panic_to_pyerr)?
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(PyErr::from)
     }
 }
 
@@ -84,6 +98,19 @@ mod tests {
                 .and_then(|value| value.extract())
                 .expect("value should convert");
             assert_eq!(value, vec![1, 2, 3]);
+        });
+    }
+
+    #[test]
+    fn pythonized_preserves_python_serialization_error_types() {
+        crate::initialize_python();
+        Python::attach(|py| {
+            let value = std::collections::BTreeMap::from([(vec![1], "value")]);
+            let direct = to_py(py, &value).unwrap_err();
+            let wrapped = Pythonized(value).into_pyobject(py).unwrap_err();
+            assert!(direct.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
+            assert!(wrapped.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
+            assert_eq!(wrapped.to_string(), direct.to_string());
         });
     }
 

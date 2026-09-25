@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final, cast
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
 from litellm.llms.gemini.common_utils import GeminiModelInfo
@@ -277,7 +278,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             raise Exception(error_msg)
         verbose_logger.debug("Initiate resumable upload response: %s", response.headers)
         # Extract upload URL from response headers
-        upload_url: Final = response.headers.get("x-goog-upload-url")
+        upload_url: Final = header_value(response.headers, "x-goog-upload-url")
         if not upload_url:
             raise Exception("No upload URL returned in response headers")
 

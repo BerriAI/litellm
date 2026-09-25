@@ -17,8 +17,8 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, run_aws_signing
-from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
+from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text, stream_chunk_size_from
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -278,7 +278,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
-        stream_chunk_size: Final = optional_params.pop("stream_chunk_size", None)
+        stream_chunk_size: Final = stream_chunk_size_from(litellm_params) if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode: Final = optional_params.get("json_mode", False)
@@ -323,21 +323,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             model_id=unencoded_model_id,
         )
 
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_bedrock_runtime_endpoint: Final = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
-        aws_session_tags: Final = optional_params.pop("aws_session_tags", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
         optional_params.pop("aws_region_name", None)
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
@@ -345,19 +332,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Final[Credentials | None] = (
             None
             if bedrock_bearer_token(api_key) is not None
-            else self.get_credentials(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                aws_region_name=aws_region_name,
-                aws_session_name=aws_session_name,
-                aws_profile_name=aws_profile_name,
-                aws_role_name=aws_role_name,
-                aws_web_identity_token=aws_web_identity_token,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
-                aws_session_tags=aws_session_tags,
-            )
+            else self.resolve_credentials(auth_params, aws_region_name)
         )
 
         ### SET RUNTIME ENDPOINT ###

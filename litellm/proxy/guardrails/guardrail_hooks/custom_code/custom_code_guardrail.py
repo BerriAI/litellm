@@ -38,9 +38,10 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import ModifyResponseException
@@ -79,6 +80,10 @@ class CustomCodeExecutionError(CustomCodeGuardrailError):
     """Raised when custom code fails during execution."""
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class CustomCodeGuardrailConfigModel(GuardrailConfigModel):
     """Configuration parameters for the custom code guardrail."""
 
@@ -114,7 +119,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         self,
         custom_code: str,
         guardrail_name: str | None = "custom_code",
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         """
         Initialize the custom code guardrail.

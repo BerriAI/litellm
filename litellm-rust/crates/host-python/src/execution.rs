@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
+use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
 use crate::{Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
 use pyo3::exceptions::PyRuntimeError;
@@ -11,6 +12,66 @@ use pyo3::prelude::*;
 use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
+
+pyo3::create_exception!(
+    _native,
+    ForkedAfterNativeRuntimeStarted,
+    PyRuntimeError,
+    "This process was forked after the native runtime started. Runtime threads do not survive fork(), so native routes cannot run here."
+);
+
+pyo3::create_exception!(
+    _native,
+    ProcessReservedForForking,
+    PyRuntimeError,
+    "This process was reserved for forking workers, so native routes cannot run here."
+);
+
+static FORK_GATE: ForkGate = ForkGate::new();
+
+/// Whether this process has entered process-bound native execution.
+pub fn runtime_started() -> bool {
+    FORK_GATE.started(std::process::id())
+}
+
+/// Declares that this process exists to fork workers, so it must never start the runtime.
+/// Fails if it already has. Workers are unaffected: the reservation is keyed by pid.
+pub fn reserve_process_for_forking() -> Result<(), RuntimeAlreadyStarted> {
+    FORK_GATE.reserve(std::process::id())
+}
+
+/// Claims process-bound native state before runtime startup or tokenizer execution.
+pub fn enter_native() -> PyResult<()> {
+    FORK_GATE
+        .enter(std::process::id())
+        .map_err(|refused| match refused {
+            Refused::ReservedForForking => ProcessReservedForForking::new_err(
+                "this process is reserved for forking workers and cannot run native routes; \
+                 move the call into a worker, after the fork",
+            ),
+            Refused::ForkedAfterStart => ForkedAfterNativeRuntimeStarted::new_err(
+                "this process was forked after the native runtime started, and runtime threads \
+                 do not survive fork(); start workers with spawn or forkserver, or fork before \
+                 the first native call",
+            ),
+        })
+}
+
+#[expect(clippy::disallowed_methods, reason = "this is the gated door")]
+fn runtime() -> PyResult<&'static Runtime> {
+    enter_native()?;
+    Ok(pyo3_async_runtimes::tokio::get_runtime())
+}
+
+#[expect(clippy::disallowed_methods, reason = "this is the gated door")]
+fn future_into_py<F, T>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
+{
+    enter_native()?;
+    pyo3_async_runtimes::tokio::future_into_py(py, future)
+}
 
 pub fn run_sync<T, E, F>(
     py: Python<'_>,
@@ -22,12 +83,7 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    run_sync_on(
-        py,
-        pyo3_async_runtimes::tokio::get_runtime(),
-        future,
-        map_error,
-    )
+    run_sync_on(py, runtime()?, future, map_error)
 }
 
 pub fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
@@ -35,7 +91,7 @@ where
     T: Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
-    run_sync_value_on(py, pyo3_async_runtimes::tokio::get_runtime(), future)
+    run_sync_value_on(py, runtime()?, future)
 }
 
 fn run_sync_value_on<T, F>(py: Python<'_>, runtime: &Runtime, future: F) -> PyResult<T>
@@ -83,7 +139,7 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    future_into_py(py, async move {
         let result = catch_future_panic(future).await?;
         let result = map_core_result(result, map_error)?;
         Ok(Pythonized(result))
@@ -95,7 +151,7 @@ where
     T: for<'py> IntoPyObject<'py> + Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
-    pyo3_async_runtimes::tokio::future_into_py(py, async move { catch_future_panic(future).await? })
+    future_into_py(py, async move { catch_future_panic(future).await? })
 }
 
 pub fn poll_async_value<T, F>(py: Python<'_>, future: Pin<&mut F>) -> PyResult<Poll<T>>
@@ -103,8 +159,9 @@ where
     T: Send,
     F: Future<Output = PyResult<T>> + Send,
 {
+    let runtime = runtime()?;
     let result = release_gil(py, || {
-        let _runtime = pyo3_async_runtimes::tokio::get_runtime().enter();
+        let _runtime = runtime.enter();
         std::panic::catch_unwind(AssertUnwindSafe(|| {
             future.poll(&mut Context::from_waker(Waker::noop()))
         }))
@@ -168,29 +225,12 @@ mod tests {
     use pyo3::exceptions::PyLookupError;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
     use serde::Serializer;
     use tokio::runtime::Builder;
 
     use super::*;
-
-    struct InitializedPython;
-
-    impl InitializedPython {
-        fn attach<F, R>(&self, f: F) -> R
-        where
-            F: for<'py> FnOnce(Python<'py>) -> R,
-        {
-            Python::attach(f)
-        }
-    }
-
-    #[fixture]
-    #[once]
-    fn initialized_python() -> InitializedPython {
-        crate::initialize_python();
-        InitializedPython
-    }
+    use crate::{InitializedPython, initialized_python};
 
     #[derive(Debug)]
     struct Error(String);
@@ -286,27 +326,25 @@ mod tests {
     }
 
     #[pyfunction]
-    fn runtime_worker_count() -> usize {
-        pyo3_async_runtimes::tokio::get_runtime()
-            .metrics()
-            .num_workers()
+    fn runtime_worker_count() -> PyResult<usize> {
+        Ok(runtime()?.metrics().num_workers())
     }
 
     #[pyfunction]
-    fn runtime_is_responsive(_py: Python<'_>, expected_completions: usize) -> bool {
+    fn runtime_is_responsive(_py: Python<'_>, expected_completions: usize) -> PyResult<bool> {
         let completion_deadline = Instant::now() + Duration::from_secs(2);
         while ASYNC_PROBE_COMPLETED.load(Ordering::SeqCst) < expected_completions {
             if Instant::now() >= completion_deadline {
-                return false;
+                return Ok(false);
             }
             thread::sleep(Duration::from_millis(1));
         }
 
         let (heartbeat_tx, heartbeat_rx) = mpsc::sync_channel(1);
-        pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
+        runtime()?.spawn(async move {
             let _ = heartbeat_tx.send(());
         });
-        heartbeat_rx.recv_timeout(Duration::from_secs(2)).is_ok()
+        Ok(heartbeat_rx.recv_timeout(Duration::from_secs(2)).is_ok())
     }
 
     fn extract_bool(py: Python<'_>, result: PyResult<Py<PyAny>>) -> bool {
@@ -315,6 +353,16 @@ mod tests {
             .bind(py)
             .extract()
             .expect("result should convert")
+    }
+
+    #[rstest]
+    fn reaching_the_runtime_marks_the_process_as_started(
+        #[from(initialized_python)] python: &InitializedPython,
+    ) {
+        python.attach(|py| {
+            run_sync_value(py, async { Ok(()) }).unwrap();
+            assert!(runtime_started());
+        });
     }
 
     #[rstest]

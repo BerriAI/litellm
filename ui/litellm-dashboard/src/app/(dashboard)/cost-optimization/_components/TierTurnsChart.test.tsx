@@ -21,6 +21,8 @@ const totalsOnly = {
   avg_session_seconds: 60,
   avg_tokens_per_session: 100,
   spend: 1,
+  savings_estimated_turns: 9,
+  savings_estimated_actual_spend: 1,
   saved_spend: 1,
   baseline_spend: 2,
   saved_pct: 50,

@@ -212,14 +212,14 @@ class TestSamplingAuthAndBudgetGating:
         )
 
         params = MagicMock()
-        params.modelPreferences = None
+        params.model_preferences = None
         params.messages = []
         params.systemPrompt = None
-        params.maxTokens = 100
+        params.max_tokens = 100
         params.temperature = None
-        params.stopSequences = None
+        params.stop_sequences = None
         params.tools = None
-        params.toolChoice = None
+        params.tool_choice = None
         params.metadata = None
 
         result = await handle_sampling_create_message(
@@ -242,14 +242,14 @@ class TestSamplingAuthAndBudgetGating:
 
         auth = _make_user_api_key_auth(models=["gpt-4o"])
         params = MagicMock()
-        params.modelPreferences = None
+        params.model_preferences = None
         params.messages = []
         params.systemPrompt = None
-        params.maxTokens = 100
+        params.max_tokens = 100
         params.temperature = None
-        params.stopSequences = None
+        params.stop_sequences = None
         params.tools = None
-        params.toolChoice = None
+        params.tool_choice = None
         params.metadata = None
 
         with (
@@ -304,14 +304,14 @@ class TestSamplingAuthAndBudgetGating:
 
         auth = _make_user_api_key_auth(models=["gpt-4o"])
         params = MagicMock()
-        params.modelPreferences = None
+        params.model_preferences = None
         params.messages = []
         params.systemPrompt = None
-        params.maxTokens = 100
+        params.max_tokens = 100
         params.temperature = None
-        params.stopSequences = None
+        params.stop_sequences = None
         params.tools = None
-        params.toolChoice = None
+        params.tool_choice = None
         params.metadata = None
 
         budget_error = ErrorData(code=-1, message="ExceededBudget: over limit")

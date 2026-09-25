@@ -1,26 +1,33 @@
 from __future__ import annotations
 
-import json
 import math
-from types import MappingProxyType
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.caching import DualCache
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy._types import (
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.spend_tracking.budget_reservation import (
-    count_request_input_tokens,
+    _get_team_member_budget_counter,
     estimate_request_max_cost,
+    release_unbound_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
-from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge import token_counter as rust_token_counter
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
@@ -209,239 +216,129 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     assert math.isclose(after, before * 1000)
 
 
-ANTHROPIC_TOKENIZER_MODEL: Final = "claude-sonnet-4-5-20250929"
-CL100K_MODEL: Final = "gpt-4"
-O200K_MODEL: Final = "gpt-4o"
-RUST_COUNTED_BODY: Final = {"model": ANTHROPIC_TOKENIZER_MODEL, "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
-RUST_INPUT_TOKENS: Final = 4_321
-RUST_INPUT_TOKENS_BY_TOKENIZER: Final = MappingProxyType(
-    {"anthropic": RUST_INPUT_TOKENS, "cl100k_base": 1_234, "o200k_base": 2_345}
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expiry_offset, expected_max_budget",
+    [
+        (timedelta(days=1), 3.0),
+        (timedelta(days=-1), 2.0),
+    ],
 )
+async def test_team_member_reservation_counter_honours_temp_budget_increase(
+    expiry_offset: timedelta, expected_max_budget: float
+) -> None:
+    user_id: Final = "member-temp"
+    team_id: Final = "team-temp"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            budget_id="budget-temp",
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=2.0,
+                temp_budget_increase=1.0,
+                temp_budget_expiry=datetime.now(timezone.utc) + expiry_offset,
+            ),
+        ),
+    )
 
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
 
-class _FakeDeclined(Exception):
-    pass
-
-
-class _FakeUpstream(Exception):
-    pass
-
-
-class _FakeNative:
-    RustBridgeDeclined = _FakeDeclined
-    RustUpstreamError = _FakeUpstream
-
-
-class _RecordingCounter:
-    """Stands in for one native counter; records `(tokenizer, body)` on the shared factory."""
-
-    def __init__(self, factory: _RecordingFactory, tokenizer: rust_token_counter.RustTokenizer) -> None:
-        self.factory = factory
-        self.tokenizer = tokenizer
-
-    async def acount_request(self, body: bytes) -> object:
-        self.factory.calls.append((self.tokenizer, body))
-        return {"model": "", "input_tokens": RUST_INPUT_TOKENS_BY_TOKENIZER[self.tokenizer]}
-
-
-class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_*_ranks`."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[rust_token_counter.RustTokenizer, bytes]] = []
-
-    def __call__(self, tokenizer_json: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "anthropic")
-
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "o200k_base")
-
-
-class _DecliningCounter:
-    async def acount_request(self, body: bytes) -> object:
-        raise _FakeDeclined("unsupported content block")
-
-
-class _DecliningFactory:
-    def __call__(self, tokenizer_json: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_cl100k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_o200k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-
-@pytest.fixture
-def rust_counter(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
-    rust_token_counter._counter.cache_clear()
-    configuration.reset_rust_configuration()
-    yield
-    rust_token_counter.TOKEN_COUNTER.reset()
-    rust_token_counter._counter.cache_clear()
-    configuration.reset_rust_configuration()
+    assert counter is not None
+    assert counter.max_budget == expected_max_budget
+    assert counter.fallback_spend == 0.5
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("route", "request_body"),
-    (
-        ("/v1/messages", RUST_COUNTED_BODY),
-        ("/v1/chat/completions", {"model": ANTHROPIC_TOKENIZER_MODEL, "messages": ANTHROPIC_MESSAGES}),
-        ("/v1/completions", {"model": ANTHROPIC_TOKENIZER_MODEL, "prompt": "hi"}),
-        ("/v1/responses", {"model": ANTHROPIC_TOKENIZER_MODEL, "input": "hi"}),
-        ("/v1/embeddings", {"model": ANTHROPIC_TOKENIZER_MODEL, "input": ["hi"]}),
-        ("/v1/rerank", {"model": ANTHROPIC_TOKENIZER_MODEL, "query": "hi", "documents": ["a"]}),
-    ),
+    "default_cap, expiry_offset, expected_max_budget",
+    [
+        (2.0, timedelta(days=1), 3.0),
+        (2.0, timedelta(days=-1), 2.0),
+        (0.0, timedelta(days=1), None),
+    ],
 )
-async def test_rust_count_replaces_python_tokenizing_on_every_llm_route(
-    rust_counter: None, route: str, request_body: dict
+async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_default(
+    default_cap: float, expiry_offset: timedelta, expected_max_budget: float | None
 ) -> None:
-    factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    rust_token_counter.TOKEN_COUNTER.override(factory)
-    raw_body: Final = json.dumps(request_body).encode()
-
-    counts: Final = await count_request_input_tokens(
-        request_body=request_body, route=route, llm_router=None, raw_body=raw_body
+    user_id: Final = "member-bare"
+    team_id: Final = "team-bare"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-bare",
+        value=LiteLLM_BudgetTable(budget_id="default-bare", max_budget=default_cap),
+    )
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            budget_id="budget-bare",
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=None,
+                temp_budget_increase=1.0,
+                temp_budget_expiry=datetime.now(timezone.utc) + expiry_offset,
+            ),
+        ),
     )
 
-    assert dict(counts) == {ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS}
-    assert factory.calls == [("anthropic", raw_body)]
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id, metadata={"team_member_budget_id": "default-bare"}),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
+
+    if expected_max_budget is None:
+        assert counter is None
+        return
+    assert counter is not None
+    assert counter.max_budget == expected_max_budget
+    assert counter.fallback_spend == 0.5
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", (CL100K_MODEL, "azure/gpt-35-turbo", "gemini/gemini-2.5-pro", "my-router-alias"))
-async def test_tiktoken_cl100k_models_are_counted_by_rust(rust_counter: None, model: str) -> None:
-    factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    rust_token_counter.TOKEN_COUNTER.override(factory)
-    body: Final = {"model": model, "messages": ANTHROPIC_MESSAGES}
-    raw_body: Final = json.dumps(body).encode()
+async def test_reservation_starts_unbound_to_any_callback():
+    reservation: Final = await _reserve("/v1/responses")
 
-    counts: Final = await count_request_input_tokens(
-        request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=raw_body
-    )
-
-    assert dict(counts) == {model: RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"]}
-    assert factory.calls == [("cl100k_base", raw_body)]
+    assert reservation is not None
+    assert reservation["callback_bound"] is False
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", (O200K_MODEL, "gpt-5", "o3", "gpt-4.1", "chatgpt-4o-latest"))
-async def test_tiktoken_o200k_models_are_counted_by_rust(rust_counter: None, model: str) -> None:
-    factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    rust_token_counter.TOKEN_COUNTER.override(factory)
-    body: Final = {"model": model, "messages": ANTHROPIC_MESSAGES}
-    raw_body: Final = json.dumps(body).encode()
-
-    counts: Final = await count_request_input_tokens(
-        request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=raw_body
+async def test_release_unbound_budget_reservation_frees_the_counter(spend_counter_cache: DualCache):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    reservation: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
     )
+    assert reservation is not None
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
 
-    assert dict(counts) == {model: RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"]}
-    assert factory.calls == [("o200k_base", raw_body)]
+    await release_unbound_budget_reservation(reservation)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.0)
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
-async def test_multi_model_request_counts_once_per_tokenizer_and_python_for_the_rest(rust_counter: None) -> None:
-    factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    rust_token_counter.TOKEN_COUNTER.override(factory)
-    models: Final = (
-        CL100K_MODEL,
-        ANTHROPIC_TOKENIZER_MODEL,
-        "gemini/gemini-2.5-pro",
-        O200K_MODEL,
-        "gpt-5",
-        "replicate/meta/llama-2-70b-chat",
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_cache: DualCache):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    reservation: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
     )
-    body: Final = {"model": list(models), "messages": ANTHROPIC_MESSAGES}
-    raw_body: Final = json.dumps(body).encode()
-    python_counts: Final = await count_request_input_tokens(
-        request_body=body, route="/v1/chat/completions", llm_router=None
-    )
+    assert reservation is not None
+    reservation["callback_bound"] = True
 
-    counts: Final = await count_request_input_tokens(
-        request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=raw_body
-    )
+    await release_unbound_budget_reservation(reservation)
 
-    assert factory.calls == [("cl100k_base", raw_body), ("anthropic", raw_body), ("o200k_base", raw_body)]
-    assert dict(counts) == {
-        CL100K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
-        "gemini/gemini-2.5-pro": RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
-        ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS,
-        O200K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
-        "gpt-5": RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
-        "replicate/meta/llama-2-70b-chat": python_counts["replicate/meta/llama-2-70b-chat"],
-    }
-    assert counts["replicate/meta/llama-2-70b-chat"] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", (ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL))
-async def test_rust_decline_falls_back_to_python_count(rust_counter: None, model: str) -> None:
-    litellm.rust(True)
-    rust_token_counter.TOKEN_COUNTER.override(_DecliningFactory())
-    body: Final = {**RUST_COUNTED_BODY, "model": model}
-    python_counts: Final = await count_request_input_tokens(request_body=body, route="/v1/messages", llm_router=None)
-
-    counts: Final = await count_request_input_tokens(
-        request_body=body,
-        route="/v1/messages",
-        llm_router=None,
-        raw_body=json.dumps(body).encode(),
-    )
-
-    assert dict(counts) == dict(python_counts)
-    assert counts[model] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
-
-
-@pytest.mark.asyncio
-async def test_disabled_rust_never_sees_the_raw_body(rust_counter: None) -> None:
-    factory: Final = _RecordingFactory()
-    litellm.rust(False)
-    rust_token_counter.TOKEN_COUNTER.override(factory)
-    body: Final = {"model": [ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL], "messages": ANTHROPIC_MESSAGES}
-
-    counts: Final = await count_request_input_tokens(
-        request_body=body,
-        route="/v1/chat/completions",
-        llm_router=None,
-        raw_body=json.dumps(body).encode(),
-    )
-
-    assert factory.calls == []
-    assert set(counts) == {ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL}
-    assert not set(counts.values()) & set(RUST_INPUT_TOKENS_BY_TOKENIZER.values())
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", ("replicate/meta/llama-2-70b-chat", "meta-llama/Llama-3-8b", "text-davinci-003"))
-async def test_models_without_a_rust_tokenizer_stay_in_python(
-    rust_counter: None, monkeypatch: pytest.MonkeyPatch, model: str
-) -> None:
-    monkeypatch.setattr(
-        litellm, "open_ai_chat_completion_models", litellm.open_ai_chat_completion_models | {"text-davinci-003"}
-    )
-    factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    rust_token_counter.TOKEN_COUNTER.override(factory)
-    body: Final = {"model": model, "messages": ANTHROPIC_MESSAGES}
-    python_counts: Final = await count_request_input_tokens(
-        request_body=body, route="/v1/chat/completions", llm_router=None
-    )
-
-    counts: Final = await count_request_input_tokens(
-        request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=json.dumps(body).encode()
-    )
-
-    assert factory.calls == []
-    assert dict(counts) == dict(python_counts)
-    assert counts[model] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+    assert reservation["finalized"] is False

@@ -38,7 +38,6 @@ litellm_settings:
   # budget_duration: 30d
   num_retries: 5
   request_timeout: 600
-  telemetry: False
   context_window_fallbacks: [{"gpt-5-mini": ["gpt-5.5"]}]
   default_team_settings: 
     - team_id: team-1
@@ -72,4 +71,4 @@ files_settings:
     api_key: os.environ/OPENAI_API_KEY
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  master_key: os.environ/LITELLM_MASTER_KEY # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys

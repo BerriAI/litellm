@@ -905,3 +905,93 @@ async def test_scan_raw_request_warns_on_in_place_mutation_returning_none(
     )
     mock_logger.warning.assert_called_once()
     assert "scan_raw_request" in str(mock_logger.warning.call_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blocker_kwargs",
+    [
+        pytest.param({}, id="sequential"),
+        pytest.param({"scan_raw_request": True}, id="scan_raw_request"),
+        pytest.param({"run_in_parallel": True}, id="parallel"),
+    ],
+)
+async def test_pre_call_block_names_the_blocking_guardrail_in_applied_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch, blocker_kwargs
+):
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(**blocker_kwargs)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    data = _secret_request()
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="completion",
+        )
+    assert data["metadata"]["applied_guardrails"] == ["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_block_keeps_request_declared_guardrail_in_applied_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(default_on=False)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    data = {**_secret_request(), "metadata": {"guardrails": ["blocker", "declared-post-call"]}}
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="completion",
+        )
+    assert data["metadata"]["applied_guardrails"] == ["blocker", "declared-post-call"]
+
+
+@pytest.mark.asyncio
+async def test_skip_guardrails_still_runs_non_guardrail_callbacks(proxy_logging, make_user_api_key_auth, monkeypatch):
+    accountant = _Accountant()
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(), accountant])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+
+    data = _secret_request()
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=data,
+        call_type="completion",
+        skip_guardrails=True,
+    )
+    assert out is data
+    assert "SECRET" in out["messages"][0]["content"]
+    assert accountant.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_default_walk_still_blocks_on_the_same_setup(proxy_logging, make_user_api_key_auth, monkeypatch):
+    accountant = _Accountant()
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(), accountant])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=_secret_request(),
+            call_type="completion",
+        )
+    assert accountant.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_guardrails_only_and_skip_guardrails_are_mutually_exclusive(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data={"model": "m"},
+            call_type="completion",
+            guardrails_only=True,
+            skip_guardrails=True,
+        )

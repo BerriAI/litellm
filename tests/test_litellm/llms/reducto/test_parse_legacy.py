@@ -3,6 +3,8 @@ import pytest
 import litellm
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
+pytestmark = pytest.mark.requires_rust_extension
+
 
 @pytest.fixture()
 def disable_aiohttp_transport():

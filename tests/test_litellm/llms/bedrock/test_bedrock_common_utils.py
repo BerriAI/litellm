@@ -279,6 +279,16 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     )
 
 
+def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
+    """The mantle/ route token is a routing prefix like openai/, so a bedrock/mantle/<model>
+    deployment must resolve the bare Bedrock model for cost lookup while still routing to Mantle."""
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model, strip_bedrock_routing_prefix
+
+    assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
+    assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
+    assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5") == "mantle"
+
+
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
     import litellm.llms.bedrock.common_utils as mod
 
@@ -336,7 +346,7 @@ def test_route_prefix_matched_as_path_segment_not_substring():
         BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
     )
     assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
     )
     assert (
         BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
@@ -926,3 +936,48 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+
+def test_s3_static_key_pair_returns_the_pair_when_both_keys_are_set():
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+    assert s3_static_key_pair(
+        {
+            "aws_access_key_id": "bedrock-key",
+            "aws_secret_access_key": "bedrock-secret",
+            "s3_access_key_id": "s3-key",
+            "s3_secret_access_key": "s3-secret",
+        }
+    ) == ("s3-key", "s3-secret")
+
+
+@pytest.mark.parametrize(
+    "partial_s3_pair",
+    [
+        {},
+        {"s3_access_key_id": "s3-key"},
+        {"s3_secret_access_key": "s3-secret"},
+        {"s3_access_key_id": "", "s3_secret_access_key": ""},
+    ],
+)
+def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+    assert s3_static_key_pair({"aws_access_key_id": "bedrock-key", **partial_s3_pair}) is None
+
+
+def test_unmapped_openai_family_model_routes_to_converse():
+    """A Bedrock-native OpenAI model that is not in the cost map yet must not fall to the invoke route.
+
+    The invoke ``openai`` provider is the imported-model path and sends ``max_tokens``, which Bedrock
+    rejects for these models; Converse maps it to ``inferenceConfig.maxTokens``.
+    """
+    from typing import Final
+
+    import litellm
+
+    unmapped: Final = "bedrock/global.openai.gpt-99-unmapped"
+    assert unmapped.removeprefix("bedrock/") not in litellm.bedrock_converse_models
+    assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
+    imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
+    assert BedrockModelInfo.get_bedrock_route(imported) == "openai"

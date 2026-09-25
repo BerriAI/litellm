@@ -7,7 +7,15 @@ if [ "${GITHUB_ACTIONS:-}" = true ]; then
 fi
 
 suite="${1:?integration suite required}"
-results="test-results/integration-${suite}"
+mode="${2:-standard}"
+side="${3:-}"
+if [ "$mode" = replica ]; then
+  results="test-results/integration-${suite}-replica"
+elif [ "$mode" = parity ]; then
+  results="test-results/parity-${suite}/${side:?parity side required}"
+else
+  results="test-results/integration-${suite}"
+fi
 mkdir -p "$results"
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
@@ -80,6 +88,18 @@ export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
 
+export INTEGRATION_PROXY_DATABASE_URL=""
+export INTEGRATION_PROXY_READ_REPLICA_URL=""
+export INTEGRATION_ROUTING=""
+if [ "$mode" = replica ] || [ "$mode" = parity ]; then
+  .venv/bin/python .circleci/scripts/prepare_replica_roles.py > "$results/prepare-replica-roles.log" 2>&1
+  export INTEGRATION_PROXY_DATABASE_URL="postgresql://litellm_writer:litellm-writer@127.0.0.1:5432/circle_test"
+  export INTEGRATION_PROXY_READ_REPLICA_URL="postgresql://litellm_reader:litellm-reader@127.0.0.1:5432/circle_test"
+fi
+if [ "$mode" = parity ]; then
+  export INTEGRATION_ROUTING=capture
+fi
+
 sudo iptables -N integration_only
 guard_created=true
 sudo iptables -A integration_only -o lo -j ACCEPT
@@ -108,15 +128,46 @@ awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/e
 setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
   .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
 upstream_pid=$!
+if [ "$suite" = cost ]; then
+  export INTEGRATION_WORKERS=8
+fi
+if [ "$suite" = mcp ]; then
+  export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
+fi
+coverage_data="$PWD/$results/coverage/data"
+proxy_command=(.venv/bin/python -m integration._support.proxy)
+if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+  mkdir -p "$(dirname "$coverage_data")"
+  proxy_command=(.venv/bin/python -m coverage run --rcfile=tests/integration/mcp_coverage.toml -m integration._support.proxy)
+fi
 start_proxy() {
   local port="$1"
   local log_name="$2"
+  local -a cost_map_env
+  if [ "$suite" = cost ]; then
+    cost_map_env=(
+      "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_UPSTREAM_URL/_cost_map"
+      "MODEL_COST_MAP_MIN_MODEL_COUNT=1"
+      "MODEL_COST_MAP_MAX_SHRINK_RATIO=0"
+      "GEMINI_API_BASE=$INTEGRATION_UPSTREAM_URL"
+      "ANTHROPIC_API_BASE=$INTEGRATION_UPSTREAM_URL"
+      "GEMINI_API_KEY=sk-scripted-provider"
+      "ANTHROPIC_API_KEY=sk-scripted-provider"
+    )
+  else
+    cost_map_env=("LITELLM_LOCAL_MODEL_COST_MAP=True")
+  fi
+  local -a database_env=("DATABASE_URL=${INTEGRATION_PROXY_DATABASE_URL:-$DATABASE_URL}")
+  if [ -n "$INTEGRATION_PROXY_READ_REPLICA_URL" ]; then
+    database_env+=("DATABASE_URL_READ_REPLICA=$INTEGRATION_PROXY_READ_REPLICA_URL")
+  fi
   setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-    DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
+    "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
+    INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
-    LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True STORE_MODEL_IN_DB=True \
-    AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
-    .venv/bin/python -m integration._support.proxy --config tests/integration/proxy_config.yaml \
+    LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
+    AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
+    "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
     --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
     --use_prisma_db_push --enforce_prisma_migration_check \
     > "$results/$log_name" 2>&1 &
@@ -125,7 +176,10 @@ start_proxy() {
 start_proxy 4000 proxy.log
 proxy_pid="$launched_pid"
 .venv/bin/python .circleci/scripts/wait_integration_services.py
-if [ "$suite" = management ]; then
+curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+  -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
+if [ "$suite" = management ] || [ "$suite" = mcp ]; then
   export INTEGRATION_PEER_URL=http://127.0.0.1:4001
   start_proxy 4001 peer.log
   peer_pid="$launched_pid"
@@ -155,13 +209,37 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-timeout --signal=TERM --kill-after=20s 11m env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
   INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \
   INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
+  INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
+  INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
+  INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
+  INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results"
+
+if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+  for covered_pid in "$proxy_pid" "$peer_pid"; do
+    [ -n "$covered_pid" ] || continue
+    kill -TERM -- "-$covered_pid"
+    for _ in {1..300}; do
+      kill -0 "$covered_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    wait "$covered_pid" 2>/dev/null || true
+  done
+  proxy_pid=""
+  peer_pid=""
+  COVERAGE_FILE="$coverage_data" .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml
+  COVERAGE_FILE="$coverage_data" .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml \
+    > "$results/coverage/coverage.txt"
+  COVERAGE_FILE="$coverage_data" .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml \
+    -d "$results/coverage/html"
+  tail -n 1 "$results/coverage/coverage.txt"
+fi

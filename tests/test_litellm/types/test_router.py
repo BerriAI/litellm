@@ -91,7 +91,7 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(id="x", input_cost_per_token="free")
 
 
@@ -118,7 +118,9 @@ def test_drop_params_ignores_non_flag_non_string_values_with_a_warning(value, ca
     assert f"drop_params={value!r} is not a flag value" in caplog.text
 
 
-@pytest.mark.parametrize("value", [True, "true", None, "os.environ/DROP_PARAMS", "v2:gcm:ciphertext-from-a-pre-fix-row"])
+@pytest.mark.parametrize(
+    "value", [True, "true", None, "os.environ/DROP_PARAMS", "v2:gcm:ciphertext-from-a-pre-fix-row"]
+)
 def test_drop_params_flags_and_strings_log_nothing(value, caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         GenericLiteLLMParams(drop_params=value)
@@ -146,3 +148,88 @@ def test_aws_session_tags_round_trip_as_sts_shaped_pairs():
 def test_aws_session_tags_reject_shapes_sts_would_refuse(aws_session_tags):
     with pytest.raises(ValidationError, match="aws_session_tags"):
         LiteLLM_Params(model="bedrock/anthropic.claude-opus-5", aws_session_tags=aws_session_tags)
+
+
+def test_provider_affinity_header_is_normalized():
+    params = LiteLLM_Params(
+        model="openai/gpt-4o-mini",
+        provider_affinity_header="X-Conversation-Id",
+    )
+
+    assert params.provider_affinity_header == "X-Conversation-Id"
+    assert params.model_dump(exclude_none=True)["provider_affinity_header"] == "X-Conversation-Id"
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+        "Host",
+        "Content-Length",
+        "Content-Type",
+        "X-API-Key",
+    ],
+)
+def test_provider_affinity_header_rejects_sensitive_or_transport_headers(header: str):
+    with pytest.raises(ValueError, match="provider_affinity_header"):
+        LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            provider_affinity_header=header,
+        )
+
+
+@pytest.mark.parametrize("header", ["", "X Conversation Id", "X-Conversation-Id\r\nInjected: true"])
+def test_provider_affinity_header_rejects_invalid_header_names(header: str):
+    with pytest.raises(ValueError, match="provider_affinity_header"):
+        LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            provider_affinity_header=header,
+        )
+
+
+def test_model_info_parses_access_windows_time_strings():
+    import datetime
+
+    info = ModelInfo(
+        id="x",
+        access_windows=[
+            {
+                "start": "22:00",
+                "end": "06:00",
+                "timezone": "America/New_York",
+                "team_ids": ["team-nightly"],
+            }
+        ],
+    )
+    window = info.access_windows[0]
+    assert window.start == datetime.time(22, 0)
+    assert window.end == datetime.time(6, 0)
+    assert window.timezone == "America/New_York"
+    assert window.team_ids == ("team-nightly",)
+
+
+@pytest.mark.parametrize(
+    "access_windows",
+    [
+        [{"start": "25:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}],
+        [{"start": "22:00", "end": "06:00", "timezone": "Mars/Olympus", "team_ids": ["t"]}],
+        [{"start": "22:00", "end": "06:00", "timezone": "UTC", "team_ids": []}],
+    ],
+    ids=["invalid-time", "unknown-timezone", "empty-team-ids"],
+)
+def test_model_info_rejects_invalid_access_windows(access_windows):
+    with pytest.raises(ValidationError):
+        ModelInfo(id="x", access_windows=access_windows)
+
+
+def test_model_info_rejects_offset_aware_access_window_times():
+    with pytest.raises(ValidationError):
+        ModelInfo(
+            id="x",
+            access_windows=[
+                {"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}
+            ],
+        )

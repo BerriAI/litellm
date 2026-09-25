@@ -47,6 +47,12 @@ import {
   toSubmittedValues,
 } from "./keyEditFormValues";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
+import {
+  endUserBudgetIdUpdate,
+  keyOffersEndUserBudget,
+  storedEndUserBudgetId,
+} from "../key_team_helpers/endUserBudgetPayload";
 import { ModelMaxBudgetField } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { useModelMaxBudgetField } from "../key_team_helpers/useModelMaxBudgetField";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
@@ -74,7 +80,7 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
-  onSubmit: (values: any) => Promise<void>;
+  onSubmit: (values: any, dirtyFields: readonly string[]) => Promise<void>;
   teams?: any[] | null;
   accessToken: string | null;
   userID: string | null;
@@ -124,8 +130,11 @@ export function KeyEditView({
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
   const modelBudget = useModelMaxBudgetField(keyData.token, keyData.model_max_budget);
+  const storedEndUserBudgetIdValue = storedEndUserBudgetId(keyData.metadata);
+  const [endUserBudgetId, setEndUserBudgetId] = useState<string | null>(storedEndUserBudgetIdValue || null);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const keyTypeFieldId = React.useId();
+  const endUserBudgetFieldId = React.useId();
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -290,6 +299,11 @@ export function KeyEditView({
 
       modelBudget.applyTo(values);
 
+      const endUserBudgetUpdate = endUserBudgetIdUpdate(endUserBudgetId, storedEndUserBudgetIdValue);
+      if (endUserBudgetUpdate !== undefined) {
+        values.end_user_budget_id = endUserBudgetUpdate;
+      }
+
       const routerSettings = routerSettingsUpdate(
         routerSettingsRef.current?.getValue()?.router_settings,
         keyData.router_settings,
@@ -303,6 +317,7 @@ export function KeyEditView({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
+        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
@@ -484,6 +499,21 @@ export function KeyEditView({
             />
           </Field>
 
+          {keyOffersEndUserBudget(keyData.metadata) && (
+            <Field>
+              <FieldLabel htmlFor={endUserBudgetFieldId}>
+                {labelWithHint("Default Customer Budget", END_USER_BUDGET_HINT)}
+              </FieldLabel>
+              <EndUserBudgetSelect
+                id={endUserBudgetFieldId}
+                accessToken={accessToken}
+                value={endUserBudgetId}
+                onChange={setEndUserBudgetId}
+                canEdit={userRole != null && isProxyAdminRole(userRole)}
+              />
+            </Field>
+          )}
+
           <KeyRateLimitFields control={form.control} />
 
           <FormField
@@ -589,18 +619,20 @@ export function KeyEditView({
             }
           </FormField>
 
-          <FormField
-            control={form.control}
-            name="disable_global_guardrails"
-            label={labelWithHint(
-              "Disable Global Guardrails",
-              "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
-            )}
-          >
-            {({ value, onChange, ref: _ref, ...field }) => (
-              <Switch {...field} checked={Boolean(value)} onCheckedChange={onChange} disabled={!canEditGuardrails} />
-            )}
-          </FormField>
+          {userRole != null && isProxyAdminRole(userRole) && (
+            <FormField
+              control={form.control}
+              name="disable_global_guardrails"
+              label={labelWithHint(
+                "Disable Global Guardrails",
+                "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
+              )}
+            >
+              {({ value, onChange, ref: _ref, ...field }) => (
+                <Switch {...field} checked={Boolean(value)} onCheckedChange={onChange} disabled={!canEditGuardrails} />
+              )}
+            </FormField>
+          )}
 
           {canViewPolicies && (
             <FormField
