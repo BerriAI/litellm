@@ -968,7 +968,7 @@ async def _resolve_customer_daily_activity_scope(
     end_user_ids_list: Final = end_user_ids.split(",") if end_user_ids else None
     exclude_end_user_ids_list: Final = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
 
-    where_condition: Final = dict[str, object]()  # mutable-ok: prisma where clause
+    where_condition: Final = dict[str, object]()
     if end_user_ids_list:
         where_condition["user_id"] = {"in": list(end_user_ids_list)}
     end_user_aliases: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(where=where_condition)
