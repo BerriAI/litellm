@@ -3332,6 +3332,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+                - /rc\/.*/
       - integration_contracts:
           name: integration-<< matrix.suite >>-replica
           matrix:
@@ -3343,6 +3344,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+                - /rc\/.*/
   build_and_test:
     unless:
       or:
@@ -3356,6 +3358,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+                - /rc\/.*/
       - unit:
           filters: *main_branches
       - provider_replay_harness
