@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
@@ -1122,17 +1123,21 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
 
-    # flush remaining langfuse logs
-    if "langfuse" in litellm.success_callback:
+    if "litellm.integrations.langfuse.langfuse_sdk" in sys.modules:
         try:
-            # flush langfuse logs on shutdow
-            from litellm.utils import langFuseLogger
+            from litellm.integrations.langfuse.langfuse_sdk import flush_langfuse_tracing
 
-            if langFuseLogger is not None:
-                langFuseLogger.Langfuse.flush()
-        except Exception:
-            # [DO NOT BLOCK shutdown events for this]
-            pass
+            flushed: Final = await asyncio.to_thread(flush_langfuse_tracing, LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS)
+            if flushed:
+                verbose_proxy_logger.info("Langfuse export channels flushed")
+            else:
+                verbose_proxy_logger.warning(
+                    "Langfuse shutdown flush incomplete: a channel did not finish within %dms or a batch was rejected "
+                    "(see the export errors above); remaining spans are left to the background exporter",
+                    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
+                )
+        except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
+            verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
