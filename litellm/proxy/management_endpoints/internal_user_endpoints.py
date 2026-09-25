@@ -18,6 +18,7 @@ import io
 import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Any, Final, Literal, Protocol, cast, overload
@@ -3123,18 +3124,32 @@ async def get_user_daily_activity_aggregated(
         )
 
 
-async def _resolve_export_user_labels(prisma_client: "PrismaClient", user_ids: frozenset[str]) -> Mapping[str, str]:
+@dataclass(frozen=True, slots=True)
+class _ExportUserLabel:
+    email: str | None
+    alias: str | None
+
+
+async def _resolve_export_users(
+    prisma_client: "PrismaClient", user_ids: frozenset[str]
+) -> Mapping[str, _ExportUserLabel]:
     if not user_ids:
         return MappingProxyType({})
     users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
-    return MappingProxyType({user.user_id: label for user in users if (label := user.user_email or user.user_alias)})
+    return MappingProxyType(
+        {user.user_id: _ExportUserLabel(email=user.user_email, alias=user.user_alias) for user in users}
+    )
 
 
-def _user_export_row(row: TeamDailyActivityExportRow, labels: Mapping[str, str]) -> UserDailyActivityExportRow:
+def _user_export_row(
+    row: TeamDailyActivityExportRow, users: Mapping[str, _ExportUserLabel]
+) -> UserDailyActivityExportRow:
+    label: Final = users.get(row.team_id)
     return UserDailyActivityExportRow(
         date=row.date,
         user_id=row.team_id,
-        user_email=labels.get(row.team_id),
+        user_email=label.email if label else None,
+        user_alias=label.alias if label else None,
         api_key=row.api_key,
         key_alias=row.key_alias,
         model=row.model,
@@ -3175,7 +3190,7 @@ def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[
 def _user_export_csv_record(row: UserDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
-        "User": csv_safe(row.user_email) if row.user_email else csv_safe(row.user_id),
+        "User": csv_safe(row.user_email or row.user_alias or row.user_id),
         "User ID": csv_safe(row.user_id),
         "Key Alias": csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
@@ -3266,7 +3281,7 @@ async def get_user_daily_activity_export(
             timezone_offset_minutes=timezone_offset,
             export_type=export_type,
         )
-        labels: Final = await _resolve_export_user_labels(
+        export_users: Final = await _resolve_export_users(
             prisma_client,
             frozenset(row.team_id for row in rows if row.team_id and row.team_id != "Unassigned"),
         )
@@ -3279,7 +3294,7 @@ async def get_user_daily_activity_export(
             detail={"error": f"Failed to fetch analytics: {e}"},
         )
 
-    user_rows: Final = tuple(_user_export_row(row, labels) for row in rows)
+    user_rows: Final = tuple(_user_export_row(row, export_users) for row in rows)
     now: Final = datetime.now(timezone.utc)
     metadata: Final = UserDailyActivityExportMetadata(
         export_date=now.isoformat(),

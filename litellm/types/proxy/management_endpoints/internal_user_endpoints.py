@@ -177,6 +177,7 @@ class UserDailyActivityExportRow(BaseModel):
     date: str
     user_id: str
     user_email: str | None = None
+    user_alias: str | None = None
     api_key: str | None = None
     key_alias: str | None = None
     model: str | None = None

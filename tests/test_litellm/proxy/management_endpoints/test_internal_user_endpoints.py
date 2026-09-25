@@ -5250,9 +5250,11 @@ def test_user_export_csv_user_cell_falls_back_to_the_user_id():
     labeled: Final = _user_export_row_instance(user_id="user-9", user_email="u@example.com")
     unlabeled: Final = _user_export_row_instance(user_id="user-10")
 
-    records: Final = list(csv.DictReader(io.StringIO(_user_export_csv("daily", (labeled, unlabeled)))))
+    aliased: Final = _user_export_row_instance(user_id="user-11", user_alias="u-alias")
 
-    assert [record["User"] for record in records] == ["u@example.com", "user-10"]
+    records: Final = list(csv.DictReader(io.StringIO(_user_export_csv("daily", (labeled, unlabeled, aliased)))))
+
+    assert [record["User"] for record in records] == ["u@example.com", "user-10", "u-alias"]
 
 
 def test_user_export_csv_adds_flat_cost_columns_only_with_ptu_flat_cost():
@@ -5267,7 +5269,7 @@ def test_user_export_csv_adds_flat_cost_columns_only_with_ptu_flat_cost():
 
 
 def test_user_export_row_maps_the_entity_column_to_user_id():
-    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_row
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _ExportUserLabel, _user_export_row
     from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
 
     team_row: Final = TeamDailyActivityExportRow(
@@ -5289,7 +5291,7 @@ def test_user_export_row_maps_the_entity_column_to_user_id():
         cache_creation_input_tokens=5,
     )
 
-    user_row: Final = _user_export_row(team_row, {"user-7": "u@example.com"})
+    user_row: Final = _user_export_row(team_row, {"user-7": _ExportUserLabel(email="u@example.com", alias=None)})
 
     assert user_row.user_id == "user-7"
     assert user_row.user_email == "u@example.com"
@@ -5297,6 +5299,11 @@ def test_user_export_row_maps_the_entity_column_to_user_id():
     assert user_row.model == "gpt-5"
     assert user_row.flat_cost == 1.0
     assert user_row.total_tokens == 40
+
+    alias_only: Final = _user_export_row(team_row, {"user-7": _ExportUserLabel(email=None, alias="u-alias")})
+
+    assert alias_only.user_email is None
+    assert alias_only.user_alias == "u-alias"
 
 
 @pytest.mark.asyncio
@@ -5397,6 +5404,7 @@ async def test_get_user_daily_activity_export_admin_global_view(monkeypatch):
 
     json_body: Final = json.loads(json_result.body)
     assert json_body["data"][0]["user_email"] == "u-db@example.com"
+    assert json_body["data"][0]["user_alias"] is None
 
     result = await get_user_daily_activity_export(
         start_date="2025-02-01",

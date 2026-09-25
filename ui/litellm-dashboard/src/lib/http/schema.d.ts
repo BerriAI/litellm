@@ -46030,6 +46030,8 @@ export interface components {
             successful_requests: number;
             /** Total Tokens */
             total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */
