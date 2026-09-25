@@ -7484,8 +7484,6 @@ class ProxyConfig:
         verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 
     def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
-        """The trigger for the current cleanup settings, or None (logged) when they do not parse.
-        Built before the live job is touched so a bad edit keeps the previous schedule running."""
         cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
         if cleanup_cron:
             from apscheduler.triggers.cron import CronTrigger
