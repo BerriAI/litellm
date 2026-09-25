@@ -52,6 +52,7 @@ from litellm.router_utils.client_initalization_utils import MaxParallelRequestsL
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
+from litellm.scheduler import FlowItem
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
 
@@ -18051,6 +18052,64 @@ def test_access_windows_filter_reserved_deployments_method():
             request_team_id="team-a",
         )
     ] == ["reserved-deployment", "open-deployment"]
+
+
+def _scheduled_router(timeout: float) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "sched-model",
+                "litellm_params": {"model": "openai/sched-model", "api_key": "sk-fake", "mock_response": "hi"},
+                "model_info": {"id": "sched-deployment"},
+            }
+        ],
+        timeout=timeout,
+    )
+
+
+async def _send_scheduled_chat(router: Router, priority: int) -> object:
+    return await router.acompletion(
+        model="sched-model", messages=[{"role": "user", "content": "hi"}], priority=priority
+    )
+
+
+async def _send_scheduled_text(router: Router, priority: int) -> object:
+    return await router.atext_completion(model="sched-model", prompt="hi", priority=priority)
+
+
+@pytest.mark.parametrize(
+    "send", [_send_scheduled_chat, _send_scheduled_text], ids=["schedule_acompletion", "schedule_factory"]
+)
+@pytest.mark.asyncio
+async def test_admitted_prioritized_request_does_not_block_later_request_during_cooldown(
+    send: Callable[[Router, int], Awaitable[object]],
+):
+    from litellm.types.router import RouterRateLimitError
+
+    router: Final = _scheduled_router(timeout=1)
+    await send(router, 1)
+    _cool_down(router, "sched-deployment")
+
+    with pytest.raises(RouterRateLimitError, match="cooldown"):
+        await send(router, 2)
+
+
+@pytest.mark.parametrize("stop_waiting", ["cancel", "timeout"])
+@pytest.mark.asyncio
+async def test_prioritized_request_leaves_queue_when_it_stops_waiting(stop_waiting: Literal["cancel", "timeout"]):
+    router: Final = _scheduled_router(timeout=0.5)
+    _cool_down(router, "sched-deployment")
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="head-of-queue", model_name="sched-model"))
+    waiting: Final = asyncio.create_task(_send_scheduled_chat(router, 5))
+    await asyncio.sleep(0.05)
+    assert len(await router.scheduler.get_queue("sched-model")) == 2
+
+    if stop_waiting == "cancel":
+        waiting.cancel()
+    with pytest.raises(asyncio.CancelledError if stop_waiting == "cancel" else litellm.Timeout):
+        await waiting
+
+    assert await router.scheduler.get_queue("sched-model") == [(0, "head-of-queue")]
 
 
 @pytest.mark.asyncio

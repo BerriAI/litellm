@@ -4311,57 +4311,17 @@ class Router:
         stream=False,
         **kwargs,
     ):
-        parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
-        _request_id: Final = str(uuid.uuid4())
-        item: Final = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+        await self._wait_for_scheduler_turn(
+            model=model, priority=priority, parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
         )
-        ### [fin] ###
-
-        ## ADDS REQUEST TO QUEUE ##
-        await self.scheduler.add_request(request=item)
-
-        ## POLL QUEUE
-        end_time: Final = time.monotonic() + self.timeout
-        curr_time = time.monotonic()
-        poll_interval: Final = self.scheduler.polling_interval  # poll every 3ms
-        make_request = False
-
-        while curr_time < end_time:
-            _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span
-            )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-                id=item.request_id,
-                model_name=item.model_name,
-                health_deployments=_healthy_deployments,
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.monotonic()
-
-        if make_request:
-            try:
-                _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-                _response._hidden_params.setdefault("additional_headers", {})
-                _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
-            )
+        try:
+            _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
+            _response._hidden_params.setdefault("additional_headers", {})
+            _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+            return _response
+        except Exception as e:
+            setattr(e, "priority", priority)
+            raise e
 
     async def _schedule_factory(
         self,
@@ -4371,60 +4331,29 @@ class Router:
         args: tuple[object, ...],
         kwargs: dict[str, object],
     ):
-        parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
-        _request_id: Final = str(uuid.uuid4())
-        item: Final = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+        await self._wait_for_scheduler_turn(
+            model=model, priority=priority, parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
         )
-        ### [fin] ###
+        try:
+            _response: Final = await original_function(*args, **kwargs)
+            if isinstance(_response._hidden_params, dict):
+                _response._hidden_params.setdefault("additional_headers", {})
+                _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+            return _response
+        except Exception as e:
+            setattr(e, "priority", priority)
+            raise e
 
-        ## ADDS REQUEST TO QUEUE ##
-        await self.scheduler.add_request(request=item)
+    async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
+        async def healthy_deployments() -> Sequence[object]:
+            deployments, _ = await self._async_get_healthy_deployments(model=model, parent_otel_span=parent_otel_span)
+            return deployments
 
-        ## POLL QUEUE
-        end_time: Final = time.monotonic() + self.timeout
-        curr_time = time.monotonic()
-        poll_interval: Final = self.scheduler.polling_interval  # poll every 3ms
-        make_request = False
-
-        while curr_time < end_time:
-            _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span
-            )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-                id=item.request_id,
-                model_name=item.model_name,
-                health_deployments=_healthy_deployments,
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.monotonic()
-
-        if make_request:
-            try:
-                _response: Final = await original_function(*args, **kwargs)
-                if isinstance(_response._hidden_params, dict):
-                    _response._hidden_params.setdefault("additional_headers", {})
-                    _response._hidden_params["additional_headers"].update(
-                        {"x-litellm-request-prioritization-used": True}
-                    )
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
-            )
+        await self.scheduler.wait_for_turn(
+            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            timeout=self.timeout,
+            get_healthy_deployments=healthy_deployments,
+        )
 
     def _is_prompt_management_model(self, model: str) -> bool:
         model_list: Final = self.get_model_list(model_name=model)

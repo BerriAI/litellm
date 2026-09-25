@@ -1,5 +1,8 @@
+import asyncio
 import enum
 import heapq
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Final
 
 from pydantic import BaseModel
@@ -7,6 +10,7 @@ from pydantic import BaseModel
 from litellm import print_verbose
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
+from litellm.exceptions import Timeout
 
 
 class SchedulerCacheKeys(enum.Enum):
@@ -49,7 +53,7 @@ class Scheduler:
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
 
-    async def poll(self, id: str, model_name: str, health_deployments: list) -> bool:
+    async def poll(self, id: str, model_name: str, health_deployments: Sequence[object]) -> bool:
         """
         Return if request can be processed.
 
@@ -61,28 +65,43 @@ class Scheduler:
             * If no healthy deployments available
             * AND request not at the top of queue
         """
+        print_verbose(f"len(health_deployments): {len(health_deployments)}")
+        if len(health_deployments) > 0:
+            return True
+
         queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
             raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
-        # ------------
-        # Setup values
-        # ------------
+        print_verbose(f"queue: {queue}, seeking id={id}")
+        if queue[0][1] != id:
+            return False
 
-        print_verbose(f"len(health_deployments): {len(health_deployments)}")
-        if len(health_deployments) == 0:
-            print_verbose(f"queue: {queue}, seeking id={id}")
-            # Check if the id is at the top of the heap
-            if queue[0][1] == id:
-                # Remove the item from the queue
-                heapq.heappop(queue)
-                await self.save_queue(queue=queue, model_name=model_name)
-                print_verbose(f"Popped id: {id}")
-                return True
-            else:
-                return False
-
+        heapq.heappop(queue)
+        await self.save_queue(queue=queue, model_name=model_name)
+        print_verbose(f"Popped id: {id}")
         return True
+
+    async def wait_for_turn(
+        self,
+        request: FlowItem,
+        timeout: float,
+        get_healthy_deployments: Callable[[], Awaitable[Sequence[object]]],
+    ) -> None:
+        try:
+            await self.add_request(request=request)
+            end_time: Final = time.monotonic() + timeout
+            while time.monotonic() < end_time:
+                if await self.poll(
+                    id=request.request_id,
+                    model_name=request.model_name,
+                    health_deployments=await get_healthy_deployments(),
+                ):
+                    return
+                await asyncio.sleep(self.polling_interval)
+        finally:
+            await self.remove_request(request_id=request.request_id, model_name=request.model_name)
+        raise Timeout(message="Request timed out while polling queue", model=request.model_name, llm_provider="openai")
 
     async def remove_request(self, request_id: str, model_name: str) -> None:
         """
