@@ -29,4 +29,5 @@ query-filters:
 paths-ignore:
   - tests
   - docs
+  - .agents
   - "**/*.md"
