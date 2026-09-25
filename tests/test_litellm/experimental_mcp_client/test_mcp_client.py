@@ -772,6 +772,36 @@ async def test_call_tool_does_not_log_arguments():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("session_opens", [True, False])
+async def test_call_tool_reports_dispatch_only_when_the_call_is_sent(session_opens):
+    """
+    on_dispatch marks the moment a tool call can reach the server, so it fires right before the
+    session sends the call and never when the session could not be opened.
+    """
+    from mcp.types import CallToolRequestParams
+
+    events: list[str] = []
+
+    async def send(**_):
+        events.append("sent")
+        return MagicMock()
+
+    async def run_with_session(operation, quiet_on_error=False):
+        if not session_opens:
+            raise ConnectionError("cannot reach the server")
+        return await operation(MagicMock(call_tool=send))
+
+    client = MCPClient(server_url="http://test-server")
+    client.run_with_session = run_with_session
+
+    await client.call_tool(
+        CallToolRequestParams(name="search_tool", arguments={}), on_dispatch=lambda: events.append("dispatched")
+    )
+
+    assert events == (["dispatched", "sent"] if session_opens else [])
+
+
+@pytest.mark.asyncio
 async def test_get_prompt_does_not_log_arguments():
     from mcp.types import GetPromptRequestParams
 

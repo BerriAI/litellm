@@ -838,6 +838,7 @@ class MCPClient:
         call_tool_request_params: MCPCallToolRequestParams,
         host_progress_callback: Callable | None = None,
         raise_on_error: bool = False,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
@@ -847,6 +848,8 @@ class MCPClient:
                 ``isError=True`` result. The token-exchange (OBO) tool-call path uses this to detect
                 an upstream 401 so it can re-mint the exchanged token and retry once; every other
                 caller keeps the default and gets graceful ``isError`` degradation.
+            on_dispatch: Called once the session is ready, right before the tool call is sent,
+                so a caller can tell a call the server may have run from one that never left.
         """
         verbose_logger.info("MCP client calling tool '%s'", call_tool_request_params.name)
 
@@ -865,6 +868,8 @@ class MCPClient:
 
         async def _call_tool_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending tool call to session")
+            if on_dispatch is not None:
+                on_dispatch()
             return await session.call_tool(
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,

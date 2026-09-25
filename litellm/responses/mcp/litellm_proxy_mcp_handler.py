@@ -700,9 +700,9 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results.
 
-        ``on_tool_dispatched`` runs for every call that passes its pre-call checks and is sent to
-        an MCP server, even one that then times out. Calls rejected before that, for example by a
-        pre-call guardrail, do not trigger it.
+        ``on_tool_dispatched`` runs for every call that is sent to its MCP server, even one that then
+        times out. Calls rejected or failing before that, for example on a pre-call guardrail or a
+        credential the caller has not set, do not trigger it.
         """
         from fastapi import HTTPException
 

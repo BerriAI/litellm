@@ -349,6 +349,38 @@ async def test_router_does_not_replay_a_tool_call_that_failed_after_it_was_sent(
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_router_retries_when_an_mcp_tool_call_never_reached_its_server(
+    ledger_gateway: _LedgerGateway,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Given: The MCP server needs a per-user header the caller has not set, so the tool call fails
+           before anything is sent to the server
+    When:  The follow-up model call fails once with a 500
+    Then:  The router still retries, because replaying the request cannot repeat a side effect
+    """
+    registry: Final = mcp_server_manager.global_mcp_server_manager.registry
+    monkeypatch.setitem(
+        registry,
+        "ledger",
+        registry["ledger"].model_copy(
+            update={
+                "spec_path": None,
+                "static_headers": {"Authorization": "Bearer ${LEDGER_TOKEN}"},
+                "env_vars": [{"name": "LEDGER_TOKEN", "scope": "user"}],
+            }
+        ),
+    )
+    model: Final = _FakeModel(failing_follow_ups=1)
+    _serve(model)
+
+    await _chat(_router(num_retries=2))
+
+    assert model.calls == ["initial", "follow_up", "initial", "follow_up"]
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_router_does_not_fall_back_when_a_streamed_follow_up_breaks_after_a_tool_ran(
     ledger_gateway: _LedgerGateway,
 ):
