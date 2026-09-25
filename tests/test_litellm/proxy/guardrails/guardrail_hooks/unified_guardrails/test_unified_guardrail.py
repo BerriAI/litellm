@@ -977,6 +977,84 @@ def test_custom_code_initializer_keeps_streaming_rewrite_opt_in(monkeypatch):
     assert guardrail.streaming_deliver_ended_rewrites is False
 
 
+@pytest.mark.parametrize(
+    ("request_route", "mappings", "expected"),
+    [
+        (None, {}, None),
+        ("/v1/chat/completions", {}, None),
+        ("/unknown", {}, None),
+        ("/v1/chat/completions", {CallTypes.acompletion: _NoopTranslation}, None),
+        (
+            "/v1/chat/completions",
+            {CallTypes.acompletion: OpenAIChatCompletionsHandler},
+            CallTypes.acompletion.value,
+        ),
+    ],
+)
+def test_resolve_buffered_rewrite_call_type_handles_route_and_handler_support(
+    monkeypatch, request_route, mappings, expected
+):
+    monkeypatch.setattr(unified_module, "get_call_types_for_route", lambda _: get_call_types_for_route(request_route))
+
+    assert (
+        UnifiedLLMGuardrails._resolve_buffered_rewrite_call_type(UserAPIKeyAuth(request_route=request_route), mappings)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_buffered_rewrite_stream_returns_without_output_for_empty_response():
+    async def empty_stream():
+        if False:
+            yield None
+
+    items = [
+        item
+        async for item in UnifiedLLMGuardrails()._run_buffered_rewrite_stream(
+            guardrail_to_apply=RecordingGuardrail(),
+            response=empty_stream(),
+            request_data={},
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            call_type=CallTypes.completion.value,
+            mappings={CallTypes.completion: _NoopTranslation},
+        )
+    ]
+
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_buffered_rewrite_stream_surfaces_translation_http_error(monkeypatch):
+    class _HTTPErrorTranslation(_NoopTranslation):
+        delivers_ended_stream_rewrites = True
+
+        async def process_output_streaming_response(self, *args, **kwargs):
+            raise unified_module.HTTPException(status_code=400, detail="rewrite failed")
+
+    async def emit_error(*args, **kwargs):
+        yield {"error": "rewrite failed"}
+
+    handler = UnifiedLLMGuardrails()
+    monkeypatch.setattr(handler, "emit_streaming_http_error", emit_error)
+
+    async def response_stream():
+        yield {"id": "response-1"}
+
+    items = [
+        item
+        async for item in handler._run_buffered_rewrite_stream(
+            guardrail_to_apply=RecordingGuardrail(),
+            response=response_stream(),
+            request_data={},
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            call_type=CallTypes.completion.value,
+            mappings={CallTypes.completion: _HTTPErrorTranslation},
+        )
+    ]
+
+    assert items == [{"error": "rewrite failed"}]
+
+
 class TestStreamingTransform:
     """Streaming text-transformation (incremental_diff) path on the OpenAI chat
     completions streaming surface."""
