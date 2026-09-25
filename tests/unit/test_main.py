@@ -626,6 +626,29 @@ def test_return_raw_request_does_not_call_provider(respx_mock: respx.MockRouter)
     ]
 
 
+def test_return_raw_request_ignores_turn_off_message_logging(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "PRIVATE-PHRASE"}]
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+
+    request: Final = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={"model": model, "messages": messages},
+    )
+
+    assert route.call_count == 0
+    assert request.get("error") is None
+    assert request["raw_request_body"]["messages"] == messages
+
+
 def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRouter):
     """Regression test: completion() must forward the verbosity param to the provider request body."""
     from litellm.types.utils import CallTypes
