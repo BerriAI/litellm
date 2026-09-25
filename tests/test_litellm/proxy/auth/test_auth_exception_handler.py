@@ -25,7 +25,7 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
@@ -595,9 +595,10 @@ async def test_resolved_identity_exported_on_auth_failure():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "resolved_identity, expected_fragment, absent_fragment",
+    "log_identity_enabled, resolved_identity, expected_fragment, absent_fragment",
     [
         pytest.param(
+            True,
             UserAPIKeyAuth(
                 token="hashed-token",
                 key_alias="skip-laptop-key",
@@ -612,23 +613,36 @@ async def test_resolved_identity_exported_on_auth_failure():
             id="expired_key_owner_named_in_log",
         ),
         pytest.param(
+            True,
             UserAPIKeyAuth(token="hashed-token", user_id="skip-user"),
             "Key Identity: user_id=skip-user",
             "key_alias=",
             id="unset_fields_omitted",
         ),
         pytest.param(
+            True,
             UserAPIKeyAuth(token="hashed-token", team_alias="ops\nRequester IP Address:10.0.0.1"),
             "Key Identity: team_alias=ops\\nRequester IP Address:10.0.0.1",
             "\nRequester IP Address:10.0.0.1",
             id="control_chars_in_alias_cannot_forge_log_lines",
         ),
-        pytest.param(None, None, "Key Identity", id="unknown_key_has_no_identity_line"),
+        pytest.param(True, None, None, "Key Identity", id="unknown_key_has_no_identity_line"),
+        pytest.param(
+            False,
+            UserAPIKeyAuth(token="hashed-token", key_alias="skip-laptop-key", user_email="skip@example.com"),
+            None,
+            "Key Identity",
+            id="identity_logging_is_opt_in_and_off_by_default",
+        ),
     ],
 )
-async def test_expired_key_error_log_names_the_key_owner(resolved_identity, expected_fragment, absent_fragment, caplog):
-    """An expired key rejection is logged with the key alias, user and team auth already
-    resolved, so an operator can trace the caller from the log line alone."""
+async def test_expired_key_error_log_names_the_key_owner(
+    log_identity_enabled, resolved_identity, expected_fragment, absent_fragment, caplog, monkeypatch
+):
+    """With `litellm.log_auth_failure_key_identity` on, an expired key rejection is logged with the
+    key alias, user and team auth already resolved, so an operator can trace the caller from the
+    log line alone. It defaults off because some deployments must keep PII out of logs."""
+    monkeypatch.setattr(litellm, "log_auth_failure_key_identity", log_identity_enabled)
     handler = UserAPIKeyAuthExceptionHandler()
     expired_key_error = ProxyException(
         message="Authentication Error - Expired Key.",

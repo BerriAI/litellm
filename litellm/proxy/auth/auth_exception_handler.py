@@ -110,7 +110,7 @@ def _escape_control_chars(value: str) -> str:
 
 def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
     """Names the owner of the rejected key so the failure log line alone identifies the caller."""
-    if resolved_identity is None:
+    if resolved_identity is None or not litellm.log_auth_failure_key_identity:
         return ""
     fields: Final = (
         ("key_alias", resolved_identity.key_alias),
