@@ -971,9 +971,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
-    model: str,
-    prompt: str,
+    image: FileTypes | list[FileTypes] | None = None,
+    model: str | None = None,
+    prompt: str | None = None,
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
@@ -1005,10 +1005,24 @@ async def aimage_edit(
         loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
+        if image is None or (isinstance(image, list) and len(image) == 0):
+            message = "Missing required parameter: 'image'."
+            raise litellm.BadRequestError(
+                message=message,
+                model=model or "unknown",
+                llm_provider=custom_llm_provider or "openai",
+                body={  # mutable-ok: BadRequestError requires an OpenAI-shaped error body dict
+                    "message": message,
+                    "type": "invalid_request_error",
+                    "param": "image",
+                    "code": "missing_required_parameter",
+                },
+            )
+
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model or DEFAULT_IMAGE_ENDPOINT_MODEL, api_base=local_vars.get("base_url", None)
             )
 
         images: Final = image if isinstance(image, list) else [image]
