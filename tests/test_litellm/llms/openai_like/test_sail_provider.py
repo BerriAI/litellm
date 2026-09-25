@@ -1078,6 +1078,7 @@ class TestProviderListBlastRadius:
             "codestral.mistral.ai/v1/fim/completions": "text-completion-codestral",
             "api.groq.com/openai/v1": "groq",
             "https://integrate.api.nvidia.com/v1": "nvidia_nim",
+            "https://api.getnadir.com/v1": "nadir",
             "api.deepseek.com/v1": "deepseek",
             "api.together.ai/v1": "together_ai",
             "api.together.xyz/v1": "together_ai",

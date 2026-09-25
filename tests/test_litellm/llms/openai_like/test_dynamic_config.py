@@ -122,14 +122,15 @@ class TestForceStoreFalse:
             _provider("store_forced", special_handling={"force_store_false": True})
         )()
         params = {"store": True}
-        config.transform_responses_api_request(
+        body = config.transform_responses_api_request(
             model="m",
             input="hi",
             response_api_optional_request_params=params,
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
-        assert params["store"] is False
+        assert body["store"] is False
+        assert params["store"] is True
 
     def test_without_the_flag_the_callers_store_value_is_left_alone(self):
         config = create_responses_config_class(_provider("store_untouched"))()
