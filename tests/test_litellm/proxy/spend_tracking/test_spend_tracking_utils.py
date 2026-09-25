@@ -167,9 +167,8 @@ _TRACE_ONLY_STANDARD_LOGGING: Final = cast(
 
 
 def _trace_only_session_id(omit_when_missing: bool) -> str | None:
-    """get_litellm_params copies metadata.trace_id into litellm_session_id, so every field echoes the trace id."""
     return _get_session_id_for_spend_log(
-        kwargs={"litellm_trace_id": "trace-abc", "litellm_session_id": "trace-abc"},
+        kwargs={"litellm_trace_id": "trace-abc", "litellm_params": {"litellm_trace_id": "trace-abc"}},
         metadata={"trace_id": "trace-abc"},
         standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
         omit_when_missing=omit_when_missing,
@@ -198,11 +197,33 @@ def test_omit_records_metadata_session_id():
 
 
 def test_legacy_policy_keeps_trace_id_fallback():
-    assert _trace_only_session_id(omit_when_missing=False) == "trace-abc"
     generated: Final = _get_session_id_for_spend_log(
         kwargs={}, metadata=None, standard_logging_payload=None, omit_when_missing=False
     )
     assert len(str(generated)) == 36
+    playground_session: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_trace_id": "trace-abc"},
+        metadata={},
+        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+        omit_when_missing=False,
+    )
+    assert playground_session == "trace-abc"
+
+
+def test_legacy_policy_never_records_client_metadata_trace_id_as_the_session():
+    session_id: Final = _trace_only_session_id(omit_when_missing=False)
+    assert session_id != "trace-abc"
+    assert len(str(session_id)) == 36
+
+
+def test_legacy_policy_prefers_explicit_session_over_metadata_trace_id():
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_trace_id": "trace-abc", "litellm_params": {"litellm_session_id": "sess-1"}},
+        metadata={"trace_id": "trace-abc"},
+        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+        omit_when_missing=False,
+    )
+    assert session_id == "sess-1"
 
 
 def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():

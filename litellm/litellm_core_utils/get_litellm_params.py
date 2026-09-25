@@ -139,7 +139,7 @@ def get_litellm_params(
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
     _meta: Final = resolved_metadata or {}
     if litellm_session_id is None:
-        litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
+        litellm_session_id = _meta.get("session_id")
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 

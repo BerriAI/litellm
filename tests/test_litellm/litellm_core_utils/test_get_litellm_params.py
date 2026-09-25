@@ -245,6 +245,11 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["litellm_session_id"] == "session-1"
         assert result["litellm_trace_id"] == "trace-1"
 
+    def test_metadata_trace_id_alone_does_not_become_the_session_id(self):
+        result = get_litellm_params(metadata={"trace_id": "trace-1"})
+        assert result["litellm_trace_id"] == "trace-1"
+        assert result["litellm_session_id"] is None
+
     def test_explicit_session_and_trace_id_are_not_overridden(self):
         result = get_litellm_params(
             litellm_session_id="explicit-session",
