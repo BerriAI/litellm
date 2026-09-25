@@ -68,8 +68,9 @@ def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolRes
     match outcome:
         case TextResult():
             return CallToolResult(
-                content=[TextContent(type="text", text=outcome.text)], is_error=False
-            )  # mutable-ok: SDK
+                content=[TextContent(type="text", text=outcome.text)],  # mutable-ok: SDK list field
+                is_error=False,
+            )
         case JsonResult():
             keep_structured: Final = compat is WireCompat.MODERN or isinstance(outcome.value, dict)
             return CallToolResult(
