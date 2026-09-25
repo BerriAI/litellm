@@ -283,6 +283,8 @@ from litellm.types.router import (
     MockRouterTestingParams,
     ModelGroupInfo,
     OptionalPreCallChecks,
+    OrderFallbackStatusCode,
+    OrderFallbackStatusCodes,
     PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
@@ -734,6 +736,143 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
+_ORDER_FALLBACK_STATUS_CODES_ADAPTER: Final[TypeAdapter[OrderFallbackStatusCodes]] = TypeAdapter(
+    OrderFallbackStatusCodes
+)
+
+
+def _normalize_order_fallback_status_codes(
+    value: OrderFallbackStatusCodes | None,
+) -> tuple[OrderFallbackStatusCode, ...] | None:
+    if value is None:
+        return None
+    return tuple(_ORDER_FALLBACK_STATUS_CODES_ADAPTER.validate_python(value))
+
+
+def _coerce_http_status_code(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 100 <= value <= 599 else None
+    if isinstance(value, str) and value.isdigit():
+        status_code: Final = int(value)
+        return status_code if 100 <= status_code <= 599 else None
+    return None
+
+
+def _order_fallback_provider_status_code(error: Exception) -> int | None:
+    if isinstance(error, (RouterRateLimitError, RouterRateLimitErrorBasic)):
+        return None
+    return next(
+        (
+            status_code
+            for value in (
+                getattr(error, "status_code", None),
+                getattr(getattr(error, "response", None), "status_code", None),
+            )
+            if (status_code := _coerce_http_status_code(value)) is not None
+        ),
+        None,
+    )
+
+
+def _order_fallback_status_matches(
+    configured_status_codes: tuple[OrderFallbackStatusCode, ...],
+    status_code: int | None,
+) -> bool:
+    if status_code is None:
+        return False
+    return status_code in configured_status_codes or ("5xx" in configured_status_codes and 500 <= status_code <= 599)
+
+
+def _evaluate_order_fallback_status_policy(
+    *,
+    error: Exception,
+    configured_status_codes: tuple[OrderFallbackStatusCode, ...] | None,
+) -> tuple[bool, int | None, bool | None, bool]:
+    dedicated_fallback: Final = isinstance(
+        error,
+        (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
+    )
+    provider_status_code: Final = _order_fallback_provider_status_code(error)
+    policy_match: Final = (
+        None
+        if configured_status_codes is None
+        else _order_fallback_status_matches(configured_status_codes, provider_status_code)
+    )
+    return dedicated_fallback, provider_status_code, policy_match, dedicated_fallback or policy_match is False
+
+
+def _order_fallback_policy_decision(
+    *,
+    dedicated_fallback: bool,
+    router_error: bool,
+    policy_match: bool | None,
+    provider_status_code: int | None,
+    target_order: int | None,
+) -> tuple[
+    Literal["matched", "not_matched", "dedicated_fallback", "router_skip"],
+    Literal[
+        "status_code_not_allowed",
+        "status_code_unavailable",
+        "dedicated_fallback",
+        "router_error",
+        "no_higher_order",
+    ]
+    | None,
+]:
+    if dedicated_fallback:
+        return "dedicated_fallback", "dedicated_fallback"
+    if router_error:
+        return "router_skip", "router_error"
+    if policy_match is False:
+        return (
+            "not_matched",
+            "status_code_unavailable" if provider_status_code is None else "status_code_not_allowed",
+        )
+    if target_order is None:
+        return "router_skip", "no_higher_order"
+    return "matched", None
+
+
+def _log_order_fallback_status_policy_decision(
+    *,
+    error: Exception,
+    configured_status_codes: tuple[OrderFallbackStatusCode, ...] | None,
+    policy_match: bool | None,
+    provider_status_code: int | None,
+    dedicated_fallback: bool,
+    order_values: Sequence[int],
+    current_target: object,
+) -> None:
+    source_order: Final[int | None] = (
+        current_target
+        if isinstance(current_target, int) and not isinstance(current_target, bool)
+        else (order_values[0] if order_values else None)
+    )
+    target_order: Final[int | None] = next(
+        (order for order in order_values if source_order is not None and order > source_order), None
+    )
+    decision_outcome, skip_reason = _order_fallback_policy_decision(
+        dedicated_fallback=dedicated_fallback,
+        router_error=configured_status_codes is not None
+        and isinstance(error, (RouterRateLimitError, RouterRateLimitErrorBasic)),
+        policy_match=policy_match,
+        provider_status_code=provider_status_code,
+        target_order=target_order,
+    )
+    verbose_router_logger.debug(
+        "Order fallback policy decision: configured=%s outcome=%s policy_match=%s status_code=%s source_order=%s target_order=%s skip_reason=%s",
+        configured_status_codes is not None,
+        decision_outcome,
+        policy_match,
+        provider_status_code,
+        source_order,
+        target_order,
+        skip_reason,
+    )
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -743,7 +882,7 @@ class Router:
     lowesttpm_logger: LowestTPMLoggingHandler | None = None
     optional_callbacks: list[CustomLogger | Callable | str] | None = None
 
-    def __init__(
+    def __init__(  # noqa: C901  # legacy constructor initializes every Router subsystem
         self,
         model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
         ## ASSISTANTS API ##
@@ -768,6 +907,7 @@ class Router:
         ## RELIABILITY ##
         num_retries: int | None = None,
         max_fallbacks: int | None = None,  # max fallbacks to try before exiting the call. Defaults to 5.
+        order_fallback_status_codes: OrderFallbackStatusCodes | None = None,
         timeout: float | None = None,
         stream_timeout: float | None = None,
         default_litellm_params: dict | None = None,  # default params for Router.chat.completion.create
@@ -834,6 +974,7 @@ class Router:
             polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
             default_priority: (Optional[int]): the default priority for a request. Only for '.scheduler_acompletion()'. Default is None.
             num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
+            order_fallback_status_codes (Optional[List[Union[int, Literal["5xx"]]]]): HTTP status codes that allow fallback to a higher deployment order. None preserves the existing behavior, while an empty list disables order fallback.
             timeout (Optional[float]): Timeout for requests. Defaults to None.
             default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
             set_verbose (bool): Flag to set verbose mode. Defaults to False.
@@ -1067,6 +1208,7 @@ class Router:
             self.max_fallbacks = litellm.max_fallbacks
         else:
             self.max_fallbacks = litellm.ROUTER_MAX_FALLBACKS
+        self.order_fallback_status_codes = _normalize_order_fallback_status_codes(order_fallback_status_codes)
 
         self._explicit_timeout = timeout  # None when user did not pass timeout
         self.timeout = timeout or litellm.request_timeout
@@ -7215,24 +7357,36 @@ class Router:
 
         # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
         # Skip for error types that have their own dedicated fallback handlers
-        _skip_order_fallback: Final = isinstance(
-            e,
-            (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
+        _configured_order_status_codes: Final = self.order_fallback_status_codes
+        _dedicated_fallback, _provider_status_code, _policy_match, _skip_order_fallback = (
+            _evaluate_order_fallback_status_policy(
+                error=e,
+                configured_status_codes=_configured_order_status_codes,
+            )
         )
         _request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
         # Use wildcard-aware lookup so order-based fallback also works for model
         # groups resolved via pattern routing (e.g. `openai/*` -> `openai/gpt-4.1-mini`).
         order_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
         all_deployments: Final = self.get_model_list(model_name=order_model_group, team_id=_request_team_id) or ()
-        _order_set: Final[set] = {
+        _order_set: Final[set[int]] = {
             litellm.utils._get_deployment_order(d)
             for d in all_deployments
             if litellm.utils._get_deployment_order(d) is not None
         }
-        order_values: Final[list] = sorted(_order_set)
+        order_values: Final[list[int]] = sorted(_order_set)
+        current_target: Final = kwargs.get("_target_order")
+        _log_order_fallback_status_policy_decision(
+            error=e,
+            configured_status_codes=_configured_order_status_codes,
+            policy_match=_policy_match,
+            provider_status_code=_provider_status_code,
+            dedicated_fallback=_dedicated_fallback,
+            order_values=order_values,
+            current_target=current_target,
+        )
         if len(order_values) > 1 and not _skip_order_fallback:
             # Determine which order levels have already been tried
-            current_target: Final = kwargs.get("_target_order")
             skip_up_to: Final = current_target if current_target is not None else order_values[0]
             # Build order-based fallback entries (skip already-tried levels)
             order_fallback_entries: Final[list] = [
@@ -7270,7 +7424,7 @@ class Router:
                 return response
 
         # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
-        if self.enable_weighted_failover and not _skip_order_fallback and original_model_group is not None:
+        if self.enable_weighted_failover and not _dedicated_fallback and original_model_group is not None:
             response = await self._maybe_run_weighted_failover(
                 exception=e,
                 original_model_group=original_model_group,
@@ -12043,6 +12197,7 @@ class Router:
             "model_group_retry_policy",
             "retry_policy",
             "model_group_alias",
+            "order_fallback_status_codes",
             "enable_weighted_failover",
             "enable_tag_filtering",
             "tag_routing_prefix",
@@ -12050,7 +12205,13 @@ class Router:
 
         for var in vars_to_include:
             if var in _all_vars:
-                _settings_to_return[var] = _all_vars[var]
+                _settings_to_return[var] = (
+                    list(  # mutable-ok: public settings must expose a JSON-serializable list
+                        _all_vars[var]
+                    )
+                    if var == "order_fallback_status_codes" and _all_vars[var] is not None
+                    else _all_vars[var]
+                )
             if (
                 var == "routing_strategy_args"
                 and self.routing_strategy == "latency-based-routing"
@@ -12094,6 +12255,8 @@ class Router:
                         value = RetryPolicy(**value)
                     if value is None or isinstance(value, RetryPolicy):
                         setattr(self, var, value)
+                elif var == "order_fallback_status_codes":
+                    setattr(self, var, _normalize_order_fallback_status_codes(kwargs[var]))
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed

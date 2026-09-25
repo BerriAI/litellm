@@ -7,17 +7,34 @@ when lower order deployments fail.
 """
 
 import json
-from typing import Final, Optional
+from typing import Final, Optional, cast
+from unittest.mock import AsyncMock, patch
 
 import httpx
+import openai
 import pytest
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router import (
+    _coerce_http_status_code,
+    _evaluate_order_fallback_status_policy,
+    _log_order_fallback_status_policy_decision,
+    _normalize_order_fallback_status_codes,
+    _order_fallback_policy_decision,
+    _order_fallback_provider_status_code,
+    _order_fallback_status_matches,
+)
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-from litellm.types.router import RouterRateLimitError
+from litellm.types.router import (
+    OrderFallbackStatusCodes,
+    RouterRateLimitError,
+    RouterRateLimitErrorBasic,
+    UpdateRouterConfig,
+)
 from litellm.utils import _get_deployment_order, get_order_filtered_deployments
 
 # ---------------------------------------------------------------------------
@@ -97,6 +114,290 @@ class TestGetOrderFilteredDeployments:
 # ---------------------------------------------------------------------------
 # Integration tests for order-based fallback in Router
 # ---------------------------------------------------------------------------
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(status_code)
+
+
+class _ResponseStatusError(Exception):
+    def __init__(self, status_code: int) -> None:
+        self.response = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://provider.example/v1"),
+        )
+        super().__init__(status_code)
+
+
+def _status_policy_router(
+    *,
+    status_code: int,
+    order_fallback_status_codes: OrderFallbackStatusCodes | None,
+    external_fallback: bool = False,
+    enable_weighted_failover: bool = False,
+) -> Router:
+    model_list: list[dict[str, object]] = [
+        {
+            "model_name": "test-model",
+            "litellm_params": {
+                "model": "gpt-4o",
+                "api_key": "bad-key",
+                "mock_response": _StatusError(status_code),
+                "order": 1,
+            },
+            "model_info": {"id": "order-1"},
+        },
+        {
+            "model_name": "test-model",
+            "litellm_params": {
+                "model": "gpt-4o",
+                "api_key": "good-key",
+                "mock_response": "success from order 2",
+                "order": 2,
+            },
+            "model_info": {"id": "order-2"},
+        },
+    ]
+    if external_fallback:
+        model_list.append(
+            {
+                "model_name": "external-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "external-key",
+                    "mock_response": "success from external fallback",
+                },
+                "model_info": {"id": "external"},
+            }
+        )
+    return Router(
+        model_list=model_list,
+        num_retries=0,
+        order_fallback_status_codes=order_fallback_status_codes,
+        fallbacks=[{"test-model": ["external-model"]}] if external_fallback else [],
+        enable_weighted_failover=enable_weighted_failover,
+    )
+
+
+def test_order_fallback_status_codes_config_round_trip_and_update() -> None:
+    config = UpdateRouterConfig(order_fallback_status_codes=[429, "5xx"])
+    router = Router(model_list=[], order_fallback_status_codes=config.order_fallback_status_codes)
+
+    assert router.order_fallback_status_codes == (429, "5xx")
+    assert router.get_settings()["order_fallback_status_codes"] == [429, "5xx"]
+
+    router.update_settings(order_fallback_status_codes=[])
+    assert router.order_fallback_status_codes == ()
+    assert router.get_settings()["order_fallback_status_codes"] == []
+
+    router.update_settings(order_fallback_status_codes=None)
+    assert router.order_fallback_status_codes is None
+    assert router.get_settings()["order_fallback_status_codes"] is None
+
+
+@pytest.mark.parametrize(
+    ("raw_status", "expected"),
+    [(429, 429), ("503", 503), (True, None), (99, None), (600, None), ("5xx", None)],
+)
+def test_coerce_http_status_code(raw_status: object, expected: int | None) -> None:
+    assert _coerce_http_status_code(raw_status) == expected
+
+
+def test_order_fallback_status_policy_helpers() -> None:
+    configured = _normalize_order_fallback_status_codes([429, "5xx"])
+    assert configured == (429, "5xx")
+    assert configured is not None
+    assert _order_fallback_status_matches(configured, 429)
+    assert _order_fallback_status_matches(configured, 599)
+    assert not _order_fallback_status_matches(configured, 401)
+
+    assert _order_fallback_provider_status_code(_StatusError(409)) == 409
+    assert _order_fallback_provider_status_code(_ResponseStatusError(503)) == 503
+    assert _order_fallback_provider_status_code(RouterRateLimitErrorBasic(model="test-model")) is None
+
+    dedicated, status_code, policy_match, skip = _evaluate_order_fallback_status_policy(
+        error=_StatusError(401),
+        configured_status_codes=configured,
+    )
+    assert (dedicated, status_code, policy_match, skip) == (False, 401, False, True)
+    assert _order_fallback_policy_decision(
+        dedicated_fallback=False,
+        router_error=False,
+        policy_match=policy_match,
+        provider_status_code=status_code,
+        target_order=2,
+    ) == ("not_matched", "status_code_not_allowed")
+
+
+def test_log_order_fallback_status_policy_decision() -> None:
+    with patch("litellm.router.verbose_router_logger.debug") as debug:
+        _log_order_fallback_status_policy_decision(
+            error=_StatusError(429),
+            configured_status_codes=(429,),
+            policy_match=True,
+            provider_status_code=429,
+            dedicated_fallback=False,
+            order_values=[1, 2],
+            current_target=None,
+        )
+
+    debug.assert_called_once()
+
+
+@pytest.mark.parametrize("invalid_value", [True, "429", 99, 600, "5XX", "400-499", "4xx"])
+def test_order_fallback_status_codes_reject_invalid_values(invalid_value: object) -> None:
+    invalid_status_codes = cast(OrderFallbackStatusCodes, [invalid_value])
+
+    with pytest.raises(ValidationError):
+        Router(model_list=[], order_fallback_status_codes=invalid_status_codes)
+    with pytest.raises(ValidationError):
+        UpdateRouterConfig(order_fallback_status_codes=invalid_status_codes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404])
+async def test_unset_order_fallback_status_codes_preserves_existing_4xx_fallback(status_code: int) -> None:
+    router = _status_policy_router(status_code=status_code, order_fallback_status_codes=None)
+
+    response = await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response._hidden_params["model_id"] == "order-2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [408, 409, 429, 500, 502, 503, 504, 599])
+async def test_order_fallback_status_codes_allow_matching_statuses(status_code: int) -> None:
+    router = _status_policy_router(
+        status_code=status_code,
+        order_fallback_status_codes=[408, 409, 429, "5xx"],
+    )
+
+    response = await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response._hidden_params["model_id"] == "order-2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404])
+async def test_order_fallback_status_codes_reject_non_matching_statuses(status_code: int) -> None:
+    router = _status_policy_router(
+        status_code=status_code,
+        order_fallback_status_codes=[408, 409, 429, "5xx"],
+    )
+
+    with pytest.raises(openai.APIError) as exc_info:
+        await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert exc_info.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_empty_order_fallback_status_codes_disable_order_fallback() -> None:
+    router = _status_policy_router(status_code=429, order_fallback_status_codes=[])
+
+    with pytest.raises(openai.APIError) as exc_info:
+        await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert exc_info.value.status_code == 429
+
+
+def test_order_fallback_status_codes_apply_to_sync_completion() -> None:
+    router = _status_policy_router(status_code=429, order_fallback_status_codes=[429])
+
+    response = router.completion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response._hidden_params["model_id"] == "order-2"
+
+
+@pytest.mark.asyncio
+async def test_non_matching_status_still_uses_external_fallback() -> None:
+    router = _status_policy_router(
+        status_code=400,
+        order_fallback_status_codes=[429, "5xx"],
+        external_fallback=True,
+    )
+
+    response = await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response._hidden_params["model_id"] == "external"
+
+
+@pytest.mark.asyncio
+async def test_order_fallback_status_codes_do_not_control_weighted_failover() -> None:
+    router = _status_policy_router(
+        status_code=400,
+        order_fallback_status_codes=[429],
+        enable_weighted_failover=True,
+    )
+
+    weighted_failover = AsyncMock(return_value=None)
+    with patch.object(router, "_maybe_run_weighted_failover", new=weighted_failover):
+        with pytest.raises(openai.APIError):
+            await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    weighted_failover.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mock_response", "context_window_fallbacks", "content_policy_fallbacks"),
+    [
+        ("litellm.ContextWindowExceededError", [{"test-model": ["dedicated-model"]}], []),
+        (
+            "Exception: content_filter_policy invalid_request_error content_policy_violation",
+            [],
+            [{"test-model": ["dedicated-model"]}],
+        ),
+    ],
+)
+async def test_status_policy_preserves_dedicated_fallbacks(
+    mock_response: str,
+    context_window_fallbacks: list[dict[str, list[str]]],
+    content_policy_fallbacks: list[dict[str, list[str]]],
+) -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                    "mock_response": mock_response,
+                    "order": 1,
+                },
+                "model_info": {"id": "order-1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "order-key",
+                    "mock_response": "order fallback should not run",
+                    "order": 2,
+                },
+                "model_info": {"id": "order-2"},
+            },
+            {
+                "model_name": "dedicated-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "dedicated-key",
+                    "mock_response": "dedicated fallback succeeded",
+                },
+                "model_info": {"id": "dedicated"},
+            },
+        ],
+        num_retries=0,
+        order_fallback_status_codes=[429],
+        context_window_fallbacks=context_window_fallbacks,
+        content_policy_fallbacks=content_policy_fallbacks,
+    )
+
+    response = await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response._hidden_params["model_id"] == "dedicated"
 
 
 def test_router_order_without_pre_call_checks():
@@ -245,6 +546,7 @@ async def test_router_order_fallback_three_levels():
             },
         ],
         num_retries=0,
+        order_fallback_status_codes=["5xx"],
     )
 
     response = await router.acompletion(
@@ -455,6 +757,7 @@ async def test_router_order_fallback_does_not_reselect_order_1_when_order_2_is_f
             },
         ],
         num_retries=0,
+        order_fallback_status_codes=[429],
     )
     litellm.callbacks.append(drop_order_2)
     try:
@@ -542,6 +845,7 @@ async def test_router_order_fallback_retries_keep_target_order():
             },
         ],
         num_retries=1,
+        order_fallback_status_codes=["5xx"],
     )
     litellm.callbacks.append(recorder)
     try:
