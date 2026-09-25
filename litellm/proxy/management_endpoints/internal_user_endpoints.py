@@ -98,6 +98,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportRow,
     DailySpendMetadata,
     ModelTopApiKeysGroupBy,
     ModelTopApiKeysResponse,
@@ -122,7 +123,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamDailyActivityExportFormat,
-    TeamDailyActivityExportRow,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -3144,13 +3144,11 @@ async def _resolve_export_users(
     )
 
 
-def _user_export_row(
-    row: TeamDailyActivityExportRow, users: Mapping[str, _ExportUserLabel]
-) -> UserDailyActivityExportRow:
-    label: Final = users.get(row.team_id)
+def _user_export_row(row: DailyActivityExportRow, users: Mapping[str, _ExportUserLabel]) -> UserDailyActivityExportRow:
+    label: Final = users.get(row.entity_id)
     return UserDailyActivityExportRow(
         date=row.date,
-        user_id=row.team_id,
+        user_id=row.entity_id,
         user_email=label.email if label else None,
         user_alias=label.alias if label else None,
         api_key=row.api_key,
@@ -3286,7 +3284,7 @@ async def get_user_daily_activity_export(
         )
         export_users: Final = await _resolve_export_users(
             prisma_client,
-            frozenset(row.team_id for row in rows if row.team_id and row.team_id != "Unassigned"),
+            frozenset(row.entity_id for row in rows if row.entity_id and row.entity_id != "Unassigned"),
         )
     except HTTPException:
         raise

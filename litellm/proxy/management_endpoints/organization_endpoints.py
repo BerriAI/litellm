@@ -613,7 +613,6 @@ async def get_organization_daily_activity(
         user_api_key_dict=user_api_key_dict,
     )
 
-    # Query daily activity for organizations
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyorganizationspend",

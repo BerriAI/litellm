@@ -5270,11 +5270,11 @@ def test_user_export_csv_adds_flat_cost_columns_only_with_ptu_flat_cost():
 
 def test_user_export_row_maps_the_entity_column_to_user_id():
     from litellm.proxy.management_endpoints.internal_user_endpoints import _ExportUserLabel, _user_export_row
-    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+    from litellm.types.proxy.management_endpoints.common_daily_activity import DailyActivityExportRow
 
-    team_row: Final = TeamDailyActivityExportRow(
+    team_row: Final = DailyActivityExportRow(
         date="2026-06-01",
-        team_id="user-7",
+        entity_id="user-7",
         api_key="key-1",
         key_alias="alias-1",
         user_email="key-owner@example.com",
@@ -5358,14 +5358,14 @@ async def test_get_user_daily_activity_export_admin_global_view(monkeypatch):
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         get_user_daily_activity_export,
     )
-    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+    from litellm.types.proxy.management_endpoints.common_daily_activity import DailyActivityExportRow
 
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    team_row: Final = TeamDailyActivityExportRow(
+    team_row: Final = DailyActivityExportRow(
         date="2025-02-01",
-        team_id="user-9",
+        entity_id="user-9",
         api_key="key-1",
         key_alias="alias-1",
         user_email="key-metadata@example.com",
