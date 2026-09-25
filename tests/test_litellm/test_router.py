@@ -17598,11 +17598,12 @@ class TestMemberAutoRouterInference:
             user_id="router-member", team_id="router-team", user_role=LitellmUserRoles.INTERNAL_USER,
             models=["member-router", "permitted-model"], api_key="test-key-hash", config={"timeout": 60},
         )
-        self.database = SimpleNamespace(db=SimpleNamespace(
+        tables = SimpleNamespace(
             litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
             litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
             litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
-        ))
+        )
+        self.database = SimpleNamespace(db=tables, replica_db=tables)
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 

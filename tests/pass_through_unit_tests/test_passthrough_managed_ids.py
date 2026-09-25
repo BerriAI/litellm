@@ -66,6 +66,7 @@ def _prisma_client() -> MagicMock:
     """Return a MagicMock prisma_client with async db methods."""
     pc = MagicMock()
     pc.db = MagicMock()
+    pc.replica_db = pc.db
     pc.db.litellm_managedfiletable = MagicMock()
     pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[])
@@ -1904,6 +1905,7 @@ class TestListPassthroughIdsFromDb:
 
         pc = MagicMock()
         pc.db = _DbWithoutManagedTables()
+        pc.replica_db = pc.db
 
         for route in ("/openai/v1/files", "/openai/v1/batches"):
             result = await list_passthrough_ids_from_db(

@@ -54,7 +54,7 @@ class _PrismaVerificationTokenDb(_VerificationTokenTables, Protocol):
 
 class _PrismaClientView(Protocol):
     @property
-    def db(self) -> _PrismaVerificationTokenDb: ...
+    def replica_db(self) -> _PrismaVerificationTokenDb: ...
 
 
 _JSON_ENCODED_TOKEN_FIELDS: Final = (
@@ -76,7 +76,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     @property
     def _db(self) -> _PrismaVerificationTokenDb:
         client: Final[_PrismaClientView] = self.prisma_client
-        return client.db
+        return client.replica_db
 
     @property
     def table(self) -> TableActions["PrismaVerificationToken"]:

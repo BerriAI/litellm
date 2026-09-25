@@ -133,6 +133,7 @@ async def test_migrate_requires_aes_gate(salt_key, monkeypatch):
 def _config_prisma(record):
     """Build an AsyncMock prisma client whose litellm_config returns `record`."""
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_config.find_unique = AsyncMock(return_value=record)
     client.db.litellm_config.update = AsyncMock()
     return client
@@ -218,6 +219,7 @@ async def test_sso_walker_real_run_migrates_and_clears_residual(salt_key, monkey
     _enable_aes(monkeypatch)
     record = SimpleNamespace(sso_settings={"client_secret": legacy, "client_id": "id"})
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=record)
     client.db.litellm_ssoconfig.update = AsyncMock()
 
@@ -235,6 +237,7 @@ async def test_sso_walker_dry_run_reports_residual_not_migrated(salt_key, monkey
     _enable_aes(monkeypatch)
     record = SimpleNamespace(sso_settings={"client_secret": legacy})
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=record)
     client.db.litellm_ssoconfig.update = AsyncMock()
 
@@ -254,6 +257,7 @@ async def test_check_reports_residual_legacy(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
 
     client = MagicMock()
+    client.replica_db = client.db
     # Net-new walker tables: empty team / token / sso, one legacy vantage field.
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
     client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -278,6 +282,7 @@ async def test_check_reports_residual_legacy(salt_key, monkeypatch):
 async def test_check_reports_zero_after_migration(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
     client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
@@ -314,6 +319,7 @@ async def test_callback_vars_walker_migrates_team_metadata(salt_key, monkeypatch
 
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
     client.db.litellm_teamtable.update = AsyncMock()
 
@@ -342,6 +348,7 @@ async def test_callback_vars_walker_dry_run_reports_legacy(salt_key, monkeypatch
 
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
     client.db.litellm_teamtable.update = AsyncMock()
 
@@ -379,6 +386,7 @@ async def test_callback_vars_walker_migrates_callback_settings_shape(
 
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
     client = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
     client.db.litellm_teamtable.update = AsyncMock()
 
@@ -414,6 +422,7 @@ async def test_check_reports_callback_var_legacy_with_gate_off(salt_key, monkeyp
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
 
     client = MagicMock()
+    client.replica_db = client.db
     _empty_covered_tables(client)
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
     client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -439,6 +448,7 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
     v2 = encrypt_value_helper("cred-secret")
 
     client = MagicMock()
+    client.replica_db = client.db
     _empty_covered_tables(client)
     client.db.litellm_proxymodeltable.find_many = AsyncMock(
         return_value=[
@@ -489,6 +499,7 @@ async def test_check_classifies_mcp_secret_maps(
     value: Final = json.dumps(cases[case]) if as_json and case != "null" else cases[case]
     row: Final = SimpleNamespace(**{column: value})
     client: Final = MagicMock()
+    client.replica_db = client.db
     _empty_covered_tables(client)
     client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     client.db.litellm_mcpservertable.update = AsyncMock()
@@ -526,6 +537,7 @@ async def test_check_counts_covered_table_residual(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
 
     client = MagicMock()
+    client.replica_db = client.db
     _empty_covered_tables(client)
     client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
     client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -554,6 +566,7 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
 
     row = SimpleNamespace(litellm_params={"api_key": legacy})
     client = MagicMock()
+    client.replica_db = client.db
     _empty_covered_tables(client)
     client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)

@@ -58,24 +58,24 @@ class _ManagedObjectRow(Protocol):
 
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
+    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.replica_db.litellm_managedobjecttable
     return table
 
 
 def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
+    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.replica_db.litellm_usertable
     return table
 
 
 def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
     table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
-        prisma_client.db.litellm_verificationtoken
+        prisma_client.replica_db.litellm_verificationtoken
     )
     return table
 
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
+    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.replica_db.litellm_teamtable
     return table
 
 

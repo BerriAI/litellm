@@ -726,6 +726,7 @@ async def test_sync_user_role_and_teams():
     )
 
     prisma = AsyncMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update = AsyncMock()
 
     with patch(
@@ -769,6 +770,7 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_role_change():
     )
 
     prisma = AsyncMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update = AsyncMock()
 
     await JWTAuthManager.sync_user_role_and_teams(
@@ -812,6 +814,7 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_team_change():
     )
 
     prisma = AsyncMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update = AsyncMock()
 
     with patch(
@@ -859,6 +862,7 @@ async def test_sync_user_role_and_teams_no_cache_write_when_nothing_changes():
     )
 
     prisma = AsyncMock()
+    prisma.replica_db = prisma.db
 
     await JWTAuthManager.sync_user_role_and_teams(
         jwt_handler, token, user, prisma, user_api_key_cache=mock_cache
@@ -3371,6 +3375,8 @@ class _UnreachableMembershipPrisma:
             async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
                 raise httpx.ConnectError("All connection attempts failed")
 
+    replica_db = db
+
 
 @pytest.mark.asyncio
 async def test_auth_builder_single_team_fallback_membership_outage_raises_instead_of_dropping_the_team():
@@ -5639,6 +5645,7 @@ async def test_sync_user_role_and_teams_no_claim_team_preservation(
         teams=["team_a", "team_b"],
     )
     prisma = AsyncMock()
+    prisma.replica_db = prisma.db
 
     with patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
@@ -7343,6 +7350,7 @@ async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
     if existing_user:
         cache.set_cache(user_id, user)
     database: Final = MagicMock()
+    database.replica_db = database.db
     users: Final = database.db.litellm_usertable
     users.find_unique = AsyncMock(return_value=None)
     users.find_first = AsyncMock(return_value=None)
@@ -7654,6 +7662,7 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
     handler.litellm_jwtauth.team_id_upsert = True
     handler.litellm_jwtauth.admin_allowed_routes = ["openai_routes"]
     database = MagicMock()
+    database.replica_db = database.db
     database.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     create_team = AsyncMock(return_value=LiteLLM_TeamTable(team_id="new-team").model_dump())
     monkeypatch.setattr(team_endpoints, "new_team", create_team)
@@ -7692,6 +7701,7 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     if existing_user and warm_cache:
         cache.set_cache(user_id, user)
     database: Final = MagicMock()
+    database.replica_db = database.db
     users: Final = database.db.litellm_usertable
     users.find_unique = AsyncMock(return_value=user if existing_user else None)
     users.find_first = AsyncMock(return_value=None)

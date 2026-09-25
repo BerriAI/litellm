@@ -207,7 +207,8 @@ async def test_should_forward_skill_auth_through_transformation_handler(monkeypa
 async def test_should_store_team_owner_for_keys_without_user_id(monkeypatch):
     table = AsyncMock()
     table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -229,7 +230,8 @@ async def test_should_store_team_owner_for_keys_without_user_id(monkeypatch):
 async def test_should_store_token_owner_for_keys_without_user_team_or_org(monkeypatch):
     table = AsyncMock()
     table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -253,7 +255,8 @@ async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatc
     sentinel as ``created_by`` would let any two such callers see each
     other's skills via the resulting shared owner scope."""
     table = AsyncMock()
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -274,7 +277,8 @@ async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatc
 async def test_should_filter_list_skills_to_authenticated_owner_scopes(monkeypatch):
     table = AsyncMock()
     table.find_many.return_value = [_skill("litellm_skill_owner", "user-1")]
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -299,7 +303,8 @@ async def test_should_filter_list_skills_to_authenticated_owner_scopes(monkeypat
 async def test_should_hide_skill_from_different_owner(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_other", "user-2")
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -319,7 +324,8 @@ async def test_should_hide_skill_from_different_owner(monkeypatch):
 async def test_should_hide_unowned_skill_by_default(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_unowned", None)
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -341,7 +347,8 @@ async def test_list_skills_excludes_unowned_for_non_admin(monkeypatch):
     with ``created_by IS NULL`` are excluded — admin-only."""
     table = AsyncMock()
     table.find_many.return_value = []
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -397,7 +404,8 @@ async def test_load_skill_uses_cache_after_first_db_hit(monkeypatch):
     fake_skill = Mock(created_by="user-1", skill_id="litellm_skill_a")
     table = AsyncMock()
     table.find_unique = AsyncMock(return_value=fake_skill)
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -415,7 +423,8 @@ async def test_load_skill_caches_negative_lookups(monkeypatch):
     the DB and the caller still sees ``None``."""
     table = AsyncMock()
     table.find_unique = AsyncMock(return_value=None)
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
@@ -434,7 +443,8 @@ async def test_delete_skill_invalidates_cache(monkeypatch):
     table = AsyncMock()
     table.find_unique = AsyncMock(return_value=fake_skill)
     table.delete = AsyncMock()
-    prisma_client = type("Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()})()
+    db = type("DB", (), {"litellm_skillstable": table})()
+    prisma_client = type("Prisma", (), {"db": db, "replica_db": db})()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",

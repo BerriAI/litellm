@@ -10143,7 +10143,7 @@ class ProxyStartupEvent:
         from prisma.errors import UniqueViolationError
 
         try:
-            config_table: Final = prisma_client.db.litellm_config
+            config_table: Final = prisma_client.replica_db.litellm_config
             row: Final = await config_table.find_unique(
                 where={"param_name": TUNING_BASELINE_PARAM_NAME}  # mutable-ok: Prisma rejects mappingproxy input
             )
@@ -15295,7 +15295,7 @@ async def model_streaming_metrics(
         """
 
     _all_api_bases: Final = set()
-    db_response: Final[Sequence[_TTFTRow] | None] = await prisma_client.db.query_raw(
+    db_response: Final[Sequence[_TTFTRow] | None] = await prisma_client.replica_db.query_raw(
         sql_query, _selected_model_group, startTime, endTime
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
@@ -15419,7 +15419,7 @@ async def model_metrics(
             avg_latency_per_token DESC;
     """
     _all_api_bases: Final = set()
-    db_response: Final[Sequence[_LatencyRow] | None] = await prisma_client.db.query_raw(
+    db_response: Final[Sequence[_LatencyRow] | None] = await prisma_client.replica_db.query_raw(
         sql_query, _selected_model_group, startTime, endTime, api_key, customer
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
@@ -15537,7 +15537,7 @@ ORDER BY
     slow_count DESC;
     """
 
-    db_response: Final = await prisma_client.db.query_raw(
+    db_response: Final = await prisma_client.replica_db.query_raw(
         sql_query,
         alerting_threshold,
         _selected_model_group,
@@ -15610,7 +15610,7 @@ async def model_metrics_exceptions(
         ORDER BY total_exceptions DESC
         LIMIT 200;
     """
-    db_response: Final[Sequence[_ExceptionRow] | None] = await prisma_client.db.query_raw(
+    db_response: Final[Sequence[_ExceptionRow] | None] = await prisma_client.replica_db.query_raw(
         sql_query, startTime, endTime, _selected_model_group, api_key
     )
     response: Final[list[dict]] = []

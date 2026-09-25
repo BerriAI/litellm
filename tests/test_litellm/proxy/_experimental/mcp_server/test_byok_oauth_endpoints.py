@@ -633,6 +633,7 @@ async def test_execute_byok_tool_missing_credential_advertises_api_key_flow(monk
     server = MCPServer(server_id="byok-discovery", name="byok-discovery", transport=MCPTransport.http, is_byok=True)
     prisma = MagicMock()
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
+    prisma.replica_db = prisma.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     with pytest.raises(HTTPException) as exc_info:
         await mcp_operations.execute_mcp_tool(

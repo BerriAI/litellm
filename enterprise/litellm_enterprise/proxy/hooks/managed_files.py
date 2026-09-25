@@ -198,11 +198,11 @@ class _CursorPageArgs(TypedDict, total=False):
 
 
 def _managed_file_table(prisma_client: PrismaClient) -> _ManagedFileTableActions:
-    return prisma_client.db.litellm_managedfiletable
+    return prisma_client.replica_db.litellm_managedfiletable
 
 
 def _managed_object_table(prisma_client: PrismaClient) -> _ManagedObjectTableActions:
-    return prisma_client.db.litellm_managedobjecttable
+    return prisma_client.replica_db.litellm_managedobjecttable
 
 
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:

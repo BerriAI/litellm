@@ -426,6 +426,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
     )
     prisma_client = MagicMock()
     prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+    prisma_client.replica_db = prisma_client.db
 
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
@@ -2561,7 +2562,7 @@ async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands
     counter_cache.redis_cache = redis_cache
     counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
     db_floor = _TeamMembershipFloorDb(spend=0.3)
-    ps.prisma_client = SimpleNamespace(db=db_floor)
+    ps.prisma_client = SimpleNamespace(db=db_floor, replica_db=db_floor)
 
     reservation = {
         "reserved_cost": 0.6,
@@ -3476,6 +3477,7 @@ class _ModelAccessGroupBudgetPrisma:
         self.db = SimpleNamespace(
             litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many)
         )
+        self.replica_db = self.db
 
     async def _find_many(self, **kwargs):
         requested = list(kwargs["where"]["access_group_name"]["in"])

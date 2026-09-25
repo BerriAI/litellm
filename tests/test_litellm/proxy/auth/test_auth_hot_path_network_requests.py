@@ -254,6 +254,7 @@ async def test_get_team_object_warm_cache():
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock()
 
@@ -295,6 +296,7 @@ async def test_get_user_object_warm_cache():
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable = MagicMock()
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock()
 
@@ -347,6 +349,7 @@ async def test_get_team_membership_warm_cache():
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teammembership = MagicMock()
     mock_prisma.db.litellm_teammembership.find_unique = AsyncMock()
 
@@ -533,6 +536,7 @@ async def test_get_user_object_missing_user_negative_cache():
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable = MagicMock()
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
@@ -564,6 +568,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable = MagicMock()
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 

@@ -35,6 +35,7 @@ def _make_user_row(password: str | None) -> MagicMock:
 def _make_prisma(user: MagicMock | None) -> MagicMock:
     prisma = MagicMock()
     prisma.db.litellm_usertable.find_first = AsyncMock(return_value=user)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
     return prisma
 
@@ -130,6 +131,7 @@ async def test_change_password_rejects_wrong_current_password():
     assert exc_info.value.status_code == 400
     assert "Current password is incorrect" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -156,6 +158,7 @@ async def test_change_password_rejects_unchanged_password():
     assert exc_info.value.status_code == 400
     assert "must be different from the current password" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -192,6 +195,7 @@ async def test_change_password_rejects_non_password_login_session(caller: UserAP
     assert exc_info.value.status_code == 403
     assert "logging in with a password" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.find_first.assert_not_called()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
@@ -218,6 +222,7 @@ async def test_change_password_rejects_session_without_user():
 
     assert exc_info.value.status_code == 400
     prisma.db.litellm_usertable.find_first.assert_not_called()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
@@ -246,6 +251,7 @@ async def test_change_password_rejects_account_without_password():
     assert exc_info.value.status_code == 400
     assert "no password set" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -274,6 +280,7 @@ async def test_change_password_enforces_min_length():
     assert exc_info.value.param == "password"
     assert "at least 12 characters" in exc_info.value.message
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -304,6 +311,7 @@ async def test_change_password_rejects_breached_password():
     assert exc_info.value.param == "password"
     assert "data breaches" in exc_info.value.message
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -335,6 +343,7 @@ async def test_change_password_verifies_current_password_before_hibp_lookup():
     assert "Current password is incorrect" in exc_info.value.detail["error"]
     assert hibp_calls == []
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio

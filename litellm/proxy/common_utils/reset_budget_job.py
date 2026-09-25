@@ -1524,7 +1524,7 @@ class ResetBudgetJob:
     ) -> str | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
         rows: Final = await self._with_db_retry(
-            lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
+            lambda: self.prisma_client.replica_db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
         for row in rows:

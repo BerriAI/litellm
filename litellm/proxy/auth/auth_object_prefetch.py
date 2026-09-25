@@ -248,7 +248,7 @@ def _validate_row(
 async def _fetch_rows(
     refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
 ) -> Mapping[str, object]:
-    row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
+    row: Final[object] = await prisma_client.replica_db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
         _SQL,
         refs.user_id if "user_row" in kinds else None,
         refs.team_id if kinds & _TEAM_BOUND_ROWS else None,

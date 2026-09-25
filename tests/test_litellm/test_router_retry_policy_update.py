@@ -415,6 +415,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     fake_table = _FakeConfigTable()
     prisma_client = MagicMock()
     prisma_client.db.litellm_config = fake_table
+    prisma_client.replica_db = prisma_client.db
 
     async def _apply_router_settings(*args, **kwargs):
         await proxy_server.proxy_config._add_router_settings_from_db_config(

@@ -117,6 +117,7 @@ class CountingRedis(RedisCache):
 
 def _prisma(rows: dict[str, object] | None = ALL_ROWS) -> MagicMock:
     prisma = MagicMock(name="prisma_client")
+    prisma.replica_db = prisma.db
     prisma.db.query_first = AsyncMock(return_value=rows)
     return prisma
 

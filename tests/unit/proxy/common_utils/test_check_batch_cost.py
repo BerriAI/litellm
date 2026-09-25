@@ -91,6 +91,7 @@ class TestCheckBatchCost:
     def mock_prisma_client(self):
         client = MagicMock()
         client.db = MagicMock()
+        client.replica_db = client.db
         client.db.litellm_managedobjecttable = MagicMock()
         client.db.litellm_usertable = MagicMock()
         return client
@@ -1997,6 +1998,7 @@ class TestUnmanagedVertexRouting:
 
         prisma = instance.prisma_client
         prisma.db = MagicMock()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedobjecttable = MagicMock()
         prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         prisma.db.litellm_managedobjecttable.update = AsyncMock()
@@ -2227,6 +2229,7 @@ class TestUnmanagedBedrockRouting:
 
         prisma = instance.prisma_client
         prisma.db = MagicMock()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedobjecttable = MagicMock()
         prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         prisma.db.litellm_managedobjecttable.update = AsyncMock()
@@ -2410,6 +2413,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         proxy_logging_obj.get_proxy_hook.return_value = hook
 
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
         instance = CheckBatchCost(
@@ -2523,6 +2527,7 @@ class TestBatchCostAttribution:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
 
         prisma = MagicMock()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
@@ -2828,6 +2833,7 @@ class TestPollPageStarvation:
 
     def _prisma(self, jobs):
         prisma = MagicMock()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=0)
         prisma.db.litellm_managedobjecttable.update = AsyncMock()
         prisma.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=jobs)
@@ -3140,6 +3146,7 @@ class TestMultiPodBatchCostClaim:
     @staticmethod
     def _prisma(row: _FakeManagedObjectRow, journal: list):
         prisma = MagicMock()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedobjecttable = _FakeManagedObjectTable(row, journal)
         prisma.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[])
         prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)

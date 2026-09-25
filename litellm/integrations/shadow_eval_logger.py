@@ -863,14 +863,14 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return _EMPTY_JOBS
         try:
-            records: Final = await prisma.db.litellm_shadowevaljob.find_many(
+            records: Final = await prisma.replica_db.litellm_shadowevaljob.find_many(
                 where={  # mutable-ok: Prisma filter
                     "stopped_at": None,
                     "ends_at": {"gt": datetime.now(timezone.utc)},  # mutable-ok: Prisma filter
                 },
             )
             grouped: Final = (
-                await prisma.db.litellm_shadowevalattempt.group_by(
+                await prisma.replica_db.litellm_shadowevalattempt.group_by(
                     by=["job_id"],
                     count=True,
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},

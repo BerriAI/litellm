@@ -38,6 +38,7 @@ def _make_mock_db():
     mock.delete = AsyncMock(return_value=None)
     prisma = MagicMock()
     prisma.db.litellm_configoverrides = mock
+    prisma.replica_db = prisma.db
     return prisma, mock
 
 

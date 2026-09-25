@@ -142,6 +142,7 @@ def _tool_call_response(*names: str) -> object:
 
 def _tool_usage_prisma() -> MagicMock:
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.tool_usage_transactions = []
     prisma._tool_usage_transactions_lock = asyncio.Lock()
     prisma.spend_log_transactions = []
@@ -316,6 +317,7 @@ class _RecordingDb:
 class _RecordingPrisma:
     def __init__(self, execute_raw: Callable[[], int] | None = None) -> None:
         self.db = _RecordingDb(execute_raw=execute_raw)
+        self.replica_db = self.db
 
 
 def _row_values(statement: Statement, column: str) -> list[object]:
@@ -903,6 +905,7 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
 
     mock_proxy_logging = MagicMock()
@@ -943,6 +946,7 @@ def _team_member_flush_fixtures() -> tuple[AsyncMock, MagicMock]:
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
     return mock_transaction, mock_prisma_client
 
@@ -1064,6 +1068,7 @@ async def test_org_spend_increments_organization_membership_row_for_the_calling_
 
     mock_batcher: Final = MagicMock()
     mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
     proxy_logging: Final = MagicMock()
     proxy_logging.call_details = {}
@@ -1098,6 +1103,7 @@ async def test_org_spend_without_user_id_leaves_organization_membership_untouche
 
     mock_batcher: Final = MagicMock()
     mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
     proxy_logging: Final = MagicMock()
     proxy_logging.call_details = {}
@@ -1126,6 +1132,7 @@ async def test_org_spend_keeps_member_attribution_when_ids_contain_the_key_delim
 
     mock_batcher: Final = MagicMock()
     mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
     proxy_logging: Final = MagicMock()
     proxy_logging.call_details = {}
@@ -1196,6 +1203,7 @@ async def test_project_spend_is_persisted_to_project_table_and_project_cache_is_
 
     mock_batcher: Final = MagicMock()
     mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
     user_api_key_cache: Final = MagicMock()
     user_api_key_cache.async_delete_cache = AsyncMock()
@@ -1842,6 +1850,7 @@ async def test_commit_key_spend_updates_includes_last_active():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
 
     # Also mock the other table batchers to avoid errors
@@ -1920,6 +1929,7 @@ async def test_commit_spend_updates_to_db_increments_key_total_spend_alongside_s
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
 
     db_spend_update_transactions = {
@@ -2136,6 +2146,7 @@ async def test_commit_spend_updates_uses_pipeline():
     db_writer.pod_lock_manager = mock_pod_lock_manager
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_proxy_logging = MagicMock()
 
     await db_writer._commit_spend_updates_to_db_with_redis(
@@ -2481,6 +2492,7 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
 
     mock_proxy_logging = MagicMock()
@@ -2866,6 +2878,7 @@ class _WindowSpendFakeDB:
 class _WindowSpendFakePrisma:
     def __init__(self, db):
         self.db = db
+        self.replica_db = self.db
 
 
 def _window_spend_upserts(db):
@@ -3282,6 +3295,7 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
             return False
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_Transaction())
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
@@ -3425,6 +3439,7 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
 
     token = "hashed-token-abc"
@@ -3459,6 +3474,7 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
 async def test_commit_spend_updates_to_db_reports_each_completed_table():
     db_writer = DBSpendUpdateWriter()
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.call_details = {}
@@ -3512,6 +3528,7 @@ async def test_commit_spend_updates_to_db_reports_table_committed_before_cache_i
 ):
     db_writer = DBSpendUpdateWriter()
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
@@ -3704,6 +3721,7 @@ async def test_commit_spend_updates_retries_deadlock_then_commits(monkeypatch):
 
     mock_batcher = MagicMock()
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(side_effect=[_failing_tx(_deadlock_error()), _good_tx(mock_batcher)])
 
     proxy_logging = MagicMock()
@@ -3731,6 +3749,7 @@ async def test_commit_spend_updates_raises_after_exhausting_deadlock_retries(mon
     monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(side_effect=lambda *a, **k: _failing_tx(_deadlock_error()))
 
     proxy_logging = MagicMock()
@@ -3760,6 +3779,7 @@ async def test_commit_spend_updates_does_not_retry_non_deadlock_data_error(monke
         data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "LiteLLM_VerificationToken"}}}
     )
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(side_effect=lambda *a, **k: _failing_tx(non_deadlock))
 
     proxy_logging = MagicMock()
@@ -3826,6 +3846,7 @@ async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkey
 
     mock_batcher = MagicMock()
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.tx = MagicMock(side_effect=[_failing_tx(_deadlock_error()), _good_tx(mock_batcher)])
 
     proxy_logging = MagicMock()

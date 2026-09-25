@@ -106,10 +106,11 @@ def test_list_containers_pages_upstream_until_non_admin_keys_see_their_container
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", PROXY_SERVER_STUB)
     table = AsyncMock()
     table.find_many.return_value = [SimpleNamespace(model_object_id="container:openai:cntr_owned")]
+    tables = SimpleNamespace(litellm_managedobjecttable=table)
     monkeypatch.setattr(
         ownership,
         "_get_prisma_client",
-        AsyncMock(return_value=SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))),
+        AsyncMock(return_value=SimpleNamespace(db=tables, replica_db=tables)),
     )
     processor_cls = _upstream_pages(
         monkeypatch,

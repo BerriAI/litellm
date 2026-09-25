@@ -156,7 +156,7 @@ def _typed_table(repo: DailyTagSpendRepository | VerificationTokenRepository | U
 
 
 async def _query_raw(prisma_client: "PrismaClient", sql_query: str, *params: object) -> object:
-    return await prisma_client.db.query_raw(sql_query, *params)
+    return await prisma_client.replica_db.query_raw(sql_query, *params)
 
 
 @router.get(

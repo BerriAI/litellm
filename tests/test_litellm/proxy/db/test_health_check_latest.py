@@ -14,6 +14,7 @@ from litellm.proxy.db.health_check_latest import (
 
 def _prisma(rows):
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.query_raw = AsyncMock(return_value=rows)
     return prisma
 

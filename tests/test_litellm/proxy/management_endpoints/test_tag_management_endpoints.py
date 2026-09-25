@@ -87,6 +87,7 @@ async def test_create_and_get_tag():
             # Setup prisma mocks
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             # Mock find_unique to return None (tag doesn't exist)
             mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
@@ -179,6 +180,7 @@ async def test_update_tag():
             # Setup prisma mocks
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             # Mock existing tag
             existing_tag = Mock()
@@ -247,7 +249,7 @@ async def test_new_tag_persists_a_budget():
         created_by="admin",
     )
     mock_db = Mock()
-    mock_prisma = SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data))
+    mock_prisma = SimpleNamespace(db=mock_db, replica_db=mock_db, jsonify_object=lambda data: dict(data))
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
@@ -316,7 +318,7 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
         created_by="admin",
     )
     mock_db = Mock()
-    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_prisma = SimpleNamespace(db=mock_db, replica_db=mock_db)
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
@@ -370,7 +372,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
         created_by="admin",
     )
     mock_db = Mock()
-    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_prisma = SimpleNamespace(db=mock_db, replica_db=mock_db)
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
@@ -420,6 +422,7 @@ async def test_delete_tag():
             # Setup prisma mocks
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             # Mock existing tag
             existing_tag = Mock()
@@ -516,6 +519,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
             mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
             mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
             mock_get_deployments.return_value = []
@@ -568,6 +572,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             existing_tag = Mock()
             existing_tag.tag_name = "cache-tag"
@@ -619,6 +624,7 @@ async def test_delete_tag_invalidates_tag_and_registry_caches():
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             existing_tag = Mock()
             existing_tag.tag_name = "cache-tag"
@@ -659,6 +665,7 @@ async def test_list_tags_with_dynamic_tags():
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             # Setup stored tags
             stored_tag = Mock()
@@ -740,6 +747,7 @@ async def test_list_tags_no_dynamic_tags():
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             stored_tag = Mock()
             stored_tag.tag_name = "stored-tag"
@@ -790,6 +798,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             owned_key_record = Mock()
             owned_key_record.token = "owned-key"
@@ -881,6 +890,7 @@ async def test_internal_user_list_tags_does_not_500_on_unsupported_prisma_kwarg(
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
 
             key_record = Mock()
             key_record.token = "new-user-key"
@@ -923,6 +933,7 @@ async def test_list_tags_with_date_range_filters_dynamic_tags():
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
             group_by_mock = AsyncMock(return_value=[])
             mock_db.litellm_dailytagspend.group_by = group_by_mock
@@ -969,6 +980,7 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
     ):
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         owned_key_record = Mock()
         owned_key_record.token = "owned-key"
@@ -1015,6 +1027,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
     ):
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         owned_key_record = Mock()
         owned_key_record.token = "owned-key"
@@ -1061,6 +1074,7 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
     ):
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
         fake_token_table = FakeVerificationTokenTable([])
         mock_db.litellm_verificationtoken = fake_token_table
         mock_get_daily_activity.return_value = "daily-activity-response"
@@ -1105,6 +1119,7 @@ async def test_internal_user_tag_daily_activity_without_any_scoped_keys_returns_
     ):
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
         fake_token_table = FakeVerificationTokenTable([])
         mock_db.litellm_verificationtoken = fake_token_table
 
@@ -1165,6 +1180,7 @@ async def test_list_tags_without_date_range_omits_date_filter():
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
             group_by_mock = AsyncMock(return_value=[])
             mock_db.litellm_dailytagspend.group_by = group_by_mock
@@ -1206,6 +1222,7 @@ async def test_list_tags_rejects_invalid_date_range(query, expected_detail_fragm
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_db = Mock()
             mock_prisma.db = mock_db
+            mock_prisma.replica_db = mock_prisma.db
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
             mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
 
@@ -1325,6 +1342,7 @@ async def test_add_tag_to_deployment_preserves_encrypted_fields():
         # Setup prisma mocks
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         # Mock the database model with encrypted fields
         db_model = Mock()
@@ -1391,6 +1409,7 @@ async def test_add_tag_to_deployment_with_string_params():
         # Setup prisma mocks
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         # Mock the database model with litellm_params as string
         db_model = Mock()
@@ -1444,6 +1463,7 @@ async def test_add_tag_to_deployment_no_duplicate_tags():
         # Setup prisma mocks
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         # Mock the database model with existing tags
         db_model = Mock()
@@ -1496,6 +1516,7 @@ async def test_add_tag_to_deployment_model_not_found():
         # Setup prisma mocks
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         # Mock find_unique to return None (model not found)
         mock_db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)

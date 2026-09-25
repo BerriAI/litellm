@@ -201,6 +201,7 @@ async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     cache = UserApiKeyCache()
 
@@ -241,6 +242,7 @@ async def test_custom_auth_key_default_end_user_budget_reaches_the_token_for_a_n
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
@@ -279,6 +281,7 @@ async def test_custom_auth_cap_stays_below_the_key_default_end_user_budget(monke
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
@@ -317,6 +320,7 @@ async def test_custom_auth_proxy_wide_default_end_user_budget_reaches_an_uncappe
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 

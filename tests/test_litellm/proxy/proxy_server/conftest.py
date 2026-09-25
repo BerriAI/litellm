@@ -161,6 +161,7 @@ def mock_prisma() -> MagicMock:
     """
     client_mock = MagicMock()
     client_mock.db = MagicMock()
+    client_mock.replica_db = client_mock.db
     client_mock.connect = AsyncMock()
     client_mock.disconnect = AsyncMock()
     client_mock.health_check = AsyncMock(return_value=True)

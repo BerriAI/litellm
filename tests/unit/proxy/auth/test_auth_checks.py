@@ -826,7 +826,9 @@ async def test_get_fuzzy_user_object():
 
     # Setup mock Prisma client
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable = MagicMock()
 
     # Mock user data

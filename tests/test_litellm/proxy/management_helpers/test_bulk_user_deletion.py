@@ -173,6 +173,7 @@ class _FakePrisma:
         fail_commit: bool = False,
     ) -> None:
         self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, jwt_mappings)
+        self.replica_db = self.db
         self._on_lock = on_lock
         self._fail_locks = fail_locks
         self._fail_commit = fail_commit
@@ -189,6 +190,7 @@ class _FakePrisma:
                 raise RuntimeError("connection reset")
         except BaseException:
             self.db.__dict__.update(snapshot.__dict__)
+            self.replica_db = self.db
             raise
         self.locks.extend(tx.locks)
         self.roster_reads.extend(tx.roster_reads)

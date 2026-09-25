@@ -76,6 +76,7 @@ async def test_filter_resolves_access_group_names():
     # Prisma mock
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
     result = await _filter_models_by_team_id(
@@ -129,6 +130,7 @@ async def test_filter_resolves_mix_of_access_groups_and_literal_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
     result = await _filter_models_by_team_id(
@@ -173,6 +175,7 @@ async def test_filter_excludes_models_from_other_access_group():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
     result = await _filter_models_by_team_id(
@@ -212,6 +215,7 @@ async def test_filter_db_fallback_receives_resolved_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
         return_value=[mock_db_model]
     )

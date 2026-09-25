@@ -661,6 +661,7 @@ class _StalledPrisma:
         self.db = MagicMock()
         self.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_stall_forever)
         self.db.litellm_teamtable.update = AsyncMock(side_effect=_answer_slowly)
+        self.replica_db = self.db
 
     async def get_data(self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None) -> None:
         await _stall_forever()
@@ -906,6 +907,7 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Set up the user creation mock - create a complete user model that can be converted to a dict
     mock_user = MagicMock()
@@ -971,6 +973,7 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
@@ -1005,6 +1008,7 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
 def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    prisma_client.replica_db = prisma_client.db
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
@@ -1090,6 +1094,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
     db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     result = await get_user_object(
         user_id=user_id,
@@ -1111,6 +1116,7 @@ async def test_get_user_object_upsert_includes_user_email():
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Set up the user creation mock
     mock_user = MagicMock()
@@ -1178,6 +1184,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(
             user_id="jwt-user-1",
@@ -1224,6 +1231,7 @@ async def test_get_user_object_backfills_null_email_from_db_read():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=[db_row, backfilled_row])
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
 
@@ -1263,6 +1271,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     result = await get_user_object(
         user_id="jwt-user-2",
@@ -1296,6 +1305,7 @@ async def test_get_user_object_backfill_race_prefers_db_email():
     )
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=winner_row)
 
     result = await get_user_object(
@@ -1335,6 +1345,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed():
     )
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=persisted_row)
 
     result = await get_user_object(
@@ -1368,6 +1379,7 @@ async def test_get_user_object_upsert_routes_default_team_to_membership(monkeypa
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
@@ -1437,6 +1449,7 @@ async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeyp
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
 
     # Define what our mocked `new_team` function should return
@@ -1471,6 +1484,7 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team,
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique.return_value = MagicMock()
 
     team_id_to_find = "existing-jwt-team"
@@ -1527,6 +1541,7 @@ async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_r
     mock_prisma_client = MagicMock()
     find_unique = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_vector_store_registry = MagicMock()
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = []
@@ -1623,6 +1638,7 @@ async def test_vector_store_access_check_with_permissions():
     mock_permissions = MagicMock()
     mock_permissions.vector_stores = ["store-1", "store-2"]
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=mock_permissions)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_vector_store_registry = MagicMock()
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-1"]
@@ -1669,6 +1685,7 @@ async def test_vector_store_access_check_with_team_permissions():
     team_permissions = MagicMock()
     team_permissions.vector_stores = ["team-store-allowed"]
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_vector_store_registry = MagicMock()
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["team-store-allowed"]
@@ -2695,6 +2712,7 @@ async def test_get_tag_objects_batch():
 
     # Mock DB to return all uncached tags in ONE query
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[uncached_tag_1, uncached_tag_2, uncached_tag_3])
+    mock_prisma.replica_db = mock_prisma.db
 
     # Call batch fetch
     tag_objects = await get_tag_objects_batch(
@@ -2797,6 +2815,7 @@ async def test_get_tag_objects_batch_never_queries_db_for_unregistered_tags():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[_tag_registry_row("some-other-tag")])
+    mock_prisma.replica_db = mock_prisma.db
     cache = UserApiKeyCache()
 
     first = await get_tag_objects_batch(
@@ -2838,6 +2857,7 @@ async def test_get_tag_objects_batch_fetches_only_registered_uncached_tags():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.replica_db = mock_prisma.db
 
     tag_objects = await get_tag_objects_batch(
         tag_names=["cached-tag", "registered-tag", "unregistered-tag"],
@@ -2860,6 +2880,7 @@ async def test_get_tag_objects_batch_caches_empty_registry():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     cache = UserApiKeyCache()
 
     assert (
@@ -2906,6 +2927,7 @@ async def test_get_tag_objects_batch_registry_db_error_negative_caches_and_keeps
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.replica_db = mock_prisma.db
     cache = _TtlRecordingCache()
 
     first = await get_tag_objects_batch(
@@ -2954,6 +2976,7 @@ async def test_tag_registry_load_is_single_flighted_across_concurrent_requests()
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.replica_db = mock_prisma.db
     cache = UserApiKeyCache()
 
     results = await asyncio.gather(
@@ -2985,6 +3008,7 @@ async def test_get_tag_objects_batch_oversized_registry_falls_back_and_stops_ref
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.replica_db = mock_prisma.db
     cache = UserApiKeyCache()
 
     first = await get_tag_objects_batch(
@@ -3022,6 +3046,7 @@ async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.replica_db = mock_prisma.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:tag:paid-tag":
@@ -3056,6 +3081,7 @@ async def test_get_team_object_raises_404_when_not_found():
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     mock_cache = MagicMock()
@@ -3079,6 +3105,7 @@ def _mock_prisma_for_team_lookup(find_unique):
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    mock_prisma_client.replica_db = mock_prisma_client.db
     return mock_prisma_client
 
 
@@ -4021,6 +4048,7 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
     # Setup mock Prisma client
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable = MagicMock()
 
     # Mock user data with mixed case email
@@ -4701,6 +4729,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_budget_row)
+    prisma_client.replica_db = prisma_client.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
@@ -4731,6 +4760,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
 
     # First call did perform the fallback DB lookup.
     prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once()
+    prisma_client.replica_db = prisma_client.db
 
     # Second call hits the cached budget row, no additional prisma read.
     prisma_client.db.litellm_budgettable.find_unique.reset_mock()
@@ -4794,6 +4824,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_budget_row)
+    prisma_client.replica_db = prisma_client.db
 
     mocked_spend = 70.0
 
@@ -4821,6 +4852,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
         )
 
     prisma_client.db.litellm_budgettable.find_unique.assert_not_awaited()
+    prisma_client.replica_db = prisma_client.db
 
     # 2. Now push spend above the per-member cap ($200). Must raise with
     # max_budget=200 to prove the per-member cap is the value being
@@ -4882,6 +4914,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_default_row)
+    prisma_client.replica_db = prisma_client.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
@@ -4909,6 +4942,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
     assert exc_info.value.current_cost == 500.0
     assert exc_info.value.max_budget == 65.0
     prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once()
+    prisma_client.replica_db = prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -4945,6 +4979,7 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_default_row)
+    prisma_client.replica_db = prisma_client.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
@@ -5008,6 +5043,7 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=fake_default_row)
+    prisma_client.replica_db = prisma_client.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
@@ -5066,6 +5102,7 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":
@@ -6605,6 +6642,7 @@ async def test_get_org_object_for_request_serves_last_known_org_through_db_outag
     prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(
         side_effect=[db_outage] if warmed_by_auth_prefetch else [org_row, db_outage]
     )
+    prisma_client.replica_db = prisma_client.db
     user_api_key_cache = UserApiKeyCache()
     if warmed_by_auth_prefetch:
         await user_api_key_cache.async_set_cache(
@@ -6788,6 +6826,7 @@ async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(mon
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -6823,6 +6862,7 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     class _JsonOnlyRedis:
         """Stands in for RedisCache, which serializes with a bare json.dumps()."""
@@ -6861,6 +6901,7 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
     assert isinstance(cached, LiteLLM_BudgetTable)
     assert cached.max_budget == 25.0
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -6872,6 +6913,7 @@ async def test_get_end_user_object_db_fetch_returns_validated_end_user():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -6935,6 +6977,7 @@ async def test_get_end_user_object_never_queries_db_for_unrestricted_end_users(
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -6976,6 +7019,7 @@ async def test_get_end_user_object_still_fetches_restricted_end_user(end_user_re
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("eu-blocked")])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=_end_user_db_row("eu-blocked", blocked=True)
     )
@@ -7009,6 +7053,7 @@ async def test_get_end_user_object_caches_empty_restricted_registry(end_user_reg
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
 
@@ -7052,6 +7097,7 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
@@ -7099,6 +7145,7 @@ async def test_registry_db_error_is_logged_at_warning(end_user_registry_skip_ena
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=Exception("registry query failed"))
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-1", blocked=True))
 
     with patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger") as mock_logger:
@@ -7133,6 +7180,7 @@ async def test_end_user_registry_load_is_single_flighted_across_concurrent_reque
         return [_end_user_registry_row("eu-blocked")]
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(side_effect=fake_find_many)
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     cache = UserApiKeyCache()
@@ -7163,6 +7211,7 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
     oversized = [_end_user_registry_row(f"eu-{index}") for index in range(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)]
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=oversized)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _end_user_db_row(kwargs["where"]["user_id"], blocked=True)
     )
@@ -7206,6 +7255,7 @@ async def test_get_end_user_object_default_budget_gate_keeps_fetching_unrestrict
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1"))
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
@@ -7236,6 +7286,7 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=100.0))
     cache = UserApiKeyCache()
 
@@ -7281,6 +7332,7 @@ async def test_get_end_user_object_key_default_budget_beats_global_default_witho
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id(
         {"global-eu-budget": 100.0, "svc-a-budget": 0.5, "svc-b-budget": 7.0}
@@ -7325,6 +7377,7 @@ async def test_get_end_user_object_cached_row_does_not_carry_another_keys_defaul
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
     cache = UserApiKeyCache()
@@ -7359,6 +7412,7 @@ async def test_get_end_user_object_caches_row_with_global_default_but_never_a_ke
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-cached"))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5, "global-budget": 7.0})
     cache = UserApiKeyCache()
@@ -7388,6 +7442,7 @@ async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_wit
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=3.0))
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 2.0})
 
@@ -7420,6 +7475,7 @@ async def test_get_end_user_object_explicit_end_user_budget_beats_key_default(mo
             litellm_budget_table={"budget_id": "vip-budget", "max_budget": 500.0},
         )
     )
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
 
     result = await get_end_user_object(
@@ -7442,6 +7498,7 @@ async def test_resolve_default_end_user_budget_falls_back_to_global_when_key_bud
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"global-eu-budget": 100.0})
+    mock_prisma.replica_db = mock_prisma.db
 
     resolved = await resolve_default_end_user_budget(
         prisma_client=mock_prisma,
@@ -7468,6 +7525,7 @@ async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-known-1"))
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -7493,6 +7551,7 @@ async def test_get_team_membership_db_fetch_returns_validated_membership():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -7527,6 +7586,7 @@ async def test_get_team_membership_negative_caches_a_missing_row():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     cache = UserApiKeyCache()
 
@@ -7564,6 +7624,7 @@ async def test_get_team_membership_reads_sentinel_as_no_membership_not_a_model()
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     result = await get_team_membership(
         user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
@@ -7589,6 +7650,7 @@ async def test_get_team_membership_coalesces_parallel_db_fetches():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_slow_find_unique)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     cache = UserApiKeyCache()
 
     async def _load():
@@ -7610,6 +7672,7 @@ async def test_get_team_membership_coalesces_parallel_db_fetches():
     assert results[0].user_id == "u-parallel"
     assert results[1].user_id == "u-parallel"
     mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -7634,6 +7697,7 @@ async def test_get_team_membership_invalidation_waits_for_in_flight_load_then_ev
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_find_unique)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     cache = UserApiKeyCache()
     _key = team_membership_reservation_cache_key(user_id="u-inv", team_id="t-inv")
 
@@ -7685,6 +7749,7 @@ async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_
     row.dict = lambda: {"user_id": "u-w", "team_id": "t-w", "spend": 1.0, "budget_id": "budget-old"}
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     cache = _SlowWriteCache()
 
     stale = asyncio.create_task(
@@ -7802,6 +7867,7 @@ async def test_get_team_membership_db_error_surfaces_and_retries_next_call():
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(
         side_effect=[RuntimeError("db down"), membership_row]
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     cache = UserApiKeyCache()
 
     with pytest.raises(RuntimeError, match="db down"):
@@ -7833,6 +7899,8 @@ class _UnreachableMembershipPrisma:
             @staticmethod
             async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
                 raise httpx.ConnectError("All connection attempts failed")
+
+    replica_db = db
 
 
 def _restricted_member_check_deps() -> dict[str, object]:
@@ -7885,6 +7953,7 @@ async def test_get_team_membership_waiter_cancel_does_not_cancel_shared_load():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_slow_find_unique)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     cache = UserApiKeyCache()
 
     async def _load():
@@ -7908,6 +7977,7 @@ async def test_get_team_membership_waiter_cancel_does_not_cancel_shared_load():
     assert result is not None
     assert result.user_id == "u-shield"
     mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -7926,6 +7996,7 @@ async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sent
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=[None, membership_row])
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     before = await get_team_membership(
         user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
@@ -7956,6 +8027,7 @@ async def test_get_access_object_db_fetch_returns_validated_access_group():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=access_row)
 
     mock_cache = MagicMock()
@@ -7984,6 +8056,7 @@ async def test_get_team_object_by_alias_db_fetch_returns_cached_obj():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -8013,6 +8086,7 @@ async def test_get_team_object_by_alias_loads_model_aliases_relation():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -8044,6 +8118,7 @@ async def test_get_org_object_by_alias_db_fetch_returns_validated_org():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[org_row])
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -8069,6 +8144,7 @@ async def test_get_object_permission_db_fetch_returns_validated_permission():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=perm_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -8095,6 +8171,7 @@ async def test_get_managed_vector_store_rows_by_uuids_db_fetch_validates_rows():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[vs_row])
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -8122,6 +8199,7 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_projecttable.find_unique = AsyncMock(return_value=project_row)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -9239,6 +9317,8 @@ class _MissingUserPrisma:
             async def find_unique(where: dict[str, str], include: dict[str, bool]) -> None:
                 return None
 
+    replica_db = db
+
 
 @pytest.mark.asyncio
 async def test_enforced_model_allowlists_treats_a_missing_user_row_as_unrestricted():
@@ -9263,6 +9343,8 @@ class _UnreachableUserPrisma:
             @staticmethod
             async def find_unique(where: dict[str, str], include: dict[str, bool]) -> None:
                 raise RuntimeError("database gone")
+
+    replica_db = db
 
 
 @pytest.mark.asyncio
@@ -9372,6 +9454,7 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
     )
     reader: Final = AsyncMock(return_value=group)
     client: Final = MagicMock(db=MagicMock(litellm_accessgrouptable=MagicMock(find_unique=reader)))
+    client.replica_db = client.db
     with (
         patch(
             "litellm.proxy.proxy_server.prisma_client", None
@@ -9575,6 +9658,7 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
 
     async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:team_member:test-user:test-team":

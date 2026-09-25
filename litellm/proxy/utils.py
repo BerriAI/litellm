@@ -4566,6 +4566,11 @@ class PrismaClient:
             return self.db.read_target
         return self.db
 
+    @property
+    def replica_db(self) -> "PrismaWrapper | RoutingPrismaWrapper":
+        """Explicit opt-in to read-replica routing; reads reached through it may go to the reader."""
+        return self.db
+
     def tx(self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT) -> "TransactionManager":
         """Open an interactive transaction on the writer.
 
@@ -4652,7 +4657,7 @@ class PrismaClient:
             required_view: Final = "LiteLLM_VerificationTokenView"
             expected_views_str: Final = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
-            ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(f"""
+            ret: Final[Sequence[_ViewCountRow]] = await self.replica_db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -4691,9 +4696,9 @@ class PrismaClient:
                         """,
                     )
                 else:
-                    should_create_views: Final = await should_create_missing_views(db=self.db)
+                    should_create_views: Final = await should_create_missing_views(db=self.replica_db)
                     if should_create_views:
-                        await create_missing_views(db=self.db)
+                        await create_missing_views(db=self.replica_db)
                     else:
                         # don't block execution if these views are missing
                         # Convert lists to sets for efficient difference calculation
@@ -4747,7 +4752,7 @@ class PrismaClient:
                 )
                 return await config_table.find_first(where={key: value})
             elif table_name == "spend":
-                return await self.db.l.find_first(where={key: value})
+                return await self.replica_db.l.find_first(where={key: value})
             return None
 
         try:
@@ -4819,7 +4824,7 @@ class PrismaClient:
         """
         stale_read_engine: Final = _StaleReadEngine.observe(self.read_db)
         try:
-            return await self.db.query_first(sql_query, *args)
+            return await self.replica_db.query_first(sql_query, *args)
         except Exception as e:
             if "cached plan must not change result type" not in str(e):
                 raise
@@ -4834,7 +4839,7 @@ class PrismaClient:
                 force_recreate=True,
                 stale_read_engine=stale_read_engine,
             )
-            return await self.db.query_first(sql_query, *args)
+            return await self.replica_db.query_first(sql_query, *args)
 
     @backoff.on_exception(
         backoff.expo,
@@ -5022,7 +5027,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await self.db.query_raw(sql_query, limit, offset)
+                        response = await self.replica_db.query_raw(sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug("PrismaClient: get_data: table_name == 'spend'")
@@ -5168,7 +5173,9 @@ class PrismaClient:
                     # If not found in main table, check deprecated keys (grace period)
                     # check_deprecated=False on the recursive call prevents unbounded chaining
                     if response is None and hashed_token is not None and check_deprecated:
-                        active_token_id: Final = await _lookup_deprecated_key(db=self.db, hashed_token=hashed_token)
+                        active_token_id: Final = await _lookup_deprecated_key(
+                            db=self.replica_db, hashed_token=hashed_token
+                        )
                         if active_token_id:
                             # The recursive call returns a finished
                             # LiteLLM_VerificationTokenView; the dict
@@ -6612,7 +6619,7 @@ class PrismaClient:
 
     async def _view_setup_gate_table_present(self) -> bool:
         rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+            await self.replica_db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
         )
         return rows[0]["present"]
 
@@ -6621,7 +6628,7 @@ class PrismaClient:
             try:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
                 await asyncio.wait_for(
-                    self.db.query_raw("SELECT 1"),
+                    self.replica_db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
                 if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
@@ -6833,7 +6840,7 @@ class PrismaClient:
             FROM pg_class
             WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
             """
-            result: Final[Sequence[_RelTuplesRow]] = await self.db.query_raw(query=sql_query)
+            result: Final[Sequence[_RelTuplesRow]] = await self.replica_db.query_raw(query=sql_query)
             return result[0]["reltuples"]
 
         try:

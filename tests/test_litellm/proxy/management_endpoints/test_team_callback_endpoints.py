@@ -57,6 +57,7 @@ def _patch_prisma(existing_team: MagicMock):
     updated_row = MagicMock()
     updated_row.team_id = existing_team.team_id
     mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_row)
+    mock_prisma.replica_db = mock_prisma.db
     return mock_prisma
 
 
@@ -106,6 +107,7 @@ def patched_prisma():
     ):
         mock_client.get_data = AsyncMock(return_value=_team_row())
         mock_client.db.litellm_teamtable.update = AsyncMock()
+        mock_client.replica_db = mock_client.db
         yield mock_client
 
 
@@ -128,6 +130,7 @@ async def test_add_team_callbacks_rejects_unauthorized_caller(patched_prisma, un
         )
     assert exc.value.status_code == 403
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
+    patched_prisma.replica_db = patched_prisma.db
 
 
 @pytest.mark.asyncio
@@ -140,6 +143,7 @@ async def test_disable_team_logging_rejects_unauthorized_caller(patched_prisma, 
         )
     assert exc.value.status_code == 403
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
+    patched_prisma.replica_db = patched_prisma.db
 
 
 @pytest.mark.asyncio
@@ -170,6 +174,7 @@ async def test_proxy_admin_can_add_team_callbacks(patched_prisma):
         user_api_key_dict=_admin_auth(),
     )
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
+    patched_prisma.replica_db = patched_prisma.db
 
 
 @pytest.mark.asyncio
@@ -196,6 +201,7 @@ async def test_team_admin_of_target_team_can_add_callbacks(patched_prisma):
         user_api_key_dict=team_admin,
     )
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
+    patched_prisma.replica_db = patched_prisma.db
 
 
 @pytest.mark.asyncio
@@ -971,6 +977,7 @@ async def test_delete_team_callback_rejects_unauthorized_caller(patched_prisma, 
         )
     assert exc.value.status_code == 403
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
+    patched_prisma.replica_db = patched_prisma.db
 
 
 @pytest.mark.asyncio
@@ -1109,6 +1116,7 @@ async def test_delete_team_callback_404s_for_unregistered_callback():
     assert exc.value.status_code == 404
     assert exc.value.detail == {"error": "callback_name = gcs is not registered for team_id = team-1."}
     mock_prisma.db.litellm_teamtable.update.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 @pytest.mark.asyncio
@@ -1138,6 +1146,7 @@ async def test_delete_team_callback_404s_when_team_has_no_logging_slot():
 
     assert exc.value.status_code == 404
     mock_prisma.db.litellm_teamtable.update.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 @pytest.mark.asyncio
@@ -1145,6 +1154,7 @@ async def test_delete_team_callback_404s_for_unknown_team():
     mock_prisma = MagicMock()
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.update = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with pytest.raises(HTTPException) as exc:
@@ -1171,6 +1181,7 @@ async def test_add_team_callbacks_rejects_team_deleted_before_write():
     """
     mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={}))
     mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = AddTeamCallback(
         callback_name="langfuse",
@@ -1488,6 +1499,7 @@ async def test_unknown_team_is_indistinguishable_from_no_access(call_handler, un
     ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=_team_row())
         mock_client.db.litellm_teamtable.update = AsyncMock()
+        mock_client.replica_db = mock_client.db
         with patch(  # test-quality-ok: _verify_team_access calls this module-level helper directly, so there is no seam to inject through
             "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
             new_callable=AsyncMock,
@@ -1663,6 +1675,7 @@ async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller
     assert exc.value.status_code == 400
     assert "langfuse_span_scope" in str(exc.value.detail) and "'full'" in str(exc.value.detail)
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
+    patched_prisma.replica_db = patched_prisma.db
 
     data.callback_vars["langfuse_span_scope"] = "full"
     await add_team_callbacks(
@@ -1691,6 +1704,7 @@ async def test_add_team_callbacks_rejects_out_of_range_arize_sampling_rate(patch
     assert exc.value.status_code == 400
     assert "arize_success_sampling_rate" in str(exc.value.detail)
     patched_prisma.db.litellm_teamtable.update.assert_not_called()
+    patched_prisma.replica_db = patched_prisma.db
 
 
 def test_add_team_callback_accepts_arize_sampling_rate_vars():

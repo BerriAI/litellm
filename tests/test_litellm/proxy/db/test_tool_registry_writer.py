@@ -58,6 +58,7 @@ def _make_prisma(
     """Return a mock prisma_client with litellm_tooltable.upsert, find_many, find_unique."""
     prisma = MagicMock()
     prisma.db.litellm_tooltable = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_tooltable.upsert = AsyncMock(return_value=upsert_return)
     prisma.db.litellm_tooltable.find_many = AsyncMock(
         return_value=find_many_rows if find_many_rows is not None else []
@@ -72,6 +73,7 @@ async def test_batch_upsert_tools_calls_upsert():
     items = [{"tool_name": "tool_a", "origin": "mcp_server", "created_by": None}]
     await batch_upsert_tools(prisma, items)
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
+    prisma.replica_db = prisma.db
     call_kw = prisma.db.litellm_tooltable.upsert.call_args.kwargs
     assert call_kw["where"] == {"tool_name": "tool_a"}
     assert call_kw["data"]["create"]["tool_name"] == "tool_a"
@@ -88,6 +90,7 @@ async def test_batch_upsert_tools_empty_list():
     prisma = _make_prisma()
     await batch_upsert_tools(prisma, [])
     prisma.db.litellm_tooltable.upsert.assert_not_awaited()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -96,6 +99,7 @@ async def test_batch_upsert_tools_skips_empty_names():
     items = [{"tool_name": "", "origin": None}, {"tool_name": None}]  # type: ignore[list-item]
     await batch_upsert_tools(prisma, items)
     prisma.db.litellm_tooltable.upsert.assert_not_awaited()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -128,6 +132,7 @@ async def test_list_tools_no_filter():
     assert result[0].tool_name == "tool_a"
     assert result[0].call_count == 5
     prisma.db.litellm_tooltable.find_many.assert_awaited_once()
+    prisma.replica_db = prisma.db
     call_kw = prisma.db.litellm_tooltable.find_many.call_args.kwargs
     assert call_kw["where"] == {}
     assert call_kw["order"] == {"created_at": "desc"}
@@ -161,6 +166,7 @@ async def test_get_tool_found():
     prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(
         where={"tool_name": "my_tool"}
     )
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -185,6 +191,7 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
     assert result is not None
     assert result.input_policy == "blocked"
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
+    prisma.replica_db = prisma.db
     call_kw = prisma.db.litellm_tooltable.upsert.call_args.kwargs
     assert call_kw["where"] == {"tool_name": "my_tool"}
     assert call_kw["data"]["update"]["input_policy"] == "blocked"
@@ -213,6 +220,7 @@ async def test_get_tools_by_names_returns_policy_map():
     prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(
         where={"tool_name": {"in": ["tool_a", "tool_b"]}}
     )
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -221,6 +229,7 @@ async def test_get_tools_by_names_empty_list():
     result = await get_tools_by_names(prisma, [])
     assert result == {}
     prisma.db.litellm_tooltable.find_many.assert_not_awaited()
+    prisma.replica_db = prisma.db
 
 
 # --- ToolPolicyRegistry ---
@@ -256,6 +265,7 @@ async def test_tool_policy_registry_sync_and_get_effective_policies():
             _mock_tool_row("tool_c", input_policy="untrusted"),
         ]
     )
+    prisma.replica_db = prisma.db
     prisma.db.litellm_objectpermissiontable.find_many = AsyncMock(
         return_value=[
             _mock_perm_row("op-key-1", ["tool_a"]),
@@ -310,6 +320,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
     mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(
         side_effect=_flaky_find_many
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
         return_value=[]
     )
@@ -346,6 +357,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
         side_effect=_flaky_perms_find_many
     )

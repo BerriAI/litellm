@@ -54,6 +54,7 @@ def _wire_team_create_tx(prisma_client):
         )
 
     prisma_client.db.tx = lambda *_args, **_kwargs: _tx()
+    prisma_client.replica_db = prisma_client.db
 
 
 def test_microsoft_sso_handler_openid_from_response_user_principal_name():
@@ -595,6 +596,7 @@ async def test_default_team_params(team_params):
     # Mock Prisma client
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -642,6 +644,7 @@ async def test_default_team_params_organization_id_reaches_sso_created_team(team
     litellm.default_team_params = team_params
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
@@ -691,6 +694,7 @@ async def test_create_team_without_default_params():
     # Mock Prisma client
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -973,6 +977,7 @@ async def test_upsert_sso_user_updates_role_for_existing_user():
 
     # Mock prisma client
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable.update_many = AsyncMock()
 
     # Existing user in DB with old role
@@ -1023,6 +1028,7 @@ async def test_upsert_sso_user_does_not_update_invalid_role():
 
     # Mock prisma client
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable.update_many = AsyncMock()
 
     # Existing user in DB
@@ -1068,6 +1074,7 @@ async def test_upsert_sso_user_no_role_in_sso_response():
 
     # Mock prisma client
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable.update_many = AsyncMock()
 
     # Existing user in DB
@@ -1427,6 +1434,7 @@ async def test_check_and_update_if_proxy_admin_id():
     # Mock Prisma client
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_usertable.update = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # Set up test data
     test_user_id = "test_admin_123"
@@ -1459,6 +1467,7 @@ async def test_check_and_update_if_proxy_admin_id_already_admin():
     # Mock Prisma client
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_usertable.update = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # Set up test data
     test_user_id = "test_admin_123"
@@ -3196,6 +3205,7 @@ class TestCLIKeyRegenerationFlow:
                 for team_id in ("team1", "team2")
             ]
         )
+        mock_prisma.replica_db = mock_prisma.db
         with (
             patch.dict(
                 os.environ,
@@ -3602,6 +3612,7 @@ class TestCLIKeyRegenerationFlow:
         find_many = AsyncMock(return_value=[team_row])
         prisma_client = MagicMock()
         prisma_client.db.litellm_teamtable.find_many = find_many
+        prisma_client.replica_db = prisma_client.db
 
         details = await fetch_cli_sso_team_details(
             prisma_client=prisma_client, teams=["team-a"]
@@ -3633,6 +3644,7 @@ class TestCLIKeyRegenerationFlow:
         failing_client.db.litellm_teamtable.find_many = AsyncMock(
             side_effect=Exception("connection reset")
         )
+        failing_client.replica_db = failing_client.db
         assert (
             await fetch_cli_sso_team_details(
                 prisma_client=failing_client, teams=["team-a"]
@@ -3642,6 +3654,7 @@ class TestCLIKeyRegenerationFlow:
 
         empty_client = MagicMock()
         empty_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        empty_client.replica_db = empty_client.db
         assert (
             await fetch_cli_sso_team_details(
                 prisma_client=empty_client, teams=["team-a"]
@@ -6556,6 +6569,7 @@ async def test_setup_team_mappings():
     """Test _setup_team_mappings function loads team mappings from database."""
     # Arrange
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_sso_config = MagicMock()
     mock_sso_config.sso_settings = {"team_mappings": {"team_ids_jwt_field": "groups"}}
     mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
@@ -7245,6 +7259,7 @@ class TestCliSsoAttributionMetadata:
         mock_prisma.db.litellm_usertable.find_unique = AsyncMock(
             return_value=MagicMock(metadata={"auth_provider": "generic"})
         )
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_usertable.update_many = AsyncMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
             return_value=[
@@ -7538,6 +7553,7 @@ class TestSyncUserRoleFromJwtRoleMap:
         cache = DualCache()
         prisma = AsyncMock()
         prisma.db.litellm_usertable.update = AsyncMock()
+        prisma.replica_db = prisma.db
         user_id = "testuser@example.com"
 
         existing_user = LiteLLM_UserTable(
@@ -7577,6 +7593,7 @@ class TestSyncUserRoleFromJwtRoleMap:
         handler = self._make_jwt_handler()
         prisma = AsyncMock()
         prisma.db.litellm_usertable.update = AsyncMock()
+        prisma.replica_db = prisma.db
 
         existing_user = LiteLLM_UserTable(
             user_id="testuser@example.com",

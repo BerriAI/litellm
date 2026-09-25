@@ -69,6 +69,7 @@ async def test_update_customer_with_budget_id(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_updated_user = MagicMock()
     mock_updated_user.model_dump.return_value = {
@@ -125,6 +126,7 @@ async def test_update_customer_creates_budget_with_proper_relations(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock budget creation
     mock_created_budget = MagicMock()
@@ -183,6 +185,7 @@ async def test_update_customer_creates_budget_with_required_fields(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock budget creation
     mock_created_budget = MagicMock()
@@ -248,6 +251,7 @@ async def test_update_customer_budget_creation_with_fallback_admin(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock budget creation
     mock_created_budget = MagicMock()
@@ -305,6 +309,7 @@ async def test_update_customer_with_budget_id_and_creation_fields(
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
         return_value=mock_existing_customer
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock budget creation
     mock_created_budget = MagicMock()

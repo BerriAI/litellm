@@ -47,6 +47,7 @@ def _make_prisma_with_config(
 
     client = MagicMock()
     client.db = db
+    client.replica_db = db
     return client
 
 

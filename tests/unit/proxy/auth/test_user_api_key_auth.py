@@ -208,6 +208,8 @@ class _NoMembershipRowPrisma:
             async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
                 return None
 
+    replica_db = db
+
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio
@@ -1519,6 +1521,7 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
     from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     with patch(
         "litellm.proxy.auth.user_api_key_auth.get_user_object",

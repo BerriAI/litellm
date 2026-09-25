@@ -99,12 +99,12 @@ class _MCPUserCredentialsTable(Protocol):
 
 def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
     """The MCP server table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_mcpservertable
+    return prisma_client.replica_db.litellm_mcpservertable
 
 
 def _mcp_user_credentials_table(prisma_client: PrismaClient) -> _MCPUserCredentialsTable:
     """The per-user MCP credential table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_mcpusercredentials
+    return prisma_client.replica_db.litellm_mcpusercredentials
 
 
 def _decrypted_credentials(raw_credentials: str | Mapping[str, JsonValue] | None) -> MCPCredentials | None:

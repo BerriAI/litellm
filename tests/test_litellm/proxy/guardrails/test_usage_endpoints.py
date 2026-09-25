@@ -111,6 +111,7 @@ def _prisma(
 ) -> MagicMock:
     client = MagicMock()
     db = client.db
+    client.replica_db = client.db
     db.litellm_guardrailstable.find_many = AsyncMock(return_value=find_many or [])
     db.litellm_guardrailstable.find_unique = AsyncMock(return_value=find_unique)
     db.litellm_dailyguardrailmetrics.find_many = AsyncMock(return_value=metrics or [])
@@ -309,6 +310,7 @@ def _units_table_missing() -> TableNotFoundError:
 async def test_overview_degrades_units_to_empty_when_units_table_is_missing():
     prisma = _prisma(metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)])
     prisma.db.litellm_dailyguardrailusageunits.find_many = AsyncMock(side_effect=_units_table_missing())
+    prisma.replica_db = prisma.db
     handler = _config_handler(_yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii"))
     p1, p2 = _patches(prisma, handler)
     with p1, p2:
@@ -443,6 +445,7 @@ async def test_detail_breaks_cost_down_by_unit_day_team_and_key():
 async def test_detail_degrades_units_to_empty_when_units_table_is_missing():
     prisma = _prisma(metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)])
     prisma.db.litellm_dailyguardrailusageunits.find_many = AsyncMock(side_effect=_units_table_missing())
+    prisma.replica_db = prisma.db
     handler = _config_handler(_yaml_guardrail())
     p1, p2 = _patches(prisma, handler)
     with p1, p2:
@@ -526,6 +529,7 @@ async def test_logs_reports_flagged_action_for_guardrail_flagged_status():
             _spend_log("r-block", "guardrail_intervened"),
         ]
     )
+    prisma.replica_db = prisma.db
     p1, p2 = _patches(prisma, _config_handler())
     with p1, p2:
         resp = await guardrails_usage_logs(
@@ -565,6 +569,7 @@ async def test_logs_reports_post_call_flag_when_pre_call_allowed():
     prisma.db.litellm_spendlogs.find_many = AsyncMock(
         return_value=[_spend_log("r-post-flag", "success", "guardrail_flagged")]
     )
+    prisma.replica_db = prisma.db
     p1, p2 = _patches(prisma, _config_handler())
     with p1, p2:
         resp = await guardrails_usage_logs(
@@ -649,6 +654,7 @@ async def test_policies_overview_returns_a_full_row_and_totals():
     metric.policy_id = "pol-1"
     prisma = _prisma()
     prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[policy])
+    prisma.replica_db = prisma.db
     prisma.db.litellm_dailypolicymetrics.find_many = AsyncMock(return_value=[metric])
     p1, p2 = _patches(prisma, _config_handler())
     with p1, p2:
@@ -702,6 +708,7 @@ async def test_logs_report_not_run_entries_as_not_run_not_passed():
     }
     prisma = _prisma(find_unique=_db_row(), index_find_many=[index_row])
     prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[spend_log])
+    prisma.replica_db = prisma.db
     handler = _config_handler()
     p1, p2 = _patches(prisma, handler)
     with p1, p2:
@@ -732,6 +739,7 @@ async def test_logs_action_passed_filter_excludes_not_run_entries():
     spend_log.metadata = {"guardrail_information": [{"guardrail_name": "db-1", "guardrail_status": "not_run"}]}
     prisma = _prisma(find_unique=_db_row(), index_find_many=[index_row])
     prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[spend_log])
+    prisma.replica_db = prisma.db
     handler = _config_handler()
     p1, p2 = _patches(prisma, handler)
     with p1, p2:

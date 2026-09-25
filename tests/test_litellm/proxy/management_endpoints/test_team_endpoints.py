@@ -200,8 +200,10 @@ def _wire_team_delete_tx(prisma_client):
 
 # Mock prisma_client
 mock_prisma_client = MagicMock()
+mock_prisma_client.replica_db = mock_prisma_client.db
 # Set up async mock for db operations
 mock_prisma_client.db = MagicMock()
+mock_prisma_client.replica_db = mock_prisma_client.db
 mock_prisma_client.db.litellm_teamtable = MagicMock()
 mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
 mock_prisma_client.db.litellm_auditlog = MagicMock()
@@ -583,6 +585,7 @@ async def test_new_team_rejects_a_duration_that_never_advances(
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_team_create = AsyncMock()
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
@@ -612,6 +615,7 @@ async def test_update_team_rejects_a_duration_that_never_advances(
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_find_unique = AsyncMock(return_value=None)
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.find_unique = mock_find_unique
@@ -641,6 +645,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
 
     # Mock object permission table creation
     mock_object_perm_create = AsyncMock(
@@ -719,6 +724,7 @@ async def test_new_team_persists_tpd_limit(mock_db_client, mock_admin_auth):
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_db_client.db.litellm_modeltable = MagicMock()
     mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
 
@@ -764,6 +770,7 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
 
     # Track what data is passed to object permission create
     created_permission_data = {}
@@ -882,6 +889,7 @@ async def test_new_team_disable_auto_add_proxy_admin_flag(
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
 
     team_create_result = MagicMock(team_id="team-789")
     team_create_result.model_dump.return_value = {"team_id": "team-789"}
@@ -942,6 +950,7 @@ async def test_team_update_object_permissions_existing_permission(monkeypatch):
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Mock existing team with object_permission_id
@@ -1014,6 +1023,7 @@ async def test_team_update_object_permissions_no_existing_permission(monkeypatch
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     existing_team_row_no_perm = LiteLLM_TeamTable(
@@ -1074,6 +1084,7 @@ async def test_team_update_object_permissions_missing_permission_record(monkeypa
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     existing_team_row_missing_perm = LiteLLM_TeamTable(
@@ -1197,6 +1208,7 @@ async def test_add_team_member_budget_table_success():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock budget record
     mock_budget_record = MagicMock()
@@ -1244,6 +1256,7 @@ async def test_add_team_member_budget_table_exception_handling():
 
     # Mock prisma client to raise an exception
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         side_effect=Exception("Database connection failed")
     )
@@ -1297,6 +1310,7 @@ async def test_add_team_member_budget_table_budget_not_found():
 
     # Mock prisma client to return None (budget not found)
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
     # Create team info response object
@@ -1803,6 +1817,7 @@ async def test_process_team_members_single_member():
 
     # Mock dependencies
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = {"team_member_budget_id": "budget-123"}
     mock_team.default_team_member_models = None
@@ -1864,6 +1879,7 @@ async def test_process_team_members_multiple_members():
 
     # Mock dependencies
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = None
     mock_team.default_team_member_models = None
@@ -2034,6 +2050,7 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     tx_cm.__aexit__ = AsyncMock(return_value=None)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.tx = MagicMock(return_value=tx_cm)
 
     with patch(
@@ -2107,6 +2124,7 @@ async def test_add_team_members_runs_member_writes_on_the_lock_holding_transacti
     tx_cm.__aexit__ = AsyncMock(return_value=None)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.tx = MagicMock(return_value=tx_cm)
     type(prisma_client).db = PropertyMock(
         side_effect=AssertionError("member writes must not reach for a second pooled connection")
@@ -2172,6 +2190,7 @@ async def test_add_team_members_skips_budget_and_membership_writes_for_members_a
     tx_cm.__aexit__ = AsyncMock(return_value=None)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.tx = MagicMock(return_value=tx_cm)
 
     _, updated_users, updated_team_memberships = await _add_team_members_to_team(
@@ -2220,6 +2239,7 @@ async def test_add_team_members_writes_nothing_when_the_team_is_deleted_mid_requ
     tx_cm.__aexit__ = AsyncMock(return_value=None)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.tx = MagicMock(return_value=tx_cm)
     prisma_client.db.execute_raw = AsyncMock()
     prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
@@ -2340,6 +2360,7 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             new_callable=AsyncMock,
         ) as mock_cache_team,
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=existing_team
         )
@@ -2417,6 +2438,7 @@ async def test_team_model_add_delete_keep_model_aliases_in_team_cache(endpoint_n
         return SimpleNamespace(team_id="team-1234", model_dump=lambda: row)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(model_dump=lambda: columns))
     prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
     prisma_client.db.execute_raw = AsyncMock(return_value=None)
@@ -2524,6 +2546,7 @@ async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
             return_value=existing_team,
         ),
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=existing_team
         )
@@ -2574,6 +2597,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
         ) as mock_upsert_budget,
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         # Setup mock prisma client
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
@@ -3142,6 +3166,7 @@ async def test_update_team_with_team_member_budget_duration(
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
         ) as mock_upsert_budget,
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
             "team_id": "test_team_id",
@@ -3230,6 +3255,7 @@ async def test_backfill_team_member_budget_entries_creates_missing_memberships()
     existing_membership.user_id = "user-A"
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
         return_value=[existing_membership]
     )
@@ -3305,6 +3331,7 @@ async def test_backfill_team_member_budget_entries_no_op_when_all_exist():
     existing_b.user_id = "user-B"
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
         return_value=[existing_a, existing_b]
     )
@@ -3352,6 +3379,7 @@ async def test_backfill_team_member_budget_entries_populates_null_budget_id_on_e
     existing_b.user_id = "user-B"
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
         return_value=[existing_a, existing_b]
     )
@@ -3388,6 +3416,7 @@ async def test_backfill_team_member_budget_entries_empty_members():
     )
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
 
@@ -3599,6 +3628,7 @@ async def test_bulk_team_member_add_all_users_flag():
             return_value=mock_team_response,
         ) as mock_team_member_add,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock the database find_many call
         mock_prisma.db.litellm_usertable.find_many = AsyncMock(
             return_value=mock_db_users
@@ -3725,6 +3755,7 @@ async def test_list_team_v2_security_check_non_admin_user():
             return_value=None,
         ),
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
 
         # Should raise HTTPException with 401 status
@@ -3775,6 +3806,7 @@ async def test_list_team_v2_security_check_non_admin_user_other_user():
             return_value=None,
         ),
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
 
         # Should raise HTTPException with 401 status
@@ -3818,9 +3850,11 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         patch("litellm.proxy.proxy_server.user_api_key_cache"),
         patch("litellm.proxy.proxy_server.proxy_logging_obj"),
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         # Mock get_user_object to return a user with teams
         from litellm.proxy._types import LiteLLM_UserTable
@@ -3883,9 +3917,11 @@ async def test_list_team_v2_security_check_admin_user():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         # Mock team lookup
         mock_teams = [
@@ -3934,9 +3970,11 @@ async def test_list_team_v2_with_status_deleted():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         # Mock deleted teams
         mock_deleted_team1 = Mock(
@@ -4030,8 +4068,10 @@ async def test_list_team_v2_includes_litellm_model_table():
         )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:  # test-quality-ok: this file's DB-mock convention
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         mock_db.litellm_teamtable.find_many = AsyncMock(
             side_effect=lambda **kw: [_team_row("team_1", kw.get("include"))]
@@ -4118,8 +4158,10 @@ async def test_list_team_v2_org_admin_sees_org_teams():
             return_value=mock_user,
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         mock_team = Mock()
         mock_team.model_dump.return_value = {
@@ -4209,8 +4251,10 @@ async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
             return_value=mock_user,
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         mock_team_1 = Mock()
         mock_team_1.model_dump.return_value = {
@@ -4352,6 +4396,7 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
         return len(await find_many(where))
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
     prisma_client.db.litellm_teamtable.count = AsyncMock(side_effect=count)
     prisma_client.db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
@@ -4447,6 +4492,7 @@ async def test_list_team_v1_org_admin_own_query_keeps_memberships_in_other_orgs(
         return [t for t in all_teams if t.organization_id in where["organization_id"]["in"]]
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
 
     async def list_teams(user_id):
@@ -4514,7 +4560,9 @@ async def test_list_team_v2_org_admin_cannot_view_other_orgs():
             return_value=mock_user,
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db = Mock()
+        mock_prisma.replica_db = mock_prisma.db
 
         with pytest.raises(HTTPException) as exc_info:
             await list_team_v2(
@@ -4604,8 +4652,10 @@ async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
             side_effect=mock_get_user_object,
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         mock_team = Mock()
         mock_team.model_dump.return_value = {
@@ -4661,6 +4711,7 @@ async def test_list_team_v2_with_invalid_status():
     )
 
     mock_prisma_client = Mock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock prisma_client to be non-None
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
@@ -4700,8 +4751,10 @@ async def test_list_team_v2_search_builds_or_clause():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
 
@@ -4747,8 +4800,10 @@ async def test_list_team_v2_search_team_id_match_prefix():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
 
@@ -4816,8 +4871,10 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
             new=AsyncMock(return_value=None),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_db = Mock()
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
 
@@ -4864,8 +4921,10 @@ async def test_list_team_v2_populates_keys_count():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         team_a = Mock()
         team_a.team_id = "team_a"
@@ -4931,8 +4990,10 @@ async def test_list_team_v2_keys_count_skipped_for_empty_page():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -4972,8 +5033,10 @@ async def test_list_team_v2_keys_count_skipped_for_deleted_status():
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_db = Mock()
         mock_prisma_client.db = mock_db
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         mock_deleted = Mock()
         mock_deleted.team_id = "team_d"
@@ -5234,6 +5297,7 @@ async def test_delete_team_writes_deleted_audit_log_for_team_keys(
     team_key = LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
@@ -5883,6 +5947,7 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -5952,6 +6017,7 @@ async def test_new_team_max_budget_within_user_limit():
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6087,6 +6153,7 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6233,6 +6300,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6374,6 +6442,7 @@ async def test_new_team_standalone_validates_against_user_models(monkeypatch):
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6443,6 +6512,7 @@ async def test_new_team_standalone_validates_against_user_budget():
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6519,6 +6589,7 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6598,6 +6669,7 @@ async def test_new_team_org_scoped_models_not_in_org_models():
             "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -6672,6 +6744,7 @@ async def test_update_team_standalone_budget_raise_blocked_for_team_admin():
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-123"
         mock_existing_team.organization_id = None  # Standalone team
@@ -6740,6 +6813,7 @@ async def test_update_team_standalone_budget_raise_allowed_for_proxy_admin(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-123"
         mock_existing_team.organization_id = None
@@ -6829,6 +6903,7 @@ async def test_update_team_standalone_budget_removal_blocked_for_team_admin():
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-123"
         mock_existing_team.organization_id = None
@@ -6899,6 +6974,7 @@ async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         _TeamRowStore(
             mock_prisma.db.litellm_teamtable,
             {
@@ -6972,6 +7048,7 @@ async def test_update_team_standalone_unchanged_budget_allowed(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing standalone team (no organization_id) with budget=$500
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-unchanged-budget-123"
@@ -7071,6 +7148,7 @@ async def test_update_team_standalone_lower_budget_allowed(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         _TeamRowStore(
             mock_prisma.db.litellm_teamtable,
             {
@@ -7157,6 +7235,7 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-456"
@@ -7234,6 +7313,7 @@ async def test_update_team_standalone_models_not_gated_by_user_limit(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing standalone team (no organization_id)
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-models-123"
@@ -7341,6 +7421,7 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit(
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-budget-123"
@@ -7452,6 +7533,7 @@ async def test_update_team_org_scoped_models_bypasses_user_limit(
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-models-123"
@@ -7556,6 +7638,7 @@ async def test_update_team_org_scoped_models_not_in_org_models():
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-models-fail-123"
@@ -7647,6 +7730,7 @@ async def test_update_team_org_scoped_models_with_all_proxy_models(
             new=AsyncMock(return_value=mock_org),
         ) as mock_get_org,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-all-proxy-models-123"
@@ -7753,6 +7837,7 @@ async def test_update_team_tpm_limit_not_gated_by_user_limit(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing standalone team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "team-tpm-test-123"
@@ -7836,6 +7921,7 @@ async def test_update_team_rpm_limit_not_gated_by_user_limit(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing standalone team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "team-rpm-test-123"
@@ -7898,6 +7984,7 @@ async def test_update_team_persists_tpd_limit(disable_audit_logging_for_mocked_t
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         existing_team = MagicMock(team_id="team-tpd", organization_id=None, model_id=None, tpd_limit=None)
         existing_team.model_dump.return_value = {"team_id": "team-tpd", "organization_id": None}
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
@@ -7977,6 +8064,7 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
             new=AsyncMock(return_value=mock_org),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -8052,6 +8140,7 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
             new=AsyncMock(return_value=mock_org),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -8137,6 +8226,7 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
             new=AsyncMock(),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -8236,6 +8326,7 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
             new=AsyncMock(return_value=mock_org),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-tpm-123"
@@ -8324,6 +8415,7 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
             new=AsyncMock(return_value=mock_org),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-rpm-123"
@@ -8418,6 +8510,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
             new=AsyncMock(return_value=mock_org),
         ),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-bypass-123"
@@ -8550,6 +8643,7 @@ async def test_update_team_guardrails_with_org_id(
         ),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing team - must have compatible models with organization
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "team-guardrails-123"
@@ -8732,6 +8826,7 @@ def test_transform_teams_to_deleted_records_empty_list():
 @pytest.mark.asyncio
 async def test_save_deleted_team_records():
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_create_many = AsyncMock()
     mock_prisma_client.db.litellm_deletedteamtable.create_many = mock_create_many
 
@@ -8758,6 +8853,7 @@ async def test_save_deleted_team_records():
 @pytest.mark.asyncio
 async def test_save_deleted_team_records_empty_list():
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_create_many = AsyncMock()
     mock_prisma_client.db.litellm_deletedteamtable.create_many = mock_create_many
 
@@ -8769,6 +8865,7 @@ async def test_save_deleted_team_records_empty_list():
 @pytest.mark.asyncio
 async def test_persist_deleted_team_records():
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_create_many = AsyncMock()
     mock_prisma_client.db.litellm_deletedteamtable.create_many = mock_create_many
 
@@ -8814,6 +8911,7 @@ async def test_delete_team_persists_deleted_teams(
     from litellm.proxy._types import DeleteTeamRequest
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_id="admin-user",
         api_key="sk-admin",
@@ -8932,6 +9030,7 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
         return 1
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=doomed_team)
     mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_keys": 0})
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
@@ -9040,6 +9139,7 @@ async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
     team_key = LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
@@ -9107,6 +9207,7 @@ async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves
     )
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
@@ -9174,6 +9275,7 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     )
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
@@ -9242,6 +9344,7 @@ async def test_delete_team_survives_a_failing_cache_backend(
     )
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
     mock_prisma_client.delete_data = mock_delete_data
@@ -9303,6 +9406,7 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     )
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_id="admin-user",
         api_key="sk-admin",
@@ -9466,6 +9570,7 @@ async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_de
     key1 = LiteLLM_VerificationToken(token="hashed-token-1", user_id="user-123", team_id="team-1")
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
         return_value=[MagicMock(user_id="user-123", teams=["team-1"])]
@@ -9527,6 +9632,7 @@ async def test_delete_team_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
     )
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
 
     async def cascading_delete_data(team_id_list, table_name):
@@ -9703,6 +9809,7 @@ async def test_new_team_soft_budget_validation(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -9905,6 +10012,7 @@ async def test_update_team_soft_budget_validation(
             "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
         ) as mock_audit,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         # Mock existing team with existing budgets
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "test-team-123"
@@ -10021,6 +10129,7 @@ async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_db_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[
         SimpleNamespace(model_id="weighted-id", model_name="group", model_info={})
     ])
@@ -10294,6 +10403,7 @@ async def test_update_team_with_router_settings(
     # Configure mocked prisma client
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_db_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[
         SimpleNamespace(model_id="weighted-id", model_name="group", model_info={})
     ])
@@ -10560,6 +10670,7 @@ async def test_validate_and_populate_member_user_info_both_provided_match():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock user object that matches both email and user_id
     mock_user = MagicMock()
@@ -10598,6 +10709,7 @@ async def test_validate_and_populate_member_user_info_only_email_provided():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock user object from find_first
     mock_user_find_first = MagicMock()
@@ -10647,6 +10759,7 @@ async def test_validate_and_populate_member_user_info_only_user_id_not_found():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock find_unique to return None (user not found)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -10751,6 +10864,7 @@ async def test_list_team_v1_batches_key_queries():
             return_value=[],
         ),
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         async def filtered_find_many(**kwargs):
             where = kwargs.get("where", {})
@@ -10860,6 +10974,7 @@ class TestBatchResolveAccessGroupResources:
         fake_row.access_agent_ids = ["agent-1", "agent-2"]
 
         fake_prisma = MagicMock()
+        fake_prisma.replica_db = fake_prisma.db
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
             return_value=[fake_row]
         )
@@ -10891,6 +11006,7 @@ class TestBatchResolveAccessGroupResources:
         row2.access_agent_ids = ["agent-2"]
 
         fake_prisma = MagicMock()
+        fake_prisma.replica_db = fake_prisma.db
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
             return_value=[row1, row2]
         )
@@ -10915,6 +11031,7 @@ class TestBatchResolveAccessGroupResources:
         row1.access_agent_ids = []
 
         fake_prisma = MagicMock()
+        fake_prisma.replica_db = fake_prisma.db
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
             return_value=[row1]
         )
@@ -10952,6 +11069,7 @@ class TestBatchResolveAccessGroupResources:
 
         fake_find_many = AsyncMock(return_value=[row1])
         fake_prisma = MagicMock()
+        fake_prisma.replica_db = fake_prisma.db
         fake_prisma.db.litellm_accessgrouptable.find_many = fake_find_many
 
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
@@ -10994,6 +11112,7 @@ class TestResolveTeamAccessGroupResources:
         row2.access_agent_ids = ["agent-1"]
 
         fake_prisma = MagicMock()
+        fake_prisma.replica_db = fake_prisma.db
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
             return_value=[row1, row2]
         )
@@ -11099,6 +11218,7 @@ async def test_update_team_rejects_unauthorized_caller():
             return_value=False,
         ),
     ):
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
             "team_id": "team-123",
@@ -11447,6 +11567,7 @@ async def test_new_team_encrypts_callback_vars(
     )
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_db_client.db.litellm_teamtable = MagicMock()
     team_create_result = MagicMock(team_id="team-456", object_permission_id=None)
     team_create_result.model_dump.return_value = {"team_id": "team-456"}
@@ -12005,6 +12126,7 @@ async def test_team_info_forwards_key_limit_to_get_data():
     from litellm.proxy.management_endpoints import team_endpoints
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
         return_value=LiteLLM_TeamTable(team_id="team-1")
     )
@@ -12047,6 +12169,7 @@ async def test_team_info_returns_model_aliases():
     )
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.get_data = AsyncMock(return_value=[])
 
@@ -12093,6 +12216,7 @@ async def test_team_info_hydrates_member_names_and_emails_from_the_user_table():
     )
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.get_data = AsyncMock(return_value=[])
 
@@ -12132,6 +12256,7 @@ async def test_update_model_table_clears_aliases_with_empty_map():
     leaves the model table untouched.
     """
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_modeltable.create = AsyncMock()
     mock_prisma.db.litellm_modeltable.upsert = AsyncMock(
         return_value=MagicMock(id="model-123")
@@ -12254,6 +12379,7 @@ async def test_new_team_rejects_reserved_ui_session_team_id():
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         patch("litellm.proxy.proxy_server._license_check") as mock_license,
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
@@ -12350,6 +12476,7 @@ async def _drive_team_write(
             new=AsyncMock(),
         ),
     ):
+        pc.replica_db = pc.db
         pc.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=None if find_returns_none else existing
         )
@@ -12821,6 +12948,7 @@ async def test_new_team_validator_runs_without_metadata_and_rejection_blocks_cre
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         _configured_team_metadata_validator(validator),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.db.litellm_teamtable.create = AsyncMock()
         _wire_team_create_tx(mock_prisma)
@@ -12853,6 +12981,7 @@ async def test_new_team_validator_accept_proceeds_to_create(mock_db_client, mock
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
 
     team_create_result = MagicMock(team_id="team-accept-1")
     team_create_result.model_dump.return_value = {"team_id": "team-accept-1"}
@@ -12896,6 +13025,7 @@ async def test_new_team_rejection_precedes_model_alias_write():
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         _configured_team_metadata_validator(validator),
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_prisma.db.litellm_teamtable.create = AsyncMock()
         _wire_team_create_tx(mock_prisma)
@@ -13052,6 +13182,7 @@ async def test_get_all_team_memberships_validates_rows():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[membership_row])
 
     result = await get_all_team_memberships(mock_prisma_client, ["team-1"], user_id="member-1")
@@ -13085,6 +13216,7 @@ async def test_list_available_teams_filters_joined_and_validates_rows(monkeypatc
     open_team_row.model_dump = lambda: {"team_id": "team-open", "team_alias": "open team"}
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[open_team_row])
 
@@ -13278,6 +13410,7 @@ async def test_resolve_existing_member_user_ids_matches_caller_supplied_user_ids
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     find_many = AsyncMock(
         return_value=[LiteLLM_UserTable(user_id="by-id", max_budget=None, spend=0.0, user_email=None, models=[])]
     )
@@ -13517,6 +13650,7 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
     member = Member(user_email="invitee@example.com", role="user")
 
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
@@ -13620,6 +13754,7 @@ async def test_new_team_created_audit_event_carries_the_final_roster(monkeypatch
     audit_logger = _wire_audit_log_callback(monkeypatch)
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
     mock_prisma.jsonify_team_object = lambda db_data: db_data
     mock_prisma.get_data = AsyncMock(return_value=None)
@@ -13740,6 +13875,7 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
     audit_logger = _wire_audit_log_callback(monkeypatch)
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     team_row = LiteLLM_TeamTable(
         team_id="team-role-audit",
         team_alias="role-audit",
@@ -13856,6 +13992,7 @@ async def test_team_member_update_role_change_rewrites_the_roster_it_read_under_
     )
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=_roster_writer(team_row))
     mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
@@ -13899,6 +14036,7 @@ async def test_team_member_update_role_change_404s_when_the_team_is_gone_under_t
         members_with_roles=[Member(user_id="bob", role="user")],
     )
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=[snapshot, None])
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -13935,6 +14073,7 @@ async def test_team_member_update_role_change_404s_when_the_member_left_before_t
         members_with_roles=[Member(user_id="alice", role="admin")],
     )
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=[snapshot, locked_row])
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -14076,6 +14215,7 @@ async def test_member_add_audit_reports_only_the_users_it_created_plus_the_roste
 
     audit_logger = _wire_audit_log_callback(monkeypatch)
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -14128,6 +14268,7 @@ async def test_delete_team_emits_only_the_deleted_audit_event(monkeypatch):
         model_spend={},
     )
     mock_prisma = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma.get_data = AsyncMock(
         return_value=SimpleNamespace(json=lambda **_kwargs: team.model_dump_json(exclude_none=True))
@@ -14354,6 +14495,7 @@ def _wire_update_team(stack, existing_metadata):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_prisma_client = stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client"))
+    mock_prisma_client.replica_db = mock_prisma_client.db
     stack.enter_context(patch("litellm.proxy.proxy_server.llm_router"))
     stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache"))
     stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj"))
@@ -14862,6 +15004,7 @@ def _wire_new_team_prisma(mock_db_client):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
 
     created_team = MagicMock(team_id="team-defaults")
     created_team.model_dump.return_value = {"team_id": "team-defaults"}
@@ -15101,6 +15244,7 @@ async def test_update_team_syncs_access_group_assigned_team_ids_in_both_directio
             new_callable=AsyncMock,
         ) as invalidate_cache,
     ):
+        prisma.replica_db = prisma.db
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
         prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
         prisma.db.tx = fake_db.tx
@@ -15175,7 +15319,7 @@ async def test_sync_reads_the_committed_team_row_rather_than_the_callers_snapsho
     access_groups = {"ag-1": ["team-a", "team-b"], "ag-2": ["team-a"], "ag-3": []}
     teams = {"team-a": ["ag-2", "ag-3"]}
     fake_db = _FakeMirrorDb(access_groups, teams, plain_lists=True)
-    prisma_client = SimpleNamespace(db=SimpleNamespace(tx=fake_db.tx))
+    prisma_client = SimpleNamespace(db=SimpleNamespace(tx=fake_db.tx), replica_db=SimpleNamespace(tx=fake_db.tx))
 
     with patch(
         "litellm.proxy.management_helpers.access_group_team_sync.invalidate_access_group_cache",
@@ -15233,6 +15377,7 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
             new_callable=AsyncMock,
         ) as invalidate_cache,
     ):
+        prisma.replica_db = prisma.db
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
         prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         prisma.db.tx = fake_db.tx
@@ -15262,6 +15407,7 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
             new_callable=AsyncMock,
         ) as sync,
     ):
+        prisma.replica_db = prisma.db
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
         prisma.delete_data = AsyncMock(return_value=[team_row])
@@ -15386,6 +15532,7 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_proxy_logging_obj = MagicMock()
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
@@ -15435,6 +15582,7 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_reset_team_member_spend_fn_membership_not_found(monkeypatch):
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
@@ -15459,6 +15607,7 @@ async def test_reset_team_member_spend_fn_membership_not_found(monkeypatch):
 @pytest.mark.asyncio
 async def test_reset_team_member_spend_fn_team_not_found(monkeypatch):
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
@@ -15484,6 +15633,7 @@ async def test_reset_team_member_spend_fn_forbidden_for_non_admin(monkeypatch):
     """A caller who is neither proxy admin, org admin, nor this team's admin must be refused,
     matching every other team-mutating endpoint's authorization."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
@@ -15511,6 +15661,7 @@ async def test_reset_team_member_spend_fn_team_admin_cannot_reset_own_spend(monk
     and repeatedly zero it right before it crosses their per-member cap, consuming the shared
     team budget without the configured limit ever binding (Veria finding on PR #37971)."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
@@ -15541,6 +15692,7 @@ async def test_reset_team_member_spend_fn_proxy_admin_can_reset_own_spend(monkey
     """The self-reset guard is scoped to non-proxy-admin roles: a proxy admin resetting their
     own membership spend is the platform-wide trust boundary, not a team-scoped one."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
@@ -15577,6 +15729,7 @@ async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
     await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
@@ -15626,6 +15779,7 @@ async def test_reset_team_member_budget_fn_detaches_member_when_team_has_no_usab
     monkeypatch, team_obj, default_row
 ):
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", budget_id="custom-b1")
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
     mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
@@ -15654,6 +15808,7 @@ async def test_reset_team_member_budget_fn_detaches_member_when_team_has_no_usab
 @pytest.mark.asyncio
 async def test_reset_team_member_budget_fn_membership_not_found(monkeypatch):
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_teammembership.update = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -15675,6 +15830,7 @@ async def test_reset_team_member_budget_fn_membership_not_found(monkeypatch):
 @pytest.mark.asyncio
 async def test_reset_team_member_budget_fn_forbidden_for_non_admin(monkeypatch):
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teammembership.update = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
@@ -15706,6 +15862,7 @@ async def _team_info_budget_sources(
     from litellm.proxy.management_endpoints import team_endpoints
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=default_budget_row)
     mock_prisma.get_data = AsyncMock(return_value=[])
@@ -15793,6 +15950,7 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
     await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
@@ -15847,6 +16005,7 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_member-1", value="still-fresh-membership")
     real_spend_counter_cache = DualCache()
@@ -16159,6 +16318,7 @@ async def test_team_info_returns_parent_organization_models(organization, expect
     )
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.get_data = AsyncMock(return_value=[])
 
@@ -16209,6 +16369,7 @@ async def test_team_info_reports_parent_organization_models_only_to_team_manager
     )
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma.get_data = AsyncMock(return_value=[])
@@ -16326,6 +16487,7 @@ async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_aut
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.replica_db = mock_db_client.db
     mock_db_client.db.litellm_modeltable = MagicMock()
     mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
 
@@ -16413,6 +16575,7 @@ async def test_update_team_clearing_model_max_budget_writes_an_empty_mapping(
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
         patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=_existing_team_with_model_caps(_EXISTING_TEAM_MODEL_CAPS)
         )
@@ -16446,6 +16609,7 @@ async def test_update_team_model_max_budget_raise_blocked_for_team_admin():
         patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
         patch("litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()),  # test-quality-ok: stubs the audit write so the test observes only the team update result
     ):
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=_existing_team_with_model_caps(_EXISTING_TEAM_MODEL_CAPS)
         )
@@ -16970,6 +17134,7 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
         members_with_roles=[Member(user_id="admin-1", role="admin"), Member(user_id="member-1", role="user")],
     )
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma.get_data = AsyncMock(return_value=[])
@@ -17037,6 +17202,7 @@ _DB_OUTAGE_503_BODY: Final = {
 
 def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)

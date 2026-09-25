@@ -183,6 +183,7 @@ def _make_managed_files_instance():
 
     mock_cache = MagicMock()
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     instance = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
@@ -1122,7 +1123,7 @@ def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_obj
     )
     return _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
-        prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=table)),
+        prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=table), replica_db=MagicMock(litellm_managedfiletable=table)),
     ), table
 
 
@@ -1302,6 +1303,7 @@ def _make_real_managed_files_instance():
     mock_cache.async_set_cache = AsyncMock()
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_managedfiletable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedfiletable.create = AsyncMock(
         side_effect=AssertionError(
@@ -1329,6 +1331,7 @@ def _make_object_store_instance():
     mock_cache.async_set_cache = AsyncMock()
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock()
 
@@ -1891,7 +1894,8 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
     managed_files = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(
-            db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
+            db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table),
+            replica_db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table),
         ),
     )
     router = MagicMock(
@@ -1935,7 +1939,8 @@ async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provide
     managed_files = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
         prisma_client=MagicMock(
-            db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
+            db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table),
+            replica_db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table),
         ),
     )
     router = MagicMock(
@@ -1992,7 +1997,7 @@ async def test_store_unified_file_id_caches_the_storage_location_the_db_row_gets
     file_table = MagicMock(upsert=AsyncMock(), find_first=AsyncMock(side_effect=AssertionError("cache miss")))
     managed_files = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=DualCache(),
-        prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=file_table)),
+        prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=file_table), replica_db=MagicMock(litellm_managedfiletable=file_table)),
     )
     stored = _make_file_object("file-kept").model_copy(update={"purpose": "batch"})
     stored._hidden_params = {"storage_backend": "litellm_db", "storage_url": "litellm_db://content-row-1"}

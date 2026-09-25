@@ -38,6 +38,7 @@ def _build_prisma_with_keys(user_keys, mock_user=None, updated_user=None):
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
     if mock_user is not None:
         mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     if updated_user is not None:

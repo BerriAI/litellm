@@ -241,7 +241,7 @@ class _SpendDailySummaryRow(TypedDict):
 
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     """Run a raw read query and return its rows as the row type the caller declares."""
-    return await prisma_client.db.query_raw(sql_query, *args)
+    return await prisma_client.replica_db.query_raw(sql_query, *args)
 
 
 async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
@@ -3008,7 +3008,7 @@ async def ui_view_spend_logs(
         )
         sql_params.extend([page_size, skip])
 
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        data: Final = await prisma_client.replica_db.query_raw(sql_query, *sql_params)
 
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_owns_fetched_spend_rows(

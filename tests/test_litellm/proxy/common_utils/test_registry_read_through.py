@@ -167,6 +167,7 @@ async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_rep
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
         return_value=FakeAgentRow(agent_id, "read-through-db-agent")
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
@@ -193,6 +194,7 @@ async def test_get_agent_with_read_through_recovers_agent_by_name(clean_agent_re
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
         side_effect=[None, FakeAgentRow("read-through-name-lookup-id", agent_name)]
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
@@ -217,6 +219,7 @@ async def test_get_agent_with_read_through_returns_none_for_unknown_agent(
 
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
@@ -236,6 +239,7 @@ async def test_resync_agents_already_registered_skips_db(clean_agent_registry, m
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
         return_value=FakeAgentRow(agent_id, "read-through-dedup-agent")
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
@@ -283,6 +287,7 @@ async def test_get_guardrail_with_read_through_recovers_guardrail_created_on_sib
     prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(
         return_value=FakeGuardrailRow(guardrail_id, guardrail_name)
     )
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
         side_effect=AssertionError("full-table guardrail scan on read-through miss")
     )
@@ -311,6 +316,7 @@ async def test_get_guardrail_with_read_through_returns_none_for_unknown_guardrai
 
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
@@ -327,6 +333,7 @@ async def test_resync_guardrails_never_loads_non_active_rows(monkeypatch):
     pending_name: Final = "pending-review-guardrail"
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
@@ -353,6 +360,7 @@ async def test_resync_guardrails_syncs_under_guardrail_reconcile_lock(monkeypatc
     prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(
         return_value=FakeGuardrailRow("lock-scope-guardrail-id", guardrail_name)
     )
+    prisma_client.replica_db = prisma_client.db
     lock_states: list[bool] = []
 
     def record_sync(guardrail) -> None:
@@ -377,6 +385,7 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
 
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[MagicMock()])
+    prisma_client.replica_db = prisma_client.db
     router: Final = MagicMock()
     router.get_model_list.return_value = []
     lock_states: list[bool] = []
@@ -410,6 +419,7 @@ async def test_resync_model_deployments_loads_db_credentials_before_reconciling_
     rows: Final = [MagicMock()]
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
+    prisma_client.replica_db = prisma_client.db
     router: Final = MagicMock()
     router.get_model_list.return_value = []
     installed: Final = MagicMock()
@@ -451,6 +461,7 @@ async def test_resync_model_deployments_respects_supported_db_objects(monkeypatc
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
         side_effect=AssertionError("db hit for an object type this replica does not load")
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["guardrails"]})
@@ -469,6 +480,7 @@ async def test_resync_guardrails_respects_supported_db_objects(monkeypatch):
     prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
         side_effect=AssertionError("db hit for an object type this replica does not load")
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
@@ -487,6 +499,7 @@ async def test_resync_agents_respects_supported_db_objects(clean_agent_registry,
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
         side_effect=AssertionError("db hit for an object type this replica does not load")
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
@@ -508,6 +521,7 @@ async def test_resync_agents_waits_for_agent_reload_and_skips_duplicate_registra
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
         side_effect=AssertionError("db hit while the agent reload held the reconcile lock")
     )
+    prisma_client.replica_db = prisma_client.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 

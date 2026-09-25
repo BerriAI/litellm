@@ -53,6 +53,7 @@ MODEL_ROWS = [{"model": "gpt-5.1"}]
 def build_prisma(query_raw: AsyncMock) -> MagicMock:
     prisma = MagicMock()
     prisma.db.query_raw = query_raw
+    prisma.replica_db = prisma.db
     return prisma
 
 
@@ -137,6 +138,7 @@ async def test_rejects_malformed_dates_with_400(mock_prisma: MagicMock):
 
     assert exc_info.value.status_code == 400
     mock_prisma.db.query_raw.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 def test_totals_ratio_is_zero_without_requests():

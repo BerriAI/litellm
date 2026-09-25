@@ -239,6 +239,7 @@ def _make_prisma_with_end_user_row(spend: float | None):
     prisma.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=None if spend is None else MagicMock(spend=spend)
     )
+    prisma.replica_db = prisma.db
     return prisma
 
 
@@ -262,6 +263,7 @@ async def test_get_current_spend_end_user_floor_admits_after_a_reset_on_a_stale_
 
     assert result == 0.0
     prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(where={"user_id": "customer-42"})
+    prisma.replica_db = prisma.db
     fake_cache.redis_cache.async_set_max.assert_not_called()
 
 
@@ -331,6 +333,7 @@ async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
 def _make_window_spend_prisma(row=None, spend_logs_total=0.0):
     prisma = MagicMock()
     prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=row)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "tok", "_sum": {"spend": spend_logs_total}}]
     )
@@ -366,6 +369,7 @@ async def test_get_current_spend_floors_window_against_maintained_row(monkeypatc
 
     assert result == 15.0
     fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
+    fake_prisma.replica_db = fake_prisma.db
     fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key=counter_key, value=15.0)
 
 
@@ -397,6 +401,7 @@ async def test_get_current_spend_floors_window_against_logs_when_row_stale(monke
 
     assert result == 15.0
     fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once()
+    fake_prisma.replica_db = fake_prisma.db
 
 
 @pytest.mark.asyncio

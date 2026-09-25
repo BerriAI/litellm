@@ -315,6 +315,7 @@ async def test_load_state_from_db_adds_the_persisted_delta_to_the_cold_start_pri
 
     prisma = MagicMock()
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[fake_row])
+    prisma.replica_db = prisma.db
     await r.load_state_from_db(prisma)
 
     new_cell = r._cells[(RequestType.GENERAL, "fast")]
@@ -337,6 +338,7 @@ async def test_load_state_from_db_keeps_a_one_sided_delta_row_sampleable():
 
     prisma = MagicMock()
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[one_sided_row])
+    prisma.replica_db = prisma.db
     await r.load_state_from_db(prisma)
 
     loaded_cell = r._cells[(RequestType.GENERAL, "fast")]
@@ -365,6 +367,7 @@ async def test_load_state_from_db_handles_unknown_request_type():
 
     prisma = MagicMock()
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[bad_row, good_row])
+    prisma.replica_db = prisma.db
     await r.load_state_from_db(prisma)
 
     # Unknown skipped; good added to the cold-start prior.

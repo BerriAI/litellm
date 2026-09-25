@@ -919,7 +919,7 @@ async def _query_raw_rows(
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    return await prisma_client.db.query_raw(sql_query, *args)
+    return await prisma_client.replica_db.query_raw(sql_query, *args)
 
 
 async def get_spend_by_team(

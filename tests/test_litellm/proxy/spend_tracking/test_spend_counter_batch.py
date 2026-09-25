@@ -288,6 +288,7 @@ async def test_batch_reads_never_touch_a_prisma_client_when_redis_answers(monkey
     redis = CountingRedis({"spend:key:hashed": 3.0})
     prisma = MagicMock()
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock()
+    prisma.replica_db = prisma.db
     monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
     monkeypatch.setattr(ps, "prisma_client", prisma)
 
@@ -301,6 +302,7 @@ async def test_batch_reads_never_touch_a_prisma_client_when_redis_answers(monkey
 def _reseed_prisma(spend: float) -> MagicMock:
     prisma = MagicMock()
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=MagicMock(spend=spend))
+    prisma.replica_db = prisma.db
     return prisma
 
 
@@ -381,6 +383,7 @@ async def test_post_call_cold_counters_seed_from_the_mget_miss_without_a_second_
     redis.async_set_cache = AsyncMock(return_value=True)
     prisma = MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=MagicMock(spend=4.0))
+    prisma.replica_db = prisma.db
     monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
     monkeypatch.setattr(ps, "prisma_client", prisma)
 
@@ -444,6 +447,7 @@ async def test_reconcile_settles_a_flushed_counter_on_its_own_after_the_shared_p
     redis.async_set_max = AsyncMock(return_value=4.0)
     prisma = MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=MagicMock(spend=4.0))
+    prisma.replica_db = prisma.db
     monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
     monkeypatch.setattr(ps, "prisma_client", prisma)
     reservation = _reservation(reserved_cost=0.4)

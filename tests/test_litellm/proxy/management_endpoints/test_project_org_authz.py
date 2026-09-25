@@ -30,6 +30,7 @@ def _make_prisma_with_team(team_id: str, admins: list, members_with_roles: tuple
     prisma = MagicMock()
     team_row = LiteLLM_TeamTable(team_id=team_id, admins=admins, members_with_roles=list(members_with_roles))
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    prisma.replica_db = prisma.db
     return prisma
 
 
@@ -57,6 +58,7 @@ async def test_project_perm_check_uses_current_team_not_caller_supplied():
     )
     assert has_perm is False
     prisma.db.litellm_teamtable.find_unique.assert_awaited_once()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -130,6 +132,7 @@ async def test_project_perm_check_denies_team_admin_unless_projects_permission_c
         )
         assert has_perm is False
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -151,6 +154,7 @@ async def test_project_perm_check_require_admin_denies_team_admin_even_when_conf
     )
     assert has_perm is False
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -172,6 +176,7 @@ async def test_project_perm_check_uses_injected_team_object_for_reassignment_tar
     )
     assert has_perm is False
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -195,6 +200,7 @@ async def test_project_perm_check_proxy_admin_always_allowed():
     assert has_perm is True
     # Admin shortcut should not even hit the DB.
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +215,7 @@ def _make_prisma_with_user_orgs(user_id: str, org_ids: list):
         MagicMock(organization_id=org_id) for org_id in org_ids
     ]
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    prisma.replica_db = prisma.db
     return prisma
 
 
@@ -282,6 +289,7 @@ async def test_assign_key_org_blocks_caller_with_no_memberships():
     user_row = MagicMock()
     user_row.organization_memberships = None
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    prisma.replica_db = prisma.db
 
     caller = UserAPIKeyAuth(
         user_id="alice",

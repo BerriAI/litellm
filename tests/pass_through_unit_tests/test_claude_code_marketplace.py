@@ -57,6 +57,7 @@ def mock_prisma_client():
 
     # Mock the db attribute
     mock_client.db = MagicMock()
+    mock_client.replica_db = mock_client.db
 
     # Mock the plugin table with async methods
     mock_table = MagicMock()

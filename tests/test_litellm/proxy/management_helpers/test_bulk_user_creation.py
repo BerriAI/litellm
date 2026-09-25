@@ -147,6 +147,7 @@ class _FakePrisma:
         raced_ids: frozenset[str] = frozenset(),
     ) -> None:
         self.db = _Db(teams or [], fail_ids, commit_then_drop, raced_ids)
+        self.replica_db = self.db
         self.tx_count = 0
         self.locks: list[str] = []
 
@@ -252,6 +253,7 @@ async def test_one_insert_and_one_locked_write_per_team():
 async def test_bad_rows_fail_alone_and_good_rows_still_land():
     prisma = _FakePrisma(teams=[_team("t1")])
     prisma.db.litellm_usertable.rows["taken"] = _UserRow(user_id="taken", user_email="Taken@Example.com")
+    prisma.replica_db = prisma.db
     response = await _run(
         prisma,
         [
@@ -325,6 +327,7 @@ async def test_team_write_failure_keeps_user_and_reports_it_on_the_row():
         raise RuntimeError("roster write failed")
 
     prisma.db.litellm_teamtable.update = explode
+    prisma.replica_db = prisma.db
     response = await _run(prisma, [{"user_id": "u1", "teams": ["t1", "t2"]}])
 
     result = response.data[0]
@@ -394,6 +397,7 @@ async def test_non_admin_cannot_create_admin_users_but_other_rows_proceed():
 async def test_license_is_checked_once_against_the_whole_batch():
     prisma = _FakePrisma()
     prisma.db.litellm_usertable.rows["existing"] = _UserRow(user_id="existing")
+    prisma.replica_db = prisma.db
     license = _License(max_users=3)
 
     with pytest.raises(ManagementProblem) as exc:

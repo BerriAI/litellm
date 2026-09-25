@@ -68,6 +68,7 @@ def _page(*buckets: dict[str, object], next_page: str | None = None) -> dict[str
 
 def _fake_prisma(rows: list[dict[str, object]]) -> MagicMock:
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.query_raw = AsyncMock(return_value=rows)
     return prisma
 
@@ -306,6 +307,7 @@ async def test_a_healthy_scheduled_check_publishes_and_never_touches_the_alert_l
 async def test_a_scheduled_check_that_fails_never_claims_the_alert_window(monkeypatch):
     lock = _pod_lock(acquired=True)
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.query_raw = AsyncMock(side_effect=RuntimeError("database gone"))
 
     with pytest.raises(RuntimeError, match="database gone"):
@@ -395,6 +397,7 @@ class _PsycopgPrisma:
 
     def __init__(self, conn: psycopg.Connection) -> None:
         self.db = self
+        self.replica_db = self
         self._conn = conn
 
     async def query_raw(self, sql: str, *params: object) -> list[dict[str, object]]:

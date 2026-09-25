@@ -66,6 +66,7 @@ async def test_team_activity_requires_admin_on_every_requested_team():
             _make_team("team-B", admin_user_ids=["bob"]),
         ]
     )
+    prisma.replica_db = prisma.db
     user_keys = MagicMock(token="alice-key-1")
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[user_keys])
 
@@ -123,6 +124,7 @@ async def test_team_activity_full_view_when_admin_of_all_requested_teams():
             _make_team("team-B", admin_user_ids=["alice"]),
         ]
     )
+    prisma.replica_db = prisma.db
 
     user_info = MagicMock()
     user_info.teams = ["team-A", "team-B"]
@@ -171,6 +173,7 @@ async def test_agent_activity_admin_unscoped():
 
     prisma = MagicMock()
     prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    prisma.replica_db = prisma.db
 
     captured = {}
 
@@ -216,6 +219,7 @@ async def test_agent_activity_non_admin_no_perms_falls_back_to_owned():
     # First call: lookup of owned agents (created_by=alice).
     # Second call: agent_metadata fetch for the resolved set.
     prisma.db.litellm_agentstable.find_many = AsyncMock(side_effect=[owned, owned])
+    prisma.replica_db = prisma.db
 
     captured = {}
 
@@ -264,6 +268,7 @@ async def test_agent_activity_non_admin_intersects_explicit_agent_ids():
 
     prisma = MagicMock()
     prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    prisma.replica_db = prisma.db
 
     captured = {}
 
@@ -314,6 +319,7 @@ async def test_agent_activity_keyless_caller_does_not_query_created_by_null():
 
     prisma = MagicMock()
     prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    prisma.replica_db = prisma.db
 
     fake_get_daily = AsyncMock()
 
@@ -359,6 +365,7 @@ async def test_agent_activity_non_admin_no_access_returns_empty_page():
 
     prisma = MagicMock()
     prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    prisma.replica_db = prisma.db
 
     fake_get_daily = AsyncMock()
 

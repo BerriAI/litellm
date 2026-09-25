@@ -120,6 +120,7 @@ def setup_mock_prisma_client(
 ):
     """Helper to set up a mock prisma client with proper async behavior"""
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable = AsyncMock()
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=team_records)
     mock_prisma_client.db.litellm_mcpservertable = AsyncMock()
@@ -1334,6 +1335,7 @@ class TestListMCPServers:
 
         mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=raw_prisma_model)
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         mock_health_result = generate_mock_mcp_server_db_record(server_id="env-server", alias="Env Server")
         mock_health_result.status = "healthy"
@@ -3845,6 +3847,7 @@ class TestUpdateMCPServer:
         # Mock dependencies
         mock_prisma_client = MagicMock()
         mock_prisma_client.db = MagicMock()
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.db.litellm_mcpservertable = AsyncMock()
         mock_prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_server)
         mock_prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=updated_server)
@@ -4973,6 +4976,7 @@ def _make_prisma_client():
     """Return a minimal mock PrismaClient accepted by get_prisma_client_or_throw."""
     client = MagicMock()
     client.db = MagicMock()
+    client.replica_db = client.db
     return client
 
 
@@ -7916,6 +7920,7 @@ async def test_config_server_edit_preserves_api_contract_without_creating_rows(r
     original = server.model_dump()
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
     with (
         patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),

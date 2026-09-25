@@ -35,6 +35,7 @@ from .conftest import normalize  # type: ignore[import-not-found]
 def prisma_with_query_raw(monkeypatch):
     pc = MagicMock()
     pc.db.query_raw = AsyncMock(return_value=[])
+    pc.replica_db = pc.db
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
     return pc
 
@@ -195,6 +196,7 @@ def _alerting_client(
     row = MagicMock()
     row.param_value = db_row
     pc.db.litellm_config.find_first = AsyncMock(return_value=row)
+    pc.replica_db = pc.db
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
 
     logging_obj = MagicMock()
@@ -283,6 +285,7 @@ def test_alerting_settings_reports_config_source_when_db_disagrees(
     row = MagicMock()
     row.param_value = {"alerting_args": db_alerting_args}
     pc.db.litellm_config.find_first = AsyncMock(return_value=row)
+    pc.replica_db = pc.db
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
 
     logging_obj = MagicMock()
@@ -320,6 +323,7 @@ def test_alerting_settings_handles_empty_db_args(
     row = MagicMock()
     row.param_value = {"alerting_args": db_alerting_args}
     pc.db.litellm_config.find_first = AsyncMock(return_value=row)
+    pc.replica_db = pc.db
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
 
     logging_obj = MagicMock()
@@ -376,6 +380,7 @@ def test_alerting_settings_happy(client, auth_as, monkeypatch):
     """Pins ``GET /alerting/settings`` (happy: returns list of ConfigList entries)."""
     pc = MagicMock()
     pc.db.litellm_config.find_first = AsyncMock(return_value=None)
+    pc.replica_db = pc.db
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
 
     logging_obj = MagicMock()

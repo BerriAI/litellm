@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class _OrganizationDb(Protocol):
-    """The single Prisma table this repository reaches for on ``prisma_client.db``."""
+    """The single Prisma table this repository reaches for on ``prisma_client.replica_db``."""
 
     @property
     def litellm_organizationtable(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]: ...
@@ -24,7 +24,7 @@ class _PrismaClientView(Protocol):
     """The one attribute this repository reads off the untyped Prisma client wrapper."""
 
     @property
-    def db(self) -> _OrganizationDb: ...
+    def replica_db(self) -> _OrganizationDb: ...
 
 
 class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
@@ -33,7 +33,7 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]:
         client: Final[_PrismaClientView] = self.prisma_client
-        return client.db.litellm_organizationtable
+        return client.replica_db.litellm_organizationtable
 
     @property
     def model_class(self) -> type[LiteLLM_OrganizationTable]:

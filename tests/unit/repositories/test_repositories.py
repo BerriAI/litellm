@@ -136,6 +136,7 @@ class MockPrismaClient:
         self.db.litellm_projecttable = MockTable(pk_field="project_id")
         self.db.litellm_objectpermissiontable = MockTable(pk_field="object_permission_id")
         self.db.litellm_credentialstable = MockTable()
+        self.replica_db = self.db
 
 
 class TestBaseRepository:
@@ -303,9 +304,8 @@ class TestModelRepository:
     @pytest.mark.asyncio
     async def test_find_all_except_serializes_exclusion_for_prisma(self) -> None:
         find_many: Final = AsyncMock(return_value=[])
-        client: Final = SimpleNamespace(
-            db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))
-        )
+        db: Final = SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))
+        client: Final = SimpleNamespace(db=db, replica_db=db)
 
         await ModelRepository(client).find_all_except("current-model")
 
@@ -2090,6 +2090,7 @@ class TestPrismaTableRepository:
         )
 
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         agents = AgentsRepository(prisma_client)
         policy = PolicyRepository(prisma_client)
 
@@ -2131,6 +2132,7 @@ class TestPrismaTableRepository:
         )
 
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         repos = [
             obj
             for name, obj in vars(tr).items()
@@ -2263,6 +2265,7 @@ class TestAutoRouterSessionRepository:
 
         client = MagicMock()
         client.db.litellm_autoroutersession = _Table()
+        client.replica_db = client.db
         return AutoRouterSessionRepository(client), lookups
 
     @pytest.mark.asyncio
@@ -2287,6 +2290,7 @@ class TestAutoRouterSessionRepository:
         from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 
         client = MagicMock()
+        client.replica_db = client.db
         assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = AutoRouterSessionRepository(None).table

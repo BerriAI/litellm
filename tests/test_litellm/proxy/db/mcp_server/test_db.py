@@ -14,6 +14,7 @@ from litellm.proxy._experimental.mcp_server.db import (
 def _prisma_client_returning(team_record: object) -> MagicMock:
     prisma_client = MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_record)
+    prisma_client.replica_db = prisma_client.db
     return prisma_client
 
 
@@ -42,11 +43,13 @@ async def test_fetch_mcp_servers_by_team(team_record, expected):
         where={"team_id": "team-123"},
         include={"object_permission": True},
     )
+    prisma_client.replica_db = prisma_client.db
 
 
 def _prisma_client_with_missing_mcp_server_row() -> MagicMock:
     prisma_client = MagicMock()
     prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     return prisma_client
 
 

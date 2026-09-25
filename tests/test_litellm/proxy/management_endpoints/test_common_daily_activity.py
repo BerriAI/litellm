@@ -43,6 +43,7 @@ async def test_get_daily_activity_empty_entity_id_list():
     # Mock PrismaClient
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # Mock the table methods
     mock_table = MagicMock()
@@ -95,6 +96,7 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_table = MagicMock()
     mock_table.count = AsyncMock(return_value=0)
     mock_table.find_many = AsyncMock(return_value=[])
@@ -148,6 +150,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     # Mock PrismaClient
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # query_raw now returns rollup rows produced by GROUPING SETS, each
     # tagged with its grouping level via GROUPING_ID(). The dispatcher
@@ -313,6 +316,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
 async def test_get_api_key_metadata_returns_active_key_metadata():
     """Test that get_api_key_metadata should return metadata for active keys."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # Mock active key record
     mock_active_key = MagicMock()
@@ -336,6 +340,7 @@ async def test_get_api_key_metadata_returns_active_key_metadata():
 async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     """Test that get_api_key_metadata should fall back to deleted keys table for missing keys."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # No active keys found
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -368,6 +373,7 @@ async def test_get_api_key_metadata_falls_back_to_deleted_keys():
 async def test_get_api_key_metadata_mixed_active_and_deleted_keys():
     """Test that get_api_key_metadata should return metadata for both active and deleted keys."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # One active key found
     mock_active_key = MagicMock()
@@ -402,6 +408,7 @@ async def test_get_api_key_metadata_mixed_active_and_deleted_keys():
 async def test_get_api_key_metadata_deleted_table_not_queried_when_all_keys_found():
     """Test that get_api_key_metadata should not query deleted table when all keys are active."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     mock_active_key = MagicMock()
     mock_active_key.token = "key-hash-1"
@@ -427,6 +434,7 @@ async def test_get_api_key_metadata_deleted_table_not_queried_when_all_keys_foun
 async def test_get_api_key_metadata_deleted_table_error_handled_gracefully():
     """Test that get_api_key_metadata should handle errors from deleted table gracefully."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # No active keys found
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -447,6 +455,7 @@ async def test_get_api_key_metadata_deleted_table_error_handled_gracefully():
 async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_record():
     """Test that get_api_key_metadata should use the most recent deleted record for regenerated keys."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # No active keys found (old hash no longer in active table after regeneration)
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -487,6 +496,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
 
     double_hashed = hash_token("a" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
@@ -516,6 +526,7 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
 
     double_hashed = hash_token("b" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
@@ -564,6 +575,7 @@ async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_log
     double_hashed = hash_token("permanent-miss-with-window-6852")
     window = (datetime(2024, 1, 1), datetime(2024, 1, 4))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
@@ -587,6 +599,7 @@ async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_a
     records = [_daily_user_spend_record(user_id="session-user", api_key=session_digest, spend=1.5)]
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_table = MagicMock()
     mock_table.count = AsyncMock(return_value=len(records))
     mock_table.find_many = AsyncMock(return_value=records)
@@ -739,6 +752,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # Create mock tag spend records (request_id is NULL for aggregated rows)
     mock_record_1 = MagicMock()
@@ -842,6 +856,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     """Test that the full aggregation pipeline should preserve metadata for deleted keys."""
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     # GROUPING SETS rollup rows. The api_key metadata lookup is driven
     # by any non-NULL api_key in the result set, so the (date, endpoint,
@@ -936,6 +951,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
 async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resolve():
     """/key/info reads the active key table only, so deleted and never-stored (session) keys must not claim to exist."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     base = {
         "date": "2024-01-01",
         "endpoint": "/v1/chat/completions",
@@ -1034,6 +1050,7 @@ async def test_get_daily_activity_applies_resolve_entity_metadata_to_breakdown()
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     records = [
         _daily_user_spend_record(user_id="user-with-email", api_key="key-1", spend=7.0),
@@ -1089,6 +1106,7 @@ async def test_model_groups_breakdown_keys_by_public_name_with_model_fallback():
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     records = [
         _daily_user_spend_record(user_id="u1", api_key="key-1", spend=7.0, model="gpt-5.2", model_group="gpt-5.2-eu"),
@@ -1399,6 +1417,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     mock_rows = [
         {
@@ -1570,6 +1589,7 @@ async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
     row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, row_counts)
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
@@ -1639,6 +1659,7 @@ async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_both
     row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, row_counts)
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
@@ -1667,6 +1688,7 @@ async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_both
 def _prisma_with_marker(marker: str | None) -> MagicMock:
     prisma = MagicMock()
     prisma.db = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     row = (
@@ -1858,6 +1880,7 @@ async def test_get_daily_activity_aggregated_reports_exact_limit_key_count_as_co
     row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, row_counts)
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
@@ -1907,6 +1930,7 @@ async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_mo
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
@@ -2561,6 +2585,7 @@ class TestPtuCostAttributionDisabled:
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_table = MagicMock()
         mock_table.count = AsyncMock(return_value=2)
         mock_table.find_many = AsyncMock(
@@ -2599,6 +2624,7 @@ class TestPtuCostAttributionDisabled:
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_table = MagicMock()
         mock_table.count = AsyncMock(return_value=2)
         mock_table.find_many = AsyncMock(
@@ -2728,6 +2754,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
     query's rollup dispatch."""
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     base = {
         "model": None,
@@ -2832,6 +2859,7 @@ async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
 
     session_digest = hash_token("cli-session-user-42")
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
@@ -2964,6 +2992,7 @@ def _team_spend_row(
 def _export_prisma(conn: psycopg.Connection, token_rows: Sequence[SimpleNamespace] = ()) -> MagicMock:
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _psycopg_query_raw(conn, [])
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(token_rows))
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])

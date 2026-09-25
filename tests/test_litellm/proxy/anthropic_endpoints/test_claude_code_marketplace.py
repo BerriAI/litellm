@@ -75,6 +75,7 @@ def _make_mock_prisma():
     mock_table.create = AsyncMock(side_effect=_create)
     mock_table.update = AsyncMock(side_effect=_update)
     mock_client.db.litellm_claudecodeplugintable = mock_table
+    mock_client.replica_db = mock_client.db
     return mock_client
 
 

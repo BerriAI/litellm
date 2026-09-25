@@ -308,7 +308,7 @@ class ResponsesSessionHandler:
         for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
-            if spend_logs := await prisma_client.db.query_raw(query, response_id):
+            if spend_logs := await prisma_client.replica_db.query_raw(query, response_id):
                 verbose_proxy_logger.debug(
                     "Found the following spend logs for previous response id %s: %s",
                     response_id,

@@ -149,6 +149,7 @@ def client_and_mocks(monkeypatch):
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
+    mock_prisma.replica_db = mock_prisma.db
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
@@ -208,6 +209,7 @@ def test_create_access_group_success(client_and_mocks, base_path, payload):
     """Create access group with various payloads returns 201."""
     client, mock_prisma, mock_table, *_ = client_and_mocks
     mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[_make_team_record("team-1")])
+    mock_prisma.replica_db = mock_prisma.db
 
     resp = client.post(base_path, json=payload)
     assert resp.status_code == 201
@@ -303,6 +305,7 @@ def test_list_access_groups_success_empty(client_and_mocks, base_path):
     assert resp.json() == []
     mock_table.find_many.assert_awaited_once()
     mock_prisma.db.litellm_teamtable.find_many.assert_not_awaited()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
@@ -454,6 +457,7 @@ def test_get_access_group_empty_column_and_no_teams_returns_empty(client_and_moc
 
     mock_table.find_unique = AsyncMock(return_value=_make_access_group_record(access_group_id="ag-123"))
     mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
 
     resp = client.get("/v1/access_group/ag-123")
     assert resp.status_code == 200
@@ -1436,6 +1440,7 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
 
 def _mock_resource_tables(mock_prisma, *, mcp_servers=(), agents=(), teams=(), keys=()):
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_servers))
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=list(agents))
     mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=list(teams))
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(keys))
@@ -1550,6 +1555,7 @@ def test_list_access_groups_skips_lookups_when_nothing_to_resolve(client_and_moc
     assert all(group["access_mcp_servers"] == [] and group["assigned_keys"] == [] for group in resp.json())
 
     mock_prisma.db.litellm_mcpservertable.find_many.assert_not_awaited()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.find_many.assert_not_awaited()
     mock_prisma.db.litellm_verificationtoken.find_many.assert_not_awaited()
 
@@ -1559,6 +1565,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
     client, mock_prisma, *_ = client_and_mocks
     team_record = _make_team_record("team-1", team_alias="Platform")
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_record)
+    mock_prisma.replica_db = mock_prisma.db
     _mock_resource_tables(
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-a", alias="GitHub")],

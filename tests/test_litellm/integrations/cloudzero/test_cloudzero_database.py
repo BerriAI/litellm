@@ -12,7 +12,8 @@ from litellm.integrations.cloudzero.database import LiteLLMDatabase
 def _setup_db(monkeypatch: pytest.MonkeyPatch, query_return):
     """Return a database instance with prisma client mocked out."""
     query_mock = AsyncMock(return_value=query_return)
-    mock_client = SimpleNamespace(db=SimpleNamespace(query_raw=query_mock))
+    mock_db = SimpleNamespace(query_raw=query_mock)
+    mock_client = SimpleNamespace(db=mock_db, replica_db=mock_db)
     db = LiteLLMDatabase()
     monkeypatch.setattr(db, "_ensure_prisma_client", lambda: mock_client)
     return db, query_mock

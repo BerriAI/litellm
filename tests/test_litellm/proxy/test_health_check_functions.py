@@ -25,6 +25,7 @@ def mock_prisma():
     """Simplified mock PrismaClient with bound methods"""
     client = MagicMock()
     client.db.litellm_healthchecktable.create = AsyncMock(return_value={"id": "test-id"})
+    client.replica_db = client.db
     client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[{"id": "1", "model_name": "test"}])
 
     # Bind actual methods
@@ -55,6 +56,7 @@ async def test_save_health_check_result(mock_prisma, status, healthy, unhealthy,
     """Test health check result saving with various scenarios"""
     if not should_succeed:
         mock_prisma.db.litellm_healthchecktable.create.side_effect = Exception("DB Error")
+        mock_prisma.replica_db = mock_prisma.db
 
     result = await mock_prisma.save_health_check_result(
         model_name="test-model",
@@ -74,6 +76,7 @@ async def test_get_health_check_history(mock_prisma):
     """Test health check history retrieval"""
     result = await mock_prisma.get_health_check_history(model_name="test", limit=50)
     mock_prisma.db.litellm_healthchecktable.find_many.assert_called_once()
+    mock_prisma.replica_db = mock_prisma.db
     assert len(result) == 1
 
 
@@ -375,6 +378,7 @@ async def test_save_background_health_checks_to_db():
     mock_prisma = MagicMock()
     mock_prisma.save_health_check_result = AsyncMock()
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
 
     model_list = [
         {
@@ -494,6 +498,7 @@ def _one_model_setup():
 async def test_save_background_health_checks_to_db_returns_false_when_a_write_fails():
     mock_prisma = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.save_health_check_result = AsyncMock(return_value=None)
     model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
 
@@ -511,6 +516,7 @@ async def test_save_background_health_checks_to_db_writes_nothing_when_the_lates
     cycle by every pod while the read kept failing, which is what filled the table in production.
     """
     mock_prisma.db.query_raw = AsyncMock(side_effect=RuntimeError("db down"))
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.save_health_check_result = AsyncMock(return_value={"id": "row"})
     model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
 
@@ -533,6 +539,7 @@ async def test_save_background_health_checks_to_db_exception_handling():
     """Test exception handling in background health check save"""
     mock_prisma = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(side_effect=Exception("DB Error"))
+    mock_prisma.replica_db = mock_prisma.db
 
     model_list = [
         {
@@ -584,6 +591,7 @@ async def test_get_all_latest_health_checks_keeps_every_distinct_group_with_its_
             _raw_latest_row("gpt-4", None, now - timedelta(minutes=3)),
         ]
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     result = await mock_prisma.get_all_latest_health_checks()
 
@@ -609,6 +617,7 @@ async def test_save_background_health_checks_compares_raw_checked_at_against_utc
             _raw_latest_row("fresh-model", "fresh-id", fresh),
         ]
     )
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.save_health_check_result = AsyncMock()
     model_list = [
         {"model_name": "stale-model", "model_info": {"id": "stale-id"}, "litellm_params": {"model": "openai/stale"}},

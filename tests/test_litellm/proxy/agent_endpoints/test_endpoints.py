@@ -78,6 +78,7 @@ client = TestClient(app)
 @pytest.fixture
 def mock_prisma_client():
     with patch("litellm.proxy.proxy_server.prisma_client") as mock:
+        mock.replica_db = mock.db
         yield mock
 
 
@@ -210,6 +211,7 @@ def test_agent_error_schema_consistency(
 @pytest.mark.asyncio
 async def test_get_agent_daily_activity_admin_param_passing(monkeypatch):
     mock_prisma = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -248,6 +250,7 @@ async def test_get_agent_daily_activity_admin_param_passing(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_agent_daily_activity_with_agent_names(monkeypatch):
     mock_prisma = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_agent1 = MagicMock()
     mock_agent1.agent_id = "agent-1"
     mock_agent1.agent_name = "First Agent"
@@ -305,6 +308,7 @@ async def test_attach_keys_to_agents_groups_by_agent_and_omits_secret():
     agent_without_keys = _sample_agent_response(agent_id="agent-2")
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[
             _Row("hash-aaa", "agent-1", "primary", "sk-...aaa"),
@@ -350,6 +354,7 @@ class TestAgentByIdKeyRedaction:
 
         test_client = _make_app_with_role(role)
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
@@ -412,6 +417,7 @@ class TestAgentRBACInternalUser:
             return_value=_sample_agent_response()
         )
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
@@ -534,6 +540,7 @@ class TestAgentRBACProxyAdminViewOnly:
         key_row.key_name = "sk-...aaa"
 
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
             mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
                 return_value=[key_row]
@@ -580,6 +587,7 @@ class TestAgentRBACProxyAdmin:
 
     def test_should_allow_admin_to_create_agent(self, monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
             self.mock_registry.add_agent_to_db = AsyncMock(
                 return_value=_sample_agent_response()
@@ -662,6 +670,7 @@ class TestAgentRBACProxyAdmin:
     def test_update_agent_response_never_echoes_secret(self):
         """LIT-6736: PUT /v1/agents/{id} must not echo the stored secret back."""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value={
                     "agent_id": "agent-123",
@@ -697,6 +706,7 @@ class TestAgentRBACProxyAdmin:
     def test_patch_agent_response_never_echoes_secret(self):
         """LIT-6736: PATCH /v1/agents/{id} must not echo the stored secret back."""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value={
                     "agent_id": "agent-123",
@@ -732,6 +742,7 @@ class TestAgentRBACProxyAdmin:
             "agent_card_params": _sample_agent_card_params(),
         }
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=existing
             )
@@ -1319,6 +1330,7 @@ def test_kill_switch_trigger_fires_the_db_row_config_over_a_stale_in_memory_copy
         kill_switch={"url": "https://ops.example.com/kill-v2", "method": "DELETE", "auth": None},
     )
     prisma: Final = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=db_row)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     fake: Final = _FakeKillSwitchClient(httpx.Response(204))
@@ -1342,6 +1354,7 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
 
     def _get_as(role: LitellmUserRoles):
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
             mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
             return _make_app_with_role(role).get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})

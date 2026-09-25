@@ -103,6 +103,7 @@ class TestListPoliciesIncludesConfig:
         row = _make_policy_row(policy_id="uuid-1", policy_name="db-policy", guardrails_add=["db-guard"])
         prisma = MagicMock()
         prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[row])
+        prisma.replica_db = prisma.db
         _set_prisma(monkeypatch, prisma)
         policy_registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
 
@@ -124,6 +125,7 @@ class TestListPoliciesIncludesConfig:
         row = _make_policy_row(policy_id="uuid-1", policy_name="shared-name", guardrails_add=["db-guard"])
         prisma = MagicMock()
         prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[row])
+        prisma.replica_db = prisma.db
         _set_prisma(monkeypatch, prisma)
         policy_registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
 
@@ -146,6 +148,7 @@ class TestListPoliciesIncludesConfig:
         )
         prisma = MagicMock()
         prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[row])
+        prisma.replica_db = prisma.db
         _set_prisma(monkeypatch, prisma)
         policy_registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
 
@@ -171,11 +174,13 @@ class TestListPoliciesIncludesConfig:
         production_row = _make_policy_row(policy_id="uuid-1", policy_name="shared-name", guardrails_add=["db-guard"])
         sync_prisma = MagicMock()
         sync_prisma.db.litellm_policytable.find_many = AsyncMock(side_effect=[[production_row], []])
+        sync_prisma.replica_db = sync_prisma.db
         await policy_registry.sync_policies_from_db(sync_prisma)
         assert policy_registry.get_source("shared-name") == "db"
 
         fresh_prisma = MagicMock()
         fresh_prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[])
+        fresh_prisma.replica_db = fresh_prisma.db
         _set_prisma(monkeypatch, fresh_prisma)
 
         response = await policy_endpoints.list_policies()
@@ -191,6 +196,7 @@ class TestListPoliciesIncludesConfig:
         row = _make_policy_row(policy_id="uuid-1", policy_name="db-policy", version_status="draft")
         prisma = MagicMock()
         prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[row])
+        prisma.replica_db = prisma.db
         _set_prisma(monkeypatch, prisma)
         policy_registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
 
@@ -232,6 +238,7 @@ class TestListAttachmentsIncludesConfig:
         row = _make_attachment_row(attachment_id="att-1", policy_name="db-policy")
         prisma = MagicMock()
         prisma.db.litellm_policyattachmenttable.find_many = AsyncMock(return_value=[row])
+        prisma.replica_db = prisma.db
         _set_prisma(monkeypatch, prisma)
         attachment_registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
 

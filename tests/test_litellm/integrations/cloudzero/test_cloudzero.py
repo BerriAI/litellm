@@ -153,6 +153,7 @@ class TestCloudZeroHourlyExport:
             fake_db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
             fake_db.litellm_usertable.find_many = AsyncMock(return_value=[])
             fake_client.db = fake_db
+            fake_client.replica_db = fake_db
             mock_prisma_client_getter.return_value = fake_client
 
             mock_datetime.now.return_value = datetime(2025, 11, 1, 12, 0, 1)
@@ -182,6 +183,7 @@ class TestLiteLLMDatabaseUsageData:
 
         fake_client = MagicMock()
         fake_client.db.query_raw = AsyncMock(side_effect=query_raw)
+        fake_client.replica_db = fake_client.db
         db = LiteLLMDatabase()
         monkeypatch.setattr(db, "_ensure_prisma_client", lambda: fake_client)
 

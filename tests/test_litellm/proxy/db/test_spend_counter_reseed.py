@@ -78,6 +78,7 @@ class _FakePrismaClient:
             litellm_verificationtoken=_InFlightCountingTable(),
             litellm_projecttable=_FakeFindUniqueTable(row=project_row),
         )
+        self.replica_db = self.db
 
 
 def _row(window_start: datetime, spend: float) -> SimpleNamespace:
@@ -99,7 +100,8 @@ class _PausedSpendTable:
 async def _reseed_with_paused_table(
     table: _PausedSpendTable, cache: DualCache, counter_key: str, window: bool
 ) -> float | None:
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_usertable=table, litellm_budgetwindowspend=table))
+    tables: Final = SimpleNamespace(litellm_usertable=table, litellm_budgetwindowspend=table)
+    prisma: Final = SimpleNamespace(db=tables, replica_db=tables)
     if window:
         return await SpendCounterReseed.coalesced_window(
             prisma_client=prisma,

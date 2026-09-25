@@ -147,6 +147,7 @@ def _make_user(user_id: str, password) -> SimpleNamespace:
 async def test_migrate_passwords_skips_when_no_plaintext() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
+    pc.replica_db = pc.db
     sha = hashlib.sha256(b"already-hashed").hexdigest()
     pc.db.litellm_usertable.find_many = AsyncMock(
         return_value=[
@@ -175,6 +176,7 @@ async def test_migrate_passwords_skips_when_no_plaintext() -> None:
 async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
+    pc.replica_db = pc.db
     users: List[SimpleNamespace] = [
         _make_user("plaintext-user-1", "plain-1"),
         _make_user("plaintext-user-2", "plain-2"),
@@ -216,6 +218,7 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
 async def test_migrate_passwords_raises_on_db_failure() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
+    pc.replica_db = pc.db
     pc.db.litellm_usertable.find_many = AsyncMock(
         side_effect=RuntimeError("db unavailable")
     )

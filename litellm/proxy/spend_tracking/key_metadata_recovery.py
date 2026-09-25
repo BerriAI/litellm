@@ -136,7 +136,7 @@ async def _reverse_hash_key_metadata(
     warning: str,
 ) -> Mapping[str, KeyMetadataDict]:
     rows: Final = await _db_or_empty(
-        lambda: prisma_client.db.query_raw(sql, sorted(wanted)),
+        lambda: prisma_client.replica_db.query_raw(sql, sorted(wanted)),
         warning,
         len(wanted),
     )

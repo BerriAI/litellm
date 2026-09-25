@@ -13,7 +13,8 @@ from litellm.integrations.focus.database import FocusLiteLLMDatabase
 def _setup_db(monkeypatch: pytest.MonkeyPatch, query_return):
     """Create a database instance with a stubbed prisma client."""
     query_mock = AsyncMock(return_value=query_return)
-    mock_client = SimpleNamespace(db=SimpleNamespace(query_raw=query_mock))
+    mock_db = SimpleNamespace(query_raw=query_mock)
+    mock_client = SimpleNamespace(db=mock_db, replica_db=mock_db)
     db = FocusLiteLLMDatabase()
     monkeypatch.setattr(db, "_ensure_prisma_client", lambda: mock_client)
     return db, query_mock
@@ -101,7 +102,8 @@ async def test_should_build_frame_from_rows_recovered_for_double_hashed_keys(mon
             return [{"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": None}]
         return [joined_row, dirty_row]
 
-    mock_client = SimpleNamespace(db=SimpleNamespace(query_raw=AsyncMock(side_effect=query_raw)))
+    mock_db = SimpleNamespace(query_raw=AsyncMock(side_effect=query_raw))
+    mock_client = SimpleNamespace(db=mock_db, replica_db=mock_db)
     db = FocusLiteLLMDatabase()
     monkeypatch.setattr(db, "_ensure_prisma_client", lambda: mock_client)
 

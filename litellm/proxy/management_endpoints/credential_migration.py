@@ -222,7 +222,7 @@ async def _migrate_config_settings_row(
     dict with selected sensitive fields (vantage_settings / cloudzero_settings).
     """
     report: Final = LocationReport(location=param_name)
-    record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": param_name})
+    record: Final = await prisma_client.replica_db.litellm_config.find_unique(where={"param_name": param_name})
     if record is None or record.param_value is None:
         return report
 
@@ -274,7 +274,7 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
     every present string field.
     """
     report: Final = LocationReport(location="sso_config")
-    record: Final = await prisma_client.db.litellm_ssoconfig.find_unique(where={"id": "sso_config"})
+    record: Final = await prisma_client.replica_db.litellm_ssoconfig.find_unique(where={"id": "sso_config"})
     if record is None or record.sso_settings is None:
         return report
 
@@ -341,10 +341,10 @@ async def _migrate_callback_vars_table(
     report: Final = LocationReport(location=f"{table_name}.callback_vars")
 
     if table_name == "team":
-        table = prisma_client.db.litellm_teamtable
+        table = prisma_client.replica_db.litellm_teamtable
         pk = "team_id"
     else:
-        table = prisma_client.db.litellm_verificationtoken
+        table = prisma_client.replica_db.litellm_verificationtoken
         pk = "token"
 
     rows: Final = await table.find_many()
@@ -510,7 +510,7 @@ async def _scan_one_table(
     scalar_columns: tuple,
 ) -> LocationReport:
     report: Final = LocationReport(location=location)
-    table: Final = getattr(prisma_client.db, db_attr, None)
+    table: Final = getattr(prisma_client.replica_db, db_attr, None)
     if table is None:
         return report
     try:
@@ -544,7 +544,9 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
     """Scan the ``environment_variables`` config row (``param_value`` dict)."""
     report: Final = LocationReport(location="config_environment_variables")
     try:
-        record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": "environment_variables"})
+        record: Final = await prisma_client.replica_db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
     except Exception as e:  # pragma: no cover - defensive
         verbose_proxy_logger.debug("scan: config env vars unavailable: %s", str(e))
         return report

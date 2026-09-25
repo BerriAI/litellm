@@ -2347,6 +2347,7 @@ async def test_proxy_server_prisma_setup():
         mock_db = MagicMock()
         mock_db.start_token_refresh_task = AsyncMock()
         mock_client.db = mock_db
+        mock_client.replica_db = mock_client.db
 
         prisma_client = await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -3009,6 +3010,7 @@ async def test_update_config_success_callback_normalization():
     class MockPrisma:
         def __init__(self):
             self.db = MagicMock()
+            self.replica_db = self.db
             self.db.litellm_config = MagicMock()
             self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
             self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)

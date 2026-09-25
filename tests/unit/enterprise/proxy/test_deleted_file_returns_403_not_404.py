@@ -37,6 +37,7 @@ def _make_managed_files_with_no_db_record():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
 
     return _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
@@ -76,6 +77,7 @@ async def test_should_allow_owner_access_when_record_exists():
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
         return_value=mock_db_record
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     managed_files = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
@@ -105,6 +107,7 @@ async def test_should_block_different_user_when_record_exists():
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
         return_value=mock_db_record
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     managed_files = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),

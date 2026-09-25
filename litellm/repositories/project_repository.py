@@ -18,7 +18,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
-        return self.prisma_client.db.litellm_projecttable
+        return self.prisma_client.replica_db.litellm_projecttable
 
     @property
     def model_class(self) -> type[LiteLLM_ProjectTable]:

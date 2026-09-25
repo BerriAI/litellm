@@ -40,6 +40,7 @@ class _FakeBatcher:
 def _prisma(batch_: MagicMock) -> MagicMock:
     prisma = MagicMock()
     prisma.db.batch_ = batch_
+    prisma.replica_db = prisma.db
     prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock()
     return prisma
 
@@ -296,12 +297,14 @@ class TestFlushToolUsageTransactions:
         ]
         batcher.litellm_spendlogtoolindex.create_many.assert_not_called()
         prisma.db.batch_.assert_called_once()
+        prisma.replica_db = prisma.db
         assert batcher.litellm_dailytoolspend.upsert.call_count == len(tool_names)
 
     @pytest.mark.asyncio
     async def test_index_connection_error_is_retried_before_the_rollup_is_attempted(self, monkeypatch):
         prisma, batcher = _prisma_with_batcher()
         prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=[httpx.ConnectError("down"), None])
+        prisma.replica_db = prisma.db
 
         async def fake_sleep(seconds: float) -> None:
             return None
@@ -310,12 +313,14 @@ class TestFlushToolUsageTransactions:
         await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         assert prisma.db.litellm_spendlogtoolindex.create_many.await_count == 2
         prisma.db.batch_.assert_called_once()
+        prisma.replica_db = prisma.db
         batcher.litellm_dailytoolspend.upsert.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ambiguous_index_error_drops_the_batch_without_touching_the_rollup(self):
         prisma, _ = _prisma_with_batcher()
         prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=httpx.ReadTimeout("ambiguous"))
+        prisma.replica_db = prisma.db
         with pytest.raises(httpx.ReadTimeout):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.litellm_spendlogtoolindex.create_many.assert_awaited_once()
@@ -326,6 +331,7 @@ class TestFlushToolUsageTransactions:
         prisma, _ = _prisma_with_batcher()
         await flush_tool_usage_transactions(prisma_client=prisma, transactions=[])
         prisma.db.batch_.assert_not_called()
+        prisma.replica_db = prisma.db
 
     @pytest.mark.asyncio
     async def test_connection_errors_retry_and_succeed(self, monkeypatch):
@@ -364,6 +370,7 @@ class TestFlushToolUsageTransactions:
         with pytest.raises(ValueError, match="bad data"):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
+        prisma.replica_db = prisma.db
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ambiguous_error", ["ReadTimeout", "ReadError"])
@@ -377,3 +384,4 @@ class TestFlushToolUsageTransactions:
         with pytest.raises((httpx.ReadTimeout, httpx.ReadError)):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
+        prisma.replica_db = prisma.db

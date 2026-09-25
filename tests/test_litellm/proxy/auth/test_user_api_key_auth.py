@@ -1977,6 +1977,7 @@ async def test_auto_register_binds_api_key_to_token_hash():
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
 
     user_api_key_cache = MagicMock()
@@ -2033,6 +2034,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
     general_settings = {"enable_jwt_auth": True}
     user_api_key_cache = DualCache()
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
     jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
@@ -2156,6 +2158,7 @@ async def test_auto_register_stamps_new_key_with_jwt_agent_id():
         credential_ref=CredentialRef(token_id=token_hash),
     )
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_set_cache = AsyncMock()
@@ -2213,6 +2216,7 @@ async def test_auto_register_race_loser_keeps_winners_agent_id(losing_agent_id: 
         credential_ref=CredentialRef(token_id=winner_hash),
     )
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
         side_effect=Exception("Unique constraint failed on the fields: (`jwt_claim_name`,`jwt_claim_value`)")
     )
@@ -2588,6 +2592,7 @@ class TestJWTOAuth2Coexistence:
         general_settings = {"enable_jwt_auth": True}
         user_api_key_cache = DualCache()
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
@@ -2684,6 +2689,7 @@ class TestJWTOAuth2Coexistence:
         general_settings = {"enable_jwt_auth": True}
         user_api_key_cache = DualCache()
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
@@ -2759,6 +2765,7 @@ class TestJWTOAuth2Coexistence:
         general_settings = {"enable_jwt_auth": True}
         user_api_key_cache = DualCache()
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "jwt-principal"})
@@ -2835,6 +2842,7 @@ class TestJWTOAuth2Coexistence:
         general_settings = {"enable_jwt_auth": True}
         user_api_key_cache = DualCache()
         prisma_client = MagicMock()
+        prisma_client.replica_db = prisma_client.db
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
@@ -4336,6 +4344,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
         return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
@@ -4600,6 +4609,7 @@ def _unrestricted_end_user_prisma(spend: float):
     end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -6598,8 +6608,10 @@ def _proxy_attrs_for_db_lookup():
     ``_user_api_key_auth_builder`` down to the DB key lookup."""
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     return {
-        "prisma_client": MagicMock(),
+        "prisma_client": prisma_client,
         "user_api_key_cache": DualCache(),
         "proxy_logging_obj": proxy_logging_obj,
         "master_key": "sk-test-master",
@@ -7729,6 +7741,7 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
     proxy_budget_row = MagicMock()
     proxy_budget_row.spend = 42.5
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=proxy_budget_row)
     prisma_client.db.query_raw = AsyncMock(
         side_effect=AssertionError("global spend must not be loaded from the fixed-30d MonthlyGlobalSpend view")
@@ -7754,6 +7767,7 @@ async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     result = await _fetch_global_spend_with_event_coordination(
@@ -8528,7 +8542,7 @@ def _per_issuer_virtual_key_jwt_handler(
 def _fake_prisma_with_jwt_key_mapping(hashed_token: str | None) -> tuple[SimpleNamespace, AsyncMock]:
     """Every ``find_first`` call (issuer-scoped or global fallback) resolves the same way."""
     find_first = AsyncMock(return_value=None if hashed_token is None else SimpleNamespace(token=hashed_token))
-    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)))
+    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)), replica_db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)))
     return prisma_client, find_first
 
 
@@ -8547,7 +8561,7 @@ def _fake_prisma_jwt_key_mapping_table(rows: list[dict[str, object]]) -> tuple[S
         return None
 
     find_first = AsyncMock(side_effect=_find_first)
-    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)))
+    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)), replica_db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)))
     return prisma_client, find_first
 
 

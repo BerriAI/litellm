@@ -50,6 +50,7 @@ def _build_prisma_mock(db_batch_object=None):
     mock.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     mock.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=db_batch_object)
     mock.db.litellm_managedobjecttable.update = AsyncMock()
+    mock.replica_db = mock.db
     return mock
 
 
@@ -376,6 +377,7 @@ def _in_memory_managed_files():
     prisma = MagicMock()
     prisma.db.litellm_managedobjecttable = table
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma.replica_db = prisma.db
 
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()

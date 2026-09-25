@@ -55,6 +55,7 @@ def _make_router(
 def _make_mock_prisma():
     p = MagicMock()
     p.db.litellm_adaptiverouterstate.find_unique = AsyncMock(return_value=None)
+    p.replica_db = p.db
     p.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[])
     p.db.litellm_adaptiverouterstate.upsert = AsyncMock()
     p.db.litellm_adaptiveroutersession.upsert = AsyncMock()
@@ -200,6 +201,7 @@ async def test_load_state_from_db_adds_persisted_delta_to_cold_start():
 
     prisma = _make_mock_prisma()
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[fake_row])
+    prisma.replica_db = prisma.db
 
     await router.load_state_from_db(prisma)
 
@@ -219,6 +221,7 @@ async def test_load_state_from_db_handles_unknown_request_type():
 
     prisma = _make_mock_prisma()
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[bad_row])
+    prisma.replica_db = prisma.db
 
     # Should not raise; bad row is silently skipped and cold-start cells remain.
     await router.load_state_from_db(prisma)

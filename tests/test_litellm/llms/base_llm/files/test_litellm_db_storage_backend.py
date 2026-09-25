@@ -14,7 +14,8 @@ from litellm.llms.base_llm.files.litellm_db_storage_backend import (
 
 def _backend_with_table():
     table = MagicMock(create=AsyncMock(), find_unique=AsyncMock(), delete=AsyncMock())
-    prisma_client = MagicMock(db=MagicMock(litellm_managedfilecontenttable=table))
+    tables = MagicMock(litellm_managedfilecontenttable=table)
+    prisma_client = MagicMock(db=tables, replica_db=tables)
     return LiteLLMDbStorageBackend(prisma_client), table
 
 

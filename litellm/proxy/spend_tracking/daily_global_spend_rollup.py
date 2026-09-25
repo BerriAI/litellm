@@ -177,7 +177,7 @@ async def _advance_marker(prisma_client: "PrismaClient", days: tuple[str, ...], 
 
 
 async def _db_now(prisma_client: "PrismaClient") -> _NowRow:
-    rows: Final = await prisma_client.db.query_raw(_DB_NOW_SQL)
+    rows: Final = await prisma_client.replica_db.query_raw(_DB_NOW_SQL)
     return _NowRow.model_validate(rows[0])
 
 
@@ -189,9 +189,9 @@ async def _scan_pending(prisma_client: "PrismaClient") -> _PendingScan:
     db_now: Final = await _db_now(prisma_client)
     last_closed_day: Final = (date.fromisoformat(db_now.today) - timedelta(days=1)).isoformat()
     rows: Final = (
-        await prisma_client.db.query_raw(_ALL_CLOSED_DAYS_SQL, last_closed_day)
+        await prisma_client.replica_db.query_raw(_ALL_CLOSED_DAYS_SQL, last_closed_day)
         if marker is None or marker.scanned_at is None
-        else await prisma_client.db.query_raw(
+        else await prisma_client.replica_db.query_raw(
             _PENDING_DAYS_SQL, last_closed_day, marker.reconciled_through, marker.scanned_at
         )
     )

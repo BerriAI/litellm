@@ -22,7 +22,7 @@ class _SupportsRawQueryDb(Protocol):
     """A prisma client handle, narrowed to the raw-query surface used here."""
 
     @property
-    def db(self) -> _SupportsQueryRaw: ...
+    def replica_db(self) -> _SupportsQueryRaw: ...
 
 
 class CacheActivityGroup(BaseModel):
@@ -169,12 +169,14 @@ async def get_cache_activity(
     key_aliases_json: Final = json.dumps(list(key_aliases))
     models_json: Final = json.dumps(list(models))
     group_rows, error_rows, key_alias_rows, model_rows = await asyncio.gather(
-        prisma_client.db.query_raw(GROUPS_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON),
-        prisma_client.db.query_raw(
+        prisma_client.replica_db.query_raw(
+            GROUPS_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON
+        ),
+        prisma_client.replica_db.query_raw(
             ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON
         ),
-        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
-        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
+        prisma_client.replica_db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
+        prisma_client.replica_db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
     )
     groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(

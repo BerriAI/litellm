@@ -1,7 +1,7 @@
 """
 Typed Protocol seams over prisma-client-py surfaces.
 
-Modules that reach Prisma through an untyped handle (``prisma_client.db`` or a
+Modules that reach Prisma through an untyped handle (``prisma_client.replica_db`` or a
 repository ``.table``) annotate against these Protocols instead of hand-rolling
 private ones per file.
 """
@@ -14,7 +14,7 @@ RowT_co = TypeVar("RowT_co", covariant=True)
 
 class DatabaseClient(Protocol):
     @property
-    def db(self) -> object: ...
+    def replica_db(self) -> object: ...
 
 
 class TableActions(Protocol[RowT_co]):

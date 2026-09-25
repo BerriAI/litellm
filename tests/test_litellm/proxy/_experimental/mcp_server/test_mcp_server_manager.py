@@ -1095,7 +1095,8 @@ class TestMCPServerManager:
         table = SimpleNamespace(
             find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
         )
-        prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+        tables = SimpleNamespace(litellm_mcpservertable=table)
+        prisma = SimpleNamespace(db=tables, replica_db=tables)
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):

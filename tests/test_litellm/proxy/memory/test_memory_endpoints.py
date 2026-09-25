@@ -212,6 +212,7 @@ def _make_team(team_id: str, *, admin_user_ids: List[str]) -> Any:
 def _make_prisma() -> MagicMock:
     client = MagicMock()
     client.db = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_memorytable = _InMemoryMemoryTable()
     client.db.litellm_teamtable = _InMemoryTeamTable()
     return client

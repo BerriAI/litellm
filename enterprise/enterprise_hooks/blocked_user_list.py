@@ -90,7 +90,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                 if end_user_cache_obj is None and self.prisma_client is not None:
                     # check db
                     end_user_obj = (
-                        await self.prisma_client.db.litellm_endusertable.find_unique(
+                        await self.prisma_client.replica_db.litellm_endusertable.find_unique(
                             where={"user_id": user}
                         )
                     )

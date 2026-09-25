@@ -947,9 +947,8 @@ class TestAzureContainerKnownFailureRegressions:
             file_purpose=ownership.CONTAINER_OBJECT_PURPOSE,
             unified_object_id=encoded_stored_id,
         )
-        prisma_client = SimpleNamespace(
-            db=SimpleNamespace(litellm_managedobjecttable=table)
-        )
+        tables = SimpleNamespace(litellm_managedobjecttable=table)
+        prisma_client = SimpleNamespace(db=tables, replica_db=tables)
         monkeypatch.setattr(
             ownership,
             "_get_prisma_client",

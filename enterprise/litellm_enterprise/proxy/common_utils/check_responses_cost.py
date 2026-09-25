@@ -43,7 +43,7 @@ class _ManagedObjectRow(Protocol):
 
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
+    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.replica_db.litellm_managedobjecttable
     return table
 
 

@@ -62,6 +62,7 @@ def _job(**overrides) -> ActiveShadowEvalJob:
 def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
     costs = {job_id: {"judge_cost": judge, "shadow_cost": shadow} for job_id, judge, shadow in attempt_costs}
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=list(jobs))
     prisma.db.litellm_shadowevalattempt.group_by = AsyncMock(
         return_value=[

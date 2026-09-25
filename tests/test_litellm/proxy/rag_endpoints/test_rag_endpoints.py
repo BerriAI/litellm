@@ -552,6 +552,7 @@ def test_rag_ingest_rejects_non_string_provider(client_internal_user):
 def test_rag_ingest_never_creates_db_row_for_registry_store(client_internal_user):
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     create_in_db = AsyncMock()
     aingest_patch, registry_patch = _patched_ingest_boundary(
         S3_REGISTRY_STORE, {"vector_store_id": "s3-store", "file_id": "file_123"}
@@ -576,6 +577,7 @@ def test_rag_ingest_never_creates_db_row_for_registry_store(client_internal_user
 def test_rag_ingest_fresh_store_creates_db_row_with_the_requesters_params(client_internal_user):
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     create_in_db = AsyncMock()
     with (
         patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; persistence is what the test asserts
@@ -633,6 +635,7 @@ async def test_save_vector_store_from_rag_ingest_appends_file_to_db_managed_stor
     existing_row.vector_store_metadata = {"ingested_files": [{"file_id": "file_old"}]}
     prisma_client = MagicMock()
     table = prisma_client.db.litellm_managedvectorstorestable
+    prisma_client.replica_db = prisma_client.db
     table.find_unique = AsyncMock(return_value=existing_row)
     table.update = AsyncMock()
     create_in_db = AsyncMock()
@@ -660,6 +663,7 @@ async def test_save_vector_store_from_rag_ingest_still_creates_row_for_fresh_sto
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     create_in_db = AsyncMock()
 
     with patch(  # test-quality-ok: the DB write boundary whose inputs the test asserts

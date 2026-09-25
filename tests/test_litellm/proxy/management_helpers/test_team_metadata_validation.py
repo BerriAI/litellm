@@ -364,6 +364,7 @@ async def _drive_create(metadata, mock_sink=None):
         pc.get_data = AsyncMock(return_value=None)
         pc.update_data = AsyncMock(return_value=MagicMock())
         pc.db.litellm_teamtable.create = AsyncMock(return_value=team_row)
+        pc.replica_db = pc.db
         pc.db.litellm_teamtable.count = AsyncMock(return_value=0)
         pc.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
         pc.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
@@ -410,6 +411,7 @@ async def _drive_update(kind, existing_metadata, payload):
         ),
     ):
         pc.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+        pc.replica_db = pc.db
         pc.db.litellm_teamtable.update = AsyncMock(
             return_value=LiteLLM_TeamTable(team_id=team_id, team_alias="matrix")
         )

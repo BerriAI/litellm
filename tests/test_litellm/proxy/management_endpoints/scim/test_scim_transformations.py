@@ -85,6 +85,7 @@ def mock_prisma_client():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
 
     mock_find_unique = AsyncMock()
     mock_db.litellm_teamtable.find_unique = mock_find_unique

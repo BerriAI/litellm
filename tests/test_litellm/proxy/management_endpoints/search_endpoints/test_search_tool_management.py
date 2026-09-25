@@ -629,6 +629,7 @@ async def test_get_all_search_tools_from_db_retries_on_transport_error():
     mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
         side_effect=_flaky_find_many
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1

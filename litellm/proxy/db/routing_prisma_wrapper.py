@@ -80,6 +80,10 @@ class WriterPinnedClient:
     def __init__(self, db: "PrismaWrapper | RoutingPrismaWrapper") -> None:
         self.db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) and not db.writer_unavailable else db
 
+    @property
+    def replica_db(self) -> "PrismaWrapper | RoutingPrismaWrapper":
+        return self.db
+
 
 def writer_wrapper(db: "PrismaWrapper | RoutingPrismaWrapper") -> PrismaWrapper:
     """Unlike `WriterPinnedClient`, ignores `writer_unavailable`: a raw SQL write has no replica fallback."""

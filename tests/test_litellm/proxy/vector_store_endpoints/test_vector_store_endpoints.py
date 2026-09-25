@@ -1428,6 +1428,7 @@ class TestIndexCreate:
         mock_prisma.db.litellm_managedvectorstoreindextable.find_unique = AsyncMock(
             return_value=None
         )
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_managedvectorstoreindextable.create = AsyncMock(
             return_value=mock_row
         )
@@ -1481,6 +1482,7 @@ class TestIndexList:
         """Index topology must never reach non-admins, not even via a DB read."""
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_managedvectorstoreindextable.find_many = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
 
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with pytest.raises(HTTPException) as exc_info:
@@ -1514,6 +1516,7 @@ class TestIndexList:
         ]
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_managedvectorstoreindextable.find_many = AsyncMock(return_value=rows)
+        mock_prisma.replica_db = mock_prisma.db
 
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             result = await index_list(user_api_key_dict=self._admin())
@@ -1774,6 +1777,7 @@ async def test_vector_store_synchronization_across_instances():
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         side_effect=mock_find_unique
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
         side_effect=mock_find_many
     )
@@ -2021,6 +2025,7 @@ async def test_vector_store_update_and_list_synchronization():
     mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
         side_effect=mock_find_many
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
         side_effect=mock_create
     )
@@ -2170,6 +2175,7 @@ async def test_new_vector_store_persists_embedding_reference_without_credentials
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     # Track what was passed to create
     captured_create_data = {}
 
@@ -2186,6 +2192,7 @@ async def test_new_vector_store_persists_embedding_reference_without_credentials
     mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
         side_effect=mock_create
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
@@ -2250,6 +2257,7 @@ async def test_new_vector_store_auto_resolves_from_router():
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Track what was passed to create
     captured_create_data = {}
@@ -2265,6 +2273,7 @@ async def test_new_vector_store_auto_resolves_from_router():
         return mock_created_vector_store
 
     mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(side_effect=mock_create)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
@@ -2387,6 +2396,7 @@ async def test_create_vector_store_in_db():
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     created_vector_store_data = {
         "vector_store_id": vector_store_id,
@@ -2463,6 +2473,7 @@ async def test_create_vector_store_in_db_raises_when_exists():
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=existing_vector_store
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     with pytest.raises(HTTPException) as exc_info:
         await create_vector_store_in_db(
@@ -2699,6 +2710,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
             return_value=existing_row
         )
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         with (
             patch(
@@ -2768,6 +2780,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
             return_value=existing_row
         )
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
             return_value=updated_row
         )
@@ -2819,6 +2832,7 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
             return_value=existing_row
         )
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
             return_value=None
         )
@@ -3109,6 +3123,7 @@ class TestConfigOwnedVectorStores:
         registry = self._registry()
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[self._db_row(self.DB_ID, "db-store")])
+        prisma.replica_db = prisma.db
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
@@ -3130,6 +3145,7 @@ class TestConfigOwnedVectorStores:
         prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(
             return_value=[self._db_row(self.DB_ID, "db-store"), self._db_row(self.CONFIG_ID, "renamed-in-db")]
         )
+        prisma.replica_db = prisma.db
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
@@ -3167,6 +3183,7 @@ class TestConfigOwnedVectorStores:
     async def test_new_with_config_store_id_is_rejected_before_db_write(self):
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedvectorstorestable.create = AsyncMock()
 
         with (
@@ -3191,6 +3208,7 @@ class TestConfigOwnedVectorStores:
 
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedvectorstorestable.update = AsyncMock()
         registry = self._registry()
 
@@ -3216,6 +3234,7 @@ class TestConfigOwnedVectorStores:
 
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
         registry = self._registry()
 
@@ -3242,6 +3261,7 @@ class TestConfigOwnedVectorStores:
         row.model_dump = MagicMock(return_value=self._db_row(self.DB_ID, "db-store"))
         prisma = MagicMock()
         prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
+        prisma.replica_db = prisma.db
         prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
         registry = self._registry()
 

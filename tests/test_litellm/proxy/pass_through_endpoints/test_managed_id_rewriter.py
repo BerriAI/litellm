@@ -20,6 +20,7 @@ def _user() -> UserAPIKeyAuth:
 def _prisma_client(file_rows=None, batch_rows=None) -> MagicMock:
     pc = MagicMock()
     pc.db = MagicMock()
+    pc.replica_db = pc.db
     pc.db.litellm_managedfiletable = MagicMock()
     pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     pc.db.litellm_managedfiletable.find_many = AsyncMock(
@@ -118,6 +119,7 @@ async def test_list_batches_out_of_range_limit_raises_400(limit, expected_messag
     assert exc.value.openai_code == expected_openai_code
     assert exc.value.message == expected_message
     pc.db.litellm_managedobjecttable.find_many.assert_not_called()
+    pc.replica_db = pc.db
 
 
 @pytest.mark.asyncio
@@ -140,6 +142,7 @@ async def test_list_batches_limit_zero_returns_empty_page_without_db_query():
         "has_more": False,
     }
     pc.db.litellm_managedobjecttable.find_many.assert_not_called()
+    pc.replica_db = pc.db
 
 
 @pytest.mark.asyncio
@@ -199,6 +202,7 @@ async def test_streamed_response_is_owned_and_rewritten_across_chunk_boundaries(
     )
 
     pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    pc.replica_db = pc.db
     created = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]
     assert created["created_by"] == "user-1"
     assert created["team_id"] == "team-1"
@@ -229,6 +233,7 @@ async def test_streamed_response_with_cr_only_frame_delimiters_is_still_owned_an
     )
 
     pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    pc.replica_db = pc.db
     managed_id = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]["unified_object_id"]
     assert RAW_RESPONSE_ID.encode() not in output
     assert output == _response_stream_bytes(managed_id).replace(b"\n", b"\r")
@@ -252,12 +257,14 @@ async def test_streamed_bytes_untouched_on_routes_without_a_response_id():
 
     assert output == payload
     pc.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+    pc.replica_db = pc.db
 
 
 @pytest.mark.asyncio
 async def test_streamed_response_stays_raw_and_intact_when_the_row_cannot_be_persisted():
     pc = _prisma_client()
     pc.db.litellm_managedobjecttable.upsert = AsyncMock(side_effect=RuntimeError("db down"))
+    pc.replica_db = pc.db
     payload = _response_stream_bytes()
 
     output = await _collect(

@@ -40,6 +40,7 @@ class _PermissionDb:
 @dataclass(frozen=True)
 class _Client:
     db: _PermissionDb = _PermissionDb()
+    replica_db: _PermissionDb = db
 
 
 def _team(**updates: object) -> LiteLLM_TeamTable:

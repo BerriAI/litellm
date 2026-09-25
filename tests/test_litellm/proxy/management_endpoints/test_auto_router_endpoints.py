@@ -643,7 +643,8 @@ class TestAutoRouterBenchmarks:
             async def query_raw(self, sql: str, *params: object):
                 return rows
 
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        db = _DB()
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": db, "replica_db": db})())
         monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
         return await get_auto_router_benchmarks(
             user_api_key_dict=ADMIN,
@@ -817,7 +818,7 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         query: Final = AsyncMock(return_value=[])
-        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query)))
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query), replica_db=SimpleNamespace(query_raw=query)))
         app: Final = FastAPI()
         app.get("/auto_router/benchmarks")(get_auto_router_benchmarks)
         app.dependency_overrides[user_api_key_auth] = lambda: ADMIN
@@ -858,7 +859,8 @@ class TestAutoRouterBenchmarks:
                 captured["params"] = params
                 return [TestAutoRouterBenchmarks.ROW.model_dump()]
 
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        db = _DB()
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": db, "replica_db": db})())
 
         response = await get_auto_router_benchmarks(
             user_api_key_dict=UserAPIKeyAuth(user_role=role, api_key="sk-admin", user_id="viewer"),
@@ -921,7 +923,8 @@ class TestAutoRouterBenchmarks:
             async def query_raw(self, sql: str, *params: object):
                 return [{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}]
 
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        db = _DB()
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": db, "replica_db": db})())
 
         response = await get_auto_router_benchmarks(
             user_api_key_dict=ADMIN,
@@ -1091,10 +1094,11 @@ class TestAutoRouterSession:
                 ]
                 return max(matching, key=lambda r: r["last_turn_at"], default=None)
 
+        db = type("D", (), {"litellm_autoroutersession": _Table()})()
         monkeypatch.setattr(
             proxy_server,
             "prisma_client",
-            type("P", (), {"db": type("D", (), {"litellm_autoroutersession": _Table()})()})(),
+            type("P", (), {"db": db, "replica_db": db})(),
         )
         return lookups
 
@@ -1354,6 +1358,7 @@ def _shadow_prisma(
     direction sees the opposite-direction legs a key may hold at the same time, and a
     group read that matched on a leg id would come back empty."""
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     teams: Final = key_teams or {}
     team_aliases: Final = known_teams or {}
     user_emails: Final = known_users or {}
@@ -3085,6 +3090,7 @@ async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypa
         team_row.model_dump.return_value = row_data
         team_row.dict.return_value = row_data
         prisma = MagicMock()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         return prisma
 
@@ -3146,6 +3152,7 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
         "members_with_roles": [{"role": "admin", "user_id": "team-admin"}],
     }
     prisma: Final = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "premium_user", True)
@@ -3178,6 +3185,7 @@ def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool 
         team_member_permissions=["/auto_router/manage"] if allowed else [],
     )
     prisma: Final = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -3615,7 +3623,7 @@ async def test_availability_counts_db_and_yaml_without_disclosing_router_names(m
     monkeypatch.setattr(
         proxy_server,
         "prisma_client",
-        SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
+        SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many)), replica_db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
     monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: (yaml_row,)))
@@ -3659,7 +3667,7 @@ async def test_availability_denies_another_teams_edit_exemption(monkeypatch):
     monkeypatch.setattr(
         proxy_server,
         "prisma_client",
-        SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
+        SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many)), replica_db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
     monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
     monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))

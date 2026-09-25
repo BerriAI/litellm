@@ -213,7 +213,7 @@ async def _query_raw_optional(
 ) -> list[dict[str, object]] | None:  # mutable-ok: prisma query_raw return shape
     if query is None:
         return None
-    return await prisma_client.db.query_raw(query[0], *query[1])
+    return await prisma_client.replica_db.query_raw(query[0], *query[1])
 
 
 def _reported_flat_cost(record: DailySpendRecord | _RollupMetricsRow) -> float:
@@ -840,7 +840,7 @@ def _build_aggregated_sql_query(
     """Build the GROUPING SETS query for aggregated daily activity.
 
     Returns:
-        Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
+        Tuple of (sql_query, params_list) ready for prisma_client.replica_db.query_raw().
     """
     pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
@@ -1599,7 +1599,7 @@ async def get_daily_activity(
             include_current_utc_day=include_current_utc_day,
         )
 
-        spend_table: Final[TableActions[DailySpendRecord]] = getattr(prisma_client.db, table_name)
+        spend_table: Final[TableActions[DailySpendRecord]] = getattr(prisma_client.replica_db, table_name)
 
         # Get total count for pagination
         total_count: Final[int] = await spend_table.count(where=where_conditions)
@@ -1764,7 +1764,7 @@ async def get_daily_activity_aggregated(
         entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
 
         raw_rows, raw_entity_rows = await asyncio.gather(
-            prisma_client.db.query_raw(sql_query, *sql_params),
+            prisma_client.replica_db.query_raw(sql_query, *sql_params),
             _query_raw_optional(prisma_client, entity_query),
         )
 

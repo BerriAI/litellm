@@ -55,6 +55,7 @@ class TestAvailableEnterpriseUsers:
             # Mock database count
             mock_prisma.db.litellm_usertable.count = _user_count(5)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=2)
+            mock_prisma.replica_db = mock_prisma.db
 
             # Override the dependency
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
@@ -91,6 +92,7 @@ class TestAvailableEnterpriseUsers:
         ):
             mock_prisma.db.litellm_usertable.count = _user_count(5, deactivated=2)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=2)
+            mock_prisma.replica_db = mock_prisma.db
 
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
                 "user_id": "test_user"
@@ -124,6 +126,7 @@ class TestAvailableEnterpriseUsers:
             # Mock database count
             mock_prisma.db.litellm_usertable.count = _user_count(3)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=1)
+            mock_prisma.replica_db = mock_prisma.db
 
             # Override the dependency
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
@@ -161,6 +164,7 @@ class TestAvailableEnterpriseUsers:
             # Mock database count higher than max_users to trigger the bug
             mock_prisma.db.litellm_usertable.count = _user_count(8)
             mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=3)
+            mock_prisma.replica_db = mock_prisma.db
 
             # Override the dependency
             client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {

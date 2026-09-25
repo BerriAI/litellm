@@ -25,7 +25,7 @@ async def _get_email_settings(prisma_client) -> Dict[str, bool]:
     """Helper function to get email settings from general_settings in db"""
     try:
         # Get general settings from db
-        general_settings_entry = await prisma_client.db.litellm_config.find_unique(
+        general_settings_entry = await prisma_client.replica_db.litellm_config.find_unique(
             where={"param_name": "general_settings"}
         )
 
@@ -71,7 +71,7 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
         )
 
         # Get current general settings
-        general_settings_entry = await prisma_client.db.litellm_config.find_unique(
+        general_settings_entry = await prisma_client.replica_db.litellm_config.find_unique(
             where={"param_name": "general_settings"}
         )
 

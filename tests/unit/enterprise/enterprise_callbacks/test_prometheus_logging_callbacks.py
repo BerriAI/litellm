@@ -1742,6 +1742,7 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         mock_db.litellm_teamtable = mock_teamtable
         mock_db.litellm_organizationtable = mock_orgtable
         mock_prisma.db = mock_db
+        mock_prisma.replica_db = mock_prisma.db
 
         # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()

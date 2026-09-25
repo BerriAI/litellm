@@ -19,7 +19,8 @@ def _table(rows=()):
 
 
 def _prisma(**tables):
-    return types.SimpleNamespace(db=types.SimpleNamespace(**tables))
+    db = types.SimpleNamespace(**tables)
+    return types.SimpleNamespace(db=db, replica_db=db)
 
 
 def _config_server(server_id: str, name: str, alias: str | None = None, server_name: str | None = None) -> MCPServer:

@@ -7184,7 +7184,7 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
-    rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
+    rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.replica_db.query_raw(
         _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
         start_date,
         end_date,

@@ -86,7 +86,7 @@ async def captured_spend_by_day(
     end_date: date,
 ) -> Mapping[str, float]:
     """LiteLLM's tracked spend per UTC day (ISO date) for the given ``custom_llm_provider`` values."""
-    rows: Final = await prisma_client.db.query_raw(
+    rows: Final = await prisma_client.replica_db.query_raw(
         _CAPTURED_SPEND_BY_DAY_SQL, start_date.isoformat(), end_date.isoformat(), tuple(litellm_providers)
     )
     return MappingProxyType({row.date: row.spend for row in _CAPTURED_SPEND_ROWS.validate_python(rows)})

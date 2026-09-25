@@ -46,6 +46,7 @@ async def test_default_budget_applied_to_end_user_without_budget():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
@@ -104,6 +105,7 @@ async def test_explicit_budget_not_overridden_by_default():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
@@ -161,6 +163,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
@@ -219,6 +222,7 @@ async def test_system_works_without_default_budget_configured():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )

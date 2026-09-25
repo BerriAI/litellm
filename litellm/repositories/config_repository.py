@@ -55,7 +55,7 @@ class ConfigRepository:
 
     @property
     def _config_table(self) -> _ConfigTable:
-        return cast(_ConfigTable, self.prisma_client.db.litellm_config)
+        return cast(_ConfigTable, self.prisma_client.replica_db.litellm_config)
 
     @property
     def table(self) -> _ConfigTable:

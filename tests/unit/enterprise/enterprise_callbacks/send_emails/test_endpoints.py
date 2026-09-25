@@ -51,6 +51,7 @@ def mock_prisma_client():
 
     mock_db.litellm_config = mock_config
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
 
     return mock_client
 
@@ -65,6 +66,7 @@ async def test_get_email_settings_empty_db(mock_prisma_client):
         return None
 
     mock_prisma_client.db.litellm_config.find_unique = mock_find_unique
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Call the function
     result = await _get_email_settings(mock_prisma_client)
@@ -91,6 +93,7 @@ async def test_get_email_settings_with_existing_settings(mock_prisma_client):
         return mock_entry
 
     mock_prisma_client.db.litellm_config.find_unique = mock_find_unique
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Call the function
     result = await _get_email_settings(mock_prisma_client)
@@ -109,12 +112,14 @@ async def test_save_email_settings_new_entry(mock_prisma_client):
         return None
 
     mock_prisma_client.db.litellm_config.find_unique = mock_find_unique
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Setup mock upsert to return None
     async def mock_upsert(*args, **kwargs):
         return None
 
     mock_prisma_client.db.litellm_config.upsert = mock_upsert
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Settings to save
     settings = {
@@ -273,6 +278,7 @@ def _prisma_recording_upserts(upserts):
         return None
 
     client.db.litellm_config.find_unique = find_unique
+    client.replica_db = client.db
     client.db.litellm_config.upsert = upsert
     return client
 

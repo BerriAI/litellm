@@ -813,7 +813,7 @@ class BaseEmailLogger(CustomLogger):
             )
             return None
 
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
+        user_row = await prisma_client.replica_db.litellm_usertable.find_unique(
             where={"user_id": user_id}
         )
 
@@ -898,7 +898,7 @@ class BaseEmailLogger(CustomLogger):
         try:
             # Try to get existing invitation
             existing_invitations = (
-                await prisma_client.db.litellm_invitationlink.find_many(
+                await prisma_client.replica_db.litellm_invitationlink.find_many(
                     where={"user_id": user_id},
                     order={"created_at": "desc"},
                 )

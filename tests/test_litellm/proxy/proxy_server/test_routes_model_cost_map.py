@@ -45,6 +45,7 @@ def _attach_litellm_config(mock_prisma):
     table.delete = AsyncMock()
     table.delete_many = AsyncMock()
     mock_prisma.db.litellm_config = table
+    mock_prisma.replica_db = mock_prisma.db
     return table
 
 

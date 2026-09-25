@@ -1785,6 +1785,7 @@ async def test_update_data_key_branch_stamps_settings_updated_at():
     client = MagicMock()
     client.jsonify_object = MagicMock(side_effect=lambda data: dict(data))
     client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    client.replica_db = client.db
 
     before = datetime.now(timezone.utc)
     await PrismaClient.update_data(client, token="sk-test-key", data={"models": ["gpt-4"]})
@@ -2433,3 +2434,107 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+class _ReadOnlyReplicaError(RuntimeError):
+    pass
+
+
+class _FakeUserTable:
+    def __init__(self, rows: list[dict[str, str]], *, read_only: bool) -> None:
+        self._rows = rows
+        self._read_only = read_only
+
+    async def find_many(self) -> list[dict[str, str]]:
+        return list(self._rows)
+
+    async def find_unique(self, where: dict[str, str]) -> dict[str, str] | None:
+        return next((row for row in self._rows if row["user_id"] == where["user_id"]), None)
+
+    async def create(self, data: dict[str, str]) -> dict[str, str]:
+        if self._read_only:
+            raise _ReadOnlyReplicaError("cannot execute INSERT in a read-only transaction")
+        self._rows.append(data)  # mutable-ok: in-memory fake table
+        return data
+
+
+class _FakePrisma:
+    def __init__(self, label: str, rows: list[dict[str, str]], *, read_only: bool, reachable: bool = True) -> None:
+        self._label = label
+        self._reachable = reachable
+        self._connected = False
+        self.litellm_usertable = _FakeUserTable(rows, read_only=read_only)
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def connect(self, timeout: object = None) -> None:
+        if not self._reachable:
+            raise ConnectionError(f"{self._label} unreachable")
+        self._connected = True
+
+    async def query_raw(self, sql: str, *params: object) -> list[dict[str, str]]:
+        return [{"served_by": self._label}]
+
+
+def _replica_client(*, reader_reachable: bool = True) -> tuple[PrismaClient, list[dict[str, str]], list[dict[str, str]]]:
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer_rows: Final[list[dict[str, str]]] = [{"user_id": "u1", "user_email": "writer@example.com"}]
+    reader_rows: Final[list[dict[str, str]]] = [{"user_id": "u1", "user_email": "reader@example.com"}]
+    writer: Final = PrismaWrapper(original_prisma=_FakePrisma("writer", writer_rows, read_only=False))
+    reader: Final = PrismaWrapper(
+        original_prisma=_FakePrisma("reader", reader_rows, read_only=True, reachable=reader_reachable)
+    )
+    client: Final = PrismaClient.__new__(PrismaClient)
+    client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
+    return client, writer_rows, reader_rows
+
+
+class TestPrismaClientReplicaDb:
+    @pytest.mark.asyncio
+    async def test_replica_db_reads_come_from_the_reader(self) -> None:
+        client, _writer_rows, reader_rows = _replica_client()
+        await client.db.connect()
+
+        found: Final = await client.replica_db.litellm_usertable.find_unique(where={"user_id": "u1"})
+        raw: Final = await client.replica_db.query_raw("SELECT 1")
+
+        assert found == reader_rows[0]
+        assert raw == [{"served_by": "reader"}]
+
+    @pytest.mark.asyncio
+    async def test_replica_db_writes_land_on_the_writer(self) -> None:
+        client, writer_rows, reader_rows = _replica_client()
+        await client.db.connect()
+        new_row: Final = {"user_id": "u2", "user_email": "new@example.com"}
+
+        created: Final = await client.replica_db.litellm_usertable.create(data=new_row)
+
+        assert created == new_row
+        assert new_row in writer_rows
+        assert new_row not in reader_rows
+
+    @pytest.mark.asyncio
+    async def test_replica_db_reads_fall_back_to_the_writer_when_the_reader_is_unreachable(self) -> None:
+        client, writer_rows, _reader_rows = _replica_client(reader_reachable=False)
+        await client.db.connect()
+
+        found: Final = await client.replica_db.litellm_usertable.find_many()
+        raw: Final = await client.replica_db.query_raw("SELECT 1")
+
+        assert found == writer_rows
+        assert raw == [{"served_by": "writer"}]
+
+    @pytest.mark.asyncio
+    async def test_replica_db_is_the_plain_handle_without_a_replica(self) -> None:
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+
+        rows: Final[list[dict[str, str]]] = [{"user_id": "u1", "user_email": "only@example.com"}]
+        client: Final = PrismaClient.__new__(PrismaClient)
+        client.db = PrismaWrapper(original_prisma=_FakePrisma("writer", rows, read_only=False))
+
+        assert client.replica_db is client.db
+        assert await client.replica_db.litellm_usertable.find_many() == rows
+        assert await client.replica_db.query_raw("SELECT 1") == [{"served_by": "writer"}]

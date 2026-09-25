@@ -57,6 +57,7 @@ class TestKeyRotationManagerPassesKeyAlias:
         mock_prisma.db.litellm_verificationtoken.update = AsyncMock(
             return_value=mock_key
         )
+        mock_prisma.replica_db = mock_prisma.db
 
         # Create mock response
         mock_response = GenerateKeyResponse(
@@ -114,6 +115,7 @@ class TestKeyRotationManagerPassesKeyAlias:
         mock_prisma.db.litellm_verificationtoken.update = AsyncMock(
             return_value=mock_key
         )
+        mock_prisma.replica_db = mock_prisma.db
 
         mock_response = GenerateKeyResponse(
             key="sk-new-key-value",

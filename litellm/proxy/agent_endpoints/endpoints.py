@@ -134,7 +134,7 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
     )
     if not agent_ids:
         return
-    key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
+    key_rows: Final = await prisma_client.replica_db.litellm_verificationtoken.find_many(
         where={"agent_id": {"in": agent_ids}},
     )
     keys_by_agent: Final[dict[str, list[AgentKeySummary]]] = {}

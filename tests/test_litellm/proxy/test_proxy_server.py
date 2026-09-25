@@ -106,6 +106,7 @@ def test_cors_exposes_cache_key_header_to_browser_js():
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     mock_login_result = {"user_id": "test-user"}
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_authenticate_user = AsyncMock(return_value=mock_login_result)
     mock_create_ui_token_object = MagicMock(return_value={"user_id": "test-user"})
     mock_jwt_encode = MagicMock(return_value="signed-token")
@@ -234,6 +235,7 @@ def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
     from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_authenticate_user = AsyncMock(
         side_effect=ProxyException(
             message="Invalid credentials",
@@ -269,6 +271,7 @@ def test_login_v2_returns_json_on_http_exception(monkeypatch):
     from fastapi import HTTPException
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_authenticate_user = AsyncMock(side_effect=HTTPException(status_code=401, detail="Unauthorized"))
 
     monkeypatch.setattr(
@@ -294,6 +297,7 @@ def test_login_v2_returns_json_on_http_exception(monkeypatch):
 def test_login_v2_returns_json_on_unexpected_exception(monkeypatch):
     """Test that /v2/login returns JSON error when unexpected exception occurs"""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_authenticate_user = AsyncMock(side_effect=ValueError("Unexpected error"))
 
     monkeypatch.setattr(
@@ -338,6 +342,7 @@ def test_login_v2_returns_json_on_invalid_json_body(monkeypatch):
 def test_login_v3_rejected_without_control_plane_url(monkeypatch):
     """v3/login returns 404 when control_plane_url is not configured."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -355,6 +360,7 @@ def test_login_v3_rejected_without_control_plane_url(monkeypatch):
 def test_login_v3_returns_code(monkeypatch):
     """v3/login returns an opaque code, not the JWT directly."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
         AsyncMock(return_value={"user_id": "test-user"}),
@@ -393,6 +399,7 @@ def test_login_v3_returns_code(monkeypatch):
 def test_login_v3_exchange_happy_path(monkeypatch):
     """Full flow: v3/login returns code, v3/login/exchange redeems it for JWT."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
         AsyncMock(return_value={"user_id": "test-user"}),
@@ -441,6 +448,7 @@ def test_login_v3_exchange_sets_secure_cookie_behind_trusted_tls_terminating_pro
     """Regression: /v3/login/exchange's token cookie must be Secure behind a trusted
     TLS-terminating reverse proxy even though litellm only sees a plain-HTTP hop."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
         AsyncMock(return_value={"user_id": "test-user"}),
@@ -485,6 +493,7 @@ def test_login_v3_exchange_sets_secure_cookie_behind_trusted_tls_terminating_pro
 def test_login_v3_exchange_single_use(monkeypatch):
     """Code can only be redeemed once."""
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
         AsyncMock(return_value={"user_id": "test-user"}),
@@ -557,6 +566,7 @@ def test_login_v3_returns_json_on_proxy_exception(monkeypatch):
     from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_authenticate_user = AsyncMock(
         side_effect=ProxyException(
             message="Invalid credentials",
@@ -847,6 +857,7 @@ async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_depl
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -906,6 +917,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
@@ -948,6 +960,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -997,6 +1010,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -1044,6 +1058,7 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
@@ -1907,10 +1922,12 @@ async def test_get_all_team_models():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_db = MagicMock()
     mock_litellm_teamtable = MagicMock()
 
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_db.litellm_teamtable = mock_litellm_teamtable
 
     # Make find_many async
@@ -2214,6 +2231,7 @@ async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
 
     user_added_model = {"model_name": "my-model", "model_info": {"id": "user-model-1"}}
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
 
@@ -2349,6 +2367,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     }
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=2)
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[db_caller_row, db_other_row])
     caller_user_row = MagicMock()
@@ -2432,6 +2451,7 @@ async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=10_000)
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
@@ -2477,6 +2497,7 @@ async def test_apply_search_filter_honours_exact_model_name_in_db_query():
     from litellm.proxy.proxy_server import _apply_search_filter_to_models
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=0)
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     proxy_config = MagicMock()
@@ -2558,6 +2579,7 @@ async def test_filter_models_by_team_id_excludes_viewer_direct_access():
     }
 
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     team_db = MagicMock()
     team_db.model_dump.return_value = {
         "team_id": "team-111",
@@ -2607,6 +2629,7 @@ async def test_filter_models_by_team_id_rejects_non_member():
     }
 
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     # Caller is in team-222 only
     user_row = MagicMock()
     user_row.teams = ["team-222"]
@@ -2645,6 +2668,7 @@ async def test_filter_models_by_team_id_allows_team_member():
     }
 
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     user_row = MagicMock()
     user_row.teams = ["team-111", "team-999"]
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
@@ -2767,6 +2791,7 @@ async def test_add_access_group_models_to_team_models():
     mock_ag_row.access_model_names = ["claude-3", "gemini"]
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[mock_ag_row])
 
     result = await _add_access_group_models_to_team_models(
@@ -2843,6 +2868,7 @@ async def test_add_access_group_models_multiple_teams_shared_group():
     mock_extra_row.access_model_names = ["gemini"]
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[mock_shared_row, mock_extra_row])
 
     result = await _add_access_group_models_to_team_models(
@@ -2883,6 +2909,7 @@ async def test_add_access_group_models_no_eligible_teams():
     team.access_group_ids = None
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_accessgrouptable.find_many = AsyncMock()
 
     result = await _add_access_group_models_to_team_models(
@@ -2924,9 +2951,11 @@ async def test_get_all_team_models_with_access_groups():
     mock_ag_row.access_model_names = ["claude-3"]
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_db = MagicMock()
     mock_litellm_teamtable = MagicMock()
     mock_prisma_client.db = mock_db
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_db.litellm_teamtable = mock_litellm_teamtable
     mock_litellm_teamtable.find_many = AsyncMock(return_value=[mock_team1])
     mock_db.litellm_accessgrouptable = MagicMock()
@@ -3281,6 +3310,7 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at(monkeypatch: pyt
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_usertable.update_many = AsyncMock(return_value={"count": 1})
 
     mock_generate_key_helper = AsyncMock(
@@ -4085,6 +4115,7 @@ async def test_write_config_to_file(monkeypatch):
 
     # Mock prisma_client to not be None (so DB path is taken)
     mock_prisma_client = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.insert_data = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -4454,6 +4485,7 @@ class TestPriceDataReloadAPI:
             ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.replica_db = mock_prisma.db
                     mock_prisma.db.litellm_config.upsert = AsyncMock(
                         return_value=_reload_schedule_row({}, reload_revision=1)
                     )
@@ -4505,6 +4537,7 @@ class TestPriceDataReloadAPI:
         ):
             # Mock the database connection
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                mock_prisma.replica_db = mock_prisma.db
                 mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
                 mock_prisma.db.litellm_config.upsert = AsyncMock(
                     return_value=_reload_schedule_row({}, reload_revision=1)
@@ -4519,6 +4552,7 @@ class TestPriceDataReloadAPI:
     def test_schedule_model_cost_map_reload_admin_access(self, client_with_auth):
         """Admin schedule write owns param_value only, so it can't clobber the job-owned run columns"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             # Mock database upsert
             mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
 
@@ -4565,6 +4599,7 @@ class TestPriceDataReloadAPI:
     def test_cancel_model_cost_map_reload_admin_access(self, client_with_auth):
         """Test that admin users can cancel periodic reload"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=1)
             mock_prisma.db.litellm_config.delete = AsyncMock(return_value=None)
 
@@ -4602,6 +4637,7 @@ class TestPriceDataReloadAPI:
         proxy_server_module.proxy_config.model_cost_map_loaded_at = datetime(2030, 6, 1, tzinfo=timezone.utc)
 
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
                 return_value=_reload_schedule_row(
                     {"interval_hours": 6},
@@ -4635,6 +4671,7 @@ class TestPriceDataReloadAPI:
     def test_get_model_cost_map_reload_status_no_config(self, client_with_auth):
         """Test that status returns not scheduled when no config exists"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
             response = client_with_auth.get("/schedule/model_cost_map_reload/status")
@@ -4649,6 +4686,7 @@ class TestPriceDataReloadAPI:
     def test_get_model_cost_map_reload_status_no_interval(self, client_with_auth):
         """A row left behind by a manual reload (no interval) must not read as scheduled"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
                 return_value=_reload_schedule_row(
                     {"interval_hours": None},
@@ -4668,6 +4706,7 @@ class TestPriceDataReloadAPI:
     def test_get_model_cost_map_reload_status_before_first_run(self, client_with_auth):
         """Scheduled but never executed: no last_run_at means no next_run can be computed"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
                 return_value=_reload_schedule_row({"interval_hours": 6})
             )
@@ -4724,6 +4763,7 @@ class TestPriceDataReloadIntegration:
             ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.replica_db = mock_prisma.db
                     mock_prisma.db.litellm_config.upsert = AsyncMock(
                         return_value=_reload_schedule_row({}, reload_revision=1)
                     )
@@ -4762,6 +4802,7 @@ class TestPriceDataReloadIntegration:
 
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -4820,6 +4861,7 @@ class TestPriceDataReloadIntegration:
 
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
             return_value=_reload_schedule_row(
@@ -4860,6 +4902,7 @@ class TestPriceDataReloadIntegration:
 
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
             return_value=_reload_schedule_row(
                 {"interval_hours": 6},
@@ -4909,6 +4952,7 @@ class TestPriceDataReloadIntegration:
         pods = [ProxyConfig(), ProxyConfig(), ProxyConfig()]
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
         for pod in pods:
@@ -4954,6 +4998,7 @@ class TestPriceDataReloadIntegration:
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
         proxy_config.model_cost_map_loaded_at = frozen_now
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
             return_value=_reload_schedule_row({}, reload_revision=published_revision)
@@ -4990,6 +5035,7 @@ class TestPriceDataReloadIntegration:
 
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=_reload_schedule_row({"interval_hours": 24}))
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=_reload_schedule_row({}, reload_revision=1))
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
@@ -5031,6 +5077,7 @@ class TestPriceDataReloadIntegration:
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
         proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
             return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
         )
@@ -5076,6 +5123,7 @@ class TestPriceDataReloadIntegration:
         pod_data_loaded_at = frozen_now - timedelta(hours=9)
         proxy_config.model_cost_map_loaded_at = pod_data_loaded_at
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
             return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
         )
@@ -5118,6 +5166,7 @@ class TestPriceDataReloadIntegration:
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
         proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
             return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
         )
@@ -5209,6 +5258,7 @@ class TestPriceDataReloadIntegration:
                 patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
                 patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
             ):
+                mock_prisma.replica_db = mock_prisma.db
                 mock_get_map.return_value = ModelCostMapReloaded(
                     model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
                 )
@@ -5250,6 +5300,7 @@ class TestPriceDataReloadIntegration:
         litellm_config_cache.flush_cache()
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
 
         # Set up config with interval_hours=12 and force_reload=True to trigger reload
         mock_config = MagicMock()
@@ -5298,6 +5349,7 @@ class TestPriceDataReloadIntegration:
             mock_reload.return_value = {"anthropic": {"beta_header": "test-value"}}
 
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                mock_prisma.replica_db = mock_prisma.db
                 # Simulate existing config with a schedule
                 mock_existing = MagicMock()
                 mock_existing.param_value = {"interval_hours": 8, "force_reload": False}
@@ -5392,6 +5444,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     # Call the method under test
@@ -5448,6 +5501,7 @@ async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
         ],
     }
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
@@ -5470,6 +5524,7 @@ async def test_valid_db_routing_groups_still_replace_router_groups():
         "routing_groups": [{"group_name": "g2", "models": ["m2"], "routing_strategy": "least-busy"}],
     }
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
@@ -5513,6 +5568,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     proxy_config.router_settings.load_yaml(config_data["router_settings"])
@@ -5550,6 +5606,7 @@ async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unc
     mock_db_config.param_value = {"fallbacks": [], "model_group_alias": {}}
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     proxy_config.router_settings.load_yaml(config_data["router_settings"])
@@ -5596,6 +5653,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     # Test Case 3: DB returns None (no router_settings in DB)
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
     config_data = {"router_settings": {"routing_strategy": "usage-based"}}
@@ -5689,6 +5747,7 @@ async def test_add_router_settings_shallow_merge_behavior():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     proxy_config.router_settings.load_yaml(config_data["router_settings"])
@@ -5726,6 +5785,7 @@ async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeyp
         return db_row if param_name == "router_settings" else None
 
     mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_row)
     mock_router: Final = MagicMock()
     monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
@@ -6353,6 +6413,7 @@ async def test_init_sso_settings_in_db():
     }
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
 
     # Mock _decrypt_and_set_db_env_variables
@@ -6397,6 +6458,7 @@ async def test_init_sso_settings_in_db_no_settings():
 
     # Mock prisma client to return None (no SSO settings)
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
 
     # Mock _decrypt_and_set_db_env_variables
@@ -6423,6 +6485,7 @@ async def test_init_sso_settings_in_db_error_handling():
 
     # Mock prisma client to raise an exception
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(side_effect=Exception("Database connection error"))
 
     # The method should not raise an exception, it should log it instead
@@ -6451,6 +6514,7 @@ async def test_init_sso_settings_in_db_empty_settings():
     mock_sso_config.sso_settings = {}
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
 
     # Mock _decrypt_and_set_db_env_variables
@@ -6491,6 +6555,7 @@ async def test_init_sso_settings_in_db_retries_on_transport_error():
         return mock_sso_config
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(side_effect=_flaky_find_unique)
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
@@ -6517,6 +6582,7 @@ async def test_init_sso_settings_in_db_propagates_when_reconnect_fails():
 
     proxy_config = ProxyConfig()
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(side_effect=prisma.errors.ClientNotConnectedError())
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
@@ -6548,6 +6614,7 @@ async def test_init_hashicorp_vault_config_override_retries_on_transport_error()
         return None  # No config in DB → function returns early after retry.
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(side_effect=_flaky_find_unique)
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
@@ -7131,6 +7198,7 @@ class TestInvitationEndpoints:
     def test_invitation_endpoints_proxy_admin_success(self, client_with_auth, endpoint, payload, mock_return):
         """Proxy admin can successfully create and delete invitations."""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_invitationlink = MagicMock()
             if endpoint == "/invitation/new":
                 mock_create = AsyncMock(return_value=mock_return)
@@ -7169,6 +7237,7 @@ class TestInvitationEndpoints:
         app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
 
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_invitationlink = MagicMock()
             # Avoid triggering async DB calls in _user_has_admin_privileges
             with patch(
@@ -8376,6 +8445,7 @@ async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
@@ -8416,6 +8486,7 @@ async def test_store_model_in_db_db_override_when_config_false():
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock DB returning store_model_in_db=True in general_settings
     mock_db_record = MagicMock()
@@ -8461,6 +8532,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
@@ -8503,6 +8575,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     # Simulate DB failure
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(side_effect=Exception("DB connection error"))
 
@@ -8742,6 +8815,7 @@ async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss()
     db_row = MagicMock()
     db_row.spend = 42.0
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
 
     stale_cache = DualCache()
@@ -8843,6 +8917,7 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         return row
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=slow_find_unique)
 
     pod_a = DualCache()
@@ -8904,6 +8979,7 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
     org_row.spend = 305.0
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
     fake_prisma.db.litellm_endusertable.find_unique = AsyncMock()
     fake_prisma.db.litellm_tagtable.find_unique = AsyncMock()
@@ -8936,6 +9012,7 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_verificationtoken.find_unique = AsyncMock()
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock()
 
@@ -8956,6 +9033,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     counter_cache = DualCache()
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window", "_sum": {"spend": 2.25}}]
@@ -9030,6 +9108,7 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     db_row = MagicMock()
     db_row.spend = 42.0
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
 
     import litellm.proxy.proxy_server as ps
@@ -9101,6 +9180,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-stale-local", "_sum": {"spend": 2.25}}]
@@ -9178,6 +9258,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-concurrent-seed", "_sum": {"spend": 2.25}}]
@@ -9474,6 +9555,7 @@ async def test_get_current_spend_reseeds_from_db_when_counter_missing():
     db_row = MagicMock()
     db_row.spend = 362.0
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
 
     import litellm.proxy.proxy_server as ps
@@ -9578,6 +9660,7 @@ async def test_get_current_spend_coalesces_concurrent_reseeds():
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(side_effect=slow_find_unique)
 
     import litellm.proxy.proxy_server as ps
@@ -9615,6 +9698,7 @@ async def test_get_current_spend_uses_db_zero_over_stale_fallback():
     db_row = MagicMock()
     db_row.spend = 0.0
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
 
     import litellm.proxy.proxy_server as ps
@@ -9685,6 +9769,7 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(side_effect=slow_find_unique)
 
     import litellm.proxy.proxy_server as ps
@@ -9800,6 +9885,7 @@ async def test_reseed_warms_cache_even_on_zero_db_spend():
         return row
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(side_effect=find_unique)
 
     import litellm.proxy.proxy_server as ps
@@ -9863,6 +9949,7 @@ class _FakeLitellmConfig:
 class _FakePrismaClient:
     def __init__(self, initial_rows=None):
         self.db = mock.MagicMock()
+        self.replica_db = self.db
         self.db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
         self.jsonify_object = lambda obj: obj
 
@@ -10728,6 +10815,7 @@ async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
     db_row = MagicMock()
     db_row.spend = 500.0
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
 
     import litellm.proxy.proxy_server as ps
@@ -10764,6 +10852,7 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=MagicMock(spend=999.0))
 
     import litellm.proxy.proxy_server as ps
@@ -11373,6 +11462,7 @@ class TestDeleteDeploymentSync:
 
         proxy_config = ProxyConfig()
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=Exception("DB connection lost"))
 
         result = await proxy_config._get_models_from_db(prisma_client=mock_prisma)
@@ -11464,9 +11554,11 @@ def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
     from litellm.proxy.proxy_server import app
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
@@ -11496,9 +11588,11 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
     from litellm.proxy.proxy_server import app
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
@@ -11518,9 +11612,11 @@ def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
     """The Admin UI General Settings table renders whatever /config/list returns,
     so the cache capacity has to be exposed there as an Integer to be editable."""
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
     app.dependency_overrides[proxy_server_module.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
@@ -11549,9 +11645,11 @@ def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatc
     from litellm.proxy.proxy_server import app
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.15)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -11626,9 +11724,11 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
     from litellm.proxy.proxy_server import app
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
     monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", "1h")
@@ -11934,9 +12034,11 @@ def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypa
     from litellm.proxy.proxy_server import app
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -12212,6 +12314,7 @@ def _config_field_info_client(monkeypatch, user_role):
     mock_config_table.find_first = AsyncMock(return_value=db_record)
     mock_prisma = MagicMock()
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.replica_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     settings = SettingsStore("general_settings")
@@ -12269,6 +12372,7 @@ def _fake_prisma_with_config(existing_param_value):
     """MagicMock prisma whose litellm_config row returns existing_param_value and
     whose litellm_auditlog.create records the written audit row."""
     fake = MagicMock()
+    fake.replica_db = fake.db
     config_row = MagicMock()
     config_row.param_value = existing_param_value
     fake.db.litellm_config.find_first = AsyncMock(return_value=config_row)
@@ -13788,6 +13892,7 @@ async def test_team_window_spend_row_carries_the_request_start_time():
 
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client = MagicMock()
+    client.replica_db = client.db
     client.connect = AsyncMock(side_effect=connect_error)
     client.db.start_token_refresh_task = AsyncMock()
     client.check_view_exists = AsyncMock()
@@ -13928,6 +14033,7 @@ async def _run_scheduled_background_jobs():
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
@@ -14343,6 +14449,7 @@ async def test_init_prompts_in_db_reloads_rows_patched_on_another_worker(monkeyp
         return served_callback().prompt_manager.get_prompt("greeting_sync").content
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
         prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row("Begin every reply with AHOY")])
         await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
@@ -14387,6 +14494,7 @@ async def test_init_prompts_in_db_syncs_remaining_rows_when_one_row_fails(monkey
         return row
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
         prisma_client.db.litellm_prompttable.find_many = AsyncMock(
             return_value=[db_row("broken_sync", "does_not_exist"), db_row("healthy_sync", "dotprompt")]
@@ -14439,6 +14547,7 @@ async def test_init_prompts_in_db_syncs_every_environment_sharing_a_versioned_id
         return callback.prompt_manager.get_prompt("greeting_env").content
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
         prisma_client.db.litellm_prompttable.find_many = AsyncMock(
             return_value=[
@@ -14499,6 +14608,7 @@ async def test_init_prompts_in_db_unloads_rows_deleted_on_another_worker(monkeyp
     monkeypatch.setattr(litellm, "callbacks", [])
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
         prisma_client.db.litellm_prompttable.find_many = AsyncMock(
             return_value=[_prompt_db_row("greeting_del", _dotprompt_params("greeting_del"))]
@@ -14536,6 +14646,7 @@ async def test_init_prompts_in_db_keeps_config_prompts_when_their_id_has_no_db_r
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
         IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=config_prompt)
         prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
@@ -14558,6 +14669,7 @@ async def test_init_prompts_in_db_keeps_the_in_memory_copy_when_a_row_fails_to_p
     monkeypatch.setattr(litellm, "callbacks", [])
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
         prisma_client.db.litellm_prompttable.find_many = AsyncMock(
             return_value=[_prompt_db_row("greeting_broken", _dotprompt_params("greeting_broken"))]
@@ -14590,6 +14702,7 @@ async def test_init_prompts_in_db_keeps_a_prompt_created_while_the_sync_was_read
     monkeypatch.setattr(litellm, "callbacks", [])
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     try:
 
         async def create_prompt_behind_the_select() -> list:

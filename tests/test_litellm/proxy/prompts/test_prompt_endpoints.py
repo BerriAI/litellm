@@ -396,6 +396,7 @@ class TestConfigPromptInfoWithEnvironment:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+        mock_prisma.replica_db = mock_prisma.db
         return mock_prisma
 
     @pytest.mark.asyncio

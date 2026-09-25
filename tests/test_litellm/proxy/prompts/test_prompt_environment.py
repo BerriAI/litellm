@@ -109,6 +109,7 @@ async def test_create_prompt_stores_environment_and_created_by():
     mock_prisma_client.db.litellm_prompttable.create = AsyncMock(
         return_value=mock_db_entry
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
 
     request = Prompt(
@@ -157,6 +158,7 @@ async def test_update_prompt_stores_environment_and_created_by():
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
         return_value=[mock_existing]
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     mock_db_entry = MagicMock()
     mock_db_entry.model_dump.return_value = {
@@ -223,6 +225,7 @@ async def test_delete_prompt_scoped_to_environment():
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     with patch(
         "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"

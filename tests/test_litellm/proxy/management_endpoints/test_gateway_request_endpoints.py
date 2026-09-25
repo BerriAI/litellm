@@ -77,6 +77,7 @@ def _admin() -> UserAPIKeyAuth:
 def _prisma_returning(rows: list) -> MagicMock:
     client = MagicMock()
     client.db = MagicMock()
+    client.replica_db = client.db
     client.db.query_raw = AsyncMock(return_value=rows)
     return client
 

@@ -29,6 +29,7 @@ def _credentials_cleared(value) -> bool:
 def _mock_prisma():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     row = models.LiteLLM_MCPServerTable.model_construct(server_id="test-server", transport="http", env={}, env_vars=[])
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
@@ -198,6 +199,7 @@ async def _run_update_with_existing(data: UpdateMCPServerRequest, existing_auth_
     existing.auth_type = existing_auth_type
     existing.credentials = None
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
     await update_mcp_server(mock_prisma, data, "test-user")
     return mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
 
@@ -240,6 +242,7 @@ async def test_explicit_null_clears_upstream_resource_and_keeps_the_rest_of_the_
     existing.url = "https://up.example.com/mcp"
     existing.credentials = json.dumps({"client_secret": "csec", "upstream_resource": "api://audience"})
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="my-test-server", credentials={"upstream_resource": None})
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -261,6 +264,7 @@ async def test_url_change_clears_stale_oauth_fields():
     existing.url = "https://old.example.com/mcp"
     existing.credentials = None
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="my-test-server", url="https://new.example.com/mcp")
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -286,6 +290,7 @@ async def test_url_change_clears_stale_oauth_fields_even_when_resubmitted_unchan
     existing.token_url = "https://old-idp.example.com/token"
     existing.authorization_url = "https://old-idp.example.com/authorize"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="my-test-server",
@@ -318,6 +323,7 @@ async def test_clearing_pinned_issuer_clears_stale_oauth_endpoints():
     existing.token_url = "https://pinned-idp.example.com/token"
     existing.authorization_url = "https://pinned-idp.example.com/authorize"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="my-test-server",
@@ -345,6 +351,7 @@ async def test_repointing_pinned_issuer_clears_stale_endpoints_keeps_new_issuer(
     existing.token_url = "https://old-idp.example.com/token"
     existing.authorization_url = "https://old-idp.example.com/authorize"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="my-test-server",
@@ -375,6 +382,7 @@ async def test_establishing_issuer_first_time_preserves_endpoints_set_in_the_sam
     existing.credentials = None
     existing.issuer = None
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="my-test-server",
@@ -402,6 +410,7 @@ async def test_unchanged_url_does_not_clear_oauth_fields():
     existing.url = "https://same.example.com/mcp"
     existing.credentials = None
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="my-test-server", url="https://same.example.com/mcp")
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -600,6 +609,7 @@ async def test_credentials_merge_migrates_legacy_blob_te_settings():
         },
     )
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="te-server",
@@ -629,6 +639,7 @@ async def test_cleared_column_is_not_resurrected_by_legacy_blob_value():
         credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://dead-idp.example.com/token"},
     )
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="te-server",
@@ -654,6 +665,7 @@ async def test_merge_strips_blob_te_copy_when_column_already_set():
     )
     existing.token_exchange_endpoint = "https://column.example.com/token"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="te-server",
@@ -676,6 +688,7 @@ async def test_auth_type_switch_clears_flow_fields_with_external_fields_set():
     mock_prisma = _mock_prisma()
     existing = _existing_row("oauth2")
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="te-server", auth_type="oauth2_token_exchange")
     await update_mcp_server(mock_prisma, data, "test-user", fields_set=set(data.fields_set()))
@@ -705,6 +718,7 @@ async def test_explicit_clear_without_credentials_purges_legacy_blob_copy():
         credentials={"client_id": "enc-old-cid", "token_exchange_endpoint": "https://dead-idp.example.com/token"},
     )
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="te-server", token_exchange_endpoint=None)
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -732,6 +746,7 @@ async def test_explicit_te_write_without_credentials_migrates_other_legacy_field
         },
     )
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="te-server", audience="api://new")
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -751,6 +766,7 @@ async def test_te_update_without_blob_te_keys_leaves_credentials_untouched():
     mock_prisma = _mock_prisma()
     existing = _existing_row("oauth2_token_exchange", credentials={"client_id": "enc-old-cid"})
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="te-server", token_exchange_endpoint="https://new.example.com/token")
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -774,6 +790,7 @@ async def test_cf_pair_switch_without_credentials_keeps_stored_app_and_endpoints
     existing.token_url = "https://provider.example/token"
     existing.registration_url = "https://provider.example/register"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="cf-server", auth_type="oauth_delegate")
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -791,6 +808,7 @@ async def test_cf_pair_switch_with_partial_credentials_merges_not_replaces():
     mock_prisma = _mock_prisma()
     existing = _existing_row("true_passthrough", credentials={"client_id": "enc-A", "client_secret": "enc-B"})
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="cf-server", auth_type="oauth_delegate", credentials={"client_id": "B"})
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -808,6 +826,7 @@ async def test_null_existing_auth_type_to_cf_counts_as_changed_and_clears_blob()
     mock_prisma = _mock_prisma()
     existing = _existing_row(None, credentials={"client_id": "enc-old"})
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(server_id="cf-server", auth_type="true_passthrough")
     await update_mcp_server(mock_prisma, data, "test-user")
@@ -827,6 +846,7 @@ async def test_client_rotation_strips_legacy_minted_token_keys():
         "oauth2", credentials={"client_id": "A", "access_token": "T", "refresh_token": "R", "expires_in": 3600}
     )
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     data = UpdateMCPServerRequest(
         server_id="oauth2-server", auth_type="oauth2", credentials={"client_id": "B", "client_secret": "S"}
@@ -872,6 +892,7 @@ def _mock_toolset_prisma():
     }
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcptoolsettable = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_mcptoolsettable.update = AsyncMock(return_value=updated_row)
     return mock_prisma
 
@@ -945,6 +966,7 @@ async def test_find_identifier_conflict_reports_alias_hit():
 
     mock_prisma = _mock_prisma()
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+    mock_prisma.replica_db = mock_prisma.db
 
     conflict = await find_mcp_server_identifier_conflict(
         mock_prisma, server_name="new-name", alias="taken", exclude_server_id="my-server"
@@ -966,6 +988,7 @@ async def test_find_identifier_conflict_reports_server_name_when_alias_is_free()
 
     mock_prisma = _mock_prisma()
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(side_effect=[None, _conflict_row()])
+    mock_prisma.replica_db = mock_prisma.db
 
     conflict = await find_mcp_server_identifier_conflict(
         mock_prisma, server_name="taken", alias="free", exclude_server_id=None
@@ -994,6 +1017,7 @@ async def test_update_writing_alias_returns_conflict_instead_of_row():
 
     mock_prisma = _mock_prisma()
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+    mock_prisma.replica_db = mock_prisma.db
 
     result = await update_mcp_server(
         mock_prisma,
@@ -1040,6 +1064,7 @@ async def test_clearing_alias_conflicts_on_the_fallback_server_name():
     existing = MagicMock()
     existing.server_name = "taken"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
 
     result = await update_mcp_server(
@@ -1063,6 +1088,7 @@ async def test_clearing_alias_to_empty_string_conflicts_on_the_fallback_server_n
     existing = MagicMock()
     existing.server_name = "taken"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
 
     result = await update_mcp_server(
@@ -1082,6 +1108,7 @@ async def test_clearing_alias_with_free_server_name_returns_the_row():
     existing = MagicMock()
     existing.server_name = "free-name"
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.replica_db = mock_prisma.db
 
     result = await update_mcp_server(
         mock_prisma,

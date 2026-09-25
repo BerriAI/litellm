@@ -44,6 +44,7 @@ class TestExpiredUISessionKeyCleanupManager:
         mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = (
             mock_keys
         )
+        mock_prisma_client.replica_db = mock_prisma_client.db
 
         with patch(
             "litellm.proxy.common_utils.expired_ui_session_key_cleanup_manager.datetime"

@@ -790,6 +790,7 @@ async def test_load_user_env_vars_force_refresh_bypasses_cache(
     prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(
         side_effect=[old_row, new_row]
     )
+    prisma.replica_db = prisma.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
 
     manager = MCPServerManager()
@@ -836,6 +837,7 @@ async def test_load_user_env_vars_invalidation_forces_refetch(
     prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(
         side_effect=[old_row, new_row]
     )
+    prisma.replica_db = prisma.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
 
     manager = MCPServerManager()
@@ -870,6 +872,7 @@ def _mock_env_vars_prisma(row=None):
 
     prisma = MagicMock()
     prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(return_value=row)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_mcpuserenvvars.upsert = AsyncMock()
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
@@ -965,6 +968,7 @@ def _transactional_env_vars_prisma(read_delay: float = 0.0):
     class _Prisma:
         def __init__(self, delay):
             self.db = _DB(_Store(), delay)
+            self.replica_db = self.db
 
     return _Prisma(read_delay)
 
@@ -1057,6 +1061,7 @@ async def test_get_user_env_vars_bulk_distributes_results(env_vars_salt_key):
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[row1, row2])
+    prisma.replica_db = prisma.db
     result = await get_user_env_vars_bulk(prisma, "alice", ["srv-1", "srv-2", "srv-3"])
     assert result == {"srv-1": {"A": "1"}, "srv-2": {"B": "2"}}
 
@@ -1080,6 +1085,7 @@ async def test_delete_user_env_vars_is_idempotent_delete_many():
     prisma = _mock_env_vars_prisma()
     await delete_user_env_vars(prisma, "alice", "srv-1")
     prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+    prisma.replica_db = prisma.db
     call = prisma.db.litellm_mcpuserenvvars.delete_many.call_args
     assert call.kwargs["where"] == {"user_id": "alice", "server_id": "srv-1"}
 
@@ -1187,6 +1193,7 @@ async def test_merge_user_env_vars_acquires_lock_without_deserializing_void(
     tx = _Tx()
     prisma = MagicMock()
     prisma.db.tx = MagicMock(return_value=tx)
+    prisma.replica_db = prisma.db
 
     values = {"CORP_TOKEN": "t0ken"}
     merged = await merge_user_env_vars(
@@ -1207,6 +1214,7 @@ async def test_delete_mcp_server_removes_orphaned_user_env_vars():
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+    prisma.replica_db = prisma.db
 
     await delete_mcp_server(prisma, "srv-1")
 
@@ -1224,6 +1232,7 @@ async def test_delete_mcp_server_skips_env_var_cleanup_when_server_missing():
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=None)
+    prisma.replica_db = prisma.db
 
     result = await delete_mcp_server(prisma, "srv-1")
 
@@ -1244,6 +1253,7 @@ async def test_delete_mcp_server_succeeds_when_orphan_cleanup_fails():
     deleted = object()
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=deleted)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock(
         side_effect=Exception("connection pool exhausted")
     )
@@ -1265,6 +1275,7 @@ async def test_delete_mcp_server_removes_orphaned_user_credentials():
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+    prisma.replica_db = prisma.db
 
     await delete_mcp_server(prisma, "srv-1")
 
@@ -1282,6 +1293,7 @@ async def test_delete_mcp_server_skips_credential_cleanup_when_server_missing():
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=None)
+    prisma.replica_db = prisma.db
 
     result = await delete_mcp_server(prisma, "srv-1")
 
@@ -1301,6 +1313,7 @@ async def test_delete_mcp_server_credential_cleanup_failure_still_cleans_env_var
     deleted = object()
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=deleted)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(
         side_effect=Exception("connection pool exhausted")
     )
@@ -1534,6 +1547,7 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(
         return_value=_prisma_row_with_json_string_env_vars()
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     created = await create_mcp_server(
         mock_prisma,
@@ -1553,6 +1567,7 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
     mock_prisma_upd.db.litellm_mcpservertable.update = AsyncMock(
         return_value=_prisma_row_with_json_string_env_vars()
     )
+    mock_prisma_upd.replica_db = mock_prisma_upd.db
     updated = await update_mcp_server(
         mock_prisma_upd,
         UpdateMCPServerRequest(server_id="srv-update"),
@@ -1630,6 +1645,7 @@ async def test_rotate_mcp_user_env_vars_logs_rotated_and_skipped_counts(
     prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(
         return_value=[good_one, good_two, bad]
     )
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpuserenvvars.update = AsyncMock()
 
     logger = MagicMock()

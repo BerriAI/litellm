@@ -211,6 +211,7 @@ class TestPrometheusUserTeamCountMetrics:
             return 2 if where is not None else 10
 
         mock_prisma = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_usertable.count = _user_count
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=4)
 
@@ -840,6 +841,7 @@ async def test_set_org_budget_metrics_after_api_request(prometheus_logger):
     org_mock.litellm_budget_table = budget_mock
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_proxy_server = MagicMock()
     mock_proxy_server.prisma_client = mock_prisma
     mock_proxy_server.user_api_key_cache = MagicMock()
@@ -906,6 +908,7 @@ async def test_initialize_org_budget_metrics(prometheus_logger):
     org_mock.litellm_budget_table = budget_mock
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_organizationtable.find_many = AsyncMock(
         return_value=[org_mock]
     )
@@ -1186,6 +1189,7 @@ async def test_initialize_customer_budget_metrics_emits_gauges_for_budgeted_cust
     ]
     find_many = AsyncMock(return_value=rows)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = find_many
     mock_prisma.db.litellm_endusertable.count = AsyncMock(return_value=len(rows))
     mock_proxy_server = MagicMock()
@@ -1220,6 +1224,7 @@ async def test_initialize_customer_budget_metrics_skips_when_end_user_tracking_o
 
     find_many = AsyncMock(return_value=[_mock_customer_row("cust-a", 100.0, 500.0, None)])
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = find_many
     mock_prisma.db.litellm_endusertable.count = AsyncMock(return_value=1)
     mock_proxy_server = MagicMock()
@@ -1237,6 +1242,7 @@ async def test_initialize_remaining_budget_metrics_includes_customers(prometheus
     import sys
 
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = AsyncMock(
         return_value=[_mock_customer_row("cust-startup", 5.0, 25.0, None)]
     )
@@ -1262,6 +1268,7 @@ async def test_initialize_customer_budget_metrics_counts_once_across_pages(prome
     find_many = AsyncMock(side_effect=pages)
     count = AsyncMock(return_value=101)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = find_many
     mock_prisma.db.litellm_endusertable.count = count
     mock_proxy_server = MagicMock()
@@ -1294,6 +1301,7 @@ async def test_initialize_customer_budget_metrics_applies_default_budget_to_unbu
     find_many = AsyncMock(return_value=[explicit_row, default_row])
     find_unique = AsyncMock(return_value=default_budget)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_endusertable.find_many = find_many
     mock_prisma.db.litellm_endusertable.count = AsyncMock(return_value=2)
     mock_prisma.db.litellm_budgettable.find_unique = find_unique

@@ -58,6 +58,7 @@ class TestTeamModelAddAtomicAppend:
             mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
                 return_value=existing_team
             )
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.execute_raw = AsyncMock(return_value=None)
             mock_prisma.db.litellm_teamtable.update = AsyncMock(
                 return_value=updated_team
