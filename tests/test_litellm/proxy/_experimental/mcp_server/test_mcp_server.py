@@ -10449,7 +10449,6 @@ async def test_streamable_http_rejects_modern_protocol_version(
     from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._experimental.mcp_server.server import unsupported_protocol_version
 
-    # Exercise the default policy independently of configuration loaded by other tests.
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     scope: Scope = {
         "type": "http",
