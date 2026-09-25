@@ -99,7 +99,7 @@ def test_edit_url_moves_calls_to_the_new_peer_without_touching_grants(gateway: G
 def test_delete_removes_listing_calls_and_database_row(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
-        identity: Final = register_mcp(scenario, peer, alias)
+        identity: Final = register_mcp(scenario, peer, alias, cleanup=forget_mcp)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         name: Final = tool_names(gateway, key, identity)["add"]
         delete_mcp(gateway, identity)
@@ -225,7 +225,7 @@ def test_access_group_membership_follows_edits(gateway: Gateway) -> None:
 def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Gateway, peer: Gateway) -> None:
     with mcp_peer() as first, mcp_peer() as second, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
-        identity: Final = register_mcp(scenario, first, alias)
+        identity: Final = register_mcp(scenario, first, alias, cleanup=forget_mcp)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         eventually(
             lambda: peer.client.get(

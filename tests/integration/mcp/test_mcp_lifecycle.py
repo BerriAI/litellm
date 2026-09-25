@@ -17,6 +17,7 @@ from integration._support.mcp import (
     McpCaller,
     Outcome,
     call_tool,
+    forget_mcp,
     mcp_peer,
     register_mcp,
     tool_calls,
@@ -364,7 +365,11 @@ def test_generated_create_edit_grant_revoke_delete_call_keeps_grants_and_tool_li
                     return
                 alias: Final = "fleet" + uuid.uuid4().hex[:8]
                 identity: Final = register_mcp(
-                    self.scenario, upstream, alias, static_headers={"X-Integration-Server": alias}
+                    self.scenario,
+                    upstream,
+                    alias,
+                    cleanup=forget_mcp,
+                    static_headers={"X-Integration-Server": alias},
                 )
                 self.servers[alias] = identity
 

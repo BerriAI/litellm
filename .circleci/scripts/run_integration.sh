@@ -227,7 +227,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do
     [ -n "$covered_pid" ] || continue
-    kill -TERM -- "-$covered_pid"
+    kill -TERM -- "-$covered_pid" 2>/dev/null || true
     for _ in {1..300}; do
       kill -0 "$covered_pid" 2>/dev/null || break
       sleep 0.1

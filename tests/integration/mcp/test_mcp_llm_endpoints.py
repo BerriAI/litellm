@@ -296,7 +296,7 @@ def test_ungranted_key_gets_no_gateway_tools_and_the_peer_is_never_reached(gatew
         assert _peer_add_calls(rig.peer) == (), "denied caller reached the peer"
         requests: Final = rig.upstream_tools()
         assert requests and all(rig.tool not in names for names in requests), requests
-        assert response.status_code in (200, 400, 401, 403), response.text
+        assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))

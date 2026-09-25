@@ -21,8 +21,6 @@ SUBJECTS: Final[tuple[Subject, ...]] = (
 
 @dataclass(frozen=True, slots=True)
 class Caller:
-    """A key plus the request headers that make the proxy resolve the granted subject."""
-
     key: str
     headers: Mapping[str, str]
 
@@ -75,11 +73,6 @@ def grant(
     access_group: str | None = None,
     allowed_tools: Mapping[str, tuple[str, ...]] | None = None,
 ) -> Caller:
-    """Build a caller whose ``subject`` level grants exactly ``granted`` out of ``ceiling``.
-
-    ``ceiling`` is what the key itself can reach before the subject narrows it; the key subject grants
-    ``granted`` directly. Access groups take the group name that the granted servers were registered with,
-    and ``allowed_tools`` maps server id to the tools the key may call on it."""
     gateway: Final = scenario.gateway
     match subject:
         case "key":
