@@ -25,7 +25,7 @@ pub use execution::{
     runtime_started,
 };
 pub use fork_gate::RuntimeAlreadyStarted;
-pub use gil::{release_count, release_gil};
+pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
@@ -42,4 +42,25 @@ pub(crate) fn initialize_python() {
             py.import("asyncio").expect("asyncio imports");
         });
     });
+}
+
+#[cfg(test)]
+pub(crate) struct InitializedPython;
+
+#[cfg(test)]
+impl InitializedPython {
+    pub(crate) fn attach<F, R>(&self, f: F) -> R
+    where
+        F: for<'py> FnOnce(pyo3::Python<'py>) -> R,
+    {
+        pyo3::Python::attach(f)
+    }
+}
+
+#[cfg(test)]
+#[rstest::fixture]
+#[once]
+pub(crate) fn initialized_python() -> InitializedPython {
+    initialize_python();
+    InitializedPython
 }

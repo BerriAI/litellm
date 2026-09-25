@@ -27,6 +27,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import type { KeyValueFormValue, KillSwitchConfig, KillSwitchFormValue } from "./kill_switch_config";
 
 export interface AgentSkillFormValue {
   id?: string;
@@ -54,6 +55,8 @@ export type AgentFormFieldValue =
   | string[]
   | AgentSkillFormValue[]
   | StaticHeaderFormValue[]
+  | KeyValueFormValue[]
+  | KillSwitchFormValue
   | McpServerSelection
   | Record<string, string[]>
   | null
@@ -82,6 +85,7 @@ export interface AgentFormValues {
   output_cost_per_token?: string | number;
   static_headers?: StaticHeaderFormValue[];
   extra_headers?: string[];
+  kill_switch?: KillSwitchFormValue;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   session_tpm_limit?: number | null;
@@ -124,6 +128,7 @@ export interface AgentRequestPayload {
   litellm_params?: Record<string, unknown>;
   object_permission?: Record<string, unknown>;
   access_group_ids?: string[];
+  kill_switch?: KillSwitchConfig | null;
 }
 
 interface AgentFormFieldProps {
