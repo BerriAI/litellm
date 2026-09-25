@@ -983,13 +983,15 @@ def test_gemini_passthrough_streaming_429_upstream_abort_after_first_frame_still
             assert bytes(received).startswith(b'data: {"error":"rate limited"}'), bytes(received)
             eventually(
                 lambda: _upstream_warnings(owned.log),
-                lambda lines: any("returned 429" in line or "read failed" in line for line in lines),
+                lambda lines: (
+                    any("returned 429" in line for line in lines) and any("read failed" in line for line in lines)
+                ),
                 seconds=30,
             )
-            matching: Final = tuple(
-                line for line in _upstream_warnings(owned.log) if "returned 429" in line or "read failed" in line
-            )
-            assert len(matching) == 1, matching
+            returned: Final = tuple(line for line in _upstream_warnings(owned.log) if "returned 429" in line)
+            read_failures: Final = tuple(line for line in _upstream_warnings(owned.log) if "read failed" in line)
+            assert len(returned) == 1, returned
+            assert len(read_failures) == 1, read_failures
             error_information: Final = _spend_error_information(call_ids[0])
             assert error_information["error_code"] == "429", error_information
             follow_up: Final = candidate.request(
