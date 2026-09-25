@@ -481,6 +481,56 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_container_upload_raises_for_non_anthropic_target():
+    """A container_upload block can't be represented in OpenAI/Gemini shape and must not be silently dropped.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/41912 (cases 1 and 3): before this
+    fix, the block vanished from the translated message list and the request was dispatched anyway
+    with empty content, instead of surfacing an error to the caller.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "container_upload", "file_id": "file-g1-controlled"}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    with pytest.raises(litellm.BadRequestError, match="container_upload"):
+        adapter.translate_anthropic_messages_to_openai(
+            messages=anthropic_messages,
+            model="gemini-flash-latest",
+            custom_llm_provider="gemini",
+        )
+
+
+def test_translate_anthropic_messages_to_openai_container_upload_passthrough_without_confirmed_target():
+    """When the real target provider isn't known, don't reject a request that may legitimately be Anthropic-bound.
+
+    This adapter is also called (with no `custom_llm_provider`) for approximate purposes against an
+    Anthropic-shaped request regardless of the real target, e.g. guardrail scanning
+    (`AnthropicMessagesHandler.process_input_messages`) and context-compaction token counting. Those
+    callers have no exception handling, so raising unconditionally would break a container_upload
+    request that is actually bound for Anthropic and works natively there.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "container_upload", "file_id": "file-g1-controlled"}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="claude-sonnet-4-6",
+    )
+
+    assert result == []
+
+
 def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning_blocks():
     """A session that moves from an OpenAI reasoning model to a chat provider replays reasoning only OpenAI can read.
 

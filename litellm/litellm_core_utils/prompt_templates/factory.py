@@ -2475,6 +2475,15 @@ def anthropic_messages_pt(
                                     _file_content_element,
                                 )
                             )
+                        elif m.get("type", "") == "input_audio":
+                            raise litellm.BadRequestError(
+                                message=(
+                                    "Anthropic does not support audio input. Remove the 'input_audio' "
+                                    "content block, or route this request to a model that supports it."
+                                ),
+                                model=model,
+                                llm_provider=llm_provider,
+                            )
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
