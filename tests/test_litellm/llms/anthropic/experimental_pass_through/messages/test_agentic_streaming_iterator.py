@@ -4,7 +4,8 @@ Tests for AgenticAnthropicStreamingIterator and SSE rebuild helpers.
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -255,6 +256,36 @@ class MockFailingAsyncStream(MockAsyncStream):
         return await super().__anext__()
 
 
+def _logging_obj(completion_start_time: Optional[datetime] = None) -> MagicMock:
+    logging_obj = MagicMock()
+    logging_obj.completion_start_time = completion_start_time
+
+    def update(completion_start_time):
+        logging_obj.completion_start_time = completion_start_time
+
+    logging_obj._update_completion_start_time.side_effect = update
+    return logging_obj
+
+
+def _build_iterator(
+    stream: AsyncIterator[bytes], logging_obj: MagicMock, hold_back: bool = False
+) -> AgenticAnthropicStreamingIterator:
+    handler = MagicMock()
+    handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+    return AgenticAnthropicStreamingIterator(
+        completion_stream=stream,
+        http_handler=handler,
+        model="claude-sonnet-4-20250514",
+        messages=[],
+        anthropic_messages_provider_config=MagicMock(),
+        anthropic_messages_optional_request_params={},
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+        kwargs={},
+        hold_back=hold_back,
+    )
+
+
 def _build_hold_back_iterator(
     stream: MockAsyncStream,
     mock_handler: MagicMock,
@@ -275,6 +306,45 @@ def _build_hold_back_iterator(
         server_fulfilled_tool_names=server_fulfilled_tool_names,
         ping_interval_seconds=ping_interval_seconds,
     )
+
+
+@pytest.mark.asyncio
+async def test_records_completion_start_time_on_first_streamed_chunk():
+    logging_obj = _logging_obj()
+    iterator = _build_iterator(MockAsyncStream([b"first", b"second"]), logging_obj)
+
+    await iterator.__anext__()
+    first_stamp = logging_obj.completion_start_time
+    await iterator.__anext__()
+
+    assert isinstance(first_stamp, datetime)
+    assert logging_obj.completion_start_time is first_stamp
+    logging_obj._update_completion_start_time.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_records_completion_start_time_while_buffering():
+    logging_obj = _logging_obj()
+    iterator = _build_iterator(
+        MockAsyncStream([b"first", b"second"]), logging_obj, hold_back=True
+    )
+
+    await iterator._drain_upstream()
+
+    assert isinstance(logging_obj.completion_start_time, datetime)
+    logging_obj._update_completion_start_time.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_preserves_existing_completion_start_time():
+    existing = datetime(2026, 1, 1)
+    logging_obj = _logging_obj(existing)
+    iterator = _build_iterator(MockAsyncStream([b"first"]), logging_obj)
+
+    await iterator.__anext__()
+
+    assert logging_obj.completion_start_time is existing
+    logging_obj._update_completion_start_time.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
