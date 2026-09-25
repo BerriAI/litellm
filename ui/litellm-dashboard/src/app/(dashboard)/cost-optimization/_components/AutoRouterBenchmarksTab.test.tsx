@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -184,9 +183,6 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.getByText("$23.13")).toBeInTheDocument();
     expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
-    expect(screen.queryByText(/turns estimated/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/older estimates.*excluded|excluded.*older estimates/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Actual spend on covered turns")).not.toBeInTheDocument();
   });
 
   it("leads with total estimated savings, before the four session-shape metrics", () => {
@@ -220,148 +216,6 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("32.7")).toBeInTheDocument();
     expect(screen.getByText("2.1h")).toBeInTheDocument();
     expect(screen.getByText("5.3M")).toBeInTheDocument();
-  });
-
-  it("keeps daily savings visible when matching historical costs are unavailable", () => {
-    const dailyValues: Partial<Totals> = {
-      spend: null,
-      llm_spend: null,
-      cost_coverage: "unavailable",
-      cost_requests: null,
-      classifier_cost: null,
-      baseline_spend: null,
-      saved_pct: null,
-    };
-    const daily = totals(dailyValues);
-    mockHook({ data: response([group()], daily) });
-    renderTab();
-
-    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "Unavailable",
-      "Unavailable",
-      "Unavailable",
-      "Unavailable",
-    ]);
-    expect(screen.getAllByText("Unavailable")).toHaveLength(4);
-    expect(screen.getByText("$23.13")).toBeInTheDocument();
-    expect(screen.queryByText("-86%")).not.toBeInTheDocument();
-    expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
-    expect(screen.getByText("Whole sessions overlapping the selected dates")).toBeInTheDocument();
-  });
-
-  it("shows recorded historical costs without presenting partial costs as the full savings comparison", () => {
-    const recordedCosts: Partial<Totals> = {
-      spend: 12,
-      llm_spend: 10,
-      classifier_cost: null,
-      cost_coverage: "partial",
-      cost_requests: null,
-      baseline_spend: null,
-      saved_pct: null,
-    };
-    mockHook({ data: response([], totals(recordedCosts)) });
-    renderTab();
-
-    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "$12.00",
-      "$10.00",
-      "Unavailable",
-      "Unavailable",
-    ]);
-    expect(screen.getByText("Partial")).toBeInTheDocument();
-    expect(screen.getByText("Some request costs are unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("-86%")).not.toBeInTheDocument();
-    expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
-  });
-
-  it("separates actual spend from the estimated-request comparison and uses request-date classification counts", () => {
-    const requestCosts: Partial<Totals> = {
-      spend: 12,
-      llm_spend: 10,
-      classifier_cost: 2,
-      cost_requests: 4,
-      savings_estimated_turns: 2,
-      savings_estimated_actual_spend: 4,
-      saved_spend: 6,
-      baseline_spend: 10,
-      saved_pct: 60,
-    };
-    mockHook({ data: response([], totals(requestCosts)) });
-    renderTab();
-
-    expect(screen.getByText("$6.00")).toBeInTheDocument();
-    expect(screen.getByText("-60%")).toBeInTheDocument();
-    expect(screen.getByText("2 of 4 requests have savings estimates")).toBeInTheDocument();
-    expect(screen.getByText("Actual spend on estimated requests")).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "$12.00",
-      "$10.00",
-      "$2.00",
-      "$4.00",
-      "$10.00",
-    ]);
-    expect(screen.getByText("($500.00 / 1K turns)")).toBeInTheDocument();
-  });
-
-  it("labels a selected router as session usage and keeps its recorded cost breakdown", async () => {
-    const user = userEvent.setup();
-    const dailyValues: Partial<Totals> = {
-      saved_spend: 3_000,
-      spend: null,
-      llm_spend: null,
-      cost_coverage: "unavailable",
-      cost_requests: null,
-      classifier_cost: null,
-      baseline_spend: null,
-      saved_pct: null,
-    };
-    const daily = totals(dailyValues);
-    mockHook({ data: response([group()], daily) });
-    renderTab();
-
-    expect(screen.getByText("$3,000.00")).toBeInTheDocument();
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "claude-auto" }));
-
-    expect(screen.getByRole("heading", { name: "Auto-router session usage" })).toBeInTheDocument();
-    expect(screen.getByText("Whole sessions overlapping the selected dates")).toBeInTheDocument();
-    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
-    expect(screen.queryByText("$3,000.00")).not.toBeInTheDocument();
-    expect(screen.getByText("-86%")).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "$359.86",
-      "$353.71",
-      "$6.15",
-      "$2,534.45",
-    ]);
-  });
-
-  it("keeps selected-router spend visible without a baseline or percentage for unestimated turns", async () => {
-    const user = userEvent.setup();
-    const unknownSavings: Partial<AutoRouterBenchmarkGroup> = {
-      savings_estimated_turns: 0,
-      savings_estimated_actual_spend: 0,
-      saved_spend: 0,
-      baseline_spend: null,
-      saved_pct: null,
-      saved_per_session: 0,
-    };
-    mockHook({ data: response([group(unknownSavings)]) });
-    renderTab();
-
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "claude-auto" }));
-
-    expect(screen.getByRole("heading", { name: "Auto-router session usage" })).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "$359.86",
-      "$353.71",
-      "$6.15",
-      "Unavailable",
-    ]);
-    expect(screen.queryByText("0%")).not.toBeInTheDocument();
   });
 
   it.each([

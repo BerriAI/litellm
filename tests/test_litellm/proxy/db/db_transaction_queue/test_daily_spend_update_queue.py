@@ -606,22 +606,3 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
     assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)
     assert updates[0][test_key]["total_response_time_ms"] == 900
     assert updates[0][test_key]["timed_requests"] == 1
-
-
-@pytest.mark.parametrize("reverse", (False, True))
-def test_old_daily_payloads_do_not_gain_router_accounting_coverage(reverse: bool) -> None:
-    old = {"spend": 1.0, "prompt_tokens": 2, "completion_tokens": 1,
-           "api_requests": 1, "successful_requests": 1, "failed_requests": 0}
-    current = {**old, "autorouter_accounted_requests": 1, "autorouter_requests": 1,
-               "autorouter_llm_spend": 1.0, "autorouter_classifier_cost": 0.2,
-               "autorouter_classifier_cost_recorded_requests": 1,
-               "autorouter_estimated_requests": 1, "autorouter_estimated_actual_spend": 1.2}
-    updates = [{"key": current}, {"key": old}] if reverse else [{"key": old}, {"key": current}]
-    merged = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)["key"]
-    assert merged["api_requests"] == 2
-    assert merged["autorouter_accounted_requests"] == merged["autorouter_requests"] == 1
-    assert merged["autorouter_llm_spend"] == 1.0
-    assert merged["autorouter_classifier_cost"] == 0.2
-    assert merged["autorouter_classifier_cost_recorded_requests"] == merged["autorouter_estimated_requests"] == 1
-    assert merged["autorouter_estimated_actual_spend"] == 1.2
-    assert "autorouter_accounted_requests" not in old

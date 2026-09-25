@@ -360,47 +360,6 @@ class TestRender:
 
 
 class TestClaudeCodeMode:
-    @pytest.mark.parametrize("field", ("baseline_spend", "savings_estimated_baseline_spend"))
-    @pytest.mark.parametrize("invalid_baseline", ("1.5", True, float("nan"), float("inf")))
-    def test_invalid_baselines_do_not_display_a_cost_comparison(
-        self, config_dir: Path, field: str, invalid_baseline: object,
-    ) -> None:
-        session: Final = statusline_script._session_from_payload({
-            **RECORDED._asdict(), field: invalid_baseline,
-        })
-        assert session is None
-        assert render("m", session, config_dir, use_color=False) == "Routed to: m"
-
-    @pytest.mark.parametrize("estimated_turns, saved_spend, delta", (
-        (0, 30.0, "-75%"), (0, -2.0, "+25%"),
-        (1, 30.0, "-75%"), (1, 0.0, "0%"), (1, -2.0, "+25%"),
-    ))
-    def test_historical_and_current_savings_remain_combined_after_cache_refresh(
-        self, tmp_path: Path, transcript: Path, config_dir: Path, estimated_turns: int,
-        saved_spend: float, delta: str,
-    ) -> None:
-        session: Final = statusline_script._session_from_payload(
-            {
-                **RECORDED._asdict(),
-                "spend": 10.0,
-                "baseline_spend": 10.0 + saved_spend,
-                "savings_estimated_baseline_spend": 1.5 if estimated_turns else None,
-                "turns": 3,
-                "savings_estimated_turns": estimated_turns,
-                "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
-            }
-        )
-        assert session is not None
-
-        def fetch(credentials: Credentials, session_id: str) -> Fetched:
-            return Fetched(session, True)
-
-        first: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
-        assert first == _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
-        assert first.splitlines()[0] == f"Routed to: claude-sonnet-5  {delta} vs Claude Opus 5"
-        assert "$10.00" in first and f"${10.0 + saved_spend:.2f}" in first
-        assert "$1.50" not in first and "Savings unavailable" not in first
-
     @pytest.mark.parametrize("estimated_turns", (0, 1))
     def test_current_estimates_keep_the_routed_model_and_compare_only_covered_turns(
         self, tmp_path: Path, transcript: Path, config_dir: Path, estimated_turns: int

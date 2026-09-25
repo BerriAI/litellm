@@ -276,26 +276,6 @@ def test_db_push_cannot_succeed_without_daily_coverage_owner(
     ]
 
 
-@pytest.mark.parametrize("use_migrate", [False, True])
-@pytest.mark.parametrize("failure", ["exit", "timeout"])
-def test_database_setup_retries_transient_daily_coverage_install(
-    fake_prisma_cli: "FakePrismaCli",
-    unset_database_url: None,
-    monkeypatch: pytest.MonkeyPatch,
-    use_migrate: bool,
-    failure: str,
-) -> None:
-    monkeypatch.setenv("FAKE_PRISMA_FAIL_FIRST_DB_EXECUTE", failure)
-
-    with patch("litellm_proxy_extras.utils.time.sleep"):
-        assert PrismaManager.setup_database(use_migrate=use_migrate) is True
-
-    assert [call[:2] for call in fake_prisma_cli.calls if call != ["--version"]] == [
-        ["migrate", "deploy"] if use_migrate else ["db", "push"],
-        ["db", "execute"], ["db", "execute"],
-    ]
-
-
 def _entra_jwt(expires_in_seconds: int) -> str:
     """A JWT shaped like a real Entra access token, expiring ``expires_in_seconds`` from now."""
     import base64

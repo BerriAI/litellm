@@ -29,21 +29,21 @@ const cache = {
 
 const stats = {
   sessions: 2,
-  turns: 4,
+  turns: 2,
   avg_turns_per_session: 2,
   avg_session_seconds: 30,
   avg_tokens_per_session: 100,
-  spend: 1.25,
-  llm_spend: 1,
+  spend: 100,
+  llm_spend: 99.75,
   cost_coverage: "complete" as const,
   cost_requests: null,
-  savings_estimated_turns: 4,
-  savings_estimated_actual_spend: 1.25,
+  savings_estimated_turns: 1,
+  savings_estimated_actual_spend: 1,
   classifier_cost: 0.25,
-  saved_spend: 8.75,
-  baseline_spend: 10,
-  saved_pct: 87.5,
-  saved_per_session: 4.375,
+  saved_spend: 1,
+  baseline_spend: 2,
+  saved_pct: 50,
+  saved_per_session: 0.5,
   cache,
 };
 
@@ -107,8 +107,8 @@ describe("KeyAutoRouterUsageTab", () => {
       "Unavailable",
       "Unavailable",
     ]);
-    expect(screen.getByText("$4.38")).toBeInTheDocument();
-    expect(screen.queryByText("-88%")).not.toBeInTheDocument();
+    expect(screen.getByText("$0.5000")).toBeInTheDocument();
+    expect(screen.queryByText("-50%")).not.toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
 
     const benchmarkUrl = new URL(requestedUrls().find((url) => url.includes("/auto_router/benchmarks")) ?? "");
@@ -121,63 +121,18 @@ describe("KeyAutoRouterUsageTab", () => {
 
     expect(screen.getByRole("heading", { name: "Auto-router session usage" })).toBeInTheDocument();
     expect(screen.getByText("Whole sessions overlapping the selected dates")).toBeInTheDocument();
-    expect(screen.getByText("$8.75")).toBeInTheDocument();
     expect(screen.queryByText("$12.75")).not.toBeInTheDocument();
-    expect(screen.getByText("-88%")).toBeInTheDocument();
-    expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
-    expect(screen.getByText("$1.25")).toBeInTheDocument();
-    expect(screen.getByText("LLM spend")).toBeInTheDocument();
-    expect(screen.getByText("$1.00")).toBeInTheDocument();
-    expect(screen.getByText("Classification cost")).toBeInTheDocument();
-    expect(screen.getByText("$0.2500")).toBeInTheDocument();
-    expect(screen.getByText("($62.50 / 1K turns)")).toBeInTheDocument();
-    expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
-    expect(screen.getByText("$10.00")).toBeInTheDocument();
-    expect(screen.getByText("Auto-router prompt caching")).toBeInTheDocument();
-    expect(screen.getAllByText("50.0%").length).toBeGreaterThan(0);
-  });
-
-  it("shows matching estimated costs and coverage when selecting a mixed-coverage router", async () => {
-    const user = userEvent.setup();
-    const mixed = {
-      ...stats,
-      turns: 2,
-      spend: 100,
-      llm_spend: 100,
-      classifier_cost: 0,
-      savings_estimated_turns: 1,
-      savings_estimated_actual_spend: 1,
-      saved_spend: 1,
-      baseline_spend: 2,
-      saved_pct: 50,
-    };
-    vi.stubGlobal("fetch", async (request: Request | string) => {
-      const url = typeof request === "string" ? request : request.url;
-      return jsonResponse(
-        url.includes("/auto_router/benchmarks")
-          ? { ...benchmarks, groups: [{ ...benchmarks.groups[0], ...mixed }] }
-          : noDeployments,
-      );
-    });
-    const activity = {
-      dateValue: { from: new Date(2025, 0, 1), to: new Date(2025, 0, 31) },
-      onDateChange: vi.fn(),
-    };
-    renderWithProviders(<KeyAutoRouterUsageTab accessToken="test-token" keyToken="key-hash-1" activity={activity} />);
-    expect(await screen.findByText("$12.75")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "router-one" }));
-
     expect(screen.getByText("-50%")).toBeInTheDocument();
     expect(screen.getByText("1 of 2 requests have savings estimates")).toBeInTheDocument();
     expect(screen.getByText("Actual spend on estimated requests")).toBeInTheDocument();
     expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
       "$100.00",
-      "$100.00",
-      "$0.00",
+      "$99.75",
+      "$0.2500",
       "$1.00",
       "$2.00",
     ]);
+    expect(screen.getByText("Auto-router prompt caching")).toBeInTheDocument();
+    expect(screen.getAllByText("50.0%").length).toBeGreaterThan(0);
   });
 });

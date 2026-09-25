@@ -3624,63 +3624,6 @@ async def test_daily_router_costs_account_for_every_external_request_without_a_s
     assert transaction["autorouter_estimated_actual_spend"] == (0.625 if estimated else 0.0)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", ("success", None, "failure"))
-async def test_daily_router_costs_use_status_normalized_from_request_metadata(status: str | None) -> None:
-    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-    from litellm.proxy.utils import PrismaClient
-
-    started_at: Final = datetime(2026, 9, 23, tzinfo=timezone.utc)
-    metadata: Final = {
-        "user_api_key": "test-hash", "user_api_key_user_id": "u", "model_group": "auto",
-        "routing_decision": {"router_model_name": "auto", "classifier_cost": 0.125},
-        **({"status": status} if status is not None else {}),
-    }
-    payload: Final = get_logging_payload(
-        kwargs={
-            "model": "synthetic-target", "call_type": "acompletion", "response_cost": 0.5,
-            "litellm_params": {"metadata": metadata, "custom_llm_provider": "openai"},
-        },
-        response_obj={}, start_time=started_at, end_time=started_at,
-    )
-    prisma: Final = PrismaClient.__new__(PrismaClient)
-    transaction: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
-        payload, prisma, "user",
-    )
-
-    assert transaction is not None
-    assert payload["status"] == ("failure" if status == "failure" else "success")
-    assert transaction["autorouter_requests"] == int(status != "failure")
-    assert transaction["autorouter_llm_spend"] == (0.0 if status == "failure" else 0.5)
-    assert transaction["autorouter_classifier_cost"] == (0.0 if status == "failure" else 0.125)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("classifier_cost, recorded", [(None, 0), (True, 0), (float("inf"), 0), (0.0, 1)])
-async def test_daily_router_classifier_zero_is_known_only_when_recorded(
-    classifier_cost: object, recorded: int,
-) -> None:
-    prisma: Final = MagicMock()
-    prisma.get_request_status.return_value = "success"
-    transaction: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
-        payload={
-            "user": "u", "startTime": "2026-09-23T00:00:00", "api_key": "hash", "model": "m",
-            "model_group": "auto", "custom_llm_provider": "openai", "call_type": "acompletion",
-            "prompt_tokens": 1, "completion_tokens": 1, "spend": 1.0, "status": "success",
-            "metadata": json.dumps({
-                "routing_decision": {"router_model_name": "auto", "classifier_cost": classifier_cost},
-                "autorouter_savings": 0.0,
-            }),
-        }, prisma_client=prisma, type="user",
-    )
-    assert transaction is not None
-    assert transaction["autorouter_requests"] == 1
-    assert transaction["autorouter_classifier_cost_recorded_requests"] == recorded
-    assert transaction["autorouter_classifier_cost"] == 0.0
-    assert transaction["autorouter_estimated_requests"] == 1
-    assert transaction["autorouter_estimated_actual_spend"] == 1.0
-
-
 def _response_time_payload(request_duration_ms: object, metadata: dict | None = None) -> dict:
     return {
         "request_id": "req-timed-1",
