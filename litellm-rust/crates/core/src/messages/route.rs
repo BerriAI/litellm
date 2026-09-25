@@ -54,6 +54,11 @@ pub enum MessagesOutput {
     Streamed,
 }
 
+/// The upstream response as the caller sees it at stream hand-off, before any chunk.
+pub struct MessagesStreamHead {
+    pub headers: Vec<(String, String)>,
+}
+
 pub struct Messages;
 
 impl Protocol for Messages {
@@ -62,7 +67,7 @@ impl Protocol for Messages {
     type Projection = MessagesCall;
     type Op = Infallible;
     type Chunk = Bytes;
-    type StreamHead = ();
+    type StreamHead = MessagesStreamHead;
 }
 
 impl From<MachineFault> for Error {
@@ -193,7 +198,14 @@ async fn relay(
     host: &MessagesHost,
     mut response: reqwest::Response,
 ) -> Result<MessagesOutput, Error> {
-    if host.open(()).await? == Demand::Detached {
+    let head = MessagesStreamHead {
+        headers: response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+            .collect(),
+    };
+    if host.open(head).await? == Demand::Detached {
         return Ok(MessagesOutput::Streamed);
     }
     while let Some(chunk) = response.chunk().await.map_err(network)? {

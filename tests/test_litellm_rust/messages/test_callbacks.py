@@ -127,7 +127,7 @@ async def test_native_messages_stream_relays_provider_events_and_logs_success_on
         **arguments(messages_server, stream=True, callbacks=[recorder])
     )
     assert isinstance(stream, AsyncIterator)
-    assert get_hidden_params_dict(stream) == {"additional_headers": {"x-litellm-rust": "true"}}
+    assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
     first: Final = await anext(stream)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names
@@ -171,7 +171,7 @@ def test_native_sync_messages_stream_relays_provider_events_and_logs_success_onc
 
     stream: Final = litellm.anthropic.messages.create(**arguments(messages_server, stream=True, callbacks=[recorder]))
     assert isinstance(stream, Iterator)
-    assert get_hidden_params_dict(stream) == {"additional_headers": {"x-litellm-rust": "true"}}
+    assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
 
     assert b"".join(stream) == sse_payload()
     assert_served_natively(messages_server)
