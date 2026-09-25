@@ -13,6 +13,7 @@ from typing import Any, Final, NamedTuple
 
 from litellm._logging import verbose_logger
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.router_utils.mcp_tool_execution import mark_mcp_tools_executed
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolResultParam,
@@ -169,9 +170,13 @@ async def anthropic_messages_with_mcp(
             {"role": "assistant", "content": list(_get_response_content(response))},
             _build_tool_result_message(tool_results),
         )
-        response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-            messages=list(working_messages), stream=False, **base_call_args
-        )
+        try:
+            response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+                messages=list(working_messages), stream=False, **base_call_args
+            )
+        except Exception as follow_up_exception:
+            mark_mcp_tools_executed(follow_up_exception)
+            raise
     else:
         verbose_logger.warning(
             "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
