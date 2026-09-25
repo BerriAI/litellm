@@ -4764,6 +4764,30 @@ def _init_custom_logger_compatible_class(
             _levo_otel_logger: Final = LevoLogger(config=otel_config, callback_name="levo")
             _in_memory_loggers.append(_levo_otel_logger)
             return _levo_otel_logger
+        elif logging_integration == "langwatch":
+            _v2 = _maybe_construct_otel_v2("langwatch", _in_memory_loggers)
+            if _v2 is not None:
+                return _v2
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+            from litellm.integrations.otel.presets.langwatch import (
+                get_langwatch_otel_config,
+            )
+
+            langwatch_endpoint, langwatch_headers = get_langwatch_otel_config()
+            otel_config = OpenTelemetryConfig(
+                exporter="otlp_http",
+                endpoint=langwatch_endpoint,
+                headers=langwatch_headers,
+            )
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry) and callback.callback_name == "langwatch":
+                    return callback
+            _langwatch_otel_logger: Final = OpenTelemetry(config=otel_config, callback_name="langwatch")
+            _in_memory_loggers.append(_langwatch_otel_logger)
+            return _langwatch_otel_logger
         elif logging_integration == "otel":
             # Gate the new typed V2 adapter behind LITELLM_OTEL_V2. When off,
             # the legacy 3,227-line god-class is used unchanged. The two are
@@ -5411,6 +5435,13 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, _PROXY_DynamicRateLimitHandlerV3):
                     return callback
 
+        elif logging_integration == "langwatch":
+            from litellm.integrations.opentelemetry import OpenTelemetry
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, (OpenTelemetryV2, OpenTelemetry)) and callback.callback_name == "langwatch":
+                    return callback
         elif logging_integration == "langtrace":
             from litellm.integrations.opentelemetry import OpenTelemetry
 

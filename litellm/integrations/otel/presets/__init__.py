@@ -20,6 +20,7 @@ from litellm.integrations.otel.presets.langfuse import (
     langfuse_preset,
 )
 from litellm.integrations.otel.presets.langtrace import langtrace_preset
+from litellm.integrations.otel.presets.langwatch import langwatch_preset
 from litellm.integrations.otel.presets.levo import levo_preset
 from litellm.integrations.otel.presets.newrelic import (
     newrelic_dynamic_endpoint,
@@ -42,6 +43,7 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
         "arize_phoenix": phoenix_preset,
         "langfuse_otel": langfuse_preset,
         "langtrace": langtrace_preset,
+        "langwatch": langwatch_preset,
         "levo": levo_preset,
         "newrelic": newrelic_preset,
         "weave_otel": weave_preset,
@@ -50,7 +52,7 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
 
 #: Callback name → per-request OTLP header builder (team/key multi-tenant
 #: routing). Only integrations that support dynamic credentials appear here —
-#: Arize-Phoenix/Langtrace/Levo/AgentOps don't, so they use the logger's
+#: Arize-Phoenix/Langtrace/LangWatch/Levo/AgentOps don't, so they use the logger's
 #: default tracer.
 DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = (
     MappingProxyType(
@@ -149,6 +151,7 @@ __all__ = [
     "dynamic_otlp_headers",
     "langfuse_preset",
     "langtrace_preset",
+    "langwatch_preset",
     "levo_preset",
     "newrelic_preset",
     "phoenix_preset",

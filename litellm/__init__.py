@@ -168,6 +168,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vantage",
     "posthog",
     "levo",
+    "langwatch",
     "compression_interception",
     "newrelic",
 ]

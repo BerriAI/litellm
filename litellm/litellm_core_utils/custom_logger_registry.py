@@ -88,6 +88,7 @@ class CustomLoggerRegistry:
         "langtrace": OpenTelemetry,
         "weave_otel": OpenTelemetry,
         "levo": OpenTelemetry,
+        "langwatch": OpenTelemetry,
         "mlflow": MlflowLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,
