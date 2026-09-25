@@ -1,3 +1,4 @@
+import json
 from typing import Final
 
 import pytest
@@ -195,3 +196,36 @@ async def test_convert_non_list_choices_raises_api_error(choices: object, type_n
     with pytest.raises(APIError, match=expected):
         async for _ in convert_to_streaming_response_async(response_object=resp):
             pass
+
+
+def test_handle_invalid_parallel_tool_calls_multiple_wrappers_no_leftover() -> None:
+    tool_calls: Final = [
+        ChatCompletionMessageToolCall(
+            id="m1",
+            type="function",
+            function=Function(
+                name="multi_tool_use.parallel",
+                arguments=json.dumps(
+                    {
+                        "tool_uses": [
+                            {"recipient_name": "functions.get_weather", "parameters": {"city": "NYC"}},
+                            {"recipient_name": "functions.get_time", "parameters": {"tz": "EST"}},
+                        ]
+                    }
+                ),
+            ),
+        ),
+        ChatCompletionMessageToolCall(
+            id="m2",
+            type="function",
+            function=Function(
+                name="multi_tool_use.parallel",
+                arguments=json.dumps(
+                    {"tool_uses": [{"recipient_name": "functions.search", "parameters": {"q": "x"}}]}
+                ),
+            ),
+        ),
+    ]
+    result = _handle_invalid_parallel_tool_calls(list(tool_calls))
+    names = [tc.function.name for tc in result]
+    assert names == ["get_weather", "get_time", "search"]
