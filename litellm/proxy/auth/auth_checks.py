@@ -4445,12 +4445,33 @@ def _can_object_call_model(
     )
 
 
-def _resolve_team_alias(model: str | list[str], team_model_aliases: dict[str, str] | None) -> str | list[str]:
+def _resolve_team_alias(
+    model: str | list[str],
+    team_model_aliases: dict[str, str] | None,
+    team_id: str | None,
+    llm_router: Router | None,
+) -> str | list[str]:
     if not team_model_aliases:
         return model
     if isinstance(model, str):
-        return team_model_aliases.get(model, model)
-    return [team_model_aliases.get(name, name) for name in model]  # mutable-ok: _can_object_call_model takes list[str]
+        return _live_team_alias_target(model, team_model_aliases, team_id, llm_router)
+    return [  # mutable-ok: _can_object_call_model takes list[str]
+        _live_team_alias_target(name, team_model_aliases, team_id, llm_router) for name in model
+    ]
+
+
+def _live_team_alias_target(
+    model: str, team_model_aliases: dict[str, str], team_id: str | None, llm_router: Router | None
+) -> str:
+    target: Final = team_model_aliases.get(model)
+    if target is None:
+        return model
+    deleted_team_deployment: Final = (
+        llm_router is not None
+        and target.startswith(f"model_name_{team_id}_")
+        and target not in llm_router.model_name_to_deployment_indices
+    )
+    return model if deleted_team_deployment else target
 
 
 async def _check_agent_access_group_model_access(
@@ -4473,7 +4494,7 @@ async def _check_agent_access_group_model_access(
             param="model",
             code=status.HTTP_403_FORBIDDEN,
         )
-    dispatched: Final = _resolve_team_alias(model, valid_token.team_model_aliases)
+    dispatched: Final = _resolve_team_alias(model, valid_token.team_model_aliases, valid_token.team_id, llm_router)
     return _can_object_call_model(
         model=dispatched,
         llm_router=llm_router,

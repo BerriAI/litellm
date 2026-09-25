@@ -9501,6 +9501,19 @@ async def test_agent_access_group_ceiling_denies_a_team_alias_outside_the_ceilin
 
 
 @pytest.mark.asyncio
+async def test_agent_access_group_ceiling_keeps_the_name_for_a_deleted_team_deployment():
+    from litellm.router import Router
+
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["foo"])
+    agent_key.team_model_aliases = {"foo": "model_name_team-1_deadbeef"}
+    router: Final = Router(model_list=[])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"foo"}))
+
+    assert await _check_agent_access_group_model_access("foo", agent_key, router, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
 async def test_agent_access_groups_naming_no_model_deny_every_model():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
     resolve, _ = _agent_model_ceiling_resolver(frozenset())
