@@ -2841,6 +2841,8 @@ def _scim_admin_prisma(mocker, *, user_teams):
     prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
     prisma.db.litellm_teamtable = mocker.MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_scimresource.find_many = AsyncMock(return_value=[])
     return prisma
 
 
@@ -6170,22 +6172,36 @@ async def test_merge_placeholder_refuses_rows_that_are_not_a_lone_placeholder(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route,arguments,dispatch", [
-    ("get_users", {"startIndex": 2, "count": 5, "filter": None}, "list"),
-    ("get_groups", {"startIndex": 1, "count": 5, "filter": None}, "list"),
-    ("get_user", {"user_id": "scoped-id"}, "get"),
-    ("get_group", {"group_id": "scoped-id"}, "get"),
-    ("create_user", {"user": SCIMUser(schemas=[], userName="human@example.com")}, "create_user"),
-    ("create_group", {"group": SCIMGroup(schemas=[], displayName="Directory")}, "create_group"),
-    ("update_user", {"user_id": "scoped-id", "user": SCIMUser(schemas=[], userName="human@example.com")}, "update_user"),
-    ("update_group", {"group_id": "scoped-id", "group": SCIMGroup(schemas=[], displayName="Directory")}, "update_group"),
-    ("patch_user", {"user_id": "scoped-id", "patch_ops": SCIMPatchOp(Operations=[])}, "update_user"),
-    ("patch_group", {"group_id": "scoped-id", "patch_ops": SCIMPatchOp(Operations=[])}, "update_group"),
-    ("delete_user", {"user_id": "scoped-id"}, "delete"),
-    ("delete_group", {"group_id": "scoped-id"}, "delete"),
-])
+@pytest.mark.parametrize(
+    "route,arguments,dispatch",
+    [
+        ("get_users", {"startIndex": 2, "count": 5, "filter": None}, "list"),
+        ("get_groups", {"startIndex": 1, "count": 5, "filter": None}, "list"),
+        ("get_user", {"user_id": "scoped-id"}, "get"),
+        ("get_group", {"group_id": "scoped-id"}, "get"),
+        ("create_user", {"user": SCIMUser(schemas=[], userName="human@example.com")}, "create_user"),
+        ("create_group", {"group": SCIMGroup(schemas=[], displayName="Directory")}, "create_group"),
+        (
+            "update_user",
+            {"user_id": "scoped-id", "user": SCIMUser(schemas=[], userName="human@example.com")},
+            "update_user",
+        ),
+        (
+            "update_group",
+            {"group_id": "scoped-id", "group": SCIMGroup(schemas=[], displayName="Directory")},
+            "update_group",
+        ),
+        ("patch_user", {"user_id": "scoped-id", "patch_ops": SCIMPatchOp(Operations=[])}, "update_user"),
+        ("patch_group", {"group_id": "scoped-id", "patch_ops": SCIMPatchOp(Operations=[])}, "update_group"),
+        ("delete_user", {"user_id": "scoped-id"}, "delete"),
+        ("delete_group", {"group_id": "scoped-id"}, "delete"),
+    ],
+)
 async def test_scoped_routes_propagate_source_denial_without_falling_back_to_legacy_humans(
-    route: str, arguments: dict[str, object], dispatch: str, monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    arguments: dict[str, object],
+    dispatch: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.management_endpoints.scim import scim_v2
     from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService
@@ -6204,3 +6220,42 @@ async def test_scoped_routes_propagate_source_denial_without_falling_back_to_leg
     resolver.assert_awaited_once_with(auth)
     handler.assert_awaited_once()
     legacy_database.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ownership", ["new", "linked", "legacy"])
+async def test_source_owned_groups_cannot_grant_global_admin(mocker, ownership: str) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.scim.scim_v2 import _resolve_scim_user_role, _scim_groups_from_team_ids
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+    resource = SimpleNamespace(
+        id="litellm-admins" if ownership == "new" else "source-group",
+        local_id="litellm-admins" if ownership == "linked" else None,
+    )
+    prisma.writer_db = SimpleNamespace(
+        litellm_scimresource=SimpleNamespace(
+            find_many=AsyncMock(return_value=[] if ownership == "legacy" else [resource])
+        )
+    )
+    groups = await _scim_groups_from_team_ids(prisma, ["litellm-admins"])
+    role = _resolve_scim_user_role(groups, "litellm-admins", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    assert role == (LitellmUserRoles.PROXY_ADMIN if ownership == "legacy" else LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
+async def test_source_membership_sync_preserves_manually_assigned_global_role(mocker, role) -> None:
+    from types import SimpleNamespace
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_admin_group",
+        new=AsyncMock(return_value="litellm-admins"),
+    )
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+    prisma.db.litellm_usertable.find_unique.return_value.user_role = role
+    prisma.db.litellm_scimresource.find_many.return_value = [SimpleNamespace(id="source-user", local_id="member-1")]
+    await _recompute_scim_member_roles(prisma, ["member-1"])
+    prisma.db.litellm_usertable.update.assert_not_awaited()
+    assert prisma.db.litellm_usertable.find_unique.return_value.user_role == role

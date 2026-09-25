@@ -65,6 +65,7 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
+    SCIMResourceRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -456,12 +457,26 @@ def _resolve_scim_user_role(
     return default_role
 
 
+async def _source_owned_ids(
+    prisma_client: PrismaClient, kind: Literal["Users", "Groups"], local_ids: tuple[str, ...]
+) -> frozenset[str]:
+    if not local_ids:
+        return frozenset()
+    resources: Final = await SCIMResourceRepository(prisma_client, use_writer=True).table.find_many(
+        where={"kind": kind, "OR": [{"id": {"in": list(local_ids)}}, {"local_id": {"in": list(local_ids)}}]}
+    )
+    return frozenset(
+        identifier for resource in resources for identifier in (resource.id, resource.local_id) if identifier
+    )
+
+
 async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list[str]) -> list[SCIMUserGroup]:
     """
     Build SCIMUserGroup objects from team ids, populating display from each
     team's alias so admin-group matching by display name works the same way it
     does on PUT (where SCIM groups carry display names natively).
     """
+    source_owned: Final = await _source_owned_ids(prisma_client, "Groups", tuple(team_ids))
     teams: Final = [
         await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id}) for team_id in team_ids
     ]
@@ -471,6 +486,7 @@ async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list
             display=team.team_alias if team is not None else None,
         )
         for team_id, team in zip(team_ids, teams)
+        if team_id not in source_owned
     ]
 
 
@@ -486,7 +502,11 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
         return
 
     default_role: Final = _default_scim_user_role()
-    for user_id in user_ids:
+    candidates: Final = tuple(user_ids)
+    source_owned: Final = await _source_owned_ids(prisma_client, "Users", candidates)
+    for user_id in candidates:
+        if user_id in source_owned:
+            continue
         user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": user_id})
         if user is None:
             continue
@@ -2424,7 +2444,7 @@ async def patch_user(
         update_data["teams"] = list(final_team_set)
 
         admin_group: Final = await _get_scim_admin_group()
-        if admin_group is not None:
+        if admin_group is not None and not await _source_owned_ids(prisma_client, "Users", (user_id,)):
             update_data["user_role"] = _resolve_scim_user_role(
                 await _scim_groups_from_team_ids(prisma_client, list(final_team_set)),
                 admin_group,
