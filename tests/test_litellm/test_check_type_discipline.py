@@ -690,33 +690,33 @@ def test_writable_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_two_for_clauses_are_flagged(tmp_path):
+def test_two_for_clauses_are_flagged(tmp_path: Path):
     assert "LIT014" in _codes(tmp_path, "y = [x for a in xs for x in a]\n")
 
 
-def test_two_ifs_on_one_generator_are_flagged(tmp_path):
+def test_two_ifs_on_one_generator_are_flagged(tmp_path: Path):
     assert "LIT014" in _codes(tmp_path, "y = [x for x in xs if x if x > 1]\n")
 
 
-def test_one_if_on_each_of_two_generators_is_flagged(tmp_path):
+def test_one_if_on_each_of_two_generators_is_flagged(tmp_path: Path):
     assert "LIT014" in _codes(tmp_path, "y = [x for a in xs if a for x in a if x]\n")
 
 
-def test_one_for_and_one_if_is_clean(tmp_path):
+def test_one_for_and_one_if_is_clean(tmp_path: Path):
     assert "LIT014" not in _codes(tmp_path, "y = tuple(x for x in xs if x)\n")
 
 
-def test_dict_set_and_generator_two_fors_are_each_flagged(tmp_path):
+def test_dict_set_and_generator_two_fors_are_each_flagged(tmp_path: Path):
     assert "LIT014" in _codes(tmp_path, "d = {k: v for a in xs for k, v in a}\n")
     assert "LIT014" in _codes(tmp_path, "s = {x for a in xs for x in a}\n")
     assert "LIT014" in _codes(tmp_path, "g = (x for a in xs for x in a)\n")
 
 
-def test_nested_comprehension_in_element_is_judged_separately(tmp_path):
+def test_nested_comprehension_in_element_is_judged_separately(tmp_path: Path):
     assert "LIT014" not in _codes(tmp_path, "y = [[v for v in a] for a in xs]\n")
 
 
-def test_comprehension_ok_with_reason_suppresses_lit014(tmp_path):
+def test_comprehension_ok_with_reason_suppresses_lit014(tmp_path: Path):
     codes = _codes(
         tmp_path,
         "y = [x for a in xs for x in a]  # comprehension-ok: flattens a stream of pairs, hot path\n",
@@ -724,7 +724,7 @@ def test_comprehension_ok_with_reason_suppresses_lit014(tmp_path):
     assert "LIT014" not in codes
 
 
-def test_comprehension_ok_on_any_spanned_line_suppresses_lit014(tmp_path):
+def test_comprehension_ok_on_any_spanned_line_suppresses_lit014(tmp_path: Path):
     src = (
         "y = [\n"
         "    x for a in xs\n"
@@ -734,7 +734,7 @@ def test_comprehension_ok_on_any_spanned_line_suppresses_lit014(tmp_path):
     assert "LIT014" not in _codes(tmp_path, src)
 
 
-def test_comprehension_ok_after_the_closing_line_does_not_suppress(tmp_path):
+def test_comprehension_ok_after_the_closing_line_does_not_suppress(tmp_path: Path):
     src = (
         "y = [\n"
         "    x for a in xs\n"
@@ -749,7 +749,7 @@ def test_comprehension_ok_after_the_closing_line_does_not_suppress(tmp_path):
     assert [v.line for v in violations if v.code == "LIT013"] == [5]
 
 
-def test_comprehension_ok_on_a_compliant_comprehension_is_an_unused_marker(tmp_path):
+def test_comprehension_ok_on_a_compliant_comprehension_is_an_unused_marker(tmp_path: Path):
     f = tmp_path / "snippet.py"
     f.write_text(
         "y = tuple(x for x in xs if x)  # comprehension-ok: kept for readability\n",
@@ -760,13 +760,13 @@ def test_comprehension_ok_on_a_compliant_comprehension_is_an_unused_marker(tmp_p
     assert "LIT014" not in [v.code for v in violations]
 
 
-def test_comprehension_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
+def test_comprehension_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path: Path):
     codes = _codes(tmp_path, "y = [x for a in xs for x in a]  # comprehension-ok\n")
     assert "LIT005" in codes
     assert "LIT014" in codes
 
 
-def test_suppression_inside_inner_comprehension_does_not_silence_the_outer(tmp_path):
+def test_suppression_inside_inner_comprehension_does_not_silence_the_outer(tmp_path: Path):
     src = (
         "y = [\n"
         "    x\n"
@@ -784,7 +784,7 @@ def test_suppression_inside_inner_comprehension_does_not_silence_the_outer(tmp_p
     assert [v.code for v in violations if v.code == "LIT013"] == []
 
 
-def test_suppression_on_outer_closing_line_does_not_silence_the_inner(tmp_path):
+def test_suppression_on_outer_closing_line_does_not_silence_the_inner(tmp_path: Path):
     src = (
         "y = [\n"
         "    x\n"
@@ -798,7 +798,7 @@ def test_suppression_on_outer_closing_line_does_not_silence_the_inner(tmp_path):
     assert [v.line for v in flagged] == [3]
 
 
-def test_equal_span_marker_suppresses_every_violating_comprehension_on_its_line(tmp_path):
+def test_equal_span_marker_suppresses_every_violating_comprehension_on_its_line(tmp_path: Path):
     src = "y = [x for a in [z for i in ys for z in i] if a if x]  # comprehension-ok: inner flatten is fine\n"
     f = tmp_path / "snippet.py"
     f.write_text(src, encoding="utf-8")
@@ -807,7 +807,7 @@ def test_equal_span_marker_suppresses_every_violating_comprehension_on_its_line(
     assert "LIT013" not in [v.code for v in violations]
 
 
-def test_single_line_outer_with_violating_inner_is_suppressed(tmp_path):
+def test_single_line_outer_with_violating_inner_is_suppressed(tmp_path: Path):
     src = "y = [x for a in [z for i in ys for z in i] for x in a]  # comprehension-ok: nested flatten is fine\n"
     f = tmp_path / "snippet.py"
     f.write_text(src, encoding="utf-8")
@@ -816,7 +816,7 @@ def test_single_line_outer_with_violating_inner_is_suppressed(tmp_path):
     assert "LIT013" not in [v.code for v in violations]
 
 
-def test_one_marker_suppresses_two_violating_sibling_comprehensions_on_its_line(tmp_path):
+def test_one_marker_suppresses_two_violating_sibling_comprehensions_on_its_line(tmp_path: Path):
     src = "y = [x for a in xs for x in a] + [x for a in ys for x in a]  # comprehension-ok: paired flattens\n"
     f = tmp_path / "snippet.py"
     f.write_text(src, encoding="utf-8")
@@ -825,7 +825,7 @@ def test_one_marker_suppresses_two_violating_sibling_comprehensions_on_its_line(
     assert "LIT013" not in [v.code for v in violations]
 
 
-def test_marker_on_a_non_violating_inner_line_suppresses_the_violating_outer(tmp_path):
+def test_marker_on_a_non_violating_inner_line_suppresses_the_violating_outer(tmp_path: Path):
     src = (
         "y = [\n"
         "    x\n"
@@ -840,7 +840,7 @@ def test_marker_on_a_non_violating_inner_line_suppresses_the_violating_outer(tmp
     assert "LIT013" not in [v.code for v in violations]
 
 
-def test_violation_message_names_the_clause_counts(tmp_path):
+def test_violation_message_names_the_clause_counts(tmp_path: Path):
     f = tmp_path / "snippet.py"
     f.write_text("y = [x for a in xs for x in a if x]\n", encoding="utf-8")
     messages = [v.message for v in checker.check_file(f) if v.code == "LIT014"]
