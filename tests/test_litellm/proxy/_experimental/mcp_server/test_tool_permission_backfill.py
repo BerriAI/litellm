@@ -251,3 +251,50 @@ async def test_resolve_granted_server_ids_ignores_tool_overrides():
     ):
         granted = await resolve_granted_server_ids(row, manager)
     assert granted == frozenset()
+
+
+def test_convert_wildcard_entry_stays_legacy_and_needs_no_inventory():
+    """A ``["*"]`` entry is an explicit grant of every current and future tool,
+    so conversion keeps it in the legacy map verbatim even without inventory."""
+    row = _row(mcp_tool_permissions={"s1": ["*"], "s2": ["a"]})
+    result = convert_row(row, {"s1": None, "s2": {"a": "read a", "b": "write b"}})
+    assert isinstance(result, ConvertedRow)
+    assert result.mcp_tool_permissions == {"s1": ["*"]}
+    assert "s1" not in result.mcp_tool_overrides
+    assert result.mcp_tool_overrides["s2"] == {"allow": [], "deny": ["b"]}
+    assert result.mcp_tool_permissions_archive == {"s1": ["*"], "s2": ["a"]}
+    assert result.mcp_permission_version == 1
+
+
+@pytest.mark.asyncio
+async def test_runner_keeps_wildcard_entries_and_evaluator_reads_them_unrestricted():
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        level_allowed_tools,
+    )
+
+    row = _row(mcp_servers=[], mcp_tool_permissions={"s1": ["*"], "s2": ["a"]})
+    prisma = _prisma([row])
+    manager = _manager(inventories={"s2": {"a": "read a", "b": "write b"}})
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    ):
+        report = await run_mcp_tool_permission_backfill(prisma, manager)
+    assert report.converted == {"perm-1"}
+    manager.fetch_unfiltered_inventory.assert_awaited_once_with("s2")
+
+    import json
+
+    data = prisma.db.litellm_objectpermissiontable.update_many.await_args.kwargs["data"]
+    assert json.loads(data["mcp_tool_permissions"]) == {"s1": ["*"]}
+    assert json.loads(data["mcp_tool_overrides"]) == {"s2": {"allow": [], "deny": ["b"]}}
+
+    converted = _row(mcp_servers=[], mcp_tool_permissions={"s1": ["*"]}, mcp_permission_version=1)
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    ):
+        allowed = level_allowed_tools(
+            row=converted, server_id="s1", grants_server=True, toolset_tools=None, inventory={}
+        )
+    assert allowed is None

@@ -22,6 +22,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.tool_classification import classify_tool_op
 from litellm.proxy._types import SpecialMCPServerName
@@ -101,6 +102,17 @@ class BackfillReport:
     skipped_no_grants: frozenset[str]
 
 
+def wildcard_permission_keys(
+    tool_permissions: Mapping[str, Sequence[str]] | None,
+) -> frozenset[str]:
+    """Keys whose stored tool list contains ``MCP_ALL_TOOLS_WILDCARD``."""
+    return frozenset(
+        server_id
+        for server_id, stored in (tool_permissions or {}).items()
+        if stored and MCP_ALL_TOOLS_WILDCARD in stored
+    )
+
+
 def convert_row(
     row: LiteLLM_ObjectPermissionTable,
     inventories: Inventories,
@@ -112,22 +124,33 @@ def convert_row(
     all-proxy sentinel already expanded); ``None`` marks a server whose
     catalog could not be discovered and makes the row Unavailable. Servers
     granted only through toolsets are excluded by the caller and stay closed.
+    Wildcard entries are explicit grants of every current and future tool, so
+    they stay in the retained legacy map verbatim and need no inventory.
     """
+    legacy: Final = row.mcp_tool_permissions or MappingProxyType({})
+    wildcard_servers: Final[frozenset[str]] = wildcard_permission_keys(legacy)
     missing: Final[frozenset[str]] = frozenset(
-        server_id for server_id, inventory in inventories.items() if inventory is None
+        server_id
+        for server_id, inventory in inventories.items()
+        if inventory is None and server_id not in wildcard_servers
     )
     if missing:
         return Unavailable(server_ids=missing)
 
-    legacy: Final = row.mcp_tool_permissions or MappingProxyType({})
     remaining_permissions: Final[Mapping[str, Sequence[str]]] = MappingProxyType(
-        {server_id: stored for server_id, stored in legacy.items() if server_id not in inventories or not stored}
+        {
+            server_id: stored
+            for server_id, stored in legacy.items()
+            if server_id not in inventories or not stored or server_id in wildcard_servers
+        }
     )
     override_entries: Final = MappingProxyType(
         {
             server_id: _server_override_entry(legacy.get(server_id), inventory or MappingProxyType({}))
             for server_id, inventory in inventories.items()
-            if server_id not in legacy or legacy[server_id]
+            if (server_id not in legacy or legacy[server_id])
+            and server_id not in wildcard_servers
+            and MCP_ALL_TOOLS_WILDCARD not in (legacy.get(server_id) or ())
         }
     )
     overrides: Final[Mapping[str, MCPToolOverrideEntry]] = MappingProxyType(
@@ -265,7 +288,12 @@ async def _convert_one_row(
     granted: Final = await resolve_granted_server_ids(row, manager)
     if not granted:
         return "skipped"
-    conversion: Final = convert_row(row, await gather_inventories(granted, manager, inventory_cache))
+    wildcard_servers: Final[frozenset[str]] = frozenset(
+        server_id
+        for server_id, tools in manager.expand_tool_permissions(row.mcp_tool_permissions).items()
+        if tools and MCP_ALL_TOOLS_WILDCARD in tools
+    )
+    conversion: Final = convert_row(row, await gather_inventories(granted - wildcard_servers, manager, inventory_cache))
     if isinstance(conversion, Unavailable):
         return conversion.server_ids
     stored_fields: Final = (

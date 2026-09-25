@@ -1685,7 +1685,67 @@ async def test_upsert_revoked_server_needs_no_inventory():
 
     manager.fetch_unfiltered_inventory.assert_awaited_once_with("server-a")
     assert upsert.record["mcp_permission_version"] == 1
-    assert json.loads(upsert.record["mcp_tool_overrides"]) == {
-        "server-a": {"allow": ["delete_item"], "deny": []}
-    }
+    assert json.loads(upsert.record["mcp_tool_overrides"]) == {"server-a": {"allow": ["delete_item"], "deny": []}}
     assert upsert.record["mcp_servers"] == ["server-a"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_wildcard_server_needs_no_inventory():
+    """A v0 row whose residual grant is a ``["*"]`` wildcard converts without
+    discovering that server: the entry is an explicit all-tools grant that
+    stays in the retained legacy map."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+
+    existing_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-id",
+        mcp_servers=[],
+        mcp_tool_permissions={"s1": ["*"], "s2": ["a"]},
+        mcp_permission_version=0,
+    )
+    mock_prisma = _make_ambiguity_prisma()
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
+
+    manager = MagicMock()
+    manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
+    manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+    manager.expand_tool_overrides = MagicMock(side_effect=lambda overrides: overrides or {})
+    manager.get_registry = MagicMock(return_value={})
+    manager.fetch_unfiltered_inventory = AsyncMock(return_value={"a": "read a", "b": "write b"})
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        upsert = await prepare_object_permission_upsert(
+            new_object_permission={"mcp_tool_permissions": {"s1": ["*"], "s2": ["a"]}},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    manager.fetch_unfiltered_inventory.assert_awaited_once_with("s2")
+    assert upsert.record["mcp_permission_version"] == 1
+    assert json.loads(upsert.record["mcp_tool_permissions"]) == {"s1": ["*"], "s2": ["a"]}
+    assert "*" not in str(upsert.record["mcp_tool_overrides"])
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_overrides_rejects_wildcard_entries():
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        reject_ambiguous_mcp_tool_override_keys,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reject_ambiguous_mcp_tool_override_keys(
+            new_mcp_tool_overrides={"server-a": {"allow": ["*"], "deny": []}},
+            existing_mcp_tool_overrides=None,
+            prisma_client=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "server-a" in str(exc_info.value.detail)

@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
@@ -117,8 +118,16 @@ async def _convert_unversioned_object_permission(
     remaining_grants: Final = await resolve_granted_server_ids(post_update_row, global_mcp_server_manager)
     if not remaining_grants:
         return MappingProxyType({})
+    wildcard_servers: Final[frozenset[str]] = frozenset(
+        server_id
+        for server_id, tools in global_mcp_server_manager.expand_tool_permissions(
+            post_update_row.mcp_tool_permissions
+        ).items()
+        if tools and MCP_ALL_TOOLS_WILDCARD in tools
+    )
     conversion: Final = convert_row(
-        existing_object_permission, await gather_inventories(remaining_grants, global_mcp_server_manager)
+        existing_object_permission,
+        await gather_inventories(remaining_grants - wildcard_servers, global_mcp_server_manager),
     )
     if isinstance(conversion, Unavailable):
         raise HTTPException(
@@ -441,6 +450,21 @@ async def reject_ambiguous_mcp_tool_override_keys(
     """
     requested: Final = _mcp_tool_override_entries(new_mcp_tool_overrides)
     stored: Final = _mcp_tool_override_entries(existing_mcp_tool_overrides)
+    wildcard_servers: Final = sorted(
+        identifier
+        for identifier, entry in requested.items()
+        if MCP_ALL_TOOLS_WILDCARD in (entry.get("allow") or ()) or MCP_ALL_TOOLS_WILDCARD in (entry.get("deny") or ())
+    )
+    if wildcard_servers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+                "error": (
+                    f"mcp_tool_overrides entries for {wildcard_servers} may not contain '{MCP_ALL_TOOLS_WILDCARD}': "
+                    "the wildcard belongs in mcp_tool_permissions, where it grants every current and future tool."
+                )
+            },
+        )
     resolved: Final = await _resolve_mcp_server_identifiers_to_ids(
         identifiers=frozenset(identifier for identifier, entry in requested.items() if stored.get(identifier) != entry),
         prisma_client=prisma_client,
