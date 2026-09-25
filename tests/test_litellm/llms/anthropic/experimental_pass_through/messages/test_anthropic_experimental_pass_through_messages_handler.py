@@ -1121,6 +1121,66 @@ async def test_native_messages_strips_replayed_provider_specific_fields_from_wir
 
 
 @pytest.mark.asyncio
+async def test_native_messages_merges_extra_body_into_wire_body():
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            model="anthropic/claude-haiku-4-5-20251001",
+            api_key="test-api-key",
+            extra_body={"provider": {"order": ["Amazon Bedrock"], "allow_fallbacks": False}},
+        )
+
+    assert captured["body"]["provider"] == {"order": ["Amazon Bedrock"], "allow_fallbacks": False}
+    assert captured["body"]["max_tokens"] == 100
+    assert "extra_body" not in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_merges_deployment_extra_body_via_router():
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "pinned",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5-20251001",
+                    "api_key": "test-api-key",
+                    "extra_body": {"provider": {"order": ["Amazon Bedrock"]}},
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await router.aanthropic_messages(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            model="pinned",
+        )
+
+    assert captured["body"]["provider"] == {"order": ["Amazon Bedrock"]}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "requested_model, expected_reported_model",
     [

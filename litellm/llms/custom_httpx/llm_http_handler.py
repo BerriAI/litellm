@@ -2036,12 +2036,22 @@ class BaseLLMHTTPHandler:
                 )
 
         # Prepare request body
-        request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
+        transformed_request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        # Same contract as the /chat/completions path: `extra_body` (per request, or
+        # a deployment's litellm_params) is merged into the provider request body.
+        # The optional-param allowlist above never sees it, so without this it was
+        # silently dropped on /v1/messages.
+        extra_body: Final = kwargs.get("extra_body")
+        request_body: Final = (
+            {**transformed_request_body, **extra_body}
+            if isinstance(extra_body, Mapping) and extra_body
+            else transformed_request_body
         )
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
