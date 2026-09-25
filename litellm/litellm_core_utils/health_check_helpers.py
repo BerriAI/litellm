@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS, LlmProviders
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
