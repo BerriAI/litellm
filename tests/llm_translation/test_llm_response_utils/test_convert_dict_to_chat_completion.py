@@ -2497,7 +2497,7 @@ def test_convert_to_model_response_object_expands_every_parallel_tool_call():
     one stayed in place and the call after it was overwritten.
     """
 
-    def parallel(call_id, recipient_name, parameters):
+    def parallel(call_id, *calls):
         return {
             "id": call_id,
             "type": "function",
@@ -2506,10 +2506,8 @@ def test_convert_to_model_response_object_expands_every_parallel_tool_call():
                 "arguments": json.dumps(
                     {
                         "tool_uses": [
-                            {
-                                "recipient_name": recipient_name,
-                                "parameters": parameters,
-                            }
+                            {"recipient_name": name, "parameters": params}
+                            for name, params in calls
                         ]
                     }
                 ),
@@ -2537,9 +2535,16 @@ def test_convert_to_model_response_object_expands_every_parallel_tool_call():
                     "content": None,
                     "tool_calls": [
                         plain("0", "get_weather"),
-                        parallel("m1", "functions.get_time", {"tz": "UTC"}),
+                        # Two expansions here and one below, so the first splice
+                        # changes the list length and the second splice has to land
+                        # at the shifted offset.
+                        parallel(
+                            "m1",
+                            ("functions.get_time", {"tz": "UTC"}),
+                            ("functions.get_date", {"tz": "UTC"}),
+                        ),
                         plain("2", "get_news"),
-                        parallel("m2", "functions.get_quote", {"sym": "AAPL"}),
+                        parallel("m2", ("functions.get_quote", {"sym": "AAPL"})),
                         plain("4", "get_forecast"),
                     ],
                 },
@@ -2557,6 +2562,7 @@ def test_convert_to_model_response_object_expands_every_parallel_tool_call():
     assert names == [
         "get_weather",
         "get_time",
+        "get_date",
         "get_news",
         "get_quote",
         "get_forecast",
