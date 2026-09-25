@@ -106,41 +106,25 @@ def _has_anthropic_shape(
     return False
 
 
-def _is_web_search_tool(tool: Mapping[str, object]) -> bool:
-    tool_type: Final = tool.get("type")
-    return isinstance(tool_type, str) and tool_type.startswith("web_search")
-
-
 def _is_gemini_tool_shape(tool: Mapping[str, object]) -> bool:
     return any(key in tool for key in _GEMINI_TOOL_KEYS)
 
 
-def _normalize_openai_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
-    if "function" in tool:
+def _as_openai_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
+    if "input_schema" not in tool:
         return tool
-    if "input_schema" in tool:
-        return MappingProxyType(
-            {
-                "type": "function",
-                "function": MappingProxyType(
-                    {
-                        "name": tool.get("name"),
-                        "description": tool.get("description"),
-                        "parameters": tool.get("input_schema"),
-                    }
-                ),
-            }
-        )
-    if tool.get("type") == "function" and "name" in tool:
-        return MappingProxyType(
-            {
-                "type": "function",
-                "function": MappingProxyType(
-                    {key: tool[key] for key in ("name", "description", "parameters", "strict") if key in tool}
-                ),
-            }
-        )
-    return tool
+    return MappingProxyType(
+        {
+            "type": "function",
+            "function": MappingProxyType(
+                {
+                    "name": tool.get("name"),
+                    "description": tool.get("description"),
+                    "parameters": tool.get("input_schema"),
+                }
+            ),
+        }
+    )
 
 
 def _tool_params(
@@ -157,10 +141,7 @@ def _tool_params(
 
 
 def _openai_tool_params(tools: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
-    return _tool_params(
-        tools=tuple(_normalize_openai_tool(tool) for tool in tools if not _is_web_search_tool(tool)),
-        web_search_options=MappingProxyType({}) if any(_is_web_search_tool(tool) for tool in tools) else None,
-    )
+    return _tool_params(tools=tuple(_as_openai_tool(tool) for tool in tools), web_search_options=None)
 
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])

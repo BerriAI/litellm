@@ -252,6 +252,31 @@ _MESSAGES_REQUESTS: Final = (
     pytest.param(
         "gemini-2.5-flash",
         {
+            "messages": [
+                _ASK,
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+            ]
+        },
+        id="tool-call-still-awaiting-its-result",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {
+            "tools": [
+                {"type": "computer_20250124", "name": "computer", "display_width_px": 1024, "display_height_px": 768}
+            ],
+            "messages": [{"role": "user", "content": "open the settings page"}],
+        },
+        id="computer-use-tool",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {
             "tools": [_WEATHER],
             "messages": [
                 _ASK,
