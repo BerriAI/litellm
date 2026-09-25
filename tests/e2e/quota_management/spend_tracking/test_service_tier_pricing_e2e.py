@@ -30,12 +30,20 @@ from cost_rows import (
     assert_fresh_tokens_billed_at,
     assert_total_is_sum_of_components,
     poll_cost_row,
+    poll_cost_row_where,
     register_priced_model,
 )
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import unwrap
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatStreamOptions, LiteLLMParamsBody
+from models import (
+    AnthropicMessagesBody,
+    ChatBody,
+    ChatMessage,
+    ChatStreamOptions,
+    LiteLLMParamsBody,
+    ResponsesStreamBody,
+)
 from pydantic import BaseModel
 from spend_e2e_client import SpendClient
 
@@ -58,6 +66,20 @@ TIER_INPUT_RATES = {"default": INPUT_RATE, "priority": PRIORITY_INPUT_RATE}
 class _StreamChunk(BaseModel):
     id: str | None = None
     service_tier: str | None = None
+
+
+class _CompletedResponseObject(BaseModel):
+    id: str | None = None
+    service_tier: str | None = None
+
+
+class _ResponsesStreamEvent(BaseModel):
+    type: str | None = None
+    response: _CompletedResponseObject | None = None
+
+
+class _MessagesStreamEvent(BaseModel):
+    type: str | None = None
 
 
 def _stream_chunks(events: list[str]) -> list[_StreamChunk]:
@@ -222,4 +244,77 @@ class TestServiceTierPricing:
         assert not missing, (
             f"{len(missing)} of {len(chunks)} relayed chunks dropped the provider's service_tier "
             f"{served_tier!r}: {missing}"
+        )
+
+    @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.responses_records_served_tier")
+    def test_responses_stream_records_the_served_tier(
+        self, client: SpendClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        model = register_priced_model(
+            client.proxy,
+            resources,
+            "tier-responses-stream",
+            LiteLLMParamsBody(model=STREAM_BACKEND, api_key=OPENAI_API_KEY),
+        )
+
+        result = client.proxy.responses_stream(
+            scoped_key,
+            ResponsesStreamBody(model=model, input=f"{unique_marker()} reply with one word"),
+        )
+        assert result.ok and result.stream_events, (
+            f"streamed responses call failed (status {result.status_code}): {result.body[:300]}"
+        )
+
+        events = [_ResponsesStreamEvent.model_validate_json(event) for event in result.stream_events]
+        completed = next((event for event in reversed(events) if event.type == "response.completed"), None)
+        assert completed is not None and completed.response is not None, (
+            f"no response.completed event in the stream: {[e.type for e in events]}"
+        )
+        served_tier = completed.response.service_tier
+        assert served_tier, f"response.completed carried no service_tier: {completed.response}"
+        assert served_tier in TIER_INPUT_RATES, f"no custom rate registered for served tier {served_tier!r}"
+        assert completed.response.id, f"response.completed carried no id: {completed.response}"
+
+        row = poll_cost_row(client.proxy, completed.response.id)
+        assert row is not None, f"no spend row with a cost breakdown landed for {completed.response.id}"
+        assert row.breakdown.service_tier == served_tier, (
+            f"response.completed served tier {served_tier!r} but the bill records "
+            f"pricing basis {row.breakdown.service_tier!r}"
+        )
+
+    @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.messages_records_served_tier")
+    def test_messages_stream_records_the_served_tier(
+        self, client: SpendClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        model = register_priced_model(
+            client.proxy,
+            resources,
+            "tier-messages-stream",
+            LiteLLMParamsBody(model=STREAM_BACKEND, api_key=OPENAI_API_KEY),
+        )
+
+        result = client.proxy.messages_stream(
+            scoped_key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=f"{unique_marker()} reply with one word")],
+                max_tokens=64,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.stream_events, (
+            f"streamed messages call failed (status {result.status_code}): {result.body[:300]}"
+        )
+
+        events = [_MessagesStreamEvent.model_validate_json(event) for event in result.stream_events]
+        assert any(event.type == "message_delta" for event in events), (
+            f"the anthropic stream emitted no message_delta: {[e.type for e in events]}"
+        )
+
+        row = poll_cost_row_where(client.proxy, scoped_key, lambda r: r.spend is not None and r.spend > 0)
+        assert row is not None, f"no spend row with a cost breakdown landed for the streamed messages call on {model}"
+        served_tier = row.breakdown.service_tier
+        assert served_tier in TIER_INPUT_RATES and served_tier is not None, (
+            "the anthropic wire format carries no service_tier, so the bill is the only record of "
+            f"the tier OpenAI served; the row recorded pricing basis {served_tier!r}"
         )

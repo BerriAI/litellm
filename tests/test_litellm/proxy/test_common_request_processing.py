@@ -7278,6 +7278,48 @@ class TestStreamingClientDisconnectBilling:
         assert standard_logging_object["response_cost"] >= 0.002
 
     @pytest.mark.asyncio
+    async def test_disconnect_bills_partial_spend_for_anthropic_adapter_stream(self):
+        """
+        /v1/messages wraps the chat stream in AnthropicStreamWrapper, which
+        hides the CustomStreamWrapper's collected chunks behind
+        .completion_stream; the partial-billing helper reads response.chunks,
+        so the wrapper must delegate inward or a disconnect bills nothing.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicStreamWrapper,
+        )
+
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            setattr(response.chunks[-1], "service_tier", "priority")  # noqa: B010  # pydantic extra, not a declared field
+            wrapped: Final = AnthropicStreamWrapper(
+                completion_stream=response,
+                model=response.model or "gpt-4o-mini",
+            )
+
+            billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj},
+                wrapped,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert getattr(partial_response, "service_tier") == "priority"
+        assert partial_response.usage.total_tokens > 0
+
+    @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks

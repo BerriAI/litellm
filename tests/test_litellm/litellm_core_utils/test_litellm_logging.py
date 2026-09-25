@@ -8694,3 +8694,55 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert "smoke-failure" in payload["error_str"]
     assert payload["model"] == "openai/gpt-5.6"
     assert events.empty()
+
+
+def test_responses_completed_event_bills_the_served_service_tier():
+    """The served service_tier on response.completed's inner ResponsesAPIResponse
+    must reach the cost calculator, so a priority-served stream prices at the
+    priority rates instead of the default tier's."""
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-5.1",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=time.time(),
+        litellm_call_id="resp-served-tier",
+        function_id="resp-served-tier",
+    )
+    logging_obj.update_environment_variables(
+        model="openai/gpt-5.1",
+        user="",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="openai",
+    )
+    inner: Final = ResponsesAPIResponse(
+        id="resp-served-tier",
+        created_at=1,
+        object="response",
+        status="completed",
+        model="gpt-5.1",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+        service_tier="priority",
+    )
+    event: Final = ResponseCompletedEvent(type="response.completed", response=inner)
+
+    cost: Final = logging_obj._response_cost_calculator(result=event)  # pyright: ignore[reportPrivateUsage]  # parity with the suite's own direct calls
+
+    billed_response: Final = ModelResponse(
+        model="gpt-5.1",
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    tier_cost: Final = litellm.completion_cost(
+        completion_response=billed_response,
+        model="openai/gpt-5.1",
+        service_tier="priority",
+    )
+    default_cost: Final = litellm.completion_cost(
+        completion_response=billed_response,
+        model="openai/gpt-5.1",
+    )
+
+    assert cost == pytest.approx(tier_cost)
+    assert cost > default_cost
