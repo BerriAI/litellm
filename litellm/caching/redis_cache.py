@@ -311,7 +311,7 @@ def _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownParameterType] 
         }
     )
     pool: Final = ConnectionPool(host=node.host, port=node.port, **node_kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # cluster kwargs validated by redis-py at runtime
-    return Redis(connection_pool=pool)  # pyright: ignore[reportUnknownVariableType]  # redis generics
+    return Redis.from_pool(pool)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis generics
 
 
 @functools.lru_cache(maxsize=1)

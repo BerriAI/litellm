@@ -1,11 +1,14 @@
+import asyncio
 from importlib import import_module
 import json
-from unittest.mock import MagicMock, patch
+import ssl
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis, RedisCluster
 from redis.asyncio.cluster import ClusterNode
+from redis.asyncio.connection import SSLConnection
 
 
 from litellm.caching.redis_cache import RedisCache
@@ -251,3 +254,65 @@ def test_init_pubsub_client_returns_the_shared_async_client_for_standalone() -> 
     cache.init_async_client = MagicMock(return_value=standalone)
 
     assert cache.init_pubsub_client() is standalone
+
+
+def test_init_pubsub_client_preserves_tls_and_authentication() -> None:
+    cache = _isolated_redis_cache("cluster-pubsub-tls")
+    cluster = RedisCluster(
+        startup_nodes=[ClusterNode(host="redis.example.test", port=7000)],
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        username="pubsub-user",
+        password="test-password",
+        socket_connect_timeout=3.0,
+        socket_keepalive=True,
+    )
+    cache.init_async_client = MagicMock(return_value=cluster)
+
+    client = cache.init_pubsub_client()
+    connection = client.connection_pool.make_connection()
+
+    assert isinstance(connection, SSLConnection)
+    assert connection.ssl_context.cert_reqs == ssl.CERT_REQUIRED
+    assert connection.ssl_context.check_hostname is True
+    assert connection.username == "pubsub-user"
+    assert connection.password == "test-password"
+    assert connection.socket_connect_timeout == 3.0
+    assert connection.socket_keepalive is True
+
+
+def test_init_pubsub_client_rejects_missing_nodes_and_can_retry() -> None:
+    cache = _isolated_redis_cache("cluster-pubsub-no-nodes")
+    cluster = _cluster_for_pubsub()
+    cluster.nodes_manager.startup_nodes = {}
+    cache.init_async_client = MagicMock(return_value=cluster)
+
+    with pytest.raises(ValueError, match="no default node and no startup nodes"):
+        cache.init_pubsub_client()
+
+    cluster.nodes_manager.default_node = ClusterNode(host="recovered.example.test", port=7001)
+    client = cache.init_pubsub_client()
+
+    assert client.connection_pool.connection_kwargs["host"] == "recovered.example.test"
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_disconnect_closes_derived_pubsub_connections_even_when_pool_close_fails(close_fails: bool) -> None:
+    cache = _isolated_redis_cache(f"cluster-pubsub-close-{close_fails}")
+    cache.async_redis_conn_pool = AsyncMock()
+    cache.init_async_client = MagicMock(return_value=_cluster_for_pubsub())
+
+    async def exercise() -> None:
+        client = cache.init_pubsub_client()
+        connection = AsyncMock()
+        connection.disconnect.side_effect = ConnectionError("connection close failed") if close_fails else None
+        client.connection_pool._available_connections.append(connection)
+
+        await cache.disconnect()
+
+        connection.disconnect.assert_awaited_once()
+        cache.async_redis_conn_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
+        cache.redis_client.close.assert_called_once()
+
+    asyncio.run(exercise())
