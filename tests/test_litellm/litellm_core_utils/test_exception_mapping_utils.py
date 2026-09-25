@@ -169,9 +169,11 @@ class TestExceptionCheckers:
         error_strings = [
             "invalid_request_error content_policy_violation occurred",
             "The response was filtered due to the prompt triggering Azure OpenAI's content management policy",
+            "The response was filtered due to the prompt triggering Azure OpenAI’s content management policy",
             "Your task failed as a result of our safety system detecting harmful content",
             "The model produced invalid content that violates our policy",
             "Request blocked due to content_filter_policy restrictions",
+            "Error code: 400 - {'error': {'message': 'content_filter error', 'code': 'content_filter', 'innererror': {'code': 'ContentFiltered'}}}",
         ]
 
         for error_str in error_strings:

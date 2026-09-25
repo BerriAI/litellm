@@ -422,3 +422,43 @@ class TestAzureExceptionMapping:
         error = exc_info.value
         assert "encrypted_content_affinity" in error.message
         assert "enable_pre_call_checks" in error.message
+
+    def test_azure_content_policy_violation_curly_apostrophe_and_content_filter_code(self):
+        """Test that Azure content policy violation with unicode right single quotation mark (curly apostrophe U+2019)
+        and code='content_filter' is mapped to ContentPolicyViolationError (#42247)."""
+        import openai
+
+        msg = (
+            "The response was filtered due to the prompt triggering Azure OpenAI’s "
+            "content management policy. Please modify your prompt and retry."
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.headers = {}
+
+        mock_exception = openai.BadRequestError(
+            message=f"Error code: 400 - {{'error': {{'message': '{msg}', 'type': 'invalid_request_error', 'param': 'prompt', 'code': 'content_filter', 'innererror': {{'code': 'ContentFiltered'}}}}}}",
+            response=mock_response,
+            body={
+                "error": {
+                    "message": msg,
+                    "type": "invalid_request_error",
+                    "param": "prompt",
+                    "code": "content_filter",
+                    "innererror": {"code": "ContentFiltered"},
+                }
+            },
+        )
+
+        with pytest.raises(ContentPolicyViolationError) as exc_info:
+            exception_type(
+                model="azure/gpt-4o",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        e = exc_info.value
+        assert "content management policy" in str(e).lower()
+        assert e.provider_specific_fields is not None
+        assert e.provider_specific_fields["inner_error"]["code"] == "ContentFiltered"
+        assert e.body["code"] == "content_filter"
