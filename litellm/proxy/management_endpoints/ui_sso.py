@@ -53,6 +53,7 @@ from litellm.constants import (
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
     CLI_SSO_SESSION_TTL_SECONDS,
+    DEFAULT_AZURE_AUTHORITY_HOST,
     LITELLM_CLI_SOURCE_IDENTIFIER,
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
@@ -63,6 +64,7 @@ from litellm.constants import (
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.llms.azure.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -4214,8 +4216,6 @@ class MicrosoftSSOHandler:
     Handles Microsoft SSO callback response and returns a CustomOpenID object
     """
 
-    DEFAULT_GRAPH_API_BASE_URL = "https://graph.microsoft.com/v1.0"
-
     """
     Constants
     """
@@ -4227,11 +4227,16 @@ class MicrosoftSSOHandler:
     @staticmethod
     def get_graph_api_base_url() -> str:
         """
-        Returns the Microsoft Graph API base URL, configurable via the
-        `MICROSOFT_GRAPH_ENDPOINT` env var so non-default clouds such as Azure
-        Government (GCC High) can point at `https://graph.microsoft.us/v1.0`
+        Returns the Microsoft Graph API base URL. `MICROSOFT_GRAPH_ENDPOINT` wins when set;
+        otherwise the Graph host is derived from the cloud `AZURE_AUTHORITY_HOST` belongs to
         """
-        return get_secret_str("MICROSOFT_GRAPH_ENDPOINT") or MicrosoftSSOHandler.DEFAULT_GRAPH_API_BASE_URL
+        configured_endpoint: Final = get_secret_str("MICROSOFT_GRAPH_ENDPOINT")
+        if configured_endpoint:
+            return configured_endpoint
+        authority_host: Final = normalize_azure_authority_host(
+            os.getenv("AZURE_AUTHORITY_HOST") or DEFAULT_AZURE_AUTHORITY_HOST
+        )
+        return f"{get_azure_cloud(authority_host).microsoft_graph_base}/v1.0"
 
     @staticmethod
     def get_graph_api_user_groups_endpoint() -> str:
