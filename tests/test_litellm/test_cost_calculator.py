@@ -5113,10 +5113,24 @@ def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch):
             completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=23, audio_tokens=58),
         ),
         results=[
-            {"type": "session.created", "session": {"model": "my-voice-alias"}},
+            {
+                "type": "session.created",
+                "session": {
+                    "model": "my-voice-alias",
+                    "audio": {"input": {"transcription": {"model": base_model}}},
+                },
+            },
             {
                 "type": "response.done",
                 "response": {"usage": {"input_tokens": 219, "output_tokens": 81, "total_tokens": 300}},
+            },
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "usage": {
+                    "type": "tokens",
+                    "input_token_details": {"audio_tokens": 40, "text_tokens": 4},
+                    "output_tokens": 3,
+                },
             },
         ],
     )
@@ -5136,6 +5150,66 @@ def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch):
     )
     assert aliased_cost == pytest.approx(base_cost, rel=1e-9)
     assert aliased_cost > 0
+
+
+def test_base_model_does_not_override_transcription_rates(monkeypatch):
+    """base_model prices the session, never the ASR events inside it.
+
+    The deployment's resolved base model reaches realtime costing through the
+    session-model slot, not the pricing-override slot, so a transcription event
+    must keep billing the ASR model the session reports rather than the realtime
+    card's audio rates.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    base_model = "gpt-realtime-2"
+    asr_model = "gpt-4o-transcribe"
+    logging_object = LiteLLMRealtimeStreamLoggingObject(
+        usage=Usage(),
+        results=[
+            {
+                "type": "session.created",
+                "session": {
+                    "model": "my-voice-alias",
+                    "audio": {"input": {"transcription": {"model": asr_model}}},
+                },
+            },
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "usage": {
+                    "type": "tokens",
+                    "input_token_details": {"audio_tokens": 400, "text_tokens": 12},
+                    "output_tokens": 30,
+                },
+            },
+        ],
+    )
+
+    with_base_model = completion_cost(
+        completion_response=logging_object,
+        model="my-voice-alias",
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+        base_model=base_model,
+    )
+    asr_priced = completion_cost(
+        completion_response=logging_object,
+        model="my-voice-alias",
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+    )
+    realtime_card = litellm.model_cost[base_model]
+    billed_at_realtime = (
+        400 * realtime_card["input_cost_per_audio_token"]
+        + 12 * realtime_card["input_cost_per_token"]
+        + 30 * realtime_card["output_cost_per_audio_token"]
+    )
+    assert billed_at_realtime != pytest.approx(asr_priced, rel=1e-9), (
+        "control: the two cards must price this usage differently or the assertion below is vacuous"
+    )
+    assert with_base_model == pytest.approx(asr_priced, rel=1e-9)
+    assert with_base_model > 0
 
 
 def test_baseten_glm_5_3_fast_is_priced_from_registry(_local_model_cost_map: None) -> None:

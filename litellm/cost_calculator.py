@@ -1701,10 +1701,12 @@ def completion_cost(
                         results=completion_response.results,
                         combined_usage_object=cost_per_token_usage_object,
                         custom_llm_provider=custom_llm_provider,
-                        litellm_model_name=model,
+                        litellm_model_name=(
+                            selected_model if explicit_pricing and selected_model is not None else model
+                        ),
                         data_residency=data_residency,
                         litellm_logging_obj=litellm_logging_obj,
-                        custom_pricing_model=selected_model if explicit_pricing else None,
+                        custom_pricing_model=selected_model if custom_pricing else None,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2939,7 +2941,7 @@ def handle_realtime_stream_cost_calculation(
     Args:
         results: A list of OpenAIRealtimeStreamBaseObject objects
         custom_pricing_model: deployment-scoped pricing key from the deployment's
-            custom rates or base_model, tried ahead of the session-reported model
+            custom rates, tried ahead of the session-reported model
     """
     received_model = None
     potential_model_names: Final = [custom_pricing_model]
