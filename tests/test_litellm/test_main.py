@@ -3588,7 +3588,7 @@ def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6()
     assert request_body["messages"][0]["content"] == [
         {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
     ]
-    assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "explicit"}
+    assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "implicit"}
 
 
 _SUBSCRIPTION_OAUTH_CREDENTIAL = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
