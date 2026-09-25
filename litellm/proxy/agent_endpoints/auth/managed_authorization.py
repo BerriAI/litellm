@@ -11,8 +11,19 @@ from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 
 
-async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore) -> None:
+async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:
     if auth.agent_id is None:
+        return
+    if store is None:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        registered: Final = global_agent_registry.get_agent_by_id(auth.agent_id)
+        if auth.managed_agent_context is not None or (
+            registered is not None and (registered.identity_managed or registered.identity is not None)
+        ):
+            raise_identity_failure(
+                AgentIdentityFailure(code="policy_unavailable", message="Managed agent policy requires a database")
+            )
         return
     agent: Final = await store.agent(auth.agent_id)
     if isinstance(agent, AgentIdentityFailure):
@@ -28,6 +39,8 @@ async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore) -
         if agent.litellm_budget_table is not None:
             auth.billing_agent_policy = agent
         return
+    if auth.jwt_claims and auth.managed_agent_context is None:
+        raise_identity_failure(AgentIdentityFailure(message="A managed agent requires a matching verified identity"))
     failure: Final = actor_admission_failure(agent, auth.managed_agent_context)
     if failure is not None:
         raise_identity_failure(failure)
@@ -101,7 +114,7 @@ def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
 
 
 async def prepare_agent_invocation(
-    auth: UserAPIKeyAuth, target_name: str, store: AgentIdentityStore, *, billable: bool = True
+    auth: UserAPIKeyAuth, target_name: str, store: AgentIdentityStore | None, *, billable: bool = True
 ) -> None:
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentRequestHandler
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
@@ -109,7 +122,11 @@ async def prepare_agent_invocation(
     registered: Final = await get_agent_with_read_through(target_name)
     if registered is None:
         return
-    target: Final = await store.agent(registered.agent_id)
+    if store is None and registered.identity_managed:
+        raise_identity_failure(
+            AgentIdentityFailure(code="policy_unavailable", message="Managed agent policy requires a database")
+        )
+    target: Final = await store.agent(registered.agent_id) if store is not None else None
     if isinstance(target, AgentIdentityFailure):
         raise_identity_failure(target)
     if target is None and registered.identity_managed:

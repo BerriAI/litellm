@@ -7800,3 +7800,30 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
         assert auth.managed_agent_context.mode == "autonomous"
         assert result["is_proxy_admin"] is False
     database.db.litellm_usertable.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("claim_value", ["managed", "Readable managed agent"])
+def test_legacy_claim_cannot_select_a_top_level_entra_binding(claim_value: str) -> None:
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="managed",
+            agent_name="Readable managed agent",
+            agent_card_params={},
+            identity_managed=True,
+            identity=AgentIdentityBinding(
+                agent_id="managed",
+                provider="microsoft_entra",
+                tenant_id="tenant",
+                client_id="client",
+                service_principal_id="principal",
+                issuer="issuer",
+                revision="revision",
+            ),
+        )
+    )
+    with pytest.raises(HTTPException) as denied:
+        JWTAuthManager.resolve_agent_id(_entra_agent_jwt_handler("agent"), {"agent": claim_value}, registry)
+    assert denied.value.status_code == 403

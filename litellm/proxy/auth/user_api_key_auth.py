@@ -3201,14 +3201,15 @@ async def _authorize_authenticated_request(
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
         from litellm.proxy.proxy_server import prisma_client
 
+        store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
         if user_api_key_auth_obj.agent_id is not None:
-            await admit_managed_actor(user_api_key_auth_obj, AgentIdentityStore.from_client(prisma_client))
+            await admit_managed_actor(user_api_key_auth_obj, store)
         target_name: Final = invocation_target(route, request_data)
         if target_name is not None:
             await prepare_agent_invocation(
                 user_api_key_auth_obj,
                 target_name,
-                AgentIdentityStore.from_client(prisma_client),
+                store,
                 billable=request_data.get("method")
                 in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
             )

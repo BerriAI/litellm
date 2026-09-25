@@ -321,3 +321,72 @@ def test_native_directory_agent_cannot_authenticate_with_a_virtual_key() -> None
     failure: Final = actor_admission_failure(policy, None)
     assert isinstance(failure, AgentIdentityFailure)
     assert "require their Entra token" in failure.message
+
+
+@pytest.mark.asyncio
+async def test_legacy_jwt_cannot_adopt_an_agent_bound_on_another_worker() -> None:
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent(execution_mode="autonomous"))
+    auth: Final = UserAPIKeyAuth(agent_id="agent", jwt_claims={"agent": "agent", "sub": "unrelated-subject"})
+    with pytest.raises(HTTPException) as denied:
+        await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
+    assert denied.value.status_code == 403
+    assert auth.managed_agent_policy is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound", [False, True])
+async def test_managed_context_or_binding_requires_database(monkeypatch: pytest.MonkeyPatch, bound: bool) -> None:
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(agent(identity_managed=bound, identity=BINDING if bound else None))
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    if not bound:
+        auth.managed_agent_context = ManagedAgentContext(
+            agent_id="agent", binding_revision="current", mode="autonomous"
+        )
+    with pytest.raises(HTTPException) as denied:
+        await admit_managed_actor(auth, None)
+    assert denied.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_managed_invocation_requires_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(agent())
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    with pytest.raises(HTTPException) as denied:
+        await prepare_agent_invocation(UserAPIKeyAuth(user_id="human"), "agent", None)
+    assert denied.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_autonomous_app_preserves_persisted_virtual_key_admission() -> None:
+    policy: Final = agent(execution_mode="autonomous")
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    auth: Final = UserAPIKeyAuth(agent_id="agent", api_key="persisted-key")
+    await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
+    assert auth.managed_agent_policy == policy
+    assert auth.billing_agent_policy == policy
+
+
+@pytest.mark.asyncio
+async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+
+    monkeypatch.setattr(agent_registry, "global_agent_registry", agent_registry.AgentRegistry())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    auth: Final = UserAPIKeyAuth(user_id="human")
+    await prepare_agent_invocation(auth, "missing", None)
+    assert auth.invoked_agent_id is None
+    assert auth.billing_agent_policy is None

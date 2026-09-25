@@ -1506,7 +1506,12 @@ class JWTAuthManager:
         agent: Final = agent_registry.get_agent_by_id(agent_id=agent_claim) or agent_registry.get_agent_by_name(
             agent_name=agent_claim
         )
-        if agent is None or agent_identity(agent.litellm_params) is not None:
+        if (
+            agent is None
+            or agent.identity_managed
+            or agent.identity is not None
+            or agent_identity(agent.litellm_params) is not None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"No registered agent matches JWT claim {jwt_handler.litellm_jwtauth.agent_id_jwt_field}={agent_claim}",

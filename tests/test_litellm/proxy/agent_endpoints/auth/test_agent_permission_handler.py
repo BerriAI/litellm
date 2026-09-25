@@ -766,3 +766,40 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     client.db.litellm_teamtable.find_unique.assert_not_called()
     client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
     client.db.litellm_accessgrouptable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_strict_legacy_group_grants_ignore_stale_replica(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.types.agents import AgentResponse
+
+    stale: Final = AgentResponse(agent_id="revoked", agent_name="Revoked", agent_card_params={})
+    registry: Final = AgentRegistry()
+    registry.register_agent(stale)
+    database: Final = MagicMock()
+    database.db.litellm_agentstable.find_many = AsyncMock(return_value=[stale])
+    database.writer_db.litellm_agentstable.find_many = AsyncMock(return_value=[stale])
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    auth: Final = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="permission", agent_access_groups=["group"]
+        )
+    )
+    assert await AgentRequestHandler._get_allowed_agents_for_key(auth, strict=True) == RestrictedAgentAccess(
+        frozenset({"revoked"})
+    )
+    database.writer_db.litellm_agentstable.find_many.return_value = []
+    assert await AgentRequestHandler._get_allowed_agents_for_key(auth, strict=True) == RestrictedAgentAccess(
+        frozenset()
+    )
+    database.db.litellm_agentstable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("groups", [[], ["group"]])
+async def test_legacy_groups_without_database_grant_no_agents(groups: list[str]) -> None:
+    assert await AgentRequestHandler._get_db_agent_ids_for_access_groups(None, groups, check_db_only=True) == set()

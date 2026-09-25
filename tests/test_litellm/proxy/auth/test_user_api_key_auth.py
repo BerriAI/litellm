@@ -9143,3 +9143,35 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
     assert result.budget_reservation == reservation
     assert websocket.state.budget_reservation is reservation
     assert websocket.scope["state"]["budget_reservation"] is reservation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invoke", [False, True])
+async def test_centralized_authorization_preserves_database_free_config_agents(monkeypatch, invoke: bool):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": None,
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    registry = AgentRegistry()
+    registry.load_agents_from_config(
+        [{"agent_name": "config-agent", "agent_card_params": {"name": "Config", "url": "http://localhost:9999"}}]
+    )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    registered = registry.get_agent_by_name("config-agent")
+    model = "a2a/config-agent" if invoke else "test-model"
+    auth = UserAPIKeyAuth(agent_id=registered.agent_id, jwt_claims={"agent": "config-agent"}, models=[model])
+    data = {"model": model, "messages": [{"role": "user", "content": "hi"}]}
+    assert (
+        await _authorize_authenticated_request(
+            auth, _alias_request("/v1/chat/completions", data), data, "/v1/chat/completions", "jwt-token"
+        )
+        is None
+    )
+    assert auth.managed_agent_policy is None

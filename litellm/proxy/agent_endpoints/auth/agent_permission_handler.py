@@ -279,7 +279,11 @@ class AgentRequestHandler:
                 return UnrestrictedAgentAccess()
 
             access_group_agents: Final = (
-                tuple(await AgentRequestHandler._get_agents_from_access_groups(list(declared_access_groups)))
+                tuple(
+                    await AgentRequestHandler._get_agents_from_access_groups(
+                        list(declared_access_groups), check_db_only=strict
+                    )
+                )
                 if declared_access_groups
                 else ()
             )
@@ -358,7 +362,11 @@ class AgentRequestHandler:
                 return UnrestrictedAgentAccess()
 
             access_group_agents: Final = (
-                tuple(await AgentRequestHandler._get_agents_from_access_groups(list(declared_access_groups)))
+                tuple(
+                    await AgentRequestHandler._get_agents_from_access_groups(
+                        list(declared_access_groups), check_db_only=strict
+                    )
+                )
                 if declared_access_groups
                 else ()
             )
@@ -383,7 +391,9 @@ class AgentRequestHandler:
             return UnrestrictedAgentAccess()
 
     @staticmethod
-    def _get_config_agent_ids_for_access_groups(config_agents: list, access_groups: list[str]) -> set[str]:
+    def _get_config_agent_ids_for_access_groups(
+        config_agents: Sequence[AgentResponse], access_groups: list[str]
+    ) -> set[str]:
         """
         Helper to get agent_ids from config-loaded agents that match any of the given access groups.
         """
@@ -396,7 +406,9 @@ class AgentRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_agent_ids_for_access_groups(prisma_client, access_groups: list[str]) -> set[str]:
+    async def _get_db_agent_ids_for_access_groups(
+        prisma_client, access_groups: list[str], *, check_db_only: bool = False
+    ) -> set[str]:
         """
         Helper to get agent_ids from DB agents that match any of the given access groups.
 
@@ -406,7 +418,7 @@ class AgentRequestHandler:
         if not access_groups or prisma_client is None:
             return set()
 
-        agents: Final = await AgentsRepository(prisma_client).table.find_many(
+        agents: Final = await AgentsRepository(prisma_client, use_writer=check_db_only).table.find_many(
             where={"agent_access_groups": {"hasSome": access_groups}}
         )
         return {agent.agent_id for agent in agents}
@@ -425,6 +437,8 @@ class AgentRequestHandler:
     @staticmethod
     async def _get_agents_from_access_groups(
         access_groups: list[str],
+        *,
+        check_db_only: bool = False,
     ) -> list[str]:
         """
         Resolve agent access groups to agent IDs by querying BOTH the agent table (DB) AND config-loaded agents.
@@ -432,14 +446,13 @@ class AgentRequestHandler:
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.proxy_server import prisma_client
 
-        # Use the helper for config-loaded agents
         config_agent_ids: Final = AgentRequestHandler._get_config_agent_ids_for_access_groups(
             global_agent_registry.agent_list, access_groups
         )
 
         # Use the helper for DB agents
         db_agent_ids: Final = await AgentRequestHandler._get_db_agent_ids_for_access_groups(
-            prisma_client, access_groups
+            prisma_client, access_groups, check_db_only=check_db_only
         )
 
         return list(config_agent_ids | db_agent_ids)

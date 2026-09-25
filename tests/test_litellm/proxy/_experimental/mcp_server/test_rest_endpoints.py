@@ -1477,8 +1477,11 @@ class TestListToolsRestAPI:
         from mcp.types import ListToolsResult, PaginatedRequestParams
         from mcp.types import Tool as MCPTool
 
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.types.mcp import MCPTransport
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", MCPServerManager())
 
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
