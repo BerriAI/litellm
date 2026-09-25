@@ -187,7 +187,7 @@ async def _run(websocket: WebSocket, start: StartRequest, headers: Mapping[str, 
             process.terminate()
         try:
             await asyncio.wait_for(process.wait(), timeout=2)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             process.kill()
             await process.wait()
 
