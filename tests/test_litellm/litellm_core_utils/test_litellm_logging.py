@@ -7757,6 +7757,9 @@ _PUBLISHED_BATCH_RATES: Final = MappingProxyType(
         "output_cost_per_token_batches": 4.1e-6,
         "cache_read_input_token_cost_batches": 1.2e-7,
         "cache_creation_input_token_cost_batches": 1.3e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 2.1e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 5.1e-6,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 2.2e-7,
         "input_cost_per_token_above_272k_tokens_batches": 3.1e-6,
         "output_cost_per_token_above_272k_tokens_batches": 7.1e-6,
         "cache_read_input_token_cost_above_272k_tokens_batches": 3.2e-7,
@@ -7765,14 +7768,17 @@ _PUBLISHED_BATCH_RATES: Final = MappingProxyType(
 )
 _PUBLISHED_INPUT_BATCH_KEYS: Final = (
     "input_cost_per_token_batches",
+    "input_cost_per_token_above_200k_tokens_batches",
     "input_cost_per_token_above_272k_tokens_batches",
     "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_200k_tokens_batches",
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_creation_input_token_cost_batches",
     "cache_creation_input_token_cost_above_272k_tokens_batches",
 )
 _PUBLISHED_OUTPUT_BATCH_KEYS: Final = (
     "output_cost_per_token_batches",
+    "output_cost_per_token_above_200k_tokens_batches",
     "output_cost_per_token_above_272k_tokens_batches",
 )
 
@@ -7861,22 +7867,22 @@ def test_batch_cost_calculator_bills_the_carried_output_tier_when_the_deployment
     )
 
 
+@pytest.mark.parametrize(
+    "tier_key",
+    ["input_cost_per_token_above_200k_tokens_batches", "input_cost_per_token_above_272k_tokens_batches"],
+)
 def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_the_published_flat_rates(
-    _published_batch_model: None,
+    _published_batch_model: None, tier_key: str
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
 
-    info: Final = deployment_pricing_model_info(
-        _batch_deployment_id({"input_cost_per_token_above_272k_tokens_batches": 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT
-    )
+    info: Final = deployment_pricing_model_info(_batch_deployment_id({tier_key: 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT)
     carried_keys: Final = tuple(
-        key
-        for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS)
-        if key != "input_cost_per_token_above_272k_tokens_batches"
+        key for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS) if key != tier_key
     )
 
     assert info is not None
-    assert info["input_cost_per_token_above_272k_tokens_batches"] == 1e-3
+    assert info[tier_key] == 1e-3
     assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 

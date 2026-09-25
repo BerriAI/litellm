@@ -5,6 +5,7 @@ import respx
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import OpenAIFileObject
 
 API_BASE: Final = "https://api.x.ai"
@@ -104,3 +105,22 @@ async def test_list_files_reads_data_array() -> None:
 
     files: Final = TypeAdapter(tuple[OpenAIFileObject, ...]).validate_python(listed)
     assert [f.id for f in files] == ["file_07"]
+
+
+async def _retrieve_file(sync_mode: bool, file_id: str) -> None:
+    if sync_mode:
+        litellm.file_retrieve(file_id=file_id, custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)
+        return
+    await litellm.afile_retrieve(file_id=file_id, custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@respx.mock
+async def test_retrieve_file_maps_xai_not_found_to_a_404_error(sync_mode: bool) -> None:
+    respx.get(f"{API_BASE}/v1/files/file_gone").respond(404, json={"code": "not-found", "error": "File not found"})
+
+    with pytest.raises(BaseLLMException) as raised:
+        await _retrieve_file(sync_mode, "file_gone")
+
+    assert raised.value.status_code == 404
+    assert "File not found" in str(raised.value)

@@ -29,7 +29,12 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LlmProviders
 
-from ..batches.transformation import get_xai_api_base, get_xai_auth_headers, xai_batches_error
+from ..batches.transformation import (
+    get_xai_api_base,
+    get_xai_auth_headers,
+    raise_for_xai_status,
+    xai_batches_error,
+)
 
 _NO_QUERY_PARAMS: Final[dict[str, str]] = {}  # mutable-ok: BaseFilesConfig request transforms return tuple[str, dict]
 _DEFAULT_PURPOSE: Final[OpenAIFilesPurpose] = "batch"
@@ -158,7 +163,7 @@ class XAIFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
-        return _to_openai_file_object(XAIFile.model_validate(raw_response.json()))
+        return _to_openai_file_object(XAIFile.model_validate(raise_for_xai_status(raw_response).json()))
 
     def transform_retrieve_file_request(
         self,
@@ -174,7 +179,7 @@ class XAIFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
-        return _to_openai_file_object(XAIFile.model_validate(raw_response.json()))
+        return _to_openai_file_object(XAIFile.model_validate(raise_for_xai_status(raw_response).json()))
 
     def transform_delete_file_request(
         self,
@@ -190,7 +195,7 @@ class XAIFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> FileDeleted:
-        deleted: Final = XAIFileDeleted.model_validate(raw_response.json())
+        deleted: Final = XAIFileDeleted.model_validate(raise_for_xai_status(raw_response).json())
         return FileDeleted(id=deleted.id, deleted=deleted.deleted, object="file")
 
     def transform_list_files_request(
@@ -208,7 +213,8 @@ class XAIFilesConfig(BaseFilesConfig):
         litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:  # mutable-ok: BaseFilesConfig signature
         return [  # mutable-ok: BaseFilesConfig signature
-            _to_openai_file_object(f) for f in XAIFileList.model_validate(raw_response.json()).data
+            _to_openai_file_object(f)
+            for f in XAIFileList.model_validate(raise_for_xai_status(raw_response).json()).data
         ]
 
     def transform_file_content_request(

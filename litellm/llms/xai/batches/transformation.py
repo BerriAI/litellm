@@ -55,6 +55,12 @@ def xai_batches_error(
     )
 
 
+def raise_for_xai_status(response: httpx.Response) -> httpx.Response:
+    if response.status_code >= 400:
+        raise xai_batches_error(response.text, response.status_code, response.headers)
+    return response
+
+
 def get_xai_api_base(api_base: str | None) -> str:
     """Return the xAI origin without a trailing ``/v1``, so callers can append ``/v1/<route>``."""
     resolved: Final = (api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE).rstrip("/")

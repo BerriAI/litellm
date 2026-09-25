@@ -4344,6 +4344,55 @@ def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_t
     assert undeclared == []
 
 
+@pytest.mark.parametrize("prefix", _BATCH_RATE_PREFIXES)
+def test_every_xai_entry_with_a_long_context_rate_and_a_batch_rate_declares_the_batch_tier(
+    _local_model_cost_map: None, prefix: str
+) -> None:
+    undeclared: Final = [
+        name
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "xai"
+        and entry.get(f"{prefix}_above_200k_tokens") is not None
+        and entry.get(f"{prefix}_batches") is not None
+        and entry.get(f"{prefix}_above_200k_tokens_batches") is None
+    ]
+
+    assert undeclared == []
+
+
+_XAI_TIERED_BATCH_MODEL: Final = "xai/grok-4.3"
+
+
+def test_xai_batch_tier_discounts_the_long_context_rate_like_the_flat_batch_rate(_local_model_cost_map: None) -> None:
+    info: Final = litellm.get_model_info(_XAI_TIERED_BATCH_MODEL, custom_llm_provider="xai")
+    flat_discount: Final = info["input_cost_per_token_batches"] / info["input_cost_per_token"]
+
+    for prefix in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        tier_discount = info[f"{prefix}_above_200k_tokens_batches"] / info[f"{prefix}_above_200k_tokens"]
+        assert tier_discount == pytest.approx(flat_discount)
+        assert info[f"{prefix}_above_200k_tokens_batches"] < info[f"{prefix}_above_200k_tokens"]
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")]
+)
+def test_xai_batch_cost_calculator_bills_the_200k_batch_tier_inclusively(
+    _local_model_cost_map: None, prompt_tokens: int, tier: str
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    info: Final = litellm.get_model_info(_XAI_TIERED_BATCH_MODEL, custom_llm_provider="xai")
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=64, total_tokens=prompt_tokens + 64)
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage, model=_XAI_TIERED_BATCH_MODEL, custom_llm_provider="xai"
+    )
+
+    assert prompt_cost == pytest.approx(prompt_tokens * info[f"input_cost_per_token{tier}"])
+    assert completion_cost_value == pytest.approx(64 * info[f"output_cost_per_token{tier}"])
+
+
 def test_batch_cost_calculator_ignores_malformed_batch_tier_keys():
     from litellm.cost_calculator import batch_cost_calculator
 

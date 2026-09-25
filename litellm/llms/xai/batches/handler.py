@@ -27,11 +27,11 @@ from .transformation import (
     XAIBatchResult,
     XAIBatchResultsPage,
     get_xai_auth_headers,
+    raise_for_xai_status,
     results_to_openai_jsonl,
     to_create_batch_body,
     to_litellm_batch,
     to_openai_batch_list,
-    xai_batches_error,
     xai_batches_url,
 )
 
@@ -41,12 +41,6 @@ _JSONL_CONTENT_TYPE: Final = ("content-type", "application/jsonl")
 class _PageParams(TypedDict):
     limit: ReadOnly[int]
     pagination_token: NotRequired[ReadOnly[str]]
-
-
-def _raise_for_status(response: httpx.Response) -> httpx.Response:
-    if response.status_code >= 400:
-        raise xai_batches_error(response.text, response.status_code, response.headers)
-    return response
 
 
 def _results_params(after: str | None, limit: int | None) -> dict[str, object]:  # mutable-ok: httpx params
@@ -100,11 +94,11 @@ class XAIBatchesHandler:
 
             async def _acreate() -> LiteLLMBatch:
                 response: Final = await self._async(timeout).post(url, json=body, headers=headers, timeout=timeout)
-                return to_litellm_batch(XAIBatch.model_validate(_raise_for_status(response).json()), endpoint)
+                return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()), endpoint)
 
             return _acreate()
         response: Final = self._sync(timeout).post(url, json=body, headers=headers, timeout=timeout)
-        return to_litellm_batch(XAIBatch.model_validate(_raise_for_status(response).json()), endpoint)
+        return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()), endpoint)
 
     def retrieve_batch(
         self,
@@ -120,11 +114,11 @@ class XAIBatchesHandler:
 
             async def _aretrieve() -> LiteLLMBatch:
                 response: Final = await self._async(timeout).get(url, headers=headers, timeout=timeout)
-                return to_litellm_batch(XAIBatch.model_validate(_raise_for_status(response).json()))
+                return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()))
 
             return _aretrieve()
         response: Final = self._sync(timeout).get(url, headers=headers, timeout=timeout)
-        return to_litellm_batch(XAIBatch.model_validate(_raise_for_status(response).json()))
+        return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()))
 
     def cancel_batch(
         self,
@@ -140,11 +134,11 @@ class XAIBatchesHandler:
 
             async def _acancel() -> LiteLLMBatch:
                 response: Final = await self._async(timeout).post(url, headers=headers, timeout=timeout)
-                return to_litellm_batch(XAIBatch.model_validate(_raise_for_status(response).json()))
+                return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()))
 
             return _acancel()
         response: Final = self._sync(timeout).post(url, headers=headers, timeout=timeout)
-        return to_litellm_batch(XAIBatch.model_validate(_raise_for_status(response).json()))
+        return to_litellm_batch(XAIBatch.model_validate(raise_for_xai_status(response).json()))
 
     def list_batches(
         self,
@@ -162,11 +156,11 @@ class XAIBatchesHandler:
 
             async def _alist() -> OpenAIBatchListResponse:
                 response: Final = await self._async(timeout).get(url, params=params, headers=headers, timeout=timeout)
-                return to_openai_batch_list(XAIBatchList.model_validate(_raise_for_status(response).json()))
+                return to_openai_batch_list(XAIBatchList.model_validate(raise_for_xai_status(response).json()))
 
             return _alist()
         response: Final = self._sync(timeout).get(url, params=params, headers=headers, timeout=timeout)
-        return to_openai_batch_list(XAIBatchList.model_validate(_raise_for_status(response).json()))
+        return to_openai_batch_list(XAIBatchList.model_validate(raise_for_xai_status(response).json()))
 
     def batch_results_content(
         self,
@@ -188,7 +182,7 @@ class XAIBatchesHandler:
                     response: Final = await client.get(
                         url, params=_results_params(after, None), headers=headers, timeout=timeout
                     )
-                    return XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
+                    return XAIBatchResultsPage.model_validate(raise_for_xai_status(response).json())
 
                 pages = [await _page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
                 while pages[-1].pagination_token and pages[-1].results:
@@ -200,7 +194,7 @@ class XAIBatchesHandler:
 
         def _page(after: str | None) -> XAIBatchResultsPage:
             response: Final = client.get(url, params=_results_params(after, None), headers=headers, timeout=timeout)
-            return XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
+            return XAIBatchResultsPage.model_validate(raise_for_xai_status(response).json())
 
         pages = [_page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
         while pages[-1].pagination_token and pages[-1].results:

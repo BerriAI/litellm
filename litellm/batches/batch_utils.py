@@ -721,6 +721,10 @@ def _get_batch_job_usage_from_response_body(
     if ResponseAPILoggingUtils._is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
     usage: Final[Usage] = Usage(**_usage_dict)
+    if custom_llm_provider == "xai":
+        from litellm.llms.xai.chat.transformation import XAIChatConfig
+
+        XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
     return usage
 
 
