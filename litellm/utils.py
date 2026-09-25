@@ -10282,7 +10282,7 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
     """
     from datetime import datetime
 
-    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.litellm_logging import Logging, RawRequestCaptured
 
     litellm_logging_obj: Final = Logging(
         model="gpt-3.5-turbo",
@@ -10293,6 +10293,7 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         start_time=datetime.now(),
         function_id="1234",
         log_raw_request_response=True,
+        raw_request_only=True,
     )
 
     llm_api_endpoint: Final = getattr(litellm, endpoint.value)
@@ -10303,7 +10304,11 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         llm_api_endpoint(
             **kwargs,
             litellm_logging_obj=litellm_logging_obj,
-            api_key="my-fake-api-key",  # 👈 ensure the request fails
+            api_key="my-fake-api-key",
+        )
+    except RawRequestCaptured:
+        received_exception = (
+            "raw request was not captured before the provider call; check the proxy logs for the pre_call error"
         )
     except Exception as e:
         received_exception = str(e)

@@ -111,6 +111,7 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
+import type { ExportFormat, ExportScope } from "./EntityUsageExport/types";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
@@ -1465,6 +1466,36 @@ export const teamDailyActivityAggregatedCall = async (
     console.error("Failed to fetch aggregated team daily activity:", error);
     throw error;
   }
+};
+
+export const teamDailyActivityExportCall = async ({
+  accessToken,
+  startTime,
+  endTime,
+  teamIds,
+  exportType,
+  format,
+}: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  teamIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}): Promise<Blob> => {
+  return apiClient.get<Blob>(`/team/daily/activity/export`, {
+    accessToken,
+    responseType: "blob",
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      timezone: new Date().getTimezoneOffset().toString(),
+      export_type: exportType,
+      format,
+      team_id: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+      exclude_team_ids: "litellm-dashboard",
+    },
+  });
 };
 
 export const teamDailyActivityKeySearchCall = async (
@@ -6242,6 +6273,16 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
+
+export const triggerAgentKillSwitchCall = async (
+  accessToken: string,
+  agentId: string,
+): Promise<AgentKillSwitchResult> =>
+  await apiClient.post<AgentKillSwitchResult>(`/v1/agents/${encodeURIComponent(agentId)}/kill_switch`, {
+    accessToken,
+  });
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6281,6 +6322,7 @@ export const patchAgentCall = async (
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
     access_group_ids?: string[];
+    kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
   },
 ) => {
   try {

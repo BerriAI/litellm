@@ -17101,3 +17101,130 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+def test_team_export_csv_columns_match_the_dashboard_client_layout():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="team-1",
+        team_alias=None,
+        api_key="key-1",
+        key_alias="key-alias-1",
+        user_id="user-1",
+        user_email="u@example.com",
+        spend=1.5,
+        api_requests=2,
+        successful_requests=2,
+        failed_requests=0,
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        cache_read_input_tokens=5,
+        cache_creation_input_tokens=4,
+    )
+
+    records: Final = list(csv.DictReader(io.StringIO(_team_export_csv("daily_with_keys", (row,)))))
+
+    assert records == [
+        {
+            "Date": "2026-06-01",
+            "Team": "-",
+            "Team ID": "team-1",
+            "Key Alias": "key-alias-1",
+            "Key ID": "key-1",
+            "User ID": "user-1",
+            "User Email": "u@example.com",
+            "Spend ($)": "1.5000",
+            "Requests": "2",
+            "Successful Requests": "2",
+            "Failed Requests": "0",
+            "Total Tokens": "30",
+            "Prompt Tokens": "20",
+            "Completion Tokens": "10",
+            "Cache Read Input Tokens": "5",
+            "Cache Creation Input Tokens": "4",
+        }
+    ]
+
+
+def test_team_export_csv_omits_key_columns_for_the_plain_daily_scope():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="team-1",
+        team_alias="Alpha",
+        spend=1.5,
+        api_requests=2,
+        successful_requests=2,
+        failed_requests=0,
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        cache_read_input_tokens=5,
+        cache_creation_input_tokens=4,
+    )
+
+    text: Final = _team_export_csv("daily", (row,))
+
+    assert text.splitlines()[0] == (
+        "Date,Team,Team ID,Spend ($),Requests,Successful Requests,Failed Requests,"
+        "Total Tokens,Prompt Tokens,Completion Tokens,Cache Read Input Tokens,Cache Creation Input Tokens"
+    )
+    assert list(csv.reader(io.StringIO(text)))[1] == [
+        "2026-06-01",
+        "Alpha",
+        "team-1",
+        "1.5000",
+        "2",
+        "2",
+        "0",
+        "30",
+        "20",
+        "10",
+        "5",
+        "4",
+    ]
+
+
+def test_team_export_csv_escapes_formula_aliases_and_keeps_dash_placeholder():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="team-1",
+        team_alias='=HYPERLINK("http://evil.example","x")',
+        key_alias="@cmd",
+        user_id=None,
+        user_email=None,
+        spend=1.5,
+        api_requests=2,
+        successful_requests=2,
+        failed_requests=0,
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        cache_read_input_tokens=5,
+        cache_creation_input_tokens=4,
+    )
+
+    record: Final = next(csv.DictReader(io.StringIO(_team_export_csv("daily_with_keys", (row,)))))
+
+    assert record["Team"] == "'=HYPERLINK(\"http://evil.example\",\"x\")"
+    assert record["Key Alias"] == "'@cmd"
+    assert record["User ID"] == "-"
+    assert record["User Email"] == "-"
