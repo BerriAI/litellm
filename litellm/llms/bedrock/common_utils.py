@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -29,6 +29,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.litellm_params import CONTROL_PARAMS_KEY, LiteLLMControlParams
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
@@ -86,15 +87,11 @@ class BedrockError(BaseLLMException):
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
-_STREAM_CHUNK_SIZE_VALIDATOR: Final[TypeAdapter[int | None]] = TypeAdapter(int | None, config=ConfigDict(strict=True))
 
 
 def stream_chunk_size_from(litellm_params: Mapping[str, object]) -> int | None:
-    raw: Final = litellm_params.get("stream_chunk_size")
-    try:
-        return _STREAM_CHUNK_SIZE_VALIDATOR.validate_python(raw)
-    except ValidationError as e:
-        raise BedrockError(status_code=400, message=f"Invalid stream_chunk_size={raw!r}. Expected int. Error: {e}")
+    control: Final = litellm_params.get(CONTROL_PARAMS_KEY)
+    return control.stream_chunk_size if isinstance(control, LiteLLMControlParams) else None
 
 
 def merge_bedrock_aws_request_params(

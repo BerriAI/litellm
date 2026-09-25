@@ -4,6 +4,7 @@ from typing import Final
 import litellm
 import pytest
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.litellm_params import CONTROL_PARAMS_KEY, LiteLLMControlParams
 
 
 class LitellmParamsRecorder(CustomLogger):
@@ -29,3 +30,9 @@ def keys_at_every_depth(value: object) -> frozenset[str]:
     if isinstance(value, (list, tuple)):
         return frozenset().union(*(keys_at_every_depth(item) for item in value))
     return frozenset()
+
+
+def recorded_stream_chunk_size(params: Mapping[str, object]) -> int | None:
+    control: Final = params[CONTROL_PARAMS_KEY]
+    assert isinstance(control, LiteLLMControlParams)
+    return control.stream_chunk_size

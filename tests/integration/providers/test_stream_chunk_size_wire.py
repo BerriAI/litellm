@@ -12,7 +12,7 @@ import litellm
 import pytest
 from integration._support.upstream import INTERNAL_FIELDS
 from integration._support.wire import Reply, Request, wire_server
-from tests._support.stream_chunk_size import keys_at_every_depth, record_litellm_params
+from tests._support.stream_chunk_size import keys_at_every_depth, record_litellm_params, recorded_stream_chunk_size
 
 TEXT: Final = "wire control"
 OPENAI_RESPONSE: Final = {
@@ -308,7 +308,7 @@ async def test_stream_chunk_size_never_reaches_provider_body(
         requests: Final = wire.drain()
         assert len(requests) == 1
         assert len(recorder.seen) == 1
-        assert recorder.seen[0]["stream_chunk_size"] == 64
+        assert recorded_stream_chunk_size(recorder.seen[0]) == 64
         body: Final = json.loads(requests[0].body)
         keys: Final = keys_at_every_depth(body)
         assert "stream_chunk_size" not in keys

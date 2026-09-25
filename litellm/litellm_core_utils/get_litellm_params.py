@@ -147,7 +147,6 @@ def get_litellm_params(
     api_version: str | None = None,
     max_retries: int | None = None,
     litellm_request_debug: bool | None = None,
-    stream_chunk_size: int | None = None,
     **kwargs,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
@@ -210,7 +209,6 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
-        "stream_chunk_size": stream_chunk_size,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present
