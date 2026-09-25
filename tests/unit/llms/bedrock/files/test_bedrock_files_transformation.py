@@ -1917,11 +1917,13 @@ class TestBedrockBatchAnthropicRowParams:
     MODEL = "bedrock/us.anthropic.claude-sonnet-4-6"
     PARAMETERS = {"type": "object", "properties": {"city": {"type": "string"}}}
 
-    def _transform(self, url: str, body: dict, model: str = MODEL) -> dict:
+    def _transform(self, url: str, body: dict, model: str = MODEL, target_model: str = "") -> dict:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         record = {"custom_id": "row-1", "method": "POST", "url": url, "body": {"model": model, **body}}
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content([record])
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [record], target_model=target_model
+        )
         assert len(result) == 1
         return result[0]["modelInput"]
 
@@ -1952,6 +1954,28 @@ class TestBedrockBatchAnthropicRowParams:
         assert (tool["name"], tool["input_schema"]) == ("get_weather", self.PARAMETERS)
         assert "function" not in tool
         assert tool.get("type") != "function"
+
+    @pytest.mark.parametrize("route_prefix", ["converse/", "invoke/"])
+    @pytest.mark.parametrize(
+        "deployment_model",
+        ["bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock/us.anthropic.claude-sonnet-4-6"],
+        ids=["budget", "adaptive"],
+    )
+    def test_route_prefixed_deployment_maps_like_the_plain_one(self, route_prefix, deployment_model):
+        body = {
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": self.PARAMETERS}}],
+            "reasoning_effort": "low",
+            "max_tokens": 2048,
+        }
+        prefixed_model = deployment_model.replace("bedrock/", f"bedrock/{route_prefix}", 1)
+
+        plain = self._transform("/v1/chat/completions", body, model="claude-batch", target_model=deployment_model)
+        prefixed = self._transform("/v1/chat/completions", body, model="claude-batch", target_model=prefixed_model)
+
+        assert prefixed == plain
+        assert "input_schema" in prefixed["tools"][0]
+        assert "reasoning_effort" not in prefixed
 
     @pytest.mark.parametrize(
         ("url", "body"),
@@ -1989,6 +2013,24 @@ class TestBedrockBatchAnthropicRowParams:
             real_time["thinking"],
             real_time.get("output_config"),
         )
+
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "json_object"},
+            {"type": "json_schema", "json_schema": {"name": "weather", "schema": PARAMETERS}},
+        ],
+        ids=["json_object", "json_schema"],
+    )
+    def test_response_format_rows_keep_json_mode_out_of_the_body(self, response_format):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "Weather in Paris?"}], "response_format": response_format},
+        )
+
+        assert "json_mode" not in model_input
+        assert "response_format" not in model_input
+        assert ("output_config" in model_input) == (response_format["type"] == "json_schema")
 
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(
