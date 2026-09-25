@@ -22,6 +22,7 @@ SECRET_FIELD_NAMES: Final = tuple(DEFAULT_DENYLIST) + tuple(SENTRY_DENYLIST)
 PII_FIELD_NAMES: Final = tuple(DEFAULT_PII_DENYLIST) + tuple(SENTRY_PII_DENYLIST)
 
 LITELLM_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
+SOURCE_CONTEXT_KEYS: Final = frozenset({"pre_context", "context_line", "post_context"})
 EMAIL_PATTERN: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 SHA256_HEX_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{64}(?![0-9A-Za-z])")
 QUOTED_VALUE: Final = r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\""
@@ -76,7 +77,9 @@ def scrub_json_strings(value: JsonValue, scrub: Callable[[str], str]) -> JsonVal
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, dict):
-        return {key: scrub_json_strings(item, scrub) for key, item in value.items()}  # mutable-ok: JSON object
+        return {  # mutable-ok: JSON object
+            key: item if key in SOURCE_CONTEXT_KEYS else scrub_json_strings(item, scrub) for key, item in value.items()
+        }
     if isinstance(value, list):
         return [scrub_json_strings(item, scrub) for item in value]  # mutable-ok: JSON array
     return value

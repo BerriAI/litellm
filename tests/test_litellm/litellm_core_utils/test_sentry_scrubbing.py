@@ -91,6 +91,17 @@ def test_default_event_carries_no_email_hash_or_secret_anywhere() -> None:
     assert "user_role='internal_user'" in frame_vars["user_obj"]
 
 
+def test_source_context_lines_are_left_readable() -> None:
+    frames: Final = json.loads(capture_serialized_event(PII_OFF))["exception"]["values"][0]["stacktrace"]["frames"]
+    source_lines: Final = tuple(
+        line
+        for frame in frames
+        for line in (*frame.get("pre_context", []), frame.get("context_line", ""), *frame.get("post_context", []))
+    )
+    assert any("token=KEY_HASH" in line for line in source_lines)
+    assert not any(FILTERED in line for line in source_lines)
+
+
 def test_default_event_keeps_the_exception_message_shape() -> None:
     serialized: Final = capture_serialized_event(PII_OFF)
     message: Final = json.loads(serialized)["exception"]["values"][0]["value"]
