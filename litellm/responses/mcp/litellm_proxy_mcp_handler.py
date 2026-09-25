@@ -700,8 +700,8 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results.
 
-        ``on_tool_executed`` runs each time an MCP server returns for a call, so the caller
-        can tell executed calls apart from ones that were rejected before reaching a server.
+        ``on_tool_executed`` runs once for every call an MCP server returned a result for. Calls
+        that failed or were rejected, for example by a pre-call guardrail, do not trigger it.
         """
         from fastapi import HTTPException
 

@@ -22,8 +22,7 @@ def mcp_tools_executed(exception: BaseException | None) -> bool:
     """
     return exception is not None and (
         getattr(exception, _MCP_TOOLS_EXECUTED_ATTR, False) is True
-        or mcp_tools_executed(exception.__cause__)
-        or mcp_tools_executed(exception.__context__)
+        or mcp_tools_executed(exception.__cause__ or exception.__context__)
     )
 
 
