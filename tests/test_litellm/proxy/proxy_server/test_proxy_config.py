@@ -4125,6 +4125,39 @@ async def test_ProxyConfig__update_general_settings_reschedules_when_only_the_cr
     assert fake_scheduler.add_job.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_reschedules_a_cron_edit_the_reload_path_already_applied(
+    monkeypatch,
+):
+    """The periodic reload applies the DB row through _update_config_from_db before
+    _update_general_settings snapshots the previous schedule, so a cron edited in the DB must
+    still replace the live job's trigger."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    real_scheduler = AsyncIOScheduler()
+    real_scheduler.start(paused=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+    try:
+        first_row = {"maximum_daily_tag_spend_retention_period": "90d", "maximum_spend_logs_cleanup_cron": "0 3 * * *"}
+        pc.settings.apply_db_row("general_settings", first_row)
+        await pc._update_general_settings(first_row)
+        assert "hour='3'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger)
+
+        edited_row = {**first_row, "maximum_spend_logs_cleanup_cron": "0 5 * * *"}
+        pc.settings.apply_db_row("general_settings", edited_row)
+        await pc._update_general_settings(edited_row)
+        assert "hour='5'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger), "DB cron edit was ignored"
+
+        pc.settings.apply_db_row("general_settings", edited_row)
+        await pc._update_general_settings(edited_row)
+        assert "hour='5'" in str(real_scheduler.get_job("spend_log_cleanup_job").trigger)
+    finally:
+        real_scheduler.shutdown(wait=False)
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_general_settings
 # ---------------------------------------------------------------------------

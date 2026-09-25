@@ -5077,6 +5077,20 @@ def _current_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
+_CLEANUP_SCHEDULE_KEYS: Final = (
+    "maximum_spend_logs_retention_period",
+    "maximum_autorouter_session_retention_period",
+    "maximum_health_check_retention_period",
+    "maximum_daily_tag_spend_retention_period",
+    "maximum_spend_logs_cleanup_cron",
+    "maximum_spend_logs_retention_interval",
+)
+
+
+def _cleanup_schedule_of(settings: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(settings.get(key) for key in _CLEANUP_SCHEDULE_KEYS)
+
+
 @lru_cache(maxsize=4096)
 def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     verbose_proxy_logger.warning(
@@ -5099,7 +5113,7 @@ class ProxyConfig:
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
-        self._last_cleanup_schedule_attempt: tuple[SettingsJsonValue | None, ...] | None = None
+        self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
         self._cleanup_reschedule_failed: bool = False
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
@@ -7531,24 +7545,17 @@ class ProxyConfig:
             previous_pass_through_endpoints,
         )
 
-    def _resolved_cleanup_schedule(self) -> tuple[SettingsJsonValue | None, ...]:
-        return tuple(
-            self.settings.get(key)
-            for key in (
-                "maximum_spend_logs_retention_period",
-                "maximum_autorouter_session_retention_period",
-                "maximum_health_check_retention_period",
-                "maximum_daily_tag_spend_retention_period",
-                "maximum_spend_logs_cleanup_cron",
-                "maximum_spend_logs_retention_interval",
-            )
-        )
+    def _resolved_cleanup_schedule(self) -> tuple[object, ...]:
+        return _cleanup_schedule_of(self.settings)
+
+    def record_cleanup_schedule_attempt(self, settings: Mapping[str, object]) -> None:
+        self._last_cleanup_schedule_attempt = _cleanup_schedule_of(settings)
 
     async def _apply_general_settings_side_effects(
         self,
         db_values: Mapping[str, SettingsJsonValue],
         cache_size_was_db: bool,
-        previous_cleanup_schedule: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[object, ...],
         previous_pass_through_endpoints: SettingsJsonValue | None,
     ) -> None:
         effects: Final = (
@@ -7652,7 +7659,7 @@ class ProxyConfig:
     async def _apply_retention_settings(
         self,
         db_values: Mapping[str, SettingsJsonValue],
-        previous_cleanup_schedule: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[object, ...],
     ) -> None:
         # while the scheduler is still stopped the startup block owns the first registration
         if scheduler is not None and scheduler.state == STATE_STOPPED:
@@ -7660,12 +7667,17 @@ class ProxyConfig:
         schedule: Final = self._resolved_cleanup_schedule()
         wants_job: Final = any(value is not None for value in schedule[:4])
         has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
+        baseline: Final = (
+            self._last_cleanup_schedule_attempt
+            if has_job and self._last_cleanup_schedule_attempt is not None
+            else previous_cleanup_schedule
+        )
         retry_due: Final = (
             wants_job
             and (not has_job or self._cleanup_reschedule_failed)
             and schedule != self._last_cleanup_schedule_attempt
         )
-        if not (previous_cleanup_schedule != schedule or retry_due or (has_job and not wants_job)):
+        if not (baseline != schedule or retry_due or (has_job and not wants_job)):
             return
         try:
             await self._reschedule_spend_log_cleanup_job()
@@ -10587,6 +10599,7 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.error(
                         "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
                     )
+            proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
