@@ -21,7 +21,8 @@ resource "litellm_mcp_server" "github_server" {
   description = "GitHub MCP server for repository operations"
   url         = "https://api.github.com/mcp"
   transport   = "http"
-  auth_type   = "bearer"
+  auth_type   = "bearer_token"
+  auth_value  = var.github_token # sensitive variable; never hardcode credentials
   
   mcp_access_groups = ["dev_team", "devops_team"]
 }
@@ -36,7 +37,7 @@ resource "litellm_mcp_server" "zapier_server" {
   description  = "Zapier MCP server for workflow automation"
   url          = "https://actions.zapier.com/mcp/sk-xxxxx/sse"
   transport    = "sse"
-  auth_type    = "bearer"
+  auth_type    = "bearer_token"
   spec_version = "2024-11-05"
   
   mcp_access_groups = ["automation_team", "marketing_team"]
@@ -104,7 +105,7 @@ resource "litellm_mcp_server" "enterprise_api_server" {
   description  = "Enterprise API gateway MCP server"
   url          = "https://api.enterprise.com/mcp/v1"
   transport    = "http"
-  auth_type    = "bearer"
+  auth_type    = "bearer_token"
   spec_version = "2024-11-05"
   
   mcp_access_groups = [
@@ -149,7 +150,8 @@ The following arguments are supported:
 * `alias` - (Optional) Alias for the MCP server. Used for easier reference.
 * `description` - (Optional) Description of the MCP server.
 * `spec_version` - (Optional) MCP specification version. Defaults to `2024-11-05`.
-* `auth_type` - (Optional) Authentication type. Valid values: `none`, `bearer`, `basic`. Defaults to `none`.
+* `auth_type` - (Optional) Authentication type. Must be a LiteLLM MCPAuth value: `none`, `api_key`, `bearer_token`, `basic`, `authorization`, `oauth2`, `aws_sigv4`, `token`, `oauth2_token_exchange`, `oauth2_id_jag`, `true_passthrough`, `oauth_delegate`. Defaults to `none`. Use `bearer_token` for bearer auth.
+* `auth_value` - (Optional, Sensitive) Authentication credential sent to the LiteLLM API as `credentials.auth_value` (e.g. the bearer token for `auth_type = "bearer_token"`, the API key for `auth_type = "api_key"`). Hidden from plan output. Only needed when the chosen `auth_type` requires a credential.
 * `mcp_access_groups` - (Optional) List of access groups that can use this MCP server.
 * `command` - (Optional) Command to run for stdio transport.
 * `args` - (Optional) List of arguments for the command (stdio transport only). Do not pass secrets as arguments; args are shown in plans, stored unencrypted in state, and visible in the server's process list.
