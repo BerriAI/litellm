@@ -32945,6 +32945,8 @@ export interface components {
             azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Bucket Name */
+            bucket_name?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -46730,6 +46732,8 @@ export interface components {
             azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Bucket Name */
+            bucket_name?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
