@@ -63,7 +63,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPAuthType
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 from litellm.caching.caching import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -14648,3 +14648,16 @@ async def test_configured_protocol_reaches_the_upstream_client(config_only_mcp_m
     client = await manager._create_mcp_client(server)
     assert server.protocol_version == revision
     assert client.protocol_version == revision
+
+
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+@pytest.mark.parametrize("explicit", (None, "auto", "2025-11-25"))
+def test_runtime_protocol_metadata_preserves_explicit_precedence(
+    revision: MCPUpstreamProtocol, explicit: MCPUpstreamProtocol | None
+) -> None:
+    server: Final = MCPServer.model_validate({
+        "server_id": "preview", "name": "preview", "transport": "http",
+        "mcp_info": {"protocol_version": revision},
+        **({"protocol_version": explicit} if explicit is not None else {}),
+    })
+    assert server.protocol_version == (explicit if explicit is not None else revision)

@@ -256,6 +256,14 @@ class MCPServer(BaseModel):
         return self.oauth2_flow == "client_credentials"
 
     @model_validator(mode="after")
+    def resolve_protocol_version(self) -> Self:
+        if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
+            self.protocol_version = TypeAdapter(MCPUpstreamProtocol).validate_python(
+                self.mcp_info.get("protocol_version", "auto")
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_identity_binding_mode(self) -> Self:
         binding: Final = self.oauth_identity_binding
         if binding is not None and binding.mode != "disabled":

@@ -28,7 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPTransport, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 _OK_TOOL_RESULT: Final = CallToolResult(content=[TextContent(type="text", text='{"result": "ok"}')], is_error=False)
@@ -4632,3 +4632,20 @@ class TestClientAllowlistOnRestRoutes:
         assert denied.value.detail["error"] == "Forbidden"
         assert "'claude-code'" in denied.value.detail["details"]
         acting.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+async def test_preview_client_honors_protocol_metadata(revision: MCPUpstreamProtocol) -> None:
+    from litellm.experimental_mcp_client.client import MCPClient
+
+    payload: Final = NewMCPServerRequest(
+        server_name="preview", url="http://127.0.0.1:9/mcp", transport="http",
+        auth_type=MCPAuth.none, mcp_info={"protocol_version": revision},
+    )
+
+    async def inspect_client(client: MCPClient) -> dict[str, str]:
+        return {"protocol_version": client.protocol_version}
+
+    result: Final = await rest_endpoints._execute_with_mcp_client(payload, inspect_client)
+    assert result == {"protocol_version": revision}
