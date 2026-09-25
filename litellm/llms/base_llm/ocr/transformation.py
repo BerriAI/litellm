@@ -1,27 +1,16 @@
 """
-Base OCR transformation configuration.
+Base OCR types shared by the Rust OCR route and Python consumers.
 """
 
 import builtins
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import Any, Final, Literal
 
-import httpx
 from pydantic import PrivateAttr
 
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
-
-
-# DocumentType for OCR - providers always receive a dict with
-# type="document_url" or type="image_url" (str values only).
-# File-type inputs are preprocessed to this format in litellm/ocr/main.py.
-DocumentType = dict[str, str]
+DocumentType = Mapping[str, object]
 
 OCRRequestFormat = Literal["litellm", "native"]
 
@@ -32,8 +21,6 @@ OCR_REQUEST_FORMAT_PARAM: Final = "req_format"
 OCR_REQUEST_FORMAT_HEADER: Final = "x-req-format"
 
 PROVIDER_NATIVE_RESPONSE_KEY: Final = "provider_native_response"
-
-HEALTH_CHECK_PDF_DATA_URI: Final = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y="
 
 
 def parse_ocr_request_format(value: object) -> OCRRequestFormat:
@@ -102,7 +89,6 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     model_config = {"extra": "allow"}
 
-    # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     def set_provider_native_response(self, native_response: Mapping[str, builtins.object]) -> None:
@@ -113,203 +99,3 @@ class OCRResponse(LiteLLMPydanticObjectBase):
         """The provider's own response payload, when `req_format=native` was requested."""
         native_response: Final = self._hidden_params.get(PROVIDER_NATIVE_RESPONSE_KEY)
         return native_response if isinstance(native_response, dict) else None
-
-
-class OCRRequestData(LiteLLMPydanticObjectBase):
-    """OCR request data structure."""
-
-    data: dict | bytes | None = None
-    files: dict[str, Any] | None = None
-
-
-class BaseOCRConfig:
-    """
-    Base configuration for OCR transformations.
-    Handles provider-agnostic OCR operations.
-    """
-
-    def __init__(self) -> None:
-        pass
-
-    def get_supported_ocr_params(self, model: str) -> list:
-        """
-        Get supported OCR parameters for this provider.
-        Override this method in provider-specific implementations.
-        """
-        return []
-
-    def get_api_key_env_var(self) -> str | None:
-        """
-        Return the provider-specific API key environment variable name, if any.
-        """
-        return None
-
-    def resolve_connection_params(
-        self,
-        *,
-        api_key: str | None,
-        api_base: str | None,
-        dynamic_api_key: str | None,
-        dynamic_api_base: str | None,
-    ) -> tuple[str | None, str | None]:
-        return dynamic_api_key or api_key, dynamic_api_base or api_base
-
-    def get_health_check_document(self) -> DocumentType:
-        return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
-            "type": "document_url",
-            "document_url": HEALTH_CHECK_PDF_DATA_URI,
-        }
-
-    def map_ocr_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-    ) -> dict:
-        """Map OCR parameters to provider-specific parameters."""
-        return optional_params
-
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        litellm_params: dict | None = None,
-        **kwargs,
-    ) -> dict:
-        """
-        Validate environment and return headers.
-        Override in provider-specific implementations.
-        """
-        return headers
-
-    def get_complete_url(
-        self,
-        api_base: str | None,
-        model: str,
-        optional_params: dict,
-        litellm_params: dict | None = None,
-        **kwargs,
-    ) -> str:
-        """
-        Get complete URL for OCR endpoint.
-        Override in provider-specific implementations.
-        """
-        raise NotImplementedError("get_complete_url must be implemented by provider")
-
-    def transform_ocr_request(
-        self,
-        model: str,
-        document: DocumentType,
-        optional_params: dict,
-        headers: dict,
-        **kwargs,
-    ) -> OCRRequestData:
-        """
-        Transform OCR request to provider-specific format.
-        Override in provider-specific implementations.
-
-        Note: By the time this method is called, any file-type documents have already
-        been converted to document_url/image_url format with base64 data URIs by
-        the preprocessing in litellm/ocr/main.py.
-
-        Args:
-            model: Model name
-            document: Document to process - always a dict with type="document_url" or type="image_url"
-            optional_params: Optional parameters for the request
-            headers: Request headers
-
-        Returns:
-            OCRRequestData with data and files fields
-        """
-        raise NotImplementedError("transform_ocr_request must be implemented by provider")
-
-    async def async_transform_ocr_request(
-        self,
-        model: str,
-        document: DocumentType,
-        optional_params: dict,
-        headers: dict,
-        **kwargs,
-    ) -> OCRRequestData:
-        """
-        Async transform OCR request to provider-specific format.
-        Optional method - providers can override if they need async transformations
-        (e.g., Azure AI for URL-to-base64 conversion).
-
-        Default implementation falls back to sync transform_ocr_request.
-
-        Args:
-            model: Model name
-            document: Document to process (Mistral format dict, or file path, bytes, etc.)
-            optional_params: Optional parameters for the request
-            headers: Request headers
-
-        Returns:
-            OCRRequestData with data and files fields
-        """
-        # Default implementation: call sync version
-        return self.transform_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            headers=headers,
-            **kwargs,
-        )
-
-    def transform_ocr_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-        **kwargs,
-    ) -> OCRResponse:
-        """
-        Transform provider-specific OCR response to standard format.
-        Override in provider-specific implementations.
-        """
-        raise NotImplementedError("transform_ocr_response must be implemented by provider")
-
-    async def async_transform_ocr_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-        **kwargs,
-    ) -> OCRResponse:
-        """
-        Async transform provider-specific OCR response to standard format.
-        Optional method - providers can override if they need async transformations
-        (e.g., Azure Document Intelligence for async operation polling).
-
-        Default implementation falls back to sync transform_ocr_response.
-
-        Args:
-            model: Model name
-            raw_response: Raw HTTP response
-            logging_obj: Logging object
-
-        Returns:
-            OCRResponse in standard format
-        """
-        # Default implementation: call sync version
-        return self.transform_ocr_response(
-            model=model,
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-            **kwargs,
-        )
-
-    def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: dict,
-    ) -> Exception:
-        """Get appropriate error class for the provider."""
-        return BaseLLMException(
-            status_code=status_code,
-            message=error_message,
-            headers=headers,
-        )

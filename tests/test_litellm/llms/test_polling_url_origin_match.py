@@ -17,43 +17,8 @@ import pytest
 
 
 # Azure DALL-E sync + async paths route through ``assert_same_origin``
-# the same way as the cases below. The helper itself is unit-tested in
-# ``tests/test_litellm/litellm_core_utils/test_url_utils.py``; the
-# tests here exercise the wiring at sites with simpler signatures.
-
-
-# ── Azure Document Intelligence polling ───────────────────────────────────────
-
-
-def test_azure_di_sync_rejects_cross_origin_polling():
-    from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
-        AzureDocumentIntelligenceOCRConfig,
-    )
-
-    config = AzureDocumentIntelligenceOCRConfig()
-
-    raw_response = MagicMock()
-    raw_response.status_code = 202
-    raw_response.headers = {
-        "Operation-Location": "https://attacker.example.com/results/xyz",
-    }
-    raw_response.request = MagicMock()
-    raw_response.request.url = (
-        "https://eastus.cognitiveservices.azure.com/documentintelligence/.../analyze"
-    )
-    raw_response.request.headers = {"Ocp-Apim-Subscription-Key": "leak-me"}
-
-    with pytest.raises(ValueError, match="rejected polling URL"):
-        config.transform_ocr_response(
-            model="azure-doc-intel",
-            raw_response=raw_response,
-            logging_obj=MagicMock(),
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-            response={},
-        )
+# the same way as the case below. The helper itself is unit-tested in
+# ``tests/test_litellm/litellm_core_utils/test_url_utils.py``.
 
 
 # ── Black Forest Labs polling ─────────────────────────────────────────────────

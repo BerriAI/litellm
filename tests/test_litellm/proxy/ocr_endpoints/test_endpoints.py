@@ -109,3 +109,39 @@ def test_should_return_native_payload_with_litellm_response_headers():
 
 def test_should_return_normalized_response_when_no_native_payload():
     assert _native_response(_ocr_response(None), MagicMock()) is None
+
+
+def test_upload_builds_a_file_document_for_rust_mime_inference():
+    from litellm.proxy.ocr_endpoints.endpoints import (
+        _build_document_from_upload,  # pyright: ignore[reportPrivateUsage]  # tests the upload projection
+    )
+
+    document = _build_document_from_upload(b"%PDF-1.4", "receipt.pdf", None)
+
+    assert document["type"] == "file"
+    upload = document["file"]
+    assert upload.read() == b"%PDF-1.4"
+    assert upload.name == "receipt.pdf"
+    assert "mime_type" not in document
+
+
+def test_upload_keeps_the_supplied_content_type_over_filename_inference():
+    from litellm.proxy.ocr_endpoints.endpoints import (
+        _build_document_from_upload,  # pyright: ignore[reportPrivateUsage]  # tests the upload projection
+    )
+
+    document = _build_document_from_upload(b"data", "photo.bin", "image/png; charset=binary")
+
+    assert document["mime_type"] == "image/png"
+    assert document["file"].name == "photo.bin"
+
+
+def test_upload_octet_stream_content_type_falls_back_to_filename_inference():
+    from litellm.proxy.ocr_endpoints.endpoints import (
+        _build_document_from_upload,  # pyright: ignore[reportPrivateUsage]  # tests the upload projection
+    )
+
+    document = _build_document_from_upload(b"%PDF-1.4", "receipt.pdf", "application/octet-stream")
+
+    assert "mime_type" not in document
+    assert document["file"].name == "receipt.pdf"

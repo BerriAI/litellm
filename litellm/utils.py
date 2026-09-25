@@ -392,7 +392,6 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.image_variations.transformation import (
         BaseImageVariationConfig,
     )
-    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.llms.base_llm.realtime.http_transformation import (
         BaseRealtimeHTTPConfig,
@@ -430,7 +429,6 @@ if TYPE_CHECKING:
     )
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
     from litellm.proxy._types import AllowedModelRegion
     from litellm.router_utils.get_retry_from_policy import (
         get_num_retries_from_retry_policy,
@@ -9757,51 +9755,6 @@ class ProviderConfigManager:
 
             return get_openrouter_image_edit_config(model)
         return None
-
-    @staticmethod
-    def get_provider_ocr_config(
-        model: str,
-        provider: LlmProviders,
-    ) -> BaseOCRConfig | None:
-        """
-        Get OCR configuration for a given provider.
-        """
-        from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
-
-        # Special handling for Azure AI - distinguish between Mistral OCR and Document Intelligence
-        if provider == litellm.LlmProviders.AZURE_AI:
-            from litellm.llms.azure_ai.ocr.common_utils import get_azure_ai_ocr_config
-
-            return get_azure_ai_ocr_config(model=model)
-
-        if provider == litellm.LlmProviders.VERTEX_AI:
-            from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
-
-            return get_vertex_ai_ocr_config(model=model)
-
-        if provider == litellm.LlmProviders.COHERE:
-            from litellm.llms.cohere.ocr.transformation import CohereParseConfig
-
-            return CohereParseConfig()
-
-        if provider == litellm.LlmProviders.REDUCTO:
-            from litellm.llms.reducto.ocr.transformation import (
-                ReductoParseLegacyConfig,
-                ReductoParseV3Config,
-            )
-
-            if model == "parse-legacy":
-                return ReductoParseLegacyConfig()
-            return ReductoParseV3Config()
-
-        MistralOCRConfig: Final = litellm_utils.MistralOCRConfig
-        PROVIDER_TO_CONFIG_MAP: Final = {
-            litellm.LlmProviders.MISTRAL: MistralOCRConfig,
-        }
-        config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
-        if config_class is None:
-            return None
-        return config_class()
 
     @staticmethod
     def get_provider_search_config(

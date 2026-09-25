@@ -1,5 +1,6 @@
 #### OCR Endpoints #####
 
+import io
 import json
 from collections.abc import Mapping
 from typing import Final, cast
@@ -15,7 +16,6 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     parse_ocr_request_format,
 )
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -24,20 +24,24 @@ router: Final = APIRouter()
 _MAX_FILE_BYTES: Final = 50 * 1024 * 1024
 
 
+class _NamedUpload(io.BytesIO):
+    name: str | None
+
+    def __init__(self, content: bytes, name: str | None) -> None:
+        super().__init__(content)
+        self.name = name
+
+
 def _build_document_from_upload(
     file_content: bytes,
     filename: str | None,
     content_type: str | None,
-) -> dict[str, str]:
+) -> dict[str, object]:
     supplied_mime: Final = content_type.split(";")[0].strip() if content_type else None
-    mime_type: Final = (
-        get_mime_type(filename)
-        if filename and (not supplied_mime or supplied_mime == "application/octet-stream")
-        else supplied_mime
-    )
-    return convert_file_document_to_url_document(
-        {"type": "file", "file": file_content, "mime_type": mime_type or "application/octet-stream"}
-    )
+    upload: Final = _NamedUpload(file_content, filename)
+    if supplied_mime and supplied_mime != "application/octet-stream":
+        return {"type": "file", "file": upload, "mime_type": supplied_mime}
+    return {"type": "file", "file": upload}
 
 
 def _with_request_format(data: Mapping[str, object], request: Request) -> Mapping[str, object]:

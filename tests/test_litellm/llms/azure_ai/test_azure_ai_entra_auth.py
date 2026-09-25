@@ -16,7 +16,6 @@ from litellm.llms.azure_ai.common_utils import (
     has_azure_entra_params,
     resolve_azure_ai_agent_auth_header,
 )
-from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
 
 ENTRA_PARAMS = {"azure_ad_token": "entra-token"}
 
@@ -81,17 +80,6 @@ def test_error_mentions_both_credential_types_when_nothing_is_configured():
     message = str(exc_info.value)
     assert "AZURE_AI_API_KEY" in message
     assert "client_secret" in message
-
-
-def test_ocr_authenticates_with_entra_token():
-    headers = AzureAIOCRConfig().validate_environment(
-        headers={},
-        model="azure_ai/mistral-ocr",
-        api_base="https://my-resource.services.ai.azure.com",
-        litellm_params=ENTRA_PARAMS,
-    )
-
-    assert headers["Authorization"] == "Bearer entra-token"
 
 
 def test_embedding_falls_back_to_entra_token_instead_of_openai_key(monkeypatch):  # test-quality-ok: asserts the embedding handler is authed with the Entra token, not the OpenAI key fallback; live path proven by the PR's Azure Foundry e2e QA

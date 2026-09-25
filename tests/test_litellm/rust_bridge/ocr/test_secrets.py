@@ -13,7 +13,6 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr import main
 from litellm.rust_bridge import settings
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -77,16 +76,6 @@ def _public_kwargs(api_base: str) -> dict[str, object]:
     return {"model": OCR_MODEL, "document": OCR_DOCUMENT, "api_base": api_base}
 
 
-async def _python_ocr(api_base: str) -> OCRResponse:
-    response: Final = main.ocr(model=OCR_MODEL, document=OCR_DOCUMENT, api_base=api_base)
-    assert isinstance(response, OCRResponse)
-    return response
-
-
-async def _python_aocr(api_base: str) -> OCRResponse:
-    return await main.aocr(model=OCR_MODEL, document=OCR_DOCUMENT, api_base=api_base)
-
-
 async def _rust_ocr(api_base: str) -> OCRResponse:
     route: Final = NATIVE_OCR.load()
     assert route is not None
@@ -103,7 +92,7 @@ _RUST_PATHS: Final = (_rust_ocr, _rust_aocr)
 _RUST_IDS: Final = ("rust-sync", "rust-async")
 
 
-@pytest.fixture(params=(_python_ocr, _python_aocr, *_RUST_PATHS), ids=("python-sync", "python-async", *_RUST_IDS))
+@pytest.fixture(params=_RUST_PATHS, ids=_RUST_IDS)
 def ocr(request: pytest.FixtureRequest) -> Ocr:
     return cast(Ocr, request.param)
 
