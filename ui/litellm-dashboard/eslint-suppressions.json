@@ -2065,9 +2065,6 @@
   "src/components/templates/key_edit_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "max-lines": {
-      "count": 1
     }
   },
   "src/components/templates/key_info_view.tsx": {

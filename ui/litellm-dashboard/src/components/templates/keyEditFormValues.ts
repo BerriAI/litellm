@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import type { UseFormReturn } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
@@ -176,6 +177,14 @@ export interface MountedFieldGates {
   canViewPolicies: boolean;
   canViewPrompts: boolean;
 }
+
+export const mcpToolFieldProps = (form: Pick<UseFormReturn<KeyEditFormValues>, "watch" | "setValue">) => ({
+  toolPermissions: form.watch("mcp_tool_permissions") || {},
+  onChange: (permissions: Record<string, string[]>) => form.setValue("mcp_tool_permissions", permissions),
+  toolOverrides: form.watch("mcp_tool_overrides") || {},
+  onOverridesChange: (overrides: Record<string, { allow: string[]; deny: string[] }>) =>
+    form.setValue("mcp_tool_overrides", overrides),
+});
 
 export const toSubmittedValues = (
   values: KeyEditFormValues,

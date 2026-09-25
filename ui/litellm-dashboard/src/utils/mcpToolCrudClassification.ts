@@ -98,11 +98,7 @@ const tokenVariants = (token: string): string[] =>
     (variant) => variant.length > 0,
   );
 
-// Read is checked before delete/update/create so that tools like
-// `get_removed_entries` — where the primary verb is a read — are not silently
-// blocked by the delete-by-default policy for new servers. This mirrors
-// litellm/proxy/_experimental/mcp_server/tool_classification.py; the shared
-// fixture under tests/test_litellm pins parity between the two.
+// Matches litellm/proxy/_experimental/mcp_server/tool_classification.py, fixture-pinned.
 const classifyTokens = (tokens: string[]): CrudOp => {
   const variants = new Set(tokens.flatMap((token) => tokenVariants(token)));
   if ([...variants].some((variant) => READ_TOKENS.has(variant))) return "read";
@@ -112,8 +108,6 @@ const classifyTokens = (tokens: string[]): CrudOp => {
   return "unknown";
 };
 
-// The name alone decides first; a misleading description cannot reclassify a
-// tool whose name already carries a recognized verb.
 export function classifyToolOp(name: string, description = ""): CrudOp {
   const byName = classifyTokens(nameTokens(name));
   if (byName !== "unknown") return byName;

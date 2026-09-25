@@ -257,10 +257,6 @@ async def _convert_one_row(
         where={
             "object_permission_id": row.object_permission_id,
             "mcp_permission_version": {"in": [0, None]},
-            # prisma-client-py has no DbNull/JsonNull sentinel for `equals` on a
-            # Json? column, so a stored NULL field is left unguarded rather than
-            # filtered with a wrong null literal; the id and version still bound
-            # the CAS.
             **{field: {"equals": value} for field, value in stored_fields if value is not None},
         },
         data={

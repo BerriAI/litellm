@@ -111,7 +111,6 @@ describe("MCPToolPermissions", () => {
       error: false,
     });
 
-    // A closed allowlist makes the server legacy-editable, so Select All writes the list.
     renderWithProviders(
       <MCPToolPermissions
         accessToken={mockAccessToken}

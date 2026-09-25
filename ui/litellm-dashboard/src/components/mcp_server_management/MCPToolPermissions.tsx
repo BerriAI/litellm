@@ -134,15 +134,10 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [servers, accessToken, toolsetsLoading]);
 
-  // Every allowlist write goes through here so an edit is authoritative for the SERVER, not for
-  // one of the equivalent keys that may name it.
   const writeAllowedTools = (entry: EffectiveMcpServer, allowed: string[]) => {
     onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed }));
   };
 
-  // On a convention server there is no snapshot to edit: the checkbox flips this tool's entry in
-  // the server's overrides and nothing else. A delete tool can only sit in `allow`; a non-delete
-  // tool is carved out with `deny`. Anything not on the checkbox is left alone.
   const isDelete = (tool: MCPTool) => classifyToolOp(tool.name, tool.description || "") === "delete";
 
   const writeToolToggle = (entry: EffectiveMcpServer, tool: MCPTool, checked: boolean) => {
@@ -161,7 +156,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     writeAllowedTools(entry, checked ? [...current, tool.name] : current.filter((name) => name !== tool.name));
   };
 
-  // Writes the override edits that make every editable displayed tool match `checked`.
   const writeConventionBulk = (entry: EffectiveMcpServer, tools: readonly MCPTool[], checked: boolean) => {
     onOverridesChange?.(
       applyToolOverrideWrites({

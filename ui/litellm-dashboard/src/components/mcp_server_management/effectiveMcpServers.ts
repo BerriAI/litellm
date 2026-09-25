@@ -19,8 +19,6 @@ export interface McpToolState {
   readonly locked: boolean;
 }
 
-// The OpenAPI schema types the stored entry's arrays as optional; the forms and write helpers
-// work with concrete arrays, so rows read from the API are defaulted here.
 export const normalizeMcpToolOverrides = (
   raw: Readonly<Record<string, { allow?: readonly string[]; deny?: readonly string[] }>> | null | undefined,
 ): Record<string, McpToolOverrideEntry> =>
@@ -54,9 +52,6 @@ export interface EffectiveMcpServer {
   // What this level actually allows on the server, which is what the backend enforces: the keyed
   // union widened by the toolset grant. `undefined` means nothing restricts the server from here.
   readonly allowedTools: readonly string[] | undefined;
-  // The merged mcp_tool_overrides entry for this server across every key naming it, or `undefined`
-  // when no key holds one. Overrides are per-tool allow/deny exceptions layered on the convention:
-  // on an unrestricted server a `deny` removes a non-delete tool and an `allow` re-arms a delete.
   readonly overrides: McpToolOverrideEntry | undefined;
   readonly source: McpGrantSource;
 }
@@ -108,9 +103,9 @@ export const mcpServersForIdentifier = (allServers: readonly MCPServer[], identi
 // Every key in the map that names this server, id first so an id key stays the one an edit keeps.
 // A key spelled like this server's name still belongs to another server when that string is that
 // server's id, so the catalog decides membership rather than a field-by-field comparison.
-export const mcpToolPermissionKeysFor = (
+export const mcpToolPermissionKeysFor = <T>(
   server: MCPServer,
-  toolPermissions: Readonly<Record<string, unknown>>,
+  toolPermissions: Readonly<Record<string, T>>,
   allServers: readonly MCPServer[],
 ): readonly string[] =>
   [server.server_id, server.server_name, server.alias].filter(
@@ -128,9 +123,9 @@ const mcpKeyNamesOneServerOnly = (allServers: readonly MCPServer[], key: string)
 // The key an edit writes: the first one that names this server and no other, falling back to the
 // server's own id. When the only entry is a key several servers share, that fallback creates an
 // id-keyed entry rather than rewriting the shared one, which would edit the other server too.
-export const mcpToolPermissionKeyFor = (
+export const mcpToolPermissionKeyFor = <T>(
   server: MCPServer,
-  toolPermissions: Readonly<Record<string, unknown>>,
+  toolPermissions: Readonly<Record<string, T>>,
   allServers: readonly MCPServer[],
 ): string =>
   mcpToolPermissionKeysFor(server, toolPermissions, allServers).find((key) =>
@@ -140,7 +135,7 @@ export const mcpToolPermissionKeyFor = (
 // The union the backend enforces across equivalent keys, first-seen order preserved.
 export const mcpAllowedToolsFor = (
   server: MCPServer,
-  toolPermissions: Readonly<Record<string, readonly string[]>>,
+  toolPermissions: Readonly<Record<string, readonly string[] | undefined>>,
   allServers: readonly MCPServer[],
 ): readonly string[] | undefined => {
   const keys = mcpToolPermissionKeysFor(server, toolPermissions, allServers);
@@ -148,8 +143,6 @@ export const mcpAllowedToolsFor = (
   return [...new Set(keys.flatMap((key) => toolPermissions[key] ?? []))];
 };
 
-// The override entry merged across every key naming this server, `undefined` when no key has one.
-// The backend unions allow/deny across equivalent keys the same way it unions allowlists.
 export const mcpToolOverridesFor = (
   server: MCPServer,
   toolOverrides: Readonly<Record<string, McpToolOverrideEntry>>,
@@ -272,10 +265,6 @@ export const resolveEffectiveMcpServers = ({
   );
 };
 
-// The checked/locked state a checkbox shows for one tool, mirroring the backend's
-// level_allowed_tools: a keyed allowlist stays a closed editable list, a toolset grant is
-// checked-but-locked, and an unrestricted (convention) server allows every non-delete tool unless
-// a stored deny says otherwise — an allow only re-arms a delete, and deny always beats allow.
 export const mcpToolState = (
   entry: EffectiveMcpServer,
   toolName: string,
@@ -295,14 +284,9 @@ export const mcpToolState = (
   return { checked: (isDeleteTool ? false : !denied) || (allowed && !denied), locked: false };
 };
 
-// Whether this server is edited through overrides (convention mode) rather than a closed
-// mcp_tool_permissions allowlist. The backend treats the same condition the same way.
 export const isConventionServer = (entry: EffectiveMcpServer): boolean =>
   entry.keyedTools === undefined && entry.toolsetTools === undefined;
 
-// Apply one checkbox change to the server's override entry: a delete tool can only be added to or
-// removed from `allow` (a deny would never let it back on), and a non-delete tool flips its `deny`
-// membership. Every other key in the map, and tools this edit did not touch, is preserved as-is.
 export const applyToolOverrideWrite = ({
   toolOverrides,
   permissionKey,
@@ -324,8 +308,6 @@ export const applyToolOverrideWrite = ({
   return { ...toolOverrides, [permissionKey]: written };
 };
 
-// Fold a list of {name, isDeleteTool} toggles over the same server entry, for Select All /
-// Deselect All applied to the displayed editable tools.
 export const applyToolOverrideWrites = ({
   toolOverrides,
   permissionKey,
