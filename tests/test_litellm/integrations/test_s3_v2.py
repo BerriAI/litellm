@@ -671,6 +671,60 @@ async def test_async_upload_does_not_retry_404_through_production_http_handler(r
     assert "Error uploading to s3" in caplog.text
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("statuses", "delays"),
+    [
+        pytest.param([503, 200], [1], id="503-recovers"),
+        pytest.param([500, 503, 200], [1, 2], id="500-503-recover"),
+    ],
+)
+async def test_async_upload_retries_500_and_503_through_production_http_handler(
+    rotating_profile: str, statuses: list[int], delays: list[int]
+):
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-retry-500-503.json",
+        payload={"test": "retry-500-503"},
+        s3_object_download_filename="test-retry-500-503.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, statuses) as (
+        logger,
+        requests,
+        mock_sleep,
+    ):
+        with patch.object(logger, "handle_callback_failure") as callback_failure:
+            result = await logger.async_upload_data_to_s3(test_element)
+
+    assert result is True
+    assert len(requests) == len(statuses)
+    assert all(request.method == "PUT" for request in requests)
+    assert len({str(request.url) for request in requests}) == 1
+    assert len({request.content for request in requests}) == 1
+    assert mock_sleep.await_args_list == [call(delay) for delay in delays]
+    callback_failure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_upload_bounds_500_and_503_retries_through_production_http_handler(rotating_profile: str):
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-retry-exhausted.json",
+        payload={"test": "retry-exhausted"},
+        s3_object_download_filename="test-retry-exhausted.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, [503, 500, 503]) as (
+        logger,
+        requests,
+        mock_sleep,
+    ):
+        with patch.object(logger, "handle_callback_failure") as callback_failure:
+            result = await logger.async_upload_data_to_s3(test_element)
+
+    assert result is False
+    assert len(requests) == 3
+    assert mock_sleep.await_args_list == [call(1), call(2)]
+    callback_failure.assert_called_once_with(callback_name="S3Logger")
+
+
 def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AWS_PROFILE", rotating_profile)
     logger = S3Logger(s3_bucket_name="test-bucket", s3_region_name="us-east-1", s3_flush_interval=3600)
