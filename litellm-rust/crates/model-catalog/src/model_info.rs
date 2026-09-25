@@ -99,6 +99,9 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_512k_tokens: Option<f64>,
+    /// Balanced service-tier rate for the same-named base field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_token_cost_balanced: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_batches: Option<f64>,
     /// Flex service-tier rate for the same-named base field.
@@ -195,6 +198,9 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_512k_tokens: Option<f64>,
+    /// Balanced service-tier rate for the same-named base field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_token_balanced: Option<f64>,
     /// USD per prompt token via the provider's batch API.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_batches: Option<f64>,
@@ -318,6 +324,9 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_512k_tokens: Option<f64>,
+    /// Balanced service-tier rate for the same-named base field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_token_balanced: Option<f64>,
     /// USD per generated token via the provider's batch API.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_batches: Option<f64>,

@@ -6114,6 +6114,7 @@ def _get_model_info_helper(
                 input_cost_per_token=_input_cost_per_token,
                 input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
                 input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
+                input_cost_per_token_balanced=_model_info.get("input_cost_per_token_balanced", None),
                 input_cost_per_token_ultrafast=_model_info.get("input_cost_per_token_ultrafast", None),
                 cache_creation_input_token_cost=_model_info.get("cache_creation_input_token_cost", None),
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
@@ -6158,6 +6159,7 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
+                cache_read_input_token_cost_balanced=_model_info.get("cache_read_input_token_cost_balanced", None),
                 cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
                 cache_read_input_token_cost_batches=_model_info.get("cache_read_input_token_cost_batches"),
                 cache_read_input_token_cost_above_200k_tokens_batches=_model_info.get(
@@ -6216,6 +6218,7 @@ def _get_model_info_helper(
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
                 output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
+                output_cost_per_token_balanced=_model_info.get("output_cost_per_token_balanced", None),
                 output_cost_per_token_ultrafast=_model_info.get("output_cost_per_token_ultrafast", None),
                 regional_processing_uplift_multiplier_eu=_model_info.get(
                     "regional_processing_uplift_multiplier_eu", None
@@ -8572,6 +8575,7 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langgraph_config(),
                 False,
             ),
+            LlmProviders.SAIL: (ProviderConfigManager._get_sail_chat_config, False),
             LlmProviders.LANGFLOW: (
                 lambda: ProviderConfigManager._get_langflow_config(),
                 False,
@@ -8643,6 +8647,12 @@ class ProviderConfigManager:
         if route == "v2":
             return litellm.CohereV2ChatConfig()
         return litellm.CohereChatConfig()
+
+    @staticmethod
+    def _get_sail_chat_config() -> BaseConfig:
+        from litellm.llms.sail.chat.transformation import SailChatConfig
+
+        return SailChatConfig()
 
     @staticmethod
     def _get_langgraph_config() -> BaseConfig:
@@ -9112,6 +9122,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.SAIL == provider:
+            from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
+
+            return SailResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             from litellm.llms.github_copilot.responses.transformation import (
                 github_copilot_supports_responses_api,
