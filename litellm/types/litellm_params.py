@@ -233,9 +233,13 @@ class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
-    stream_chunk_size: int | None = None
     keepalive_seconds: float | None = None
     allow_client_keepalive_override: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LiteLLMControlParams:
+    stream_chunk_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -257,6 +261,7 @@ class LiteLLMOptions:
     guardrails: GuardrailOptions
     prompt: PromptOptions
     response: ResponseOptions
+    control: LiteLLMControlParams
     mock: MockOptions
 
 
