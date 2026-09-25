@@ -5,7 +5,6 @@ import httpx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import GeminiCountTokensRequest
 from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
@@ -90,7 +89,7 @@ class GoogleAIStudioTokenCounter:
         """
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
-        base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+        base_url: Final = api_base or "https://generativelanguage.googleapis.com"
         return f"{base_url}/v1beta/models/{model}:countTokens"
 
     async def validate_environment(
