@@ -28,7 +28,6 @@ from litellm.types.mcp import MCPToolOverrideEntry
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
-    from prisma import types as prisma_types
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy.utils import PrismaClient
@@ -272,18 +271,21 @@ async def _convert_one_row(
         ("mcp_toolsets", raw_row.mcp_toolsets),
         ("mcp_tool_permissions", raw_row.mcp_tool_permissions),
     )
-    equals_filters: Final = MappingProxyType(
-        {field: MappingProxyType({"equals": value}) for field, value in stored_fields if value is not None}
-    )
-    where: Final[prisma_types.LiteLLM_ObjectPermissionTableWhereInput] = {
+    equals_filters: Final = {  # mutable-ok: prisma where kwarg requires a JSON-serializable dict
+        field: {"equals": value}  # mutable-ok: prisma where filter shape
+        for field, value in stored_fields
+        if value is not None
+    }
+    where: Final[dict[str, object]] = {  # mutable-ok: prisma where kwarg requires a JSON-serializable dict
         "object_permission_id": row.object_permission_id,
         "mcp_permission_version": 0,
         **equals_filters,
     }
-    data: Final[prisma_types.LiteLLM_ObjectPermissionTableUpdateManyMutationInput] = {
-        "mcp_tool_overrides": json.dumps({**conversion.mcp_tool_overrides}),
-        "mcp_tool_permissions": json.dumps({**conversion.mcp_tool_permissions}),
-        "mcp_tool_permissions_archive": json.dumps({**conversion.mcp_tool_permissions_archive}),
+    record: Final = converted_row_record(conversion)
+    data: Final[dict[str, object]] = {  # mutable-ok: prisma data kwarg requires a JSON-serializable dict
+        "mcp_tool_overrides": json.dumps(record["mcp_tool_overrides"]),
+        "mcp_tool_permissions": json.dumps(record["mcp_tool_permissions"]),
+        "mcp_tool_permissions_archive": json.dumps(record["mcp_tool_permissions_archive"]),
         "mcp_permission_version": 1,
     }
     updated: Final = await ObjectPermissionRepository(prisma_client).table.update_many(where=where, data=data)
