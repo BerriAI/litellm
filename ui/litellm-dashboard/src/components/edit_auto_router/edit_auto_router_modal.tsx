@@ -1,3 +1,5 @@
+import { usesClassifierContext } from "../add_model/classifier_types";
+import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
@@ -54,6 +56,7 @@ import ComplexityRouterConfig, {
   ClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
+  effectiveClassifierType,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -92,8 +95,10 @@ export interface StoredComplexityRouterConfig {
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: unknown;
   classifier_context_window_size?: unknown;
   classifier_context_budget_chars?: unknown;
+  classifier_context_per_turn_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
   tier_boundaries?: unknown;
@@ -138,7 +143,12 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
-    classifier_llm_config: parsedConfig.classifier_llm_config,
+    classifier_llm_config: parsedConfig.classifier_type === "jev" ? undefined : parsedConfig.classifier_llm_config,
+    jev_classifier_config:
+      parsedConfig.classifier_type === "jev"
+        ? jevClassifierConfigSchema.safeParse(parsedConfig.jev_classifier_config ?? {}).data ??
+          defaultJevClassifierConfig()
+        : undefined,
     classifier_context_window_size:
       typeof parsedConfig.classifier_context_window_size === "number"
         ? parsedConfig.classifier_context_window_size
@@ -146,6 +156,10 @@ export const hydrateComplexityRouterConfig = (
     classifier_context_budget_chars:
       typeof parsedConfig.classifier_context_budget_chars === "number"
         ? parsedConfig.classifier_context_budget_chars
+        : undefined,
+    classifier_context_per_turn_chars:
+      typeof parsedConfig.classifier_context_per_turn_chars === "number"
+        ? parsedConfig.classifier_context_per_turn_chars
         : undefined,
     classifier_context_include_assistant_turns:
       typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
@@ -191,6 +205,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
+  "jev_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
@@ -266,6 +281,9 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "classifier_context_per_turn_chars") {
+      return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
+    }
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
@@ -285,8 +303,10 @@ export const buildUpdatedComplexityRouterConfig = (
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
     classifierLlmConfig: value.classifier_llm_config,
+    jevClassifierConfig: value.jev_classifier_config,
     classifierContextWindowSize: value.classifier_context_window_size,
     classifierContextBudgetChars: value.classifier_context_budget_chars,
+    classifierContextPerTurnChars: value.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,

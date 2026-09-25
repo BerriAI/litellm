@@ -15,6 +15,7 @@ import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import { normalizeTierModels } from "./add_model/complexity_router_tiers";
 import {
@@ -877,6 +878,11 @@ export default function ModelInfoView({
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>

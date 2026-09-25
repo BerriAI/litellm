@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { transitionClassifierType } from "../add_model/classifier_type_transition";
+import { effectiveClassifierType } from "../add_model/ComplexityRouterConfig";
 
 import {
   MANAGED_COMPLEXITY_ROUTER_KEYS,
@@ -46,6 +48,101 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each([false, true])("omits masked JEV credentials from dashboard saves, edited: %s", (edited) => {
+    const stored = {
+      classifier_type: "jev" as const,
+      tiers: FORM_VALUE.tiers,
+      jev_classifier_config: {
+        model: "jev-configured",
+        timeout_ms: 6100,
+        instructions: "Existing instructions",
+        api_key: "sk-s****************cret",
+        api_base: "https://jev.example.com",
+      },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.jev_classifier_config).not.toHaveProperty("api_key");
+    expect(hydrated.jev_classifier_config).not.toHaveProperty("api_base");
+    const value = edited
+      ? {
+          ...hydrated,
+          jev_classifier_config: { model: "jev-updated", timeout_ms: 8100, instructions: "" },
+        }
+      : hydrated;
+    const saved = buildUpdatedComplexityRouterConfig(stored, value);
+    expect(saved.jev_classifier_config).toEqual({
+      ...(edited
+        ? { model: "jev-updated", timeout_ms: 8100 }
+        : { model: "jev-configured", timeout_ms: 6100, instructions: "Existing instructions" }),
+    });
+    for (const classifierType of ["llm", "heuristic"] as const) {
+      expect(
+        buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(value, classifierType)),
+      ).not.toHaveProperty("jev_classifier_config");
+    }
+  });
+
+  it("hydrates nullable JEV instructions without resetting the server configuration", () => {
+    const stored = {
+      classifier_type: "jev" as const,
+      jev_classifier_config: {
+        model: "jev-configured",
+        timeout_ms: 6100,
+        instructions: null,
+        circuit_breaker_enabled: false,
+      },
+      tiers: FORM_VALUE.tiers,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(saved.jev_classifier_config).toEqual({
+      model: "jev-configured",
+      timeout_ms: 6100,
+      circuit_breaker_enabled: false,
+    });
+  });
+  it.each([false, true])("round trips JEV settings and preserves unmanaged fields, custom: %s", (custom) => {
+    const stored = {
+      ...(custom ? storedCustomConfig() : STORED),
+      classifier_llm_config: { model: "stale-judge", timeout_ms: 3000 },
+      classifier_type: "jev" as const,
+      jev_classifier_config: {
+        model: "jev-test",
+        timeout_ms: 4100,
+        instructions: "Judge the request",
+        circuit_breaker_enabled: false,
+        circuit_breaker_cooldown_seconds: 10.5,
+      },
+      classifier_context_window_size: 7,
+      classifier_context_budget_chars: 9000,
+      classifier_context_per_turn_chars: 450,
+      classifier_context_include_assistant_turns: true,
+      some_future_backend_key: { nested: true },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(effectiveClassifierType(hydrated)).toBe("jev");
+    expect(hydrated.classifier_llm_config).toBeUndefined();
+    expect(hydrated.jev_classifier_config).toEqual(stored.jev_classifier_config);
+    expect(hydrated.classifier_context_per_turn_chars).toBe(450);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+    const expectedSavedConfig = {
+      classifier_type: "jev",
+      jev_classifier_config: stored.jev_classifier_config,
+      classifier_context_window_size: 7,
+      classifier_context_budget_chars: 9000,
+      classifier_context_per_turn_chars: 450,
+      classifier_context_include_assistant_turns: true,
+      some_future_backend_key: { nested: true },
+    };
+    expect(saved).toMatchObject(expectedSavedConfig);
+    expect(saved).not.toHaveProperty("classifier_llm_config");
+    const reloaded = hydrateComplexityRouterConfig(saved, undefined);
+    expect(reloaded.jev_classifier_config).toEqual(hydrated.jev_classifier_config);
+    expect(reloaded.classifier_context_per_turn_chars).toBe(450);
+    expect(effectiveClassifierType(reloaded)).toBe("jev");
+    const llm = buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(reloaded, "llm"));
+    expect(llm).not.toHaveProperty("jev_classifier_config");
+  });
+
   it("round-trips an untouched edit without changing any keyword-matching value", () => {
     // Opening the modal hydrates state from STORED; saving with nothing changed must be a
     // no-op. These keys are now MANAGED, so a hydration bug silently wipes them.
@@ -110,13 +207,46 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
 
 const STORED_LLM = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-  classifier_type: "llm",
+  classifier_type: "llm" as const,
   classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
 };
 
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
+  it.each(["llm", "jev"] as const)(
+    "drops the stored %s per-turn bound when switching to heuristic",
+    (classifier_type) => {
+      const stored = { ...STORED_LLM, classifier_type };
+      const saved = buildUpdatedComplexityRouterConfig(stored, {
+        ...hydrateComplexityRouterConfig(stored, undefined),
+        classifier_type: "heuristic",
+      });
+
+      expect(saved).not.toHaveProperty("classifier_context_per_turn_chars");
+    },
+  );
+
+  it("does not resurrect an explicitly cleared per-turn bound", () => {
+    const saved = buildUpdatedComplexityRouterConfig(STORED_LLM, {
+      ...hydrateComplexityRouterConfig(STORED_LLM, undefined),
+      classifier_context_per_turn_chars: undefined,
+    });
+
+    expect(saved).not.toHaveProperty("classifier_context_per_turn_chars");
+  });
+
+  it.each(["llm", "jev"] as const)("saves the form's per-turn bound over the stored %s bound", (classifier_type) => {
+    const formValue = {
+      ...hydrateComplexityRouterConfig({ ...STORED_LLM, classifier_type }, undefined),
+      classifier_context_per_turn_chars: 600,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(saved.classifier_context_per_turn_chars).toBe(600);
+    expect(hydrateComplexityRouterConfig(saved, undefined).classifier_context_per_turn_chars).toBe(600);
+  });
+
   it("round-trips an untouched edit without changing the classifier context values", () => {
     const formValue = {
       tiers: STORED_LLM.tiers,
@@ -492,7 +622,12 @@ describe("managed keys survive an untouched open-and-save", () => {
   // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
   // this fixture uses, so no single stored config can hold every managed key. They get their own round
   // trip below.
-  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier", "classification_prompt"]);
+  const CUSTOM_TIER_ONLY_KEYS = new Set([
+    "tier_definitions",
+    "fallback_tier",
+    "classification_prompt",
+    "jev_classifier_config",
+  ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);

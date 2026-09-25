@@ -72,6 +72,11 @@ class AutoRouterRoutingTestRequest(BaseModel):
     complexity_router_config: RequestComplexityRouterConfig = Field(
         description="The complexity router config to route against, in the shape /model/new accepts",
     )
+    saved_model_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Test this saved deployment's server-side configuration instead of the supplied config and default model",
+    )
     default_model: str | None = Field(
         default=None,
         description="Model to route to when no tier resolves, i.e. complexity_router_default_model",

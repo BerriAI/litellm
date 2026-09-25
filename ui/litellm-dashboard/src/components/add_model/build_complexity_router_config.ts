@@ -1,5 +1,10 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
+  type JevClassifierConfig,
+  jevClassifierConfigSchema,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
+import {
   type CustomTierSet,
   type TierRow,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +39,7 @@ import {
   effectiveTierLabel,
   heuristicScoringRoleFor,
   usesLlmClassifier,
+  usesClassifierContext,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -53,12 +59,26 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        system_prompt,
+      }
+    : {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(classification_rubric && { classification_rubric }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -99,8 +119,10 @@ export interface BuildComplexityRouterConfigParams {
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  jevClassifierConfig?: JevClassifierConfig;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
+  classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
@@ -150,6 +172,7 @@ export interface ComplexityRouterConfigPayload {
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -246,8 +269,15 @@ export const getKeywordTierRulesError = (
 // An edited tier set forces the LLM classifier, so the model requirement follows the EFFECTIVE type.
 // Both forms' submit gates and their submit handlers read this one answer so they cannot drift.
 export const getClassifierModelError = (
-  config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
+  config: Pick<
+    ComplexityRouterConfigValue,
+    "custom_tier_set" | "classifier_type" | "classifier_llm_config" | "jev_classifier_config"
+  >,
 ): string | null => {
+  if (effectiveClassifierType(config) === "jev") {
+    const parsed = jevClassifierConfigSchema.safeParse(config.jev_classifier_config ?? {});
+    return parsed.success ? null : "Enter a JEV model, a positive whole-number timeout and a positive cooldown";
+  }
   if (!usesLlmClassifier(effectiveClassifierType(config)) || config.classifier_llm_config?.model) return null;
   return config.custom_tier_set
     ? "Please select a classifier model: an edited tier set routes with the LLM classifier"
@@ -267,12 +297,21 @@ export const getSemanticConfigError = ({
   return null;
 };
 
-export const customTierWireFields = (
-  customTierSet: CustomTierSet,
-  classifierLlmConfig: ClassifierLLMConfig | undefined,
-  planModeMinTierId: string | undefined,
-  classificationPrompt: string | undefined,
-): Partial<ComplexityRouterConfigPayload> => {
+interface CustomTierWireFieldInputs {
+  customTierSet: CustomTierSet;
+  classifierType: ClassifierType;
+  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  planModeMinTierId: string | undefined;
+  classificationPrompt: string | undefined;
+}
+
+export const customTierWireFields = ({
+  customTierSet,
+  classifierType,
+  classifierLlmConfig,
+  planModeMinTierId,
+  classificationPrompt,
+}: CustomTierWireFieldInputs): Partial<ComplexityRouterConfigPayload> => {
   const rows = customTierSet.tiers;
   const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
   const floor = tierRowById(rows, planModeMinTierId);
@@ -280,15 +319,26 @@ export const customTierWireFields = (
     tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
-    classifier_type: "llm",
+    classifier_type: classifierType === "jev" ? "jev" : "llm",
     // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
-    ...(classifierLlmConfig && {
-      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
-    }),
+    ...(classifierType !== "jev" &&
+      classifierLlmConfig && {
+        classifier_llm_config: {
+          model: classifierLlmConfig.model,
+          timeout_ms: classifierLlmConfig.timeout_ms,
+          ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+            circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+          }),
+          ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+            circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+          }),
+        },
+      }),
     session_affinity: false,
-    ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(classifierType !== "jev" &&
+      classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
   };
 };
@@ -344,6 +394,7 @@ const classifierWireFields = (
     heuristicFirstMaxTier,
     classifierContextWindowSize,
     classifierContextBudgetChars,
+    classifierContextPerTurnChars,
     classifierContextIncludeAssistantTurns,
   }: Pick<
     BuildComplexityRouterConfigParams,
@@ -352,24 +403,29 @@ const classifierWireFields = (
     | "heuristicFirstMaxTier"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
+    | "classifierContextPerTurnChars"
     | "classifierContextIncludeAssistantTurns"
   >,
 ): Partial<ComplexityRouterConfigPayload> => ({
   ...(usesLlmClassifier(effectiveType) &&
     classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-  ...(usesLlmClassifier(effectiveType) &&
+  ...(usesClassifierContext(effectiveType) &&
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
   ...(effectiveType === "heuristic_first" &&
     heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
-  ...(usesLlmClassifier(effectiveType) &&
+  ...(usesClassifierContext(effectiveType) &&
     classifierContextWindowSize !== undefined && {
       classifier_context_window_size: classifierContextWindowSize,
     }),
-  ...(usesLlmClassifier(effectiveType) &&
+  ...(usesClassifierContext(effectiveType) &&
     classifierContextBudgetChars !== undefined && {
       classifier_context_budget_chars: classifierContextBudgetChars,
     }),
-  ...(usesLlmClassifier(effectiveType) &&
+  ...(usesClassifierContext(effectiveType) &&
+    classifierContextPerTurnChars !== undefined && {
+      classifier_context_per_turn_chars: classifierContextPerTurnChars,
+    }),
+  ...(usesClassifierContext(effectiveType) &&
     classifierContextIncludeAssistantTurns !== undefined && {
       classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
     }),
@@ -383,8 +439,10 @@ export const buildComplexityRouterConfig = ({
   tierLabels,
   classifierType,
   classifierLlmConfig,
+  jevClassifierConfig,
   classifierContextWindowSize,
   classifierContextBudgetChars,
+  classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   classificationPrompt,
@@ -432,11 +490,12 @@ export const buildComplexityRouterConfig = ({
     heuristicFirstMaxTier,
     classifierContextWindowSize,
     classifierContextBudgetChars,
+    classifierContextPerTurnChars,
     classifierContextIncludeAssistantTurns,
   };
   // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
   // the form never rewrote. The UI gates the same controls on this, not on the raw value.
-  const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
+  const effectiveType = effectiveClassifierType({ custom_tier_set: customTierSet, classifier_type: classifierType });
 
   const payload: ComplexityRouterConfigPayload = {
     tiers,
@@ -445,6 +504,7 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
+    ...(effectiveType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     ...classifierWireFields(effectiveType, classifierInputs),
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
@@ -469,8 +529,12 @@ export const buildComplexityRouterConfig = ({
   const kept = Object.fromEntries(
     Object.entries(payload).filter(([key]) => !CUSTOM_TIER_STRIPPED_KEYS.includes(key)),
   ) as ComplexityRouterConfigPayload;
-  return {
-    ...kept,
-    ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier, classificationPrompt),
+  const customTierInputs: CustomTierWireFieldInputs = {
+    customTierSet,
+    classifierType,
+    classifierLlmConfig,
+    planModeMinTierId: planModeMinTier,
+    classificationPrompt,
   };
+  return { ...kept, ...customTierWireFields(customTierInputs) };
 };
