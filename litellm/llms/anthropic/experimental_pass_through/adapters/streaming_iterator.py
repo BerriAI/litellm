@@ -1197,3 +1197,35 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return True
 
         return False
+
+
+class AnthropicSSEStream(AsyncIterator[bytes]):
+    """
+    AsyncIterator[bytes] view of AnthropicStreamWrapper returned to callers of
+    translate_completion_output_params_streaming. Keeps the wrapper reachable so
+    the proxy's disconnect-time partial billing can read the inner chat stream's
+    collected chunks, messages, and model; a bare async generator would hide them.
+    """
+
+    def __init__(self, anthropic_wrapper: AnthropicStreamWrapper) -> None:
+        self._anthropic_wrapper = anthropic_wrapper
+        self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
+        self._hidden_params: dict[str, object] = {}  # mutable-ok: the proxy merges provider headers onto _hidden_params in place
+
+    @property
+    def chunks(self) -> list | None:
+        return self._anthropic_wrapper.chunks
+
+    @property
+    def messages(self) -> list | None:
+        return self._anthropic_wrapper.messages
+
+    @property
+    def model(self) -> str:
+        return self._anthropic_wrapper.model
+
+    async def __anext__(self) -> bytes:
+        return await self._byte_stream.__anext__()
+
+    async def aclose(self) -> None:
+        await self._byte_stream.aclose()
