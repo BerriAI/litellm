@@ -95,7 +95,7 @@ class TestMCPRegistryFile:
         with open(registry_path, "r") as f:
             data = json.load(f)
         names = {s["name"] for s in data["servers"]}
-        expected = {"github", "slack", "postgresql", "snowflake", "atlassian"}
+        expected = {"github", "slack", "postgresql", "snowflake", "atlassian", "microsoft_365"}
         missing = expected - names
         assert not missing, f"Missing well-known servers: {missing}"
 
