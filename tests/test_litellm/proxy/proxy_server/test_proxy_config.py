@@ -3862,6 +3862,7 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retent
 async def test_ProxyConfig__update_general_settings_updates_health_check_retention(monkeypatch):
     settings = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", MagicMock(**{"get_job.return_value": None}))
     pc = ProxyConfig()
     reschedule = AsyncMock()
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
@@ -3957,6 +3958,44 @@ async def test_ProxyConfig__update_general_settings_retries_a_schedule_that_rais
     await pc._update_general_settings(retention)
     assert fake_scheduler.add_job.call_count == 2
     assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_retries_a_failed_replacement_of_the_live_job(monkeypatch):
+    """A cron change whose add_job raised keeps the old job running, so the next reload with the
+    same settings must try the replacement again instead of leaving the new cron unapplied."""
+    fake_scheduler = MagicMock()
+    fake_scheduler.get_job.return_value = MagicMock(id="spend_log_cleanup_job")
+    fake_scheduler.add_job.side_effect = [RuntimeError("scheduler busy"), None]
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    pc.settings.load_yaml({"maximum_daily_tag_spend_retention_period": "90d"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+    new_cron = {"maximum_spend_logs_cleanup_cron": "0 3 * * *"}
+    await pc._update_general_settings(new_cron)
+    assert fake_scheduler.add_job.call_count == 1
+    await pc._update_general_settings(new_cron)
+    assert fake_scheduler.add_job.call_count == 2, "failed replacement was not retried on the next sync"
+    await pc._update_general_settings(new_cron)
+    assert fake_scheduler.add_job.call_count == 2, "a successful replacement was rescheduled again"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_leaves_a_changed_db_schedule_to_startup_while_scheduler_is_stopped(
+    monkeypatch,
+):
+    """The first DB sync runs before the scheduler starts and usually differs from the yaml; it
+    must still leave registration to the startup block instead of adding a job it will replace."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    real_scheduler = AsyncIOScheduler()
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+    await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
+    assert real_scheduler.get_jobs() == [], "DB sync registered the cleanup job before the scheduler started"
 
 
 @pytest.mark.asyncio
@@ -4207,6 +4246,7 @@ async def test_ProxyConfig__update_general_settings_reschedules_after_retention_
     pc = ProxyConfig()
     reschedule: Final = AsyncMock()
     monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "scheduler", MagicMock(**{"get_job.return_value": None}))
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
 
     await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})

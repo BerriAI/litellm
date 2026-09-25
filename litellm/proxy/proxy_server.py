@@ -5084,6 +5084,7 @@ class ProxyConfig:
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
         self._last_cleanup_schedule_attempt: tuple[SettingsJsonValue | None, ...] | None = None
+        self._cleanup_reschedule_failed: bool = False
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7639,23 +7640,28 @@ class ProxyConfig:
         db_values: Mapping[str, SettingsJsonValue],
         previous_cleanup_schedule: tuple[SettingsJsonValue | None, ...],
     ) -> None:
+        # while the scheduler is still stopped the startup block owns the first registration
+        if scheduler is not None and scheduler.state == STATE_STOPPED:
+            return
         schedule: Final = self._resolved_cleanup_schedule()
         wants_job: Final = any(value is not None for value in schedule[:4])
         has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
-        # while the scheduler is still stopped the startup block owns the first registration
-        scheduler_running: Final = scheduler is not None and scheduler.state != STATE_STOPPED
-        job_missing: Final = (
-            wants_job and not has_job and scheduler_running and schedule != self._last_cleanup_schedule_attempt
+        retry_due: Final = (
+            wants_job
+            and (not has_job or self._cleanup_reschedule_failed)
+            and schedule != self._last_cleanup_schedule_attempt
         )
-        if not (previous_cleanup_schedule != schedule or job_missing or (has_job and not wants_job)):
+        if not (previous_cleanup_schedule != schedule or retry_due or (has_job and not wants_job)):
             return
         try:
             await self._reschedule_spend_log_cleanup_job()
         except Exception as exc:
+            self._cleanup_reschedule_failed = True
             verbose_proxy_logger.exception(
                 "Spend log cleanup could not be rescheduled, will retry on next sync: %s", exc
             )
             return
+        self._cleanup_reschedule_failed = False
         self._last_cleanup_schedule_attempt = schedule
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
