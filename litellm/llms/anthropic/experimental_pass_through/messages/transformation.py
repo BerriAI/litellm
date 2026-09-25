@@ -445,34 +445,66 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 optional_params.pop("output_config", None)
 
     @staticmethod
-    def _drop_incompatible_temperature_for_thinking(
-        model: str, optional_params: dict, custom_llm_provider: str
-    ) -> None:
-        """Anthropic rejects any ``temperature`` other than 1 while extended thinking
-        is enabled ("temperature may only be set to 1 when thinking is enabled").
+    def _drop_incompatible_sampling_for_thinking(model: str, optional_params: dict, custom_llm_provider: str) -> None:
+        """Anthropic rejects sampling parameters that conflict with extended thinking,
+        whether the mode is legacy ``enabled`` or ``adaptive`` (the API error reads
+        "when thinking is enabled or in adaptive mode"):
+
+        - ``temperature`` may only be ``1``;
+        - ``top_p`` must be ``>= 0.95`` or unset;
+        - ``top_k`` must be unset.
 
         Clients like Claude Code send ``thinking``/``output_config.effort`` together
-        with a pinned ``temperature`` (e.g. the safety classifier uses ``temperature=0``
-        for determinism). When the request lands on a non-adaptive model, the effort
-        interface is reshaped above into legacy ``thinking={type: enabled}`` (or kept
-        as ``output_config.effort`` on Opus 4.5), and the leftover ``temperature`` would
-        400. Preserving the thinking the caller asked for wins over an unhonorable
-        sampling value (Anthropic forces ``temperature=1`` under thinking regardless),
-        so drop it and let the API default apply.
-
-        Adaptive models (4.6+) own this natively and are left untouched.
+        with pinned sampling values (e.g. the safety classifier uses
+        ``temperature=0`` for determinism). Preserving the thinking the caller asked
+        for wins over an unhonorable sampling value, so drop the offending params and
+        let the API defaults apply. On the first-party API this covers adaptive (4.6+)
+        models too: this used to early-return for them on the assumption they own the
+        relationship natively, but the same constraints apply there, so a pinned value
+        still 400s.
         """
-        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
-            return
-        temperature: Final = optional_params.get("temperature")
-        if temperature is None or temperature == 1:
-            return
         thinking: Final = optional_params.get("thinking")
         output_config: Final = optional_params.get("output_config")
-        thinking_enabled: Final = isinstance(thinking, dict) and thinking.get("type") == "enabled"
-        effort_enabled: Final = isinstance(output_config, dict) and output_config.get("effort") is not None
-        if thinking_enabled or effort_enabled:
+        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        effort_set: Final = isinstance(output_config, dict) and output_config.get("effort") is not None
+
+        # ``adaptive`` thinking and a bare ``output_config.effort`` are first-party
+        # Anthropic interfaces. The backends that inherit this transform (Bedrock
+        # Invoke, Vertex AI, Azure AI Foundry, DeepSeek) do not take on the first-party
+        # sampling restriction: Bedrock Invoke forwards ``output_config.effort`` on an
+        # adaptive model and still honours a pinned ``temperature`` (see
+        # ``test_bedrock_messages_allowlist_filters_anthropic_only_fields``, which the
+        # provider-wide drop of these two keys regressed), so they keep the behaviour
+        # this helper had before adaptive models were covered here -- only a legacy
+        # ``enabled`` block makes a pinned sampling value unhonorable for them.
+        if custom_llm_provider != "anthropic" and AnthropicModelInfo._is_adaptive_thinking_model(
+            model, custom_llm_provider
+        ):
+            return
+
+        first_party: Final = custom_llm_provider == "anthropic"
+        thinking_active: Final = (
+            thinking_type == "enabled" or (first_party and thinking_type == "adaptive") or effort_set
+        )
+        if not thinking_active:
+            return
+
+        temperature: Final = optional_params.get("temperature")
+        if temperature is not None and temperature != 1:
             optional_params.pop("temperature", None)
+
+        # Anthropic additionally requires ``top_p >= 0.95`` and ``top_k`` unset while
+        # thinking is active. Other Anthropic-compatible backends (DeepSeek, Minimax,
+        # Tencent, OpenAI-compatible) have their own sampling rules, so only apply
+        # these two drops to the first-party Anthropic API and leave them untouched
+        # elsewhere.
+        if custom_llm_provider == "anthropic":
+            top_p: Final = optional_params.get("top_p")
+            if isinstance(top_p, (int, float)) and top_p < 0.95:
+                optional_params.pop("top_p", None)
+
+            if optional_params.get("top_k") is not None:
+                optional_params.pop("top_k", None)
 
     def transform_anthropic_messages_request(
         self,
@@ -521,7 +553,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        self._drop_incompatible_temperature_for_thinking(
+        self._drop_incompatible_sampling_for_thinking(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
