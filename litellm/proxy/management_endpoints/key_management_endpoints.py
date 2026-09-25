@@ -7766,7 +7766,10 @@ def _validate_key_alias_format(key_alias: str | None) -> None:
         raise_if_unsafe_secret_name(key_alias)
     except ValueError:
         raise ProxyException(
-            message="Invalid key_alias",
+            message=(
+                "Invalid key_alias: must not contain control characters (such as tab or newline) "
+                + 'or a ".." path segment'
+            ),
             type=ProxyErrorTypes.bad_request_error,
             param="key_alias",
             code=400,
