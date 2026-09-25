@@ -3172,8 +3172,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     (
                         desc
                         for desc in descriptors
-                        if desc["key"] == descriptor_key
-                        and (status_value is None or desc["value"] == status_value)
+                        if desc["key"] == descriptor_key and (status_value is None or desc["value"] == status_value)
                     ),
                     None,
                 )
