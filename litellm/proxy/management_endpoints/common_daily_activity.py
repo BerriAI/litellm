@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     )
 
 # Mapping from Prisma accessor names to actual PostgreSQL table names.
-_PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
+PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
     "litellm_dailyuserspend": "LiteLLM_DailyUserSpend",
     "litellm_dailyteamspend": "LiteLLM_DailyTeamSpend",
     "litellm_dailyorganizationspend": "LiteLLM_DailyOrganizationSpend",
@@ -566,7 +566,7 @@ async def get_api_key_metadata(
     return await attach_user_details(prisma_client, combined)
 
 
-def _adjust_dates_for_timezone(
+def adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
     timezone_offset_minutes: int | None,
@@ -626,7 +626,7 @@ def _build_where_conditions(
 ) -> dict[str, "_WhereValue"]:
     """Build prisma where clause for daily activity queries."""
     # Adjust dates for timezone if provided
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(
         start_date, end_date, timezone_offset_minutes, include_current_utc_day
     )
 
@@ -661,7 +661,7 @@ def _build_where_conditions(
     return where_conditions
 
 
-def _build_aggregated_where_clause(
+def build_aggregated_where_clause(
     *,
     entity_id_field: str,
     entity_id: str | list[str] | None,
@@ -840,15 +840,15 @@ def _build_aggregated_sql_query(
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
     """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(
         start_date, end_date, timezone_offset_minutes, include_current_utc_day
     )
 
-    where_clause, where_params = _build_aggregated_where_clause(
+    where_clause, where_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,
@@ -945,15 +945,15 @@ def _build_entity_rollup_sql_query(
     (date, entity, api_key) — told apart by GROUPING(api_key): 1 when the
     api_key column is rolled up, 0 when it is part of the key.
     """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(
         start_date, end_date, timezone_offset_minutes, include_current_utc_day
     )
 
-    where_clause, sql_params = _build_aggregated_where_clause(
+    where_clause, sql_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,
@@ -999,12 +999,12 @@ def _build_export_sql_query(
     totals match breakdown.entities, and are excluded from the key, user and
     model exports where the flat-cost row has no meaning.
     """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
-    where_clause, where_params = _build_aggregated_where_clause(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    where_clause, where_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,

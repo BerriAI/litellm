@@ -19,9 +19,9 @@ from typing_extensions import TypedDict
 
 from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    _PRISMA_TO_PG_TABLE,
-    _adjust_dates_for_timezone,
-    _build_aggregated_where_clause,
+    PRISMA_TO_PG_TABLE,
+    adjust_dates_for_timezone,
+    build_aggregated_where_clause,
     get_daily_activity_export_rows,
 )
 from litellm.proxy.utils import PrismaClient
@@ -207,12 +207,12 @@ def build_daily_activity_key_search_sql(
 ) -> tuple[str, list[str]]:
     """Build the key-search query: top-spend matching tokens that have spend rows inside the
     caller's entity scope, so the LIMIT cannot evict an in-scope match for a foreign one."""
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
-    where_clause, where_params = _build_aggregated_where_clause(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    where_clause, where_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,
@@ -247,14 +247,14 @@ async def search_daily_activity_key_tokens(
     entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
     api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
-    start_date: str,
-    end_date: str,
+    start_date: str | None,
+    end_date: str | None,
     timezone_offset_minutes: int | None,
     search: str,
 ) -> tuple[str, ...]:
     """Token hashes matching `search` restricted to keys with spend rows inside the caller's
     entity and api_key scope, so the spend-ordered LIMIT never trims visible matches."""
-    if entity_id == [] or api_key == []:
+    if start_date is None or end_date is None or entity_id == [] or api_key == []:
         return ()
     sql_query, sql_params = build_daily_activity_key_search_sql(
         table_name=table_name,

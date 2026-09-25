@@ -17,11 +17,11 @@ from litellm.constants import (
     USAGE_TOP_API_KEYS_LIMIT,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
     _build_entity_rollup_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
+    adjust_dates_for_timezone,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
@@ -1160,7 +1160,7 @@ class TestAdjustDatesForTimezone:
         ],
     )
     def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
+        start, end = adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
         assert start == "2026-05-29"
         assert end == "2026-05-29"
 
@@ -1169,14 +1169,14 @@ class TestAdjustDatesForTimezone:
         Pins the boundary that caused the original 2x bug: a single IST day must
         not be translated into a SQL filter covering two UTC days.
         """
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
+        start, end = adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
         assert start == end == "2026-05-29", (
             "Single-day IST query expanded to a multi-day UTC range; this is "
             "the regression that produced approximately 2x over-counting."
         )
 
     def test_multi_day_range_endpoints_are_preserved(self):
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
+        start, end = adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
         assert (start, end) == ("2026-05-29", "2026-06-02")
 
     @pytest.mark.parametrize("offset_minutes", [-330, 480])
@@ -1188,8 +1188,8 @@ class TestAdjustDatesForTimezone:
         exceeded the multi-day total by ~50% over a 5-day IST window.
         """
         days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
-        single_day_ranges = [_adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
-        multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
+        single_day_ranges = [adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
+        multi_day_range = adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
 
         per_day_starts = [r[0] for r in single_day_ranges]
         per_day_ends = [r[1] for r in single_day_ranges]
@@ -1215,43 +1215,43 @@ class TestAdjustDatesForTimezoneLiveEnd:
     PT_EVENING_UTC: Final = datetime(2026, 8, 6, 4, 30, tzinfo=timezone.utc)
 
     def test_pt_evening_range_ending_today_extends_to_utc_today(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-05", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-06", "2026-08-06")
 
     def test_without_opt_in_live_range_keeps_pass_through(self):
-        start, end = _adjust_dates_for_timezone("2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC)
+        start, end = adjust_dates_for_timezone("2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC)
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_pt_historical_range_is_untouched(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-01", "2026-08-04", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-01", "2026-08-04")
 
     def test_east_of_utc_local_today_already_covers_utc_today(self):
         ist_evening_utc: Final = datetime(2026, 8, 5, 17, 0, tzinfo=timezone.utc)
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-07", "2026-08-06", -330, include_current_utc_day=True, utc_now=ist_evening_utc
         )
         assert (start, end) == ("2026-07-07", "2026-08-06")
 
     def test_missing_offset_stays_pass_through_even_for_live_range(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-05", None, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_utc_caller_range_ending_today_is_unchanged(self):
         utc_noon: Final = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-05", 0, include_current_utc_day=True, utc_now=utc_noon
         )
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_future_end_date_extends_no_further_than_requested(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-09", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-06", "2026-08-09")
@@ -1261,7 +1261,7 @@ class TestBuildAggregatedSqlQuery:
     """
     Asserts the SQL emitted by the aggregated query path stays anchored to the
     user-supplied date range. The original bug shipped a function that returned
-    expanded dates from _adjust_dates_for_timezone, so the regression surface is
+    expanded dates from adjust_dates_for_timezone, so the regression surface is
     not just the helper but the SQL it feeds into.
     """
 
