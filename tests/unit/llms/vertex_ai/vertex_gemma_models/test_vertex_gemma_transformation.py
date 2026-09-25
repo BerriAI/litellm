@@ -5,11 +5,18 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 """
 
 import json
+from collections.abc import AsyncIterator
+from typing import cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 import litellm
+from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ResponseCompletedEvent,
+    ResponsesAPIStreamingResponse,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -528,6 +535,42 @@ class TestVertexGemmaCompletion:
             assert hasattr(chunk, "choices")
             assert len(chunk.choices) > 0
             assert chunk.choices[0].delta.content == "Streaming test response"
+
+    @pytest.mark.asyncio
+    async def test_aresponses_streams_vertex_gemma_with_llm_tracing(self):
+        pytest.importorskip("ddtrace")
+        from ddtrace.contrib.internal.litellm.patch import patch as patch_litellm
+        from ddtrace.contrib.internal.litellm.patch import unpatch as unpatch_litellm
+
+        reply = Mock(status_code=200)
+        reply.json.return_value = _make_gemma_vertex_response(content="READY")
+        client = Mock()
+        client.post = AsyncMock(return_value=reply)
+
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client),
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            patch_litellm()
+            try:
+                response = await litellm.aresponses(
+                    model="vertex_ai/gemma/test-model",
+                    input="Reply exactly READY",
+                    stream=True,
+                    api_base="https://example.invalid/v1/projects/test-project/locations/us-central1/endpoints/test:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+                events = [event async for event in cast(AsyncIterator[ResponsesAPIStreamingResponse], response)]
+            finally:
+                unpatch_litellm()
+
+        assert "stream" not in client.post.call_args.kwargs["json"]["instances"][0]
+        assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
+        assert isinstance(events[-1], ResponseCompletedEvent)
 
     @pytest.mark.asyncio
     async def test_acompletion_filters_stream_and_stream_options(self):
