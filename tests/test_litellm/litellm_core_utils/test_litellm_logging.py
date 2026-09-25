@@ -20,7 +20,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
 from litellm._logging import session_id_var, trace_id_var
-from litellm.constants import SENTRY_PII_DENYLIST
+from litellm.constants import REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -5308,6 +5308,19 @@ def test_handle_anthropic_messages_response_logging_passes_model_response_throug
     assert logging_obj._handle_anthropic_messages_response_logging(result=model_response) is model_response
 
 
+def test_anthropic_messages_logged_response_tolerates_a_stream_that_assembled_nothing():
+    """A /v1/messages stream whose upstream yielded no chunks assembles to None; the spend
+    row must still land under the message id the caller was served instead of crashing."""
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_streamed_anthropic_message_id("msg_served")
+
+    result = logging_obj._anthropic_messages_logged_response(result=None)
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_served"
+    assert result.model == "openai/my-local"
+
+
 def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_responses_payload():
     """If the Responses translation raises (eg. empty output on an incomplete response),
     the row must still land: a minimal ModelResponse with model + usage is returned."""
@@ -6602,6 +6615,65 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
+_PRIVATE_RAW_REQUEST_ARGS: Final = {
+    "api_base": "https://api.openai.com/v1/chat/completions",
+    "headers": {},
+    "complete_input_dict": {"messages": [{"role": "user", "content": "PRIVATE-PHRASE"}]},
+}
+
+
+def _pre_call_with_raw_request_logging(logging_obj) -> dict:
+    metadata: Final = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+    logging_obj.pre_call(input="hi", api_key="", additional_args=_PRIVATE_RAW_REQUEST_ARGS)
+    return metadata
+
+
+def _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata: dict) -> None:
+    assert metadata["raw_request"] == REDACTED_BY_LITELLM
+    typed_dict: Final = logging_obj.model_call_details["raw_request_typed_dict"]
+    assert typed_dict["raw_request_body"] == _PRIVATE_RAW_REQUEST_ARGS["complete_input_dict"]
+    assert typed_dict["error"] is None
+
+
+def test_pre_call_raw_request_honors_turn_off_message_logging_set_after_import(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+
+    metadata = _pre_call_with_raw_request_logging(logging_obj)
+
+    _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
+
+
+def test_pre_call_raw_request_honors_per_request_turn_off_message_logging(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+
+    metadata = _pre_call_with_raw_request_logging(logging_obj)
+
+    _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
+
+
+def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "json_logs", True)
+    logging_obj.litellm_request_debug = True
+
+    with patch("litellm.litellm_core_utils.litellm_logging.verbose_logger.warning") as warning:
+        logging_obj._print_llm_call_debugging_log(api_base="https://api.openai.com/v1", headers={}, additional_args={})
+
+    assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
+
+
+def test_debugging_log_with_json_logs_tolerates_missing_headers(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "json_logs", True)
+    logging_obj.litellm_request_debug = True
+
+    with patch("litellm.litellm_core_utils.litellm_logging.verbose_logger.warning") as warning:
+        logging_obj._print_llm_call_debugging_log(api_base="https://api.openai.com/v1", headers=None, additional_args={})
+
+    assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
+
+
 def _streaming_logging_obj_with_callbacks(callbacks: list[CustomLogger]):
     import datetime
 
@@ -7768,6 +7840,9 @@ _PUBLISHED_BATCH_RATES: Final = MappingProxyType(
         "output_cost_per_token_batches": 4.1e-6,
         "cache_read_input_token_cost_batches": 1.2e-7,
         "cache_creation_input_token_cost_batches": 1.3e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 2.1e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 5.1e-6,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 2.2e-7,
         "input_cost_per_token_above_272k_tokens_batches": 3.1e-6,
         "output_cost_per_token_above_272k_tokens_batches": 7.1e-6,
         "cache_read_input_token_cost_above_272k_tokens_batches": 3.2e-7,
@@ -7776,14 +7851,17 @@ _PUBLISHED_BATCH_RATES: Final = MappingProxyType(
 )
 _PUBLISHED_INPUT_BATCH_KEYS: Final = (
     "input_cost_per_token_batches",
+    "input_cost_per_token_above_200k_tokens_batches",
     "input_cost_per_token_above_272k_tokens_batches",
     "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_200k_tokens_batches",
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_creation_input_token_cost_batches",
     "cache_creation_input_token_cost_above_272k_tokens_batches",
 )
 _PUBLISHED_OUTPUT_BATCH_KEYS: Final = (
     "output_cost_per_token_batches",
+    "output_cost_per_token_above_200k_tokens_batches",
     "output_cost_per_token_above_272k_tokens_batches",
 )
 
@@ -7872,22 +7950,22 @@ def test_batch_cost_calculator_bills_the_carried_output_tier_when_the_deployment
     )
 
 
+@pytest.mark.parametrize(
+    "tier_key",
+    ["input_cost_per_token_above_200k_tokens_batches", "input_cost_per_token_above_272k_tokens_batches"],
+)
 def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_the_published_flat_rates(
-    _published_batch_model: None,
+    _published_batch_model: None, tier_key: str
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
 
-    info: Final = deployment_pricing_model_info(
-        _batch_deployment_id({"input_cost_per_token_above_272k_tokens_batches": 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT
-    )
+    info: Final = deployment_pricing_model_info(_batch_deployment_id({tier_key: 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT)
     carried_keys: Final = tuple(
-        key
-        for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS)
-        if key != "input_cost_per_token_above_272k_tokens_batches"
+        key for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS) if key != tier_key
     )
 
     assert info is not None
-    assert info["input_cost_per_token_above_272k_tokens_batches"] == 1e-3
+    assert info[tier_key] == 1e-3
     assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 
