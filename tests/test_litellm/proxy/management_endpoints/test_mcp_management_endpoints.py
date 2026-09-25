@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import types
@@ -33,7 +34,7 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerConfig, MCPServerManager
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -8662,3 +8663,1398 @@ class TestLIT3974ResolutionRegressions:
         }, "alias denial response body"
         add_server.assert_not_awaited()
         health_check.assert_not_awaited()
+
+
+class TestLIT3974ResolutionCharacterization:
+    async def _load_registry_config(
+        self,
+        manager: MCPServerManager,
+        config: dict[str, MCPServerConfig],
+    ) -> None:
+        existing_tasks: Final = asyncio.all_tasks()
+        with MockRouter(assert_all_called=False) as httpx_mock:
+            await manager.load_servers_from_config(config)
+            startup_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in existing_tasks)
+            for task in startup_tasks:
+                task.cancel()
+            await asyncio.gather(*startup_tasks, return_exceptions=True)
+        assert httpx_mock.calls.call_count == 0, "registry setup must not make upstream HTTP calls"
+
+    async def _resolution_case(
+        self,
+        source: str,
+        caller: str,
+        server_id: str,
+        *,
+        is_byok: bool = False,
+    ) -> tuple[MagicMock, MCPServerManager, UserAPIKeyAuth]:
+        team_id: Final = "lit3974_resolution_team"
+        user_id: Final = f"lit3974_{caller}_user"
+        db_server: Final = generate_mock_mcp_server_db_record(
+            server_id=server_id,
+            alias="lit3974_alias",
+        ).model_copy(
+            update={
+                "server_name": f"lit3974_{source}_server",
+                "is_byok": is_byok,
+                "env_vars": [
+                    {
+                        "name": "LIT3974_TOKEN",
+                        "value": "",
+                        "scope": "user",
+                        "description": "MCP credential",
+                    }
+                ],
+                "static_headers": {"Authorization": "Bearer ${LIT3974_TOKEN}"},
+            }
+        )
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"lit3974_{caller}_permission",
+            mcp_servers=[server_id] if caller == "allowed" else [],
+        )
+        team: Final = LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974_resolution_team_permission",
+                mcp_servers=[server_id] if caller == "ui_allowed" else [],
+            ),
+        )
+        user: Final = (
+            LiteLLM_UserTable(
+                user_id=user_id,
+                teams=[team_id],
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            )
+            if caller == "ui_allowed"
+            else None
+        )
+        prisma: Final = _lit3974_prisma_client(db_server, key_permission, team, user=user)
+        if source != "db_runtime":
+            prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+            prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+
+        manager: Final = MCPServerManager()
+        if source in ("db_runtime", "config"):
+            await self._load_registry_config(
+                manager,
+                {
+                    f"lit3974_{source}_server": {
+                        "server_id": server_id,
+                        "alias": "lit3974_alias",
+                        "url": "https://mcp.example.com/server",
+                        "transport": "http",
+                        "is_byok": is_byok,
+                        "env_vars": [
+                            {
+                                "name": "LIT3974_TOKEN",
+                                "value": "",
+                                "scope": "user",
+                                "description": "MCP credential",
+                            }
+                        ],
+                        "static_headers": {"Authorization": "Bearer ${LIT3974_TOKEN}"},
+                    }
+                },
+            )
+
+        auth: Final = UserAPIKeyAuth(
+            api_key=f"lit3974_{caller}_key",
+            user_id=user_id,
+            team_id=UI_SESSION_TOKEN_TEAM_ID if caller == "ui_allowed" else None,
+            user_role=(LitellmUserRoles.PROXY_ADMIN if caller == "admin" else LitellmUserRoles.INTERNAL_USER),
+            object_permission=key_permission if caller != "ui_allowed" else None,
+        )
+        return prisma, manager, auth
+
+    @staticmethod
+    def _resolution_error(source: str, caller: str, server_id: str) -> tuple[int, dict[str, str]] | None:
+        if source == "missing":
+            if caller == "admin":
+                return 404, {"error": f"MCP Server {server_id} not found"}
+            return (
+                403,
+                {
+                    "error": (
+                        f"User does not have permission to access mcp server with id {server_id}. "
+                        "You can only manage mcp servers that you have access to."
+                    )
+                },
+            )
+        if caller == "denied":
+            return (
+                403,
+                {
+                    "error": (
+                        f"User does not have permission to access mcp server with id {server_id}. "
+                        "You can only manage mcp servers that you have access to."
+                    )
+                },
+            )
+        return None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "operation,source,caller",
+        [
+            ("byok_store", "db_runtime", "admin"),
+            ("byok_store", "db_runtime", "allowed"),
+            ("byok_store", "db_runtime", "denied"),
+            ("byok_store", "config", "allowed"),
+            ("byok_store", "config", "denied"),
+            ("byok_store", "missing", "admin"),
+            ("byok_store", "missing", "allowed"),
+            ("byok_store", "missing", "denied"),
+            ("byok_store", "config", "ui_allowed"),
+            ("oauth_store", "db_runtime", "admin"),
+            ("oauth_store", "db_runtime", "allowed"),
+            ("oauth_store", "db_runtime", "denied"),
+            ("oauth_store", "missing", "admin"),
+            ("oauth_store", "missing", "allowed"),
+            ("oauth_store", "missing", "denied"),
+            ("oauth_store", "config", "ui_allowed"),
+            ("env_get", "db_runtime", "admin"),
+            ("env_get", "db_runtime", "allowed"),
+            ("env_get", "db_runtime", "denied"),
+            ("env_get", "config", "admin"),
+            ("env_get", "config", "allowed"),
+            ("env_get", "config", "denied"),
+            ("env_get", "missing", "allowed"),
+            ("env_get", "config", "ui_allowed"),
+            ("env_store", "db_runtime", "admin"),
+            ("env_store", "db_runtime", "allowed"),
+            ("env_store", "db_runtime", "denied"),
+            ("env_store", "config", "admin"),
+            ("env_store", "config", "denied"),
+            ("env_store", "missing", "allowed"),
+            ("env_store", "missing", "denied"),
+            ("env_store", "config", "ui_allowed"),
+            ("env_clear", "db_runtime", "admin"),
+            ("env_clear", "db_runtime", "allowed"),
+            ("env_clear", "db_runtime", "denied"),
+            ("env_clear", "config", "admin"),
+            ("env_clear", "config", "allowed"),
+            ("env_clear", "config", "denied"),
+            ("env_clear", "missing", "allowed"),
+            ("env_clear", "missing", "denied"),
+            ("env_clear", "config", "ui_allowed"),
+        ],
+        ids=[
+            "byok-store-db-runtime-admin",
+            "byok-store-db-runtime-allowed",
+            "byok-store-db-runtime-denied",
+            "byok-store-config-allowed",
+            "byok-store-config-denied",
+            "byok-store-missing-admin",
+            "byok-store-missing-allowed",
+            "byok-store-missing-denied",
+            "byok-store-config-ui-allowed",
+            "oauth-store-db-runtime-admin",
+            "oauth-store-db-runtime-allowed",
+            "oauth-store-db-runtime-denied",
+            "oauth-store-missing-admin",
+            "oauth-store-missing-allowed",
+            "oauth-store-missing-denied",
+            "oauth-store-config-ui-allowed",
+            "env-get-db-runtime-admin",
+            "env-get-db-runtime-allowed",
+            "env-get-db-runtime-denied",
+            "env-get-config-admin",
+            "env-get-config-allowed",
+            "env-get-config-denied",
+            "env-get-missing-allowed",
+            "env-get-config-ui-allowed",
+            "env-store-db-runtime-admin",
+            "env-store-db-runtime-allowed",
+            "env-store-db-runtime-denied",
+            "env-store-config-admin",
+            "env-store-config-denied",
+            "env-store-missing-allowed",
+            "env-store-missing-denied",
+            "env-store-config-ui-allowed",
+            "env-clear-db-runtime-admin",
+            "env-clear-db-runtime-allowed",
+            "env-clear-db-runtime-denied",
+            "env-clear-config-admin",
+            "env-clear-config-allowed",
+            "env-clear-config-denied",
+            "env-clear-missing-allowed",
+            "env-clear-missing-denied",
+            "env-clear-config-ui-allowed",
+        ],
+    )
+    async def test_credential_and_env_var_resolution_cells(
+        self,
+        operation: str,
+        source: str,
+        caller: str,
+    ) -> None:
+        server_id: Final = f"lit3974_{operation}_{source}"
+        prisma, manager, auth = await self._resolution_case(
+            source,
+            caller,
+            server_id,
+            is_byok=operation == "byok_store",
+        )
+        byok_store: Final = AsyncMock()
+        oauth_store: Final = AsyncMock()
+        oauth_read: Final = AsyncMock(return_value={"expires_at": "2099-01-01T00:00:00+00:00"})
+        env_read: Final = AsyncMock(return_value={})
+        env_merge: Final = AsyncMock(return_value={"LIT3974_TOKEN": "lit3974-secret"})
+        env_delete: Final = AsyncMock()
+        byok_invalidate: Final = AsyncMock()
+        oauth_invalidate: Final = AsyncMock()
+        env_invalidate: Final = MagicMock()
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock()
+        expected_error: Final = self._resolution_error(source, caller, server_id)
+
+        with (
+            MockRouter(assert_all_called=False) as httpx_mock,
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+            patch.object(manager, "add_server", add_server),
+            patch.object(manager, "health_check_server", health_check),
+            patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_credential",
+                byok_store,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+                oauth_store,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+                oauth_read,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_env_vars",
+                env_read,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.merge_user_env_vars",
+                env_merge,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_env_vars",
+                env_delete,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+                byok_invalidate,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.invalidate_user_env_vars_cache",
+                env_invalidate,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            if expected_error is not None:
+                with pytest.raises(HTTPException) as exc_info:
+                    await self._call_credential_or_env_operation(operation, server_id, auth)
+
+                assert exc_info.value.status_code == expected_error[0], f"{operation}/{source}/{caller}: status"
+                assert exc_info.value.detail == expected_error[1], f"{operation}/{source}/{caller}: full detail body"
+                byok_store.assert_not_awaited()
+                oauth_store.assert_not_awaited()
+                env_merge.assert_not_awaited()
+                env_delete.assert_not_awaited()
+                byok_invalidate.assert_not_awaited()
+                oauth_invalidate.assert_not_awaited()
+                env_invalidate.assert_not_called()
+                add_server.assert_not_awaited()
+                health_check.assert_not_awaited()
+                assert httpx_mock.calls.call_count == 0, f"{operation}/{source}/{caller}: no upstream HTTP"
+                return
+
+            if operation == "byok_store" and source == "config":
+                with pytest.raises(HTTPException) as exc_info:
+                    await self._call_credential_or_env_operation(operation, server_id, auth)
+
+                assert exc_info.value.status_code == 400, f"{operation}/{source}/{caller}: status"
+                assert exc_info.value.detail == {"error": "This MCP server does not support BYOK credentials"}, (
+                    f"{operation}/{source}/{caller}: full detail body"
+                )
+                byok_store.assert_not_awaited()
+                oauth_store.assert_not_awaited()
+                env_merge.assert_not_awaited()
+                env_delete.assert_not_awaited()
+                byok_invalidate.assert_not_awaited()
+                oauth_invalidate.assert_not_awaited()
+                env_invalidate.assert_not_called()
+                add_server.assert_not_awaited()
+                health_check.assert_not_awaited()
+                assert httpx_mock.calls.call_count == 0, f"{operation}/{source}/{caller}: no upstream HTTP"
+                return
+
+            result: Final = await self._call_credential_or_env_operation(operation, server_id, auth)
+
+        if operation == "byok_store":
+            assert result.model_dump() == {"server_id": server_id, "has_credential": True}
+            byok_store.assert_awaited_once()
+            byok_invalidate.assert_awaited_once_with(auth.user_id, server_id)
+        elif operation == "oauth_store":
+            assert result.model_dump() == {
+                "server_id": server_id,
+                "has_credential": True,
+                "expires_at": "2099-01-01T00:00:00+00:00",
+                "is_expired": False,
+                "connected_at": None,
+            }
+            oauth_store.assert_awaited_once()
+            oauth_invalidate.assert_awaited_once_with(auth.user_id, server_id)
+        elif operation == "env_get":
+            assert result.model_dump() == {
+                "server_id": server_id,
+                "server_name": f"lit3974_{source}_server",
+                "alias": "lit3974_alias",
+                "required": [{"name": "LIT3974_TOKEN", "description": "MCP credential", "is_set": False}],
+                "missing_count": 1,
+                "setup_url": f"/ui/mcp-servers?fill_env_vars={server_id}",
+            }
+            env_read.assert_awaited_once_with(prisma, auth.user_id, server_id)
+        elif operation == "env_store":
+            assert result.model_dump() == {
+                "server_id": server_id,
+                "server_name": f"lit3974_{source}_server",
+                "alias": "lit3974_alias",
+                "required": [{"name": "LIT3974_TOKEN", "description": "MCP credential", "is_set": True}],
+                "missing_count": 0,
+                "setup_url": f"/ui/mcp-servers?fill_env_vars={server_id}",
+            }
+            env_merge.assert_awaited_once()
+            env_invalidate.assert_called_once_with(auth.user_id, server_id)
+        else:
+            assert result.model_dump() == {
+                "server_id": server_id,
+                "server_name": f"lit3974_{source}_server",
+                "alias": "lit3974_alias",
+                "required": [{"name": "LIT3974_TOKEN", "description": "MCP credential", "is_set": False}],
+                "missing_count": 1,
+                "setup_url": f"/ui/mcp-servers?fill_env_vars={server_id}",
+            }
+            env_delete.assert_awaited_once_with(prisma, auth.user_id, server_id)
+            env_invalidate.assert_called_once_with(auth.user_id, server_id)
+
+    async def _call_credential_or_env_operation(
+        self,
+        operation: str,
+        server_id: str,
+        auth: UserAPIKeyAuth,
+    ) -> MCPUserCredentialResponse | mgmt_endpoints.MCPOAuthUserCredentialStatus | mgmt_endpoints.MCPUserEnvVarsStatus:
+        if operation == "byok_store":
+            return await mgmt_endpoints.store_mcp_user_credential(
+                server_id=server_id,
+                payload=mgmt_endpoints.MCPUserCredentialRequest(credential="lit3974-secret"),
+                user_api_key_dict=auth,
+            )
+        if operation == "oauth_store":
+            return await mgmt_endpoints.store_mcp_oauth_user_credential(
+                server_id=server_id,
+                payload=mgmt_endpoints.MCPOAuthUserCredentialRequest(
+                    access_token="lit3974-token",
+                    expires_in=3600,
+                ),
+                user_api_key_dict=auth,
+            )
+        if operation == "env_get":
+            return await mgmt_endpoints.get_mcp_user_env_vars(
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+        if operation == "env_store":
+            return await mgmt_endpoints.store_mcp_user_env_vars(
+                server_id=server_id,
+                payload=mgmt_endpoints.MCPUserEnvVarsRequest(values={"LIT3974_TOKEN": "lit3974-secret"}),
+                user_api_key_dict=auth,
+            )
+        return await mgmt_endpoints.clear_mcp_user_env_vars(
+            server_id=server_id,
+            user_api_key_dict=auth,
+        )
+
+    @pytest.mark.asyncio
+    async def test_oauth_credential_status_does_not_resolve_server_access(self) -> None:
+        server_id: Final = "lit3974_missing_oauth_status"
+        prisma, manager, auth = await self._resolution_case("missing", "denied", server_id)
+        oauth_read: Final = AsyncMock(return_value=None)
+        oauth_invalidate: Final = AsyncMock()
+
+        with (
+            MockRouter(assert_all_called=False) as httpx_mock,
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+                oauth_read,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            result: Final = await mgmt_endpoints.get_mcp_oauth_user_credential_status(
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+
+        assert result.model_dump() == {
+            "server_id": server_id,
+            "has_credential": False,
+            "expires_at": None,
+            "is_expired": False,
+            "connected_at": None,
+        }
+        oauth_read.assert_awaited_once_with(prisma, auth.user_id, server_id)
+        oauth_invalidate.assert_not_awaited()
+        assert httpx_mock.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_non_admin_deletes_own_oauth_credential_for_missing_server(self) -> None:
+        server_id: Final = "lit3974_removed_oauth_server"
+        user_id: Final = "lit3974_oauth_owner"
+        prisma: Final = _lit3974_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=server_id),
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_delete_key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_delete_team"),
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+        manager: Final = MCPServerManager()
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_oauth_owner_key",
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974_delete_key",
+                mcp_servers=[],
+            ),
+        )
+        credential_read: Final = AsyncMock(return_value={"type": "oauth2", "access_token": "lit3974-token"})
+        delete_credential: Final = AsyncMock()
+        invalidate: Final = AsyncMock()
+
+        with (
+            MockRouter(assert_all_called=False) as httpx_mock,
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+            patch.object(manager, "invalidate_user_oauth_token_cache", invalidate),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+                credential_read,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+                delete_credential,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            result: Final = await mgmt_endpoints.delete_mcp_oauth_user_credential(
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+
+        assert result.model_dump() == {
+            "server_id": server_id,
+            "has_credential": False,
+            "expires_at": None,
+            "is_expired": False,
+            "connected_at": None,
+        }
+        credential_read.assert_awaited_once_with(prisma, user_id, server_id)
+        delete_credential.assert_awaited_once_with(prisma, user_id, server_id)
+        invalidate.assert_awaited_once_with(user_id, server_id)
+        assert httpx_mock.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_database_server_identifier_collision(self) -> None:
+        server_id: Final = "lit3974_db_identifier_collision"
+        server: Final = generate_mock_mcp_server_db_record(server_id=server_id)
+        prisma: Final = _lit3974_prisma_client(
+            server,
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_create_key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_create_team"),
+        )
+        manager: Final = MCPServerManager()
+        create_server: Final = AsyncMock()
+        add_server: Final = AsyncMock()
+        reload_servers: Final = AsyncMock()
+        payload: Final = NewMCPServerRequest(
+            server_id=server_id,
+            alias="lit3974_duplicate_alias",
+            url="https://mcp.example.com/duplicate",
+            transport=MCPTransport.http,
+        )
+
+        with (
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "add_server", add_server),
+            patch.object(manager, "reload_servers_from_database", reload_servers),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free",
+                create_server,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.add_mcp_server(
+                    payload=payload,
+                    user_api_key_dict=generate_mock_user_api_key_auth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        user_id="lit3974_create_admin",
+                    ),
+                )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == {
+            "error": f"MCP Server with id {server_id} already exists. Cannot create another."
+        }
+        create_server.assert_not_awaited()
+        add_server.assert_not_awaited()
+        reload_servers.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_user_credential_list_keeps_entry_for_missing_server_in_one_batch(self) -> None:
+        missing_server_id: Final = "lit3974_list_missing_server"
+        manager: Final = MCPServerManager()
+        prisma_client: Final = MagicMock()
+        credential_rows: Final = [
+            {
+                "server_id": missing_server_id,
+                "expires_at": None,
+                "connected_at": None,
+            },
+        ]
+        list_credentials: Final = AsyncMock(return_value=credential_rows)
+        get_servers: Final = AsyncMock(return_value=[])
+        get_single_server: Final = AsyncMock()
+
+        with (
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma_client),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.list_user_oauth_credentials",
+                list_credentials,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_servers",
+                get_servers,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                get_single_server,
+            ),
+        ):
+            result: Final = await mgmt_endpoints.list_mcp_user_credentials(
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_id="lit3974_list_user",
+                )
+            )
+
+        assert [item.model_dump() for item in result] == [
+            {
+                "server_id": missing_server_id,
+                "server_name": None,
+                "alias": None,
+                "credential_type": "oauth2",
+                "has_credential": True,
+                "expires_at": None,
+                "connected_at": None,
+            },
+        ]
+        get_servers.assert_awaited_once_with(prisma_client, [missing_server_id])
+        get_single_server.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source,caller,expected_status",
+        [
+            ("db_runtime", "admin", 200),
+            ("db_runtime", "view_only", 200),
+            ("db_runtime", "allowed", 200),
+            ("db_runtime", "denied", 403),
+            ("config", "view_only", 200),
+            ("config", "ui_key_allowed", 200),
+            ("config", "ui_denied", 403),
+            ("missing", "admin", 404),
+            ("missing", "view_only", 404),
+            ("missing", "allowed", 404),
+            ("missing", "denied", 404),
+        ],
+        ids=[
+            "db-runtime-admin",
+            "db-runtime-view-only",
+            "db-runtime-key-allowed",
+            "db-runtime-key-denied",
+            "config-view-only",
+            "config-ui-key-grant",
+            "config-ui-session-denied",
+            "missing-admin",
+            "missing-view-only",
+            "missing-key-allowed",
+            "missing-key-denied",
+        ],
+    )
+    async def test_fetch_mcp_server_resolution_cells(
+        self,
+        source: str,
+        caller: str,
+        expected_status: int,
+    ) -> None:
+        server_id: Final = f"lit3974_{source}_detail"
+        server: Final = generate_mock_mcp_server_db_record(server_id=server_id, alias="LIT3974 detail")
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"lit3974_{source}_{caller}_permission",
+            mcp_servers=[server_id] if caller in ("allowed", "ui_key_allowed") else [],
+        )
+        team: Final = LiteLLM_TeamTable(
+            team_id="lit3974_detail_team",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974_detail_team_permission",
+                mcp_servers=[],
+            ),
+        )
+        user: Final = (
+            LiteLLM_UserTable(
+                user_id="lit3974_detail_user",
+                teams=[],
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            )
+            if caller in ("ui_denied", "ui_key_allowed")
+            else None
+        )
+        prisma: Final = _lit3974_prisma_client(server, key_permission, team, user=user)
+        if source != "db_runtime":
+            prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+            prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+
+        manager: Final = MCPServerManager()
+        if source in ("db_runtime", "config"):
+            await self._load_registry_config(
+                manager,
+                {
+                    "lit3974_detail_server": {
+                        "server_id": server_id,
+                        "alias": "LIT3974 detail",
+                        "url": "https://detail.example.com/mcp",
+                        "transport": "http",
+                    }
+                },
+            )
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock(return_value=server)
+        byok_store: Final = AsyncMock()
+        oauth_store: Final = AsyncMock()
+        env_merge: Final = AsyncMock()
+        env_delete: Final = AsyncMock()
+        byok_invalidate: Final = AsyncMock()
+        oauth_invalidate: Final = AsyncMock()
+        env_invalidate: Final = MagicMock()
+        auth: Final = UserAPIKeyAuth(
+            api_key=f"lit3974_{source}_{caller}_key",
+            user_id="lit3974_detail_user",
+            team_id=UI_SESSION_TOKEN_TEAM_ID if caller in ("ui_denied", "ui_key_allowed") else None,
+            user_role=(
+                LitellmUserRoles.PROXY_ADMIN
+                if caller == "admin"
+                else LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+                if caller == "view_only"
+                else LitellmUserRoles.INTERNAL_USER
+            ),
+            object_permission=key_permission,
+        )
+        with (
+            MockRouter(assert_all_called=False) as httpx_mock,
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "add_server", add_server),
+            patch.object(manager, "health_check_server", health_check),
+            patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+                byok_invalidate,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.invalidate_user_env_vars_cache",
+                env_invalidate,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_credential",
+                byok_store,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+                oauth_store,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.merge_user_env_vars",
+                env_merge,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_env_vars",
+                env_delete,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            if expected_status in (403, 404):
+                with pytest.raises(HTTPException) as exc_info:
+                    await mgmt_endpoints.fetch_mcp_server(
+                        request=_make_mock_request(),
+                        server_id=server_id,
+                        user_api_key_dict=auth,
+                    )
+
+                expected_detail: Final = (
+                    {"error": f"MCP Server with id {server_id} not found"}
+                    if expected_status == 404
+                    else {
+                        "error": (
+                            f"User does not have permission to view mcp server with id {server_id}. "
+                            "You can only view mcp servers that you have access to."
+                        )
+                    }
+                )
+                assert exc_info.value.status_code == expected_status, f"{source}/{caller}: detail status"
+                assert exc_info.value.detail == expected_detail, f"{source}/{caller}: complete detail body"
+                add_server.assert_not_awaited()
+                health_check.assert_not_awaited()
+                byok_store.assert_not_awaited()
+                oauth_store.assert_not_awaited()
+                env_merge.assert_not_awaited()
+                env_delete.assert_not_awaited()
+                byok_invalidate.assert_not_awaited()
+                oauth_invalidate.assert_not_awaited()
+                env_invalidate.assert_not_called()
+                assert httpx_mock.calls.call_count == 0, f"{source}/{caller}: no upstream HTTP"
+                return
+
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == server_id, f"{source}/{caller}: resolved server id"
+        assert result.alias == "LIT3974 detail", f"{source}/{caller}: resolved display alias"
+        if source == "db_runtime":
+            add_server.assert_awaited_once()
+        else:
+            add_server.assert_not_awaited()
+        health_check.assert_awaited_once_with(server_id)
+
+    @pytest.mark.asyncio
+    async def test_fetch_config_alias_filters_external_client_ip(self) -> None:
+        server_id: Final = "lit3974_private_config"
+        prisma: Final = _lit3974_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=server_id),
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_private_key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_private_team"),
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "lit3974_private_server": {
+                    "server_id": server_id,
+                    "alias": "private_alias",
+                    "url": "https://private.example.com/mcp",
+                    "transport": "http",
+                    "available_on_public_internet": False,
+                }
+            },
+        )
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock()
+        byok_store: Final = AsyncMock()
+        oauth_store: Final = AsyncMock()
+        env_merge: Final = AsyncMock()
+        env_delete: Final = AsyncMock()
+        byok_invalidate: Final = AsyncMock()
+        oauth_invalidate: Final = AsyncMock()
+        env_invalidate: Final = MagicMock()
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_private_key",
+            user_id="lit3974_private_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            MockRouter(assert_all_called=False) as httpx_mock,
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "add_server", add_server),
+            patch.object(manager, "health_check_server", health_check),
+            patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+                byok_invalidate,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.invalidate_user_env_vars_cache",
+                env_invalidate,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_credential",
+                byok_store,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+                oauth_store,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.merge_user_env_vars",
+                env_merge,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_env_vars",
+                env_delete,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.fetch_mcp_server(
+                    request=_make_mock_request(ip="203.0.113.25"),
+                    server_id="private_alias",
+                    user_api_key_dict=auth,
+                )
+
+        assert exc_info.value.status_code == 404, "config alias hidden from an external client IP"
+        assert exc_info.value.detail == {"error": "MCP Server with id private_alias not found"}, (
+            "complete IP-filtered alias lookup detail"
+        )
+        add_server.assert_not_awaited()
+        health_check.assert_not_awaited()
+        byok_store.assert_not_awaited()
+        oauth_store.assert_not_awaited()
+        env_merge.assert_not_awaited()
+        env_delete.assert_not_awaited()
+        byok_invalidate.assert_not_awaited()
+        oauth_invalidate.assert_not_awaited()
+        env_invalidate.assert_not_called()
+        assert httpx_mock.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_db_runtime_ignores_external_client_ip(self) -> None:
+        server_id: Final = "lit3974_private_db"
+        server: Final = generate_mock_mcp_server_db_record(server_id=server_id, alias="Private DB")
+        prisma: Final = _lit3974_prisma_client(
+            server,
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_private_db_key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_private_db_team"),
+        )
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "lit3974_private_db_server": {
+                    "server_id": server_id,
+                    "alias": "Private DB",
+                    "url": "https://private.example.com/mcp",
+                    "transport": "http",
+                    "available_on_public_internet": False,
+                }
+            },
+        )
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock(return_value=server)
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_private_db_admin",
+            user_id="lit3974_private_db_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "add_server", add_server),
+            patch.object(manager, "health_check_server", health_check),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(ip="203.0.113.25"),
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == server_id, "DB detail lookup is not filtered by the client IP"
+        assert result.alias == "Private DB", "DB detail response retains its alias"
+        add_server.assert_awaited_once()
+        health_check.assert_awaited_once_with(server_id)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source,caller,expected_status",
+        [
+            ("temp_mem", "allowed", 403),
+            ("temp_draft", "admin", 200),
+            ("temp_draft", "allowed", 403),
+            ("temp_draft", "denied", 403),
+            ("temp_redis", "admin", 200),
+            ("temp_redis", "allowed", 403),
+            ("temp_redis", "denied", 403),
+            ("config", "admin", 200),
+            ("db_only", "admin", 404),
+            ("db_only", "allowed", 404),
+            ("db_only", "denied", 404),
+            ("missing", "allowed", 404),
+            ("missing", "denied", 404),
+        ],
+        ids=[
+            "temp-memory-key-allowed",
+            "temp-draft-admin",
+            "temp-draft-key-allowed",
+            "temp-draft-key-denied",
+            "temp-redis-admin",
+            "temp-redis-key-allowed",
+            "temp-redis-key-denied",
+            "config-admin",
+            "db-only-admin",
+            "db-only-key-allowed",
+            "db-only-key-denied",
+            "missing-key-allowed",
+            "missing-key-denied",
+        ],
+    )
+    async def test_temporary_oauth_resolution_source_and_caller_cells(
+        self,
+        source: str,
+        caller: str,
+        expected_status: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _cache_temporary_mcp_server_in_redis,
+            _get_cached_temporary_mcp_server_or_404,
+            _TemporaryMCPServerEntry,
+        )
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "lit3974-test-salt-key")
+        server_id: Final = f"lit3974_{source}_oauth"
+        temp_server: Final = generate_mock_mcp_server_config_record(server_id=server_id)
+        db_server: Final = generate_mock_mcp_server_db_record(server_id=server_id)
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"lit3974_{source}_{caller}_oauth_permission",
+            mcp_servers=[server_id] if caller == "allowed" else [],
+        )
+        team: Final = LiteLLM_TeamTable(team_id=f"lit3974_{source}_oauth_team")
+        prisma: Final = _lit3974_prisma_client(db_server, key_permission, team)
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=db_server if source == "db_only" else None
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[db_server.model_copy(update={"approval_status": "draft"})] if source == "temp_draft" else []
+        )
+        manager: Final = MCPServerManager()
+        config: Final = (
+            {
+                "lit3974_oauth_config": {
+                    "server_id": server_id,
+                    "alias": "LIT3974 OAuth",
+                    "url": "https://oauth.example.com/mcp",
+                    "transport": "http",
+                }
+            }
+            if source == "config"
+            else {
+                "lit3974_oauth_unrelated": {
+                    "server_id": "lit3974_unrelated_oauth",
+                    "url": "https://unrelated.example.com/mcp",
+                    "transport": "http",
+                }
+            }
+        )
+        await self._load_registry_config(manager, config)
+        auth: Final = UserAPIKeyAuth(
+            api_key=f"lit3974_{source}_{caller}_oauth_key",
+            user_id="lit3974_oauth_user",
+            user_role=(LitellmUserRoles.PROXY_ADMIN if caller == "admin" else LitellmUserRoles.INTERNAL_USER),
+            object_permission=key_permission,
+        )
+        cache_backend: Final = SimpleNamespace(
+            async_get_cache=AsyncMock(return_value=None),
+            async_set_cache=AsyncMock(),
+        )
+        original_cache: Final = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=cache_backend)
+        memory_cache: Final = (
+            {
+                server_id: _TemporaryMCPServerEntry(
+                    server=temp_server,
+                    expires_at=datetime.utcnow() + timedelta(seconds=300),
+                )
+            }
+            if source == "temp_mem"
+            else {}
+        )
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock()
+        byok_store: Final = AsyncMock()
+        oauth_store: Final = AsyncMock()
+        env_merge: Final = AsyncMock()
+        env_delete: Final = AsyncMock()
+        byok_invalidate: Final = AsyncMock()
+        oauth_invalidate: Final = AsyncMock()
+        env_invalidate: Final = MagicMock()
+        try:
+            if source == "temp_redis":
+                await _cache_temporary_mcp_server_in_redis(temp_server, ttl_seconds=300)
+                cache_backend.async_get_cache = AsyncMock(
+                    return_value=cache_backend.async_set_cache.await_args.kwargs["value"]
+                )
+
+            with (
+                MockRouter(assert_all_called=False) as httpx_mock,
+                patch.object(mgmt_endpoints, "_temporary_mcp_servers", memory_cache),
+                patch.object(mgmt_endpoints, "_get_prisma_client_or_none", return_value=prisma),
+                patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+                patch.object(manager, "add_server", add_server),
+                patch.object(manager, "health_check_server", health_check),
+                patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+                    byok_invalidate,
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.invalidate_user_env_vars_cache",
+                    env_invalidate,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_credential",
+                    byok_store,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+                    oauth_store,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.merge_user_env_vars",
+                    env_merge,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_env_vars",
+                    env_delete,
+                ),
+                patch("litellm.proxy.proxy_server.prisma_client", prisma),
+                patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            ):
+                if expected_status in (403, 404):
+                    with pytest.raises(HTTPException) as exc_info:
+                        await _get_cached_temporary_mcp_server_or_404(
+                            server_id,
+                            auth,
+                            request=_make_mock_request(),
+                        )
+
+                    expected_detail: Final = (
+                        {"error": f"MCP server {server_id} not found"}
+                        if expected_status == 404
+                        else {"error": f"Access denied to MCP server {server_id}"}
+                    )
+                    assert exc_info.value.status_code == expected_status, f"{source}/{caller}: OAuth resolution status"
+                    assert exc_info.value.detail == expected_detail, f"{source}/{caller}: complete OAuth detail body"
+                    add_server.assert_not_awaited()
+                    health_check.assert_not_awaited()
+                    byok_store.assert_not_awaited()
+                    oauth_store.assert_not_awaited()
+                    env_merge.assert_not_awaited()
+                    env_delete.assert_not_awaited()
+                    byok_invalidate.assert_not_awaited()
+                    oauth_invalidate.assert_not_awaited()
+                    env_invalidate.assert_not_called()
+                    assert httpx_mock.calls.call_count == 0, f"{source}/{caller}: no upstream HTTP"
+                else:
+                    resolved: Final = await _get_cached_temporary_mcp_server_or_404(
+                        server_id,
+                        auth,
+                        request=_make_mock_request(),
+                    )
+                    expected_alias: Final = (
+                        db_server.alias
+                        if source == "temp_draft"
+                        else "LIT3974 OAuth"
+                        if source == "config"
+                        else temp_server.alias
+                    )
+                    assert resolved.server_id == server_id, f"{source}/{caller}: resolved OAuth server"
+                    assert resolved.alias == expected_alias, f"{source}/{caller}: resolved OAuth display name"
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+    @pytest.mark.asyncio
+    async def test_temporary_oauth_id_and_name_lookup_keep_distinct_ip_behavior(self) -> None:
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+            _TemporaryMCPServerEntry,
+        )
+
+        server_id: Final = "lit3974_private_oauth"
+        prisma: Final = _lit3974_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=server_id),
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_private_oauth_permission", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_private_oauth_team"),
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "lit3974_private_oauth": {
+                    "server_id": server_id,
+                    "alias": "private_oauth_alias",
+                    "url": "https://private.example.com/mcp",
+                    "transport": "http",
+                    "available_on_public_internet": False,
+                }
+            },
+        )
+        entry: Final = _TemporaryMCPServerEntry(
+            server=generate_mock_mcp_server_config_record(server_id="lit3974_unused_temp"),
+            expires_at=datetime.utcnow() + timedelta(seconds=300),
+        )
+        auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        request: Final = _make_mock_request(ip="203.0.113.25")
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock()
+        byok_store: Final = AsyncMock()
+        oauth_store: Final = AsyncMock()
+        env_merge: Final = AsyncMock()
+        env_delete: Final = AsyncMock()
+        byok_invalidate: Final = AsyncMock()
+        oauth_invalidate: Final = AsyncMock()
+        env_invalidate: Final = MagicMock()
+        original_cache: Final = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(
+            cache=SimpleNamespace(async_get_cache=AsyncMock(return_value=None))
+        )
+        try:
+            with (
+                MockRouter(assert_all_called=False) as httpx_mock,
+                patch.object(mgmt_endpoints, "_temporary_mcp_servers", {entry.server.server_id: entry}),
+                patch.object(mgmt_endpoints, "_get_prisma_client_or_none", return_value=prisma),
+                patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+                patch.object(manager, "add_server", add_server),
+                patch.object(manager, "health_check_server", health_check),
+                patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+                    byok_invalidate,
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.invalidate_user_env_vars_cache",
+                    env_invalidate,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_credential",
+                    byok_store,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+                    oauth_store,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.merge_user_env_vars",
+                    env_merge,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_env_vars",
+                    env_delete,
+                ),
+            ):
+                resolved: Final = await _get_cached_temporary_mcp_server_or_404(
+                    server_id,
+                    auth,
+                    request=request,
+                )
+                assert resolved.server_id == server_id, "registry ID lookup omits client-IP filtering"
+                with pytest.raises(HTTPException) as exc_info:
+                    await _get_cached_temporary_mcp_server_or_404(
+                        "private_oauth_alias",
+                        auth,
+                        request=request,
+                    )
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        assert exc_info.value.status_code == 404, "registry name lookup filters an external client IP"
+        assert exc_info.value.detail == {"error": "MCP server private_oauth_alias not found"}, (
+            "complete OAuth alias IP-filter detail"
+        )
+        add_server.assert_not_awaited()
+        health_check.assert_not_awaited()
+        byok_store.assert_not_awaited()
+        oauth_store.assert_not_awaited()
+        env_merge.assert_not_awaited()
+        env_delete.assert_not_awaited()
+        byok_invalidate.assert_not_awaited()
+        oauth_invalidate.assert_not_awaited()
+        env_invalidate.assert_not_called()
+        assert httpx_mock.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["authorize", "token", "register"], ids=["authorize", "token", "register"])
+    @pytest.mark.parametrize(
+        "source,expected_status",
+        [("config_denied", 403), ("missing", 404)],
+        ids=["existing-but-denied", "missing"],
+    )
+    async def test_oauth_endpoints_reject_denied_and_missing_servers_before_upstream(
+        self,
+        endpoint: str,
+        source: str,
+        expected_status: int,
+    ) -> None:
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_authorize,
+            mcp_register,
+            mcp_token,
+        )
+
+        server_id: Final = f"lit3974_{source}_oauth_endpoint"
+        db_server: Final = generate_mock_mcp_server_db_record(server_id=server_id)
+        prisma: Final = _lit3974_prisma_client(
+            db_server,
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_oauth_endpoint_key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_oauth_endpoint_team"),
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "lit3974_oauth_endpoint_server": {
+                    "server_id": server_id,
+                    "alias": "LIT3974 OAuth endpoint",
+                    "url": "https://oauth.example.com/mcp",
+                    "transport": "http",
+                }
+            }
+            if source == "config_denied"
+            else {
+                "lit3974_oauth_endpoint_unrelated": {
+                    "server_id": "lit3974_unrelated_oauth_endpoint",
+                    "url": "https://unrelated.example.com/mcp",
+                    "transport": "http",
+                }
+            },
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_oauth_endpoint_key",
+            user_id="lit3974_oauth_endpoint_user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974_oauth_endpoint_key_permission",
+                mcp_servers=[],
+            ),
+        )
+        cache_backend: Final = SimpleNamespace(async_get_cache=AsyncMock(return_value=None))
+        original_cache: Final = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=cache_backend)
+        upstream_authorize: Final = AsyncMock()
+        upstream_token: Final = AsyncMock()
+        upstream_register: Final = AsyncMock()
+        byok_store: Final = AsyncMock()
+        oauth_store: Final = AsyncMock()
+        env_merge: Final = AsyncMock()
+        env_delete: Final = AsyncMock()
+        byok_invalidate: Final = AsyncMock()
+        oauth_invalidate: Final = AsyncMock()
+        env_invalidate: Final = MagicMock()
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock()
+        request: Final = _make_mock_request()
+        try:
+            with (
+                MockRouter(assert_all_called=False) as httpx_mock,
+                patch.object(mgmt_endpoints, "_temporary_mcp_servers", {}),
+                patch.object(mgmt_endpoints, "_get_prisma_client_or_none", return_value=prisma),
+                patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+                patch.object(manager, "add_server", add_server),
+                patch.object(manager, "health_check_server", health_check),
+                patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache",
+                    byok_invalidate,
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.invalidate_user_env_vars_cache",
+                    env_invalidate,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_credential",
+                    byok_store,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+                    oauth_store,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.merge_user_env_vars",
+                    env_merge,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_env_vars",
+                    env_delete,
+                ),
+                patch.object(mgmt_endpoints, "authorize_with_server", upstream_authorize),
+                patch.object(mgmt_endpoints, "exchange_token_with_server", upstream_token),
+                patch.object(mgmt_endpoints, "register_client_with_server", upstream_register),
+                patch("litellm.proxy.proxy_server.prisma_client", prisma),
+                patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            ):
+                with pytest.raises(HTTPException) as exc_info:
+                    if endpoint == "authorize":
+                        await mcp_authorize(
+                            request=request,
+                            server_id=server_id,
+                            user_api_key_dict=auth,
+                            client_id="lit3974-client",
+                            redirect_uri="https://client.example.com/callback",
+                        )
+                    elif endpoint == "token":
+                        await mcp_token(
+                            request=request,
+                            server_id=server_id,
+                            user_api_key_dict=auth,
+                            grant_type="authorization_code",
+                        )
+                    else:
+                        await mcp_register(
+                            request=request,
+                            server_id=server_id,
+                            user_api_key_dict=auth,
+                        )
+
+            expected_detail: Final = (
+                {"error": f"Access denied to MCP server {server_id}"}
+                if expected_status == 403
+                else {"error": f"MCP server {server_id} not found"}
+            )
+            assert exc_info.value.status_code == expected_status, f"{endpoint}/{source}: OAuth status"
+            assert exc_info.value.detail == expected_detail, f"{endpoint}/{source}: complete OAuth detail body"
+            add_server.assert_not_awaited()
+            health_check.assert_not_awaited()
+            upstream_authorize.assert_not_awaited()
+            upstream_token.assert_not_awaited()
+            upstream_register.assert_not_awaited()
+            byok_store.assert_not_awaited()
+            oauth_store.assert_not_awaited()
+            env_merge.assert_not_awaited()
+            env_delete.assert_not_awaited()
+            byok_invalidate.assert_not_awaited()
+            oauth_invalidate.assert_not_awaited()
+            env_invalidate.assert_not_called()
+            assert httpx_mock.calls.call_count == 0, f"{endpoint}/{source}: no upstream HTTP"
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
