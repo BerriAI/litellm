@@ -113,6 +113,9 @@ describe("AddAgentForm submit payload", () => {
     await user.click(screen.getByLabelText("Trusted Entra Tenant"));
     await user.click(await screen.findByRole("option", { name: tenant }));
     fireEvent.change(screen.getByLabelText("Application (Client) ID"), { target: { value: clientId } });
+    fireEvent.change(screen.getByLabelText("Enterprise Application Object ID"), {
+      target: { value: "33333333-3333-4333-8333-333333333333" },
+    });
     await user.click(screen.getByRole("button", { name: /^Next/ }));
     await user.click(screen.getByRole("button", { name: /^Next/ }));
     await user.click(screen.getByRole("button", { name: /^Next/ }));
@@ -120,9 +123,16 @@ describe("AddAgentForm submit payload", () => {
     await user.click(screen.getByRole("button", { name: /Create Agent/ }));
     await waitFor(() => expect(networking.createAgentCall).toHaveBeenCalledTimes(1));
     expect(createdPayload().agent_name).toBe("Readable agent");
-    expect(createdPayload().litellm_params).toEqual({
-      identity: { provider: "microsoft_entra", tenant_id: tenant, client_id: clientId },
-    });
+    const expectedIdentity = {
+      provider: "microsoft_entra",
+      tenant_id: tenant,
+      client_id: clientId,
+      service_principal_id: "33333333-3333-4333-8333-333333333333",
+      required_roles: [],
+      required_scopes: ["user_impersonation"],
+    };
+    expect(createdPayload().identity).toEqual(expectedIdentity);
+    expect(createdPayload()).not.toHaveProperty("litellm_params.identity");
     expect(networking.keyCreateForAgentCall).not.toHaveBeenCalled();
     expect(
       screen.getByText(

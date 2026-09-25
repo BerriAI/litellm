@@ -1015,6 +1015,24 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
+    if _model and valid_token is not None and valid_token.managed_agent_policy is not None:
+        managed_models: Final = (valid_token.managed_agent_policy.object_permission or MappingProxyType({})).get(
+            "models", ()
+        )
+        if not isinstance(managed_models, (list, tuple)) or not managed_models:
+            raise HTTPException(403, "This agent has no model grants")
+        _can_object_call_model(
+            model=_model,
+            llm_router=llm_router,
+            models=list(managed_models),
+            team_id=valid_token.team_id,
+            object_type="agent",
+        )
+
+    if valid_token is not None:
+        from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
+
+        await check_agent_budget(valid_token)
     await _check_agent_access_group_model_access(model=_model, valid_token=valid_token, llm_router=llm_router)
     await _check_agent_caller_model_access(
         model=_model,
@@ -4345,7 +4363,16 @@ async def _check_agent_access_group_model_access(
     """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
     if not model or valid_token is None or not valid_token.agent_id:
         return True
-    ceiling: Final = await resolve_ceiling(valid_token.agent_id)
+
+    async def managed_group_ids(_agent_id: str) -> tuple[str, ...]:
+        agent: Final = valid_token.managed_agent_policy
+        return tuple(agent.access_group_ids or ()) if agent else ()
+
+    ceiling: Final = (
+        await resolve_agent_access_group_ceiling(valid_token.agent_id, load_access_group_ids=managed_group_ids)
+        if valid_token.managed_agent_policy is not None
+        else await resolve_ceiling(valid_token.agent_id)
+    )
     if ceiling is None:
         return True
     if not ceiling.models:

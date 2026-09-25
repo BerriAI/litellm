@@ -289,6 +289,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const buildAgentData = (values: AgentFormValues): AgentRequestPayload | null => {
     if (agentType === CUSTOM_AGENT_TYPE) {
+      if (values.identity_provider === "microsoft_entra") return { agent_name: values.agent_name };
       return {
         agent_name: values.agent_name,
         agent_card_params: {
@@ -795,7 +796,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                     <StatusBadge tone="warning" label="GENERIC" className="h-4 px-1 text-[10px]" />
                   </span>
                   <span className="block text-xs whitespace-normal text-warning">
-                    For agents that don&apos;t follow a standard protocol, just needs a virtual key
+                    For outbound agents using an identity provider or virtual key
                   </span>
                 </span>
               </span>
@@ -915,7 +916,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           name="team_id"
           label={labelWithHint(
             "Assign to Team",
-            "Optionally assign this agent to a team. The agent and its key will belong to the selected team.",
+            "Optionally select a team for the virtual key. The agent identity and its permissions are managed separately.",
           )}
         >
           {({ value, onChange }) => (

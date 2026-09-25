@@ -44,6 +44,18 @@ class AgentsRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentsTable"
     table_name = "litellm_agentstable"
 
 
+class AgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentIdentity"]):
+    table_name = "litellm_agentidentity"
+
+
+class RetiredAgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgentIdentity"]):
+    table_name = "litellm_retiredagentidentity"
+
+
+class VerifiedHumanSubjectRepository(PrismaTableRepository["prisma_models.LiteLLM_VerifiedHumanSubject"]):
+    table_name = "litellm_verifiedhumansubject"
+
+
 class ObjectPermissionRepository(PrismaTableRepository["prisma_models.LiteLLM_ObjectPermissionTable"]):
     table_name = "litellm_objectpermissiontable"
 

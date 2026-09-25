@@ -12,12 +12,11 @@ import asyncio
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from types import MappingProxyType
 from typing import Annotated, Final, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import TypeAdapter
+from pydantic import ValidationError
 from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
@@ -48,11 +47,10 @@ from litellm.proxy.agent_endpoints.agent_search import (
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
 from litellm.proxy.agent_endpoints.identity import (
-    AgentIdentityStatus,
-    agent_identity,
-    identity_evidence_key,
     validate_identity_binding,
 )
+from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -67,6 +65,12 @@ from litellm.types.agents import (
     PatchAgentRequest,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.proxy.agent_identity import (
+    AgentIdentityBinding,
+    AgentIdentityFailure,
+    EntraIdentityConfig,
+    ManagedAgentIdentityStatus,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
@@ -179,7 +183,7 @@ def _redact_sensitive_agent_fields(
         copy = agent.model_copy(deep=True)
         copy.jwt_auth_configured = bool(
             general_settings.get("enable_jwt_auth")
-            and (agent_identity(agent.litellm_params) is not None or jwt_handler.litellm_jwtauth.agent_id_jwt_field)
+            and (agent.identity is not None or jwt_handler.litellm_jwtauth.agent_id_jwt_field)
         )
         if not is_admin:
             copy.static_headers = None
@@ -445,6 +449,23 @@ def _trusted_agent_issuers() -> tuple[str, ...]:
     )
 
 
+def _validate_managed_identity_request(
+    request: AgentConfig | PatchAgentRequest, existing: AgentResponse | None = None
+) -> None:
+    raw: Final = request.get("identity") if "identity" in request else existing.identity if existing else None
+    if raw is None:
+        return
+    try:
+        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else EntraIdentityConfig.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(400, "Invalid Entra identity configuration") from exc
+    if identity.issuer not in _trusted_agent_issuers():
+        raise HTTPException(400, "Configure trusted JWT issuer and audience validation for this Entra tenant first")
+    if request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous":
+        if os.getenv("MICROSOFT_TENANT") != identity.tenant_id or not os.getenv("MICROSOFT_CLIENT_ID"):
+            raise HTTPException(400, "Delegated agents require Microsoft SSO for the same trusted tenant")
+
+
 @router.get("/v1/agents/identity/providers", response_model=tuple[str, ...], tags=("[beta] A2A Agents",))
 async def get_agent_identity_providers(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -453,22 +474,25 @@ async def get_agent_identity_providers(
     return _trusted_agent_issuers()
 
 
-@router.get("/v1/agents/{agent_id}/identity", response_model=AgentIdentityStatus, tags=("[beta] A2A Agents",))
+@router.get("/v1/agents/{agent_id}/identity", response_model=ManagedAgentIdentityStatus, tags=("[beta] A2A Agents",))
 async def get_agent_identity_status(
     agent_id: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> AgentIdentityStatus:
-    from litellm.proxy.proxy_server import user_api_key_cache
+) -> ManagedAgentIdentityStatus:
+    from litellm.proxy.proxy_server import prisma_client
 
     _check_agent_management_permission(user_api_key_dict)
-    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id)
+    agent: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
+    if isinstance(agent, AgentIdentityFailure):
+        raise_identity_failure(agent)
     if agent is None:
         raise HTTPException(404, "Agent not found")
-    identity: Final = agent_identity(agent.litellm_params)
-    cached: Final[object] = await user_api_key_cache.async_get_cache(identity_evidence_key(agent))
-    return AgentIdentityStatus(
-        identity=identity,
-        last_authenticated_at=TypeAdapter(datetime | None).validate_python(cached) if identity else None,
+    return ManagedAgentIdentityStatus(
+        identity=agent.identity,
+        identity_managed=agent.identity_managed,
+        enabled=agent.enabled,
+        execution_mode=agent.execution_mode,
+        last_authenticated_at=agent.identity.last_authenticated_at if agent.identity else None,
     )
 
 
@@ -533,6 +557,7 @@ async def create_agent(
         # Get the user ID from the API key auth
         created_by: Final = user_api_key_dict.user_id or "unknown"
 
+        _validate_managed_identity_request(request)
         validate_identity_binding(
             request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers()
         )
@@ -727,13 +752,16 @@ async def update_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
+        )
         if existing_agent is not None:
-            existing_agent = dict(existing_agent)
+            existing_agent = existing_agent.model_dump()
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
+        _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
         validate_identity_binding(
             request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
         )
@@ -833,13 +861,16 @@ async def patch_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
+        )
         if existing_agent is not None:
-            existing_agent = dict(existing_agent)
+            existing_agent = existing_agent.model_dump()
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
+        _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
         validate_identity_binding(
             request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
         )
@@ -924,7 +955,9 @@ async def delete_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
+        )
         if existing_agent is not None:
             existing_agent = dict[str, object](existing_agent)
 

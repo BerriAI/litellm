@@ -198,7 +198,7 @@ class TestAgentRequestHandler:
 
     @staticmethod
     def _team_grants(grants: dict[str, AgentAccess]) -> AsyncMock:
-        async def by_team(user_api_key_auth: UserAPIKeyAuth | None = None) -> AgentAccess:
+        async def by_team(user_api_key_auth: UserAPIKeyAuth | None = None, *, strict: bool = False) -> AgentAccess:
             assert user_api_key_auth is not None
             return grants.get(user_api_key_auth.team_id or "", UnrestrictedAgentAccess())
 
@@ -248,7 +248,6 @@ class TestAgentRequestHandler:
             assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
                 frozenset({"agent-alpha"})
             )
-
 
     async def test_agent_access_groups_intersect_with_key_grants(self):
         agent_key: Final = self._key_granting(["agent-alpha", "agent-beta"], agent_id="caller-agent")

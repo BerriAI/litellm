@@ -156,17 +156,22 @@ describe("AgentInfoView update payload", () => {
       .mockResolvedValue({} as never);
   });
 
-  it("preserves the Entra binding, access groups, and runtime settings when renaming", async () => {
+  it("preserves the Entra binding and access groups without overwriting unopened runtime settings when renaming", async () => {
     const user = setup();
     const identity = {
       provider: "microsoft_entra",
       tenant_id: "11111111-1111-4111-8111-111111111111",
       client_id: "22222222-2222-4222-8222-222222222222",
+      service_principal_id: "33333333-3333-4333-8333-333333333333",
     };
-    const params = { ...A2A_AGENT.litellm_params, identity, require_trace_id_on_calls_by_agent: true };
+    const params = { ...A2A_AGENT.litellm_params, require_trace_id_on_calls_by_agent: true };
     vi.mocked(networking.getAgentInfo).mockResolvedValue({
       ...A2A_AGENT,
       litellm_params: params,
+      identity: { ...identity, agent_id: "agent-1", issuer: "https://issuer.example", revision: "rev", active: true },
+      identity_managed: true,
+      execution_mode: "autonomous",
+      enabled: true,
       access_group_ids: ["ag-entra"],
     } as never);
     vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
@@ -181,7 +186,8 @@ describe("AgentInfoView update payload", () => {
     fireEvent.change(screen.getByLabelText("Agent Name"), { target: { value: "Renamed agent" } });
     await save(user);
     expect(patchedPayload().agent_name).toBe("Renamed agent");
-    expect(patchedPayload().litellm_params).toEqual(params);
+    expect(patchedPayload()).not.toHaveProperty("litellm_params");
+    expect(patchedPayload().identity).toMatchObject(identity);
     expect(patchedPayload().access_group_ids).toEqual(["ag-entra"]);
     expect(networking.patchAgentCall).toHaveBeenCalledWith(
       "tok",

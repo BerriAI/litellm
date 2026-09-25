@@ -319,7 +319,7 @@ export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] 
 });
 
 export const parseMcpPermissionsForForm = (agent: any) => ({
-  ...parseIdentityForForm(agent.litellm_params),
+  ...parseIdentityForForm(agent),
   allowed_mcp_servers_and_groups: {
     servers: agent.object_permission?.mcp_servers ?? [],
     accessGroups: agent.object_permission?.mcp_access_groups ?? [],

@@ -1,9 +1,10 @@
 import json
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
@@ -19,7 +20,7 @@ from litellm.proxy.agent_endpoints.endpoints import (
     router,
     user_api_key_auth,
 )
-from litellm.types.agents import AgentResponse
+from litellm.types.agents import AgentResponse, PatchAgentRequest
 
 
 def _sample_agent_card_params() -> dict:
@@ -95,7 +96,7 @@ def test_update_agent_success(mock_prisma_client, mock_user_api_key_auth, monkey
         "agent_card_params": _sample_agent_card_params(),
     }
     mock_prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
-        return_value=existing_agent
+        return_value=AgentResponse.model_validate(existing_agent)
     )
 
     mock_registry = MagicMock()
@@ -661,11 +662,9 @@ class TestAgentRBACProxyAdmin:
         """LIT-6736: PUT /v1/agents/{id} must not echo the stored secret back."""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
-                return_value={
-                    "agent_id": "agent-123",
-                    "agent_name": "Existing Agent",
-                    "agent_card_params": _sample_agent_card_params(),
-                }
+                return_value=AgentResponse(
+                    agent_id="agent-123", agent_name="Existing Agent", agent_card_params=_sample_agent_card_params()
+                )
             )
             self.mock_registry.update_agent_in_db = AsyncMock(
                 return_value=AgentResponse(
@@ -696,11 +695,9 @@ class TestAgentRBACProxyAdmin:
         """LIT-6736: PATCH /v1/agents/{id} must not echo the stored secret back."""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
-                return_value={
-                    "agent_id": "agent-123",
-                    "agent_name": "Existing Agent",
-                    "agent_card_params": _sample_agent_card_params(),
-                }
+                return_value=AgentResponse(
+                    agent_id="agent-123", agent_name="Existing Agent", agent_card_params=_sample_agent_card_params()
+                )
             )
             self.mock_registry.patch_agent_in_db = AsyncMock(
                 return_value=AgentResponse(
@@ -1158,10 +1155,10 @@ def test_jwt_authentication_status_does_not_require_virtual_keys(
 
 
 def test_identity_providers_require_configured_issuer_and_audience(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy import proxy_server
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-    from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
 
     handler: Final = JWTHandler()
     handler.update_environment(None, DualCache(), LiteLLM_JWTAuth())
@@ -1178,49 +1175,99 @@ def test_identity_providers_require_configured_issuer_and_audience(monkeypatch: 
     assert forbidden.status_code == 403
 
 
-def test_identity_evidence_is_gateway_generated_and_changes_with_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_identity_evidence_is_persisted_and_never_taken_from_runtime_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
-    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
-    from litellm.proxy.agent_endpoints.identity import identity_evidence_key
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
-    registry: Final = AgentRegistry()
-    cache: Final = UserApiKeyCache()
-    bound: Final = AgentResponse(agent_id="bound", agent_name="Readable name", agent_card_params={}, litellm_params={"identity": {
-        "provider": "microsoft_entra", "tenant_id": "11111111-1111-4111-8111-111111111111", "client_id": "22222222-2222-4222-8222-222222222222",
-    }, "last_authenticated_at": "forged-proof"})
-    registry.register_agent(bound)
-    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    binding: Final = AgentIdentityBinding(
+        agent_id="bound",
+        provider="microsoft_entra",
+        tenant_id="11111111-1111-4111-8111-111111111111",
+        client_id="22222222-2222-4222-8222-222222222222",
+        issuer="https://issuer.example",
+        revision="revision-one",
+    )
+    bound: Final = AgentResponse(
+        agent_id="bound",
+        agent_name="Readable name",
+        agent_card_params={},
+        identity=binding,
+        identity_managed=True,
+        litellm_params={"last_authenticated_at": "forged-proof"},
+    )
+    database: Final = MagicMock()
+    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=bound)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
     pending: Final = client.get("/v1/agents/bound/identity")
     assert pending.status_code == 200
     assert pending.json()["last_authenticated_at"] is None
-    cache.set_cache(identity_evidence_key(bound), "2026-01-01T00:00:00+00:00")
+    verified_binding: Final = binding.model_copy(
+        update={"last_authenticated_at": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+    )
+    database.db.litellm_agentstable.find_unique.return_value = bound.model_copy(update={"identity": verified_binding})
     verified: Final = client.get("/v1/agents/bound/identity")
     assert verified.json()["last_authenticated_at"] == "2026-01-01T00:00:00Z"
-    assert verified.json()["identity"]["client_id"] == "22222222-2222-4222-8222-222222222222"
+    assert verified.json()["identity"]["client_id"] == binding.client_id
+    database.db.litellm_agentstable.find_unique.return_value = None
     assert client.get("/v1/agents/missing/identity").status_code == 404
-    registry.deregister_agent(bound.agent_name)
-    registry.register_agent(bound.model_copy(update={"litellm_params": {}}))
-    assert client.get("/v1/agents/bound/identity").json() == {"identity": None, "last_authenticated_at": None}
+    database.db.litellm_agentstable.find_unique.side_effect = RuntimeError("unavailable")
+    assert client.get("/v1/agents/bound/identity").status_code == 503
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
-    from litellm.proxy import proxy_server
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
     from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
 
     handler: Final = JWTHandler()
-    handler.update_environment(None, DualCache(), LiteLLM_JWTAuth(issuers=[
-        JWTIssuerConfig(issuer="https://scoped.example", audience="gateway"),
-        JWTIssuerConfig(issuer="https://unscoped.example", disable_audience_validation=True),
-    ]))
+    handler.update_environment(
+        None,
+        DualCache(),
+        LiteLLM_JWTAuth(
+            issuers=[
+                JWTIssuerConfig(issuer="https://scoped.example", audience="gateway"),
+                JWTIssuerConfig(issuer="https://unscoped.example", disable_audience_validation=True),
+            ]
+        ),
+    )
     monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": enabled})
     monkeypatch.setenv("JWT_ISSUER", "https://global.example")
     monkeypatch.setenv("JWT_AUDIENCE", "gateway")
-    assert client.get("/v1/agents/identity/providers").json() == (["https://scoped.example", "https://global.example"] if enabled else [])
+    assert client.get("/v1/agents/identity/providers").json() == (
+        ["https://scoped.example", "https://global.example"] if enabled else []
+    )
     monkeypatch.setenv("JWT_ISSUER", "https://unscoped.example")
     assert client.get("/v1/agents/identity/providers").json() == (["https://scoped.example"] if enabled else [])
+
+
+@pytest.mark.parametrize("change", ({"execution_mode": "delegated"}, {"execution_mode": "both"}))
+def test_mode_only_edit_requires_the_existing_identity_sso_tenant(
+    monkeypatch: pytest.MonkeyPatch, change: PatchAgentRequest
+) -> None:
+    from tests.test_litellm.proxy.agent_endpoints.test_managed_identity import BINDING, TENANT, managed_agent
+
+    monkeypatch.setattr(agent_endpoints, "_trusted_agent_issuers", lambda: (BINDING.issuer,))
+    monkeypatch.delenv("MICROSOFT_TENANT", raising=False)
+    monkeypatch.setenv("MICROSOFT_CLIENT_ID", "gateway-client")
+    with pytest.raises(HTTPException, match="Delegated agents require Microsoft SSO"):
+        agent_endpoints._validate_managed_identity_request(change, managed_agent())
+    monkeypatch.setenv("MICROSOFT_TENANT", TENANT)
+    agent_endpoints._validate_managed_identity_request(change, managed_agent())
+
+
+def test_identity_only_edit_preserves_delegated_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_litellm.proxy.agent_endpoints.test_managed_identity import BINDING, managed_agent
+
+    monkeypatch.setattr(agent_endpoints, "_trusted_agent_issuers", lambda: (BINDING.issuer,))
+    monkeypatch.delenv("MICROSOFT_TENANT", raising=False)
+    configuration: Final = BINDING.model_dump(
+        exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
+    )
+    delegated: Final = managed_agent().model_copy(update={"execution_mode": "delegated"})
+    with pytest.raises(HTTPException, match="Delegated agents require Microsoft SSO"):
+        agent_endpoints._validate_managed_identity_request({"identity": configuration}, delegated)

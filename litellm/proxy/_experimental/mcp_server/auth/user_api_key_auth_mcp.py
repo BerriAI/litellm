@@ -1462,6 +1462,11 @@ class MCPRequestHandler:
         """
         from litellm.proxy.proxy_server import general_settings
 
+        if user_api_key_auth is not None and user_api_key_auth.managed_agent_policy is not None:
+            from litellm.proxy._experimental.mcp_server.auth.managed_agent_access import managed_agent_servers
+
+            return MCPServerAccess(server_ids=await managed_agent_servers(user_api_key_auth), scope="scoped")
+
         key_object_permission: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
 
         try:
@@ -2079,6 +2084,11 @@ class MCPRequestHandler:
         """
         if not user_api_key_auth:
             return None
+
+        if user_api_key_auth.managed_agent_policy is not None:
+            from litellm.proxy._experimental.mcp_server.auth.managed_agent_access import managed_agent_tools
+
+            return await managed_agent_tools(server_id, user_api_key_auth)
 
         try:
             # FIRST statement, mirroring get_allowed_mcp_servers: a keyless admitted subject resolves per
@@ -3121,6 +3131,10 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
 
+        if user_api_key_auth.managed_agent_policy is not None:
+            permission: Final = user_api_key_auth.managed_agent_policy.object_permission
+            return LiteLLM_ObjectPermissionTable.model_validate(permission) if permission is not None else None
+
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
             return None
@@ -3182,7 +3196,7 @@ class MCPRequestHandler:
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(obj_perm)
             return list({*expanded_direct_servers, *access_group_servers, *toolset_grants})
         except Exception as e:
-            if isinstance(e, UnloadableEntitlementError):
+            if user_api_key_auth.managed_agent_policy is not None or isinstance(e, UnloadableEntitlementError):
                 raise
             verbose_logger.warning("Failed to get allowed MCP servers for agent: %s", e)
             return []
@@ -3251,9 +3265,9 @@ class MCPRequestHandler:
             )
             toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(obj_perm, server_id)
             agent_tools: Final = MCPRequestHandler._union_tool_grants(direct_tools, toolset_tools)
-            return list(agent_tools) if agent_tools else None
+            return list(agent_tools) if agent_tools is not None else None
         except Exception as e:
-            if isinstance(e, UnloadableEntitlementError):
+            if user_api_key_auth.managed_agent_policy is not None or isinstance(e, UnloadableEntitlementError):
                 raise
             verbose_logger.warning("Failed to get agent tool permissions for server: %s", e)
             return None

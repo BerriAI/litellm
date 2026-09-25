@@ -723,6 +723,8 @@ async def invoke_agent_a2a(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        user_api_key_dict.invoked_agent_id = agent.agent_id
+
         _enforce_inbound_trace_id(agent, request)
 
         # Get backend URL and agent name

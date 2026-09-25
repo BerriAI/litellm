@@ -2091,6 +2091,79 @@
           "title": "APIKeySecurityScheme",
           "type": "object"
         },
+        "AgentBudgetConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "max_budget": {
+              "minimum": 0.0,
+              "title": "Max Budget",
+              "type": "number"
+            }
+          },
+          "required": [
+            "max_budget"
+          ],
+          "title": "AgentBudgetConfig",
+          "type": "object"
+        },
+        "AgentBudgetState": {
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "title": "Budget Id",
+              "type": "string"
+            },
+            "budget_reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Reset At"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            }
+          },
+          "required": [
+            "budget_id"
+          ],
+          "title": "AgentBudgetState",
+          "type": "object"
+        },
         "AgentCapabilities": {
           "description": "Defines optional capabilities supported by an agent.",
           "properties": {
@@ -2378,6 +2451,29 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentBudgetConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2391,6 +2487,16 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "litellm_params": {
               "additionalProperties": true,
@@ -2460,8 +2566,7 @@
             }
           },
           "required": [
-            "agent_name",
-            "agent_card_params"
+            "agent_name"
           ],
           "title": "AgentConfig",
           "type": "object"
@@ -2511,17 +2616,24 @@
           "title": "AgentExtension",
           "type": "object"
         },
-        "AgentIdentityStatus": {
+        "AgentIdentityBinding": {
           "properties": {
-            "identity": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/EntraAgentIdentity"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+            "active": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            },
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
             },
             "last_authenticated_at": {
               "anyOf": [
@@ -2534,9 +2646,59 @@
                 }
               ],
               "title": "Last Authenticated At"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
+            "tenant_id": {
+              "title": "Tenant Id",
+              "type": "string"
             }
           },
-          "title": "AgentIdentityStatus",
+          "required": [
+            "agent_id",
+            "provider",
+            "tenant_id",
+            "client_id",
+            "issuer",
+            "revision"
+          ],
+          "title": "AgentIdentityBinding",
           "type": "object"
         },
         "AgentInterface": {
@@ -2752,6 +2914,17 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "budget_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Id"
+            },
             "created_at": {
               "anyOf": [
                 {
@@ -2775,6 +2948,21 @@
               ],
               "title": "Created By"
             },
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2788,6 +2976,21 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
             },
             "jwt_auth_configured": {
               "default": false,
@@ -2807,6 +3010,16 @@
                 }
               ],
               "title": "Keys"
+            },
+            "litellm_budget_table": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentBudgetState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "litellm_params": {
               "anyOf": [
@@ -3239,11 +3452,10 @@
           "title": "DailySpendMetadata",
           "type": "object"
         },
-        "EntraAgentIdentity": {
+        "EntraIdentityConfig": {
           "additionalProperties": false,
           "properties": {
             "client_id": {
-              "format": "uuid",
               "title": "Client Id",
               "type": "string"
             },
@@ -3252,8 +3464,36 @@
               "title": "Provider",
               "type": "string"
             },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
             "tenant_id": {
-              "format": "uuid",
               "title": "Tenant Id",
               "type": "string"
             }
@@ -3263,7 +3503,7 @@
             "tenant_id",
             "client_id"
           ],
-          "title": "EntraAgentIdentity",
+          "title": "EntraIdentityConfig",
           "type": "object"
         },
         "HTTPAuthSecurityScheme": {
@@ -3413,6 +3653,54 @@
             "agent_ids"
           ],
           "title": "MakeAgentsPublicRequest",
+          "type": "object"
+        },
+        "ManagedAgentIdentityStatus": {
+          "properties": {
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            }
+          },
+          "title": "ManagedAgentIdentityStatus",
           "type": "object"
         },
         "MetricWithMetadata": {
@@ -3615,6 +3903,29 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentBudgetConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -3628,6 +3939,16 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "litellm_params": {
               "additionalProperties": true,
@@ -4440,7 +4761,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/AgentIdentityStatus"
+                    "$ref": "#/components/schemas/ManagedAgentIdentityStatus"
                   }
                 }
               },

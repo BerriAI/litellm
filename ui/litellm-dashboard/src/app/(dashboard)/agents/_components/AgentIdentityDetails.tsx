@@ -1,4 +1,5 @@
 import React from "react";
+import type { components } from "@/lib/http/schema";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
@@ -23,13 +24,17 @@ export const AgentIdentityDetails = ({
   const { data, isError, isFetching, refetch } = useQuery({
     queryKey: ["agent-identity", agentId, identity],
     queryFn: () =>
-      apiClient.get<{ last_authenticated_at: string | null }>(`/v1/agents/${encodeURIComponent(agentId)}/identity`, {
-        accessToken: accessToken ?? "",
-      }),
+      apiClient.get<components["schemas"]["ManagedAgentIdentityStatus"]>(
+        `/v1/agents/${encodeURIComponent(agentId)}/identity`,
+        {
+          accessToken: accessToken ?? "",
+        },
+      ),
     enabled: Boolean(accessToken && identity),
   });
 
   if (!identity) return null;
+  const executionLabel = data?.enabled ? "Enabled" : "Disabled";
   return (
     <section aria-label="Agent Identity" className="mb-6 space-y-2 rounded-lg border border-border p-4">
       <h3 className="font-medium">Agent Identity: Microsoft Entra ID</h3>
@@ -39,10 +44,18 @@ export const AgentIdentityDetails = ({
       <p className="text-sm">
         Application (Client) ID: <span className="font-mono">{identity.client_id}</span>
       </p>
-      <p className="text-sm">{authenticationMessage(isError, data?.last_authenticated_at)}</p>
+      <p className="text-sm">Enterprise application Object ID: {identity.service_principal_id || "Not configured"}</p>
+      <p className="text-sm">
+        Execution: {data ? executionLabel : "Loading"} · Mode: {data?.execution_mode ?? "Loading"}
+      </p>
+      <p className="text-sm">
+        {data?.identity?.active === false
+          ? "Identity unbound; execution is disabled"
+          : authenticationMessage(isError, data?.last_authenticated_at)}
+      </p>
       <p className="text-xs text-muted-foreground">
-        Recent evidence comes from a validated Entra token matching this binding. It is retained in the gateway cache
-        for 24 hours and may clear on restart. Tool and model permissions are checked separately.
+        Recent evidence comes from a validated Entra token matching this binding. It is persisted across restarts and
+        cleared when the binding changes. Tool and model permissions are checked separately.
       </p>
       <div className="flex items-center gap-4">
         <Button

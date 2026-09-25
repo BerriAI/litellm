@@ -239,7 +239,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         : built;
 
       await patchAgentCall(accessToken, agentId, {
-        ...withAgentIdentity(updateData, values, agent.litellm_params),
+        ...withAgentIdentity(updateData, values, agent),
         object_permission: buildMcpObjectPermission(values),
         access_group_ids: values.access_group_ids ?? [],
       });
@@ -339,16 +339,20 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         <div>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
-            {isAdmin && (
-              <AgentIdentityDetails
-                agentId={agentId}
-                identity={agent.litellm_params?.identity}
-                accessToken={accessToken}
-              />
-            )}
+            {isAdmin && <AgentIdentityDetails agentId={agentId} identity={agent.identity} accessToken={accessToken} />}
             <DetailList>
               <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
               <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
+              <DetailItem label="Agent Budget">
+                {agent.litellm_budget_table?.max_budget != null
+                  ? `$${agent.spend ?? 0} / $${agent.litellm_budget_table.max_budget}`
+                  : "No aggregate limit"}
+              </DetailItem>
+              <DetailItem label="Budget Reset">
+                {agent.litellm_budget_table?.budget_reset_at
+                  ? new Date(agent.litellm_budget_table.budget_reset_at).toLocaleString()
+                  : "No scheduled reset"}
+              </DetailItem>
               <DetailItem label="Display Name">{agent.agent_card_params?.name || "-"}</DetailItem>
               <DetailItem label="Description">{agent.agent_card_params?.description || "-"}</DetailItem>
               <DetailItem label="URL">{agent.agent_card_params?.url || "-"}</DetailItem>

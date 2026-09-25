@@ -16,7 +16,6 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -53,7 +52,9 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.agent_endpoints.identity import agent_identity, identity_evidence_key, match_agent_identity
+from litellm.proxy.agent_endpoints.identity import agent_identity
+from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
@@ -69,6 +70,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
+from litellm.types.proxy.agent_identity import AgentIdentityFailure
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 from .auth_checks import (
@@ -1096,6 +1098,15 @@ class JWTHandler:
             "options": options or None,
         }
 
+    def managed_issuer_is_trusted(self, issuer: object) -> bool:
+        if not isinstance(issuer, str):
+            return False
+        configured: Final = self.litellm_jwtauth.issuers or ()
+        for item in configured:
+            if item.issuer == issuer:
+                return bool(item.audience) and not item.disable_audience_validation
+        return issuer == os.getenv("JWT_ISSUER") and bool(os.getenv("JWT_AUDIENCE"))
+
     def _get_configured_issuer(self, token: str) -> JWTIssuerConfig | None:
         litellm_jwtauth: Final[_JWTAuthSettings | None] = getattr(self, "litellm_jwtauth", None)
         if litellm_jwtauth is None:
@@ -1482,14 +1493,6 @@ class JWTAuthManager:
         jwt_valid_token: Mapping[str, object],
         agent_registry: AgentLookup,
     ) -> str | None:
-        bound_agent: Final = match_agent_identity(agent_registry.get_agent_list(), jwt_valid_token)
-        if bound_agent is not None:
-            jwt_handler.user_api_key_cache.set_cache(
-                key=identity_evidence_key(bound_agent),
-                value=datetime.now(timezone.utc).isoformat(),
-                ttl=86400,
-            )
-            return bound_agent.agent_id
         agent_claim: Final = jwt_handler.get_agent_claim(token=jwt_valid_token)
         if agent_claim is None:
             return None
@@ -2417,12 +2420,39 @@ class JWTAuthManager:
         """Resolve and authorize JWT context; only normal admission supplies provisioning."""
         handler: Final = jwt_handler
         jwt_valid_token: Final = await JWTAuthManager.authenticate_jwt(api_key, handler)
+        managed: Final = await resolve_managed_agent(jwt_valid_token, prisma_client)
+        if managed is not None:
+            if not handler.managed_issuer_is_trusted(jwt_valid_token.get("iss")):
+                raise HTTPException(403, "Managed agents require trusted JWT issuer and audience validation")
+            if not RouteChecks.is_llm_api_route(route) and route not in ("/v1/agents", "/agents"):
+                raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
+            evidence: Final = await AgentIdentityStore.from_client(prisma_client).record_authentication(managed)
+            if isinstance(evidence, AgentIdentityFailure):
+                raise_identity_failure(evidence)
+            if managed.mode == "autonomous":
+                return JWTAuthBuilderResult(
+                    is_proxy_admin=False,
+                    team_id=None,
+                    team_object=None,
+                    user_id=None,
+                    user_email=None,
+                    user_object=None,
+                    org_id=None,
+                    org_object=None,
+                    end_user_id=None,
+                    end_user_object=None,
+                    token=api_key,
+                    team_membership=None,
+                    jwt_claims=jwt_valid_token,
+                    agent_id=managed.agent_id,
+                    managed_agent_context=managed,
+                )
         team_id_upsert: Final = provisioning.team_id_upsert if provisioning is not None else False
         model: Final = request_data.get("model")
         requested_model: Final = model if isinstance(model, str) else None
 
         # Check RBAC
-        rbac_role: Final = handler.get_rbac_role(token=jwt_valid_token)
+        rbac_role: Final = handler.get_rbac_role(token=jwt_valid_token) if managed is None else None
         await JWTAuthManager.check_rbac_role(handler, jwt_valid_token, general_settings, request_data, route, rbac_role)
 
         # Check Scope Based Access
@@ -2438,7 +2468,11 @@ class JWTAuthManager:
         object_id = handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         # Get basic user info
-        user_id, user_email, valid_user_email = await JWTAuthManager.get_user_info(handler, jwt_valid_token)
+        user_id, user_email, valid_user_email = (
+            (managed.user_id, None, None)
+            if managed is not None
+            else await JWTAuthManager.get_user_info(handler, jwt_valid_token)
+        )
 
         # Get IDs
         org_id: Final = handler.get_org_id(token=jwt_valid_token, default_value=None)
@@ -2453,23 +2487,31 @@ class JWTAuthManager:
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
                 user_id = object_id
 
-        agent_id: Final = JWTAuthManager.resolve_agent_id(
-            jwt_handler=handler,
-            jwt_valid_token=jwt_valid_token,
-            agent_registry=handler.agent_lookup,
+        agent_id: Final = (
+            managed.agent_id
+            if managed is not None
+            else JWTAuthManager.resolve_agent_id(
+                jwt_handler=handler,
+                jwt_valid_token=jwt_valid_token,
+                agent_registry=handler.agent_lookup,
+            )
         )
 
         # Check admin access
-        admin_result: Final = await JWTAuthManager.check_admin_access(
-            handler,
-            scopes,
-            route,
-            user_id,
-            org_id,
-            api_key,
-            jwt_valid_token,
-            user_email=user_email,
-            agent_id=agent_id,
+        admin_result: Final = (
+            None
+            if managed is not None
+            else await JWTAuthManager.check_admin_access(
+                handler,
+                scopes,
+                route,
+                user_id,
+                org_id,
+                api_key,
+                jwt_valid_token,
+                user_email=user_email,
+                agent_id=agent_id,
+            )
         )
         if admin_result:
             await JWTAuthManager._attach_team_from_header_for_admin(
@@ -2632,13 +2674,13 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             route=route,
             org_alias=org_alias,
-            user_id_upsert=provisioning.user_id_upsert if provisioning is not None else False,
+            user_id_upsert=provisioning.user_id_upsert if provisioning is not None and managed is None else False,
         )
 
         # Derive org_id from org_object if resolved by alias
         resolved_org_id: Final = org_object.organization_id if org_object else org_id
 
-        if provisioning is not None:
+        if provisioning is not None and managed is None:
             await JWTAuthManager.sync_user_role_and_teams(
                 jwt_handler=handler,
                 jwt_valid_token=jwt_valid_token,
@@ -2709,7 +2751,7 @@ class JWTAuthManager:
                 )
 
         ## MAP USER TO TEAMS
-        if provisioning is not None:
+        if provisioning is not None and managed is None:
             await JWTAuthManager.map_user_to_teams(
                 user_object=user_object,
                 team_object=team_object,
@@ -2724,7 +2766,9 @@ class JWTAuthManager:
         )
 
         # check if user is proxy admin
-        is_proxy_admin: Final = bool(user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN)
+        is_proxy_admin: Final = managed is None and bool(
+            user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN
+        )
 
         return JWTAuthBuilderResult(
             is_proxy_admin=is_proxy_admin,
@@ -2741,6 +2785,7 @@ class JWTAuthManager:
             team_membership=team_membership_object,
             jwt_claims=jwt_valid_token,
             agent_id=agent_id,
+            managed_agent_context=managed,
         )
 
     @staticmethod
@@ -2751,11 +2796,13 @@ class JWTAuthManager:
         """Keep JWT identity and permission attribution identical across consumers."""
         user: Final = result["user_object"]
         admin: Final = result["is_proxy_admin"]
-        return UserAPIKeyAuth(
+        auth: Final = UserAPIKeyAuth(
             api_key=None,
             user_role=(
                 LitellmUserRoles.PROXY_ADMIN
                 if admin
+                else LitellmUserRoles.INTERNAL_USER
+                if result.get("managed_agent_context") is not None
                 else LitellmUserRoles(user.user_role)
                 if user is not None and user.user_role is not None
                 else LitellmUserRoles.INTERNAL_USER
@@ -2777,3 +2824,5 @@ class JWTAuthManager:
                 user_id=result["user_id"],
             ),
         )
+        auth.managed_agent_context = result.get("managed_agent_context")
+        return auth

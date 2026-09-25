@@ -28,6 +28,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import read_batched_spend_
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
+    AgentsRepository,
     BudgetWindowSpendRepository,
     EndUserRepository,
     SpendLogsRepository,
@@ -159,6 +160,9 @@ class SpendCounterReseed:
                     row = await OrganizationRepository(prisma_client).table.find_unique(
                         where={"organization_id": org_id}
                     )
+                elif counter_key.startswith("spend:agent:"):
+                    agent_id: Final = counter_key[len("spend:agent:") :]
+                    row = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
                 elif counter_key.startswith("spend:project:"):
                     project_id: Final = counter_key[len("spend:project:") :]
                     row = await ProjectRepository(prisma_client).table.find_unique(where={"project_id": project_id})

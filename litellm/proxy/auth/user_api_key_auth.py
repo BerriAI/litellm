@@ -1647,6 +1647,13 @@ async def _user_api_key_auth_builder(
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)
 
+                    from litellm.proxy.agent_endpoints.identity_store import resolve_managed_agent
+
+                    if jwt_claims and await resolve_managed_agent(jwt_claims, prisma_client) is not None:
+                        raise HTTPException(
+                            403, "Managed agents require direct JWT authentication without virtual-key mapping"
+                        )
+
                     resolve_result: Final = await _resolve_jwt_to_virtual_key(
                         jwt_claims=jwt_claims,
                         jwt_handler=jwt_handler,
@@ -3108,7 +3115,10 @@ async def _reserve_budget_after_common_checks(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
+        fail_closed_budget_enforcement=(
+            general_settings.get("fail_closed_budget_enforcement") is True
+            or user_api_key_auth_obj.billing_agent_policy is not None
+        ),
         raw_body=await read_raw_json_body(request=request),
     )
 
@@ -3179,6 +3189,25 @@ async def _authorize_authenticated_request(
     # admin-only-route / model-access / budget checks) surface as
     # ProxyException consistently with pre-refactor behavior.
     try:
+        from litellm.proxy.agent_endpoints.auth.managed_authorization import (
+            admit_managed_actor,
+            invocation_target,
+            prepare_agent_invocation,
+        )
+        from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth_obj.agent_id is not None:
+            await admit_managed_actor(user_api_key_auth_obj, AgentIdentityStore.from_client(prisma_client))
+        target_name: Final = invocation_target(route, request_data)
+        if target_name is not None:
+            await prepare_agent_invocation(
+                user_api_key_auth_obj,
+                target_name,
+                AgentIdentityStore.from_client(prisma_client),
+                billable=request_data.get("method")
+                in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
+            )
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,
