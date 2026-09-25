@@ -2127,8 +2127,8 @@ class TestPanwAirsShouldRunGuardrail:
                 "post_call",
                 _simple_data(),
                 GuardrailEventHooks.post_mcp_call,
-                True,
-                id="post_call_mode_runs_for_post_mcp_call",
+                False,
+                id="post_call_mode_does_not_run_for_post_mcp_call",
             ),
             pytest.param(
                 True,
