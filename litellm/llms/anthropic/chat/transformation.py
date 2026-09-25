@@ -29,7 +29,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
     async_inline_remote_media,
-    inline_remote_image_urls,
 )
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -1866,8 +1865,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 break
         return headers
 
-    def inlines_remote_media(self, media: RemoteMedia) -> bool:
-        return inline_remote_image_urls(media) and media.url.startswith("http://")
+    def inlines_remote_media(self, _media: RemoteMedia) -> bool:
+        return False
 
     async def async_transform_request(
         self,
