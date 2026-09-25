@@ -1,11 +1,5 @@
-"""
-xAI Batches API handler: create, retrieve, list, cancel and result download.
-
-Every operation is one or more plain HTTP calls with the same auth header, so the sync and async
-paths share the URL builders and response mapping in ``transformation.py`` and differ only in the client.
-"""
-
 from collections.abc import Coroutine
+from itertools import chain
 from typing import Final
 
 import httpx
@@ -50,7 +44,7 @@ def _results_params(after: str | None, limit: int | None) -> dict[str, object]: 
 
 
 def _flatten(pages: list[XAIBatchResultsPage]) -> tuple[XAIBatchResult, ...]:
-    return tuple(result for page in pages for result in page.results)
+    return tuple(chain.from_iterable(page.results for page in pages))
 
 
 def _jsonl_response(url: str, results: tuple[XAIBatchResult, ...]) -> HttpxBinaryResponseContent:
@@ -170,7 +164,6 @@ class XAIBatchesHandler:
         api_key: str | None,
         timeout: float | httpx.Timeout,
     ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
-        """Walk every page of ``GET /v1/batches/{id}/results`` and render it as an OpenAI output JSONL."""
         url: Final = xai_batches_url(api_base, batch_id, suffix="/results")
         headers: Final = get_xai_auth_headers(api_key=api_key)
         if _is_async:

@@ -1,12 +1,8 @@
 """
-xAI Batch API. Reference: https://docs.x.ai/developers/advanced-api-usage/batch-api
+xAI Batch API reference: https://docs.x.ai/developers/advanced-api-usage/batch-api
 
-xAI reads the same OpenAI-shaped JSONL LiteLLM already accepts (``{custom_id, method, url, body}``)
-once it is uploaded to ``POST /v1/files`` and referenced by ``input_file_id`` on batch creation.
-A batch has no ``status`` field, only request counters, and no output file: results come from
-``GET /v1/batches/{id}/results`` a page at a time. LiteLLM reports the batch id as ``output_file_id``
-once every request has settled, and the xAI file content path turns that id back into an
-OpenAI-shaped output JSONL (``{id, custom_id, response: {status_code, body}, error}``).
+xAI batches carry request counters, not a status, and no output file: results are paged from
+``GET /v1/batches/{id}/results``, so LiteLLM hands back the batch id as ``output_file_id``.
 """
 
 import json
@@ -62,7 +58,6 @@ def raise_for_xai_status(response: httpx.Response) -> httpx.Response:
 
 
 def get_xai_api_base(api_base: str | None) -> str:
-    """Return the xAI origin without a trailing ``/v1``, so callers can append ``/v1/<route>``."""
     resolved: Final = (api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE).rstrip("/")
     return resolved.removesuffix("/v1")
 
@@ -90,8 +85,6 @@ def is_xai_batch_results_id(file_id: str) -> bool:
 
 
 class XAICreateBatchRequest(TypedDict):
-    """Body of ``POST /v1/batches``."""
-
     name: ReadOnly[str]
     input_file_id: NotRequired[ReadOnly[str]]
 
@@ -210,8 +203,6 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
 
 
 class OpenAIBatchListResponse(BaseModel):
-    """Shape of ``GET /v1/batches`` in the OpenAI API, populated from one page of xAI batches."""
-
     model_config = ConfigDict(frozen=True)
 
     object: Literal["list"] = "list"

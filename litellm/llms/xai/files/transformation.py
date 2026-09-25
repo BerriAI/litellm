@@ -1,9 +1,7 @@
 """
-xAI Files API. Reference: https://docs.x.ai/developers/rest-api-reference/inference/files
+xAI Files API reference: https://docs.x.ai/developers/rest-api-reference/inference/files
 
-xAI's file objects carry the OpenAI field names, so this config is URL routing and auth. The one
-difference is ``purpose``: xAI stores it as an empty string, and LiteLLM reports uploads as ``batch``,
-the only purpose xAI files serve today.
+xAI stores ``purpose`` as an empty string; LiteLLM reports uploads as ``batch``, the only purpose xAI files serve.
 """
 
 import time
