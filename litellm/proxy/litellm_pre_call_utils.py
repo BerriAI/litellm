@@ -1604,13 +1604,6 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def get_logged_api_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
-        """
-        The value spend rows and logging callbacks attribute a request to.
-
-        A CLI session token is a per-login random secret, so the key is the
-        session's stable alias (cli-session-<user_id>) instead: every login of
-        one user rolls up to one key and the live token never lands in a row.
-        """
         if user_api_key_dict.is_session_token and user_api_key_dict.key_alias:
             return user_api_key_dict.key_alias
         return user_api_key_dict.api_key

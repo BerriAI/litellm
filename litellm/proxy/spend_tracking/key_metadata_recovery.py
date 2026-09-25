@@ -219,11 +219,6 @@ async def attach_user_details(
     prisma_client: PrismaClient,
     recovered: Mapping[str, KeyMetadataDict],
 ) -> Mapping[str, KeyMetadataDict]:
-    """
-    Fill user_email from the owner's user row, and for a cli-session key also
-    the team the CLI login attaches on its own: the user's only team. A user in
-    several teams picks one per login, so the alias claims none for them.
-    """
     needing_details: Final = frozenset(
         user_id
         for api_key, meta in recovered.items()
