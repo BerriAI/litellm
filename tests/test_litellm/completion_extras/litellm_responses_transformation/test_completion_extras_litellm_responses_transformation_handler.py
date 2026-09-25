@@ -335,3 +335,131 @@ async def test_acompletion_keeps_provider_native_model_id_through_responses(
 
     handed_model = responses_call.call_args.kwargs["model"]
     assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model
+# ------------------------------------------------------------------------
+# #41009/#41014: rebuild empty streamed output from output_item.done events
+# ------------------------------------------------------------------------
+
+
+class _FakeCompletedResponse:
+    response = {
+        "id": "resp_41014",
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": "gpt-5.4",
+        "output": [],
+    }
+
+
+class _FakeStreamIter:
+    def __init__(self, streamed_items):
+        self.completed_response = _FakeCompletedResponse()
+        self._hidden_params = None
+        self._items = streamed_items
+
+    def __iter__(self):
+        return iter([])
+
+    def get_streamed_output_items(self):
+        return self._items
+
+
+class _FakeAsyncStreamIter(_FakeStreamIter):
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+def test_collect_response_from_stream_rebuilds_empty_output_from_streamed_items():
+    from litellm.completion_extras.litellm_responses_transformation.handler import (
+        ResponsesToCompletionBridgeHandler,
+    )
+
+    bridge = ResponsesToCompletionBridgeHandler()
+    streamed_items = [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
+        }
+    ]
+    response = bridge._collect_response_from_stream(_FakeStreamIter(streamed_items))
+    assert len(response.output) == 1
+    assert response.output[0]["id"] == "msg_1"
+
+
+def test_collect_response_from_stream_keeps_nonempty_output_untouched():
+    from litellm.completion_extras.litellm_responses_transformation.handler import (
+        ResponsesToCompletionBridgeHandler,
+    )
+
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    class _NonEmptyCompleted:
+        response = {
+            "id": "resp_nonempty",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [{"type": "message", "id": "msg_0"}],
+        }
+
+    class _StreamNoItems:
+        completed_response = _NonEmptyCompleted()
+        _hidden_params = None
+
+        def __iter__(self):
+            return iter([])
+
+    response = bridge._collect_response_from_stream(_StreamNoItems())
+    assert len(response.output) == 1
+    assert response.output[0]["id"] == "msg_0"
+
+
+def test_collect_response_from_stream_without_streamed_items_keeps_empty_output():
+    from litellm.completion_extras.litellm_responses_transformation.handler import (
+        ResponsesToCompletionBridgeHandler,
+    )
+
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    class _NoStreamedItems:
+        completed_response = _FakeCompletedResponse()
+        _hidden_params = None
+
+        def __iter__(self):
+            return iter([])
+
+    response = bridge._collect_response_from_stream(_NoStreamedItems())
+    assert len(response.output) == 0
+
+
+def test_collect_response_from_stream_async_rebuilds_empty_output():
+    from litellm.completion_extras.litellm_responses_transformation.handler import (
+        ResponsesToCompletionBridgeHandler,
+    )
+    from litellm.types.utils import ResponsesAPIResponse
+    import asyncio
+
+    async def run():
+        bridge = ResponsesToCompletionBridgeHandler()
+        streamed_items = [
+            {
+                "type": "message",
+                "id": "msg_async_1",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hi", "annotations": []}],
+            }
+        ]
+        response = await bridge._collect_response_from_stream_async(_FakeAsyncStreamIter(streamed_items))
+        assert isinstance(response, ResponsesAPIResponse)
+        assert len(response.output) == 1
+        assert response.output[0]["id"] == "msg_async_1"
+
+    asyncio.run(run())
+
+

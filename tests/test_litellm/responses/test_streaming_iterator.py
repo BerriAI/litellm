@@ -942,3 +942,89 @@ def test_persist_completed_response_to_cache_survives_an_unserializable_response
     iterator._persist_completed_response_to_cache(is_async=False)
 
     cache.add_cache.assert_not_called()
+
+
+def test_process_chunk_collects_output_item_done_in_order():
+    """output_item.done events are keyed by index and returned in order."""
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+
+    for index, item in enumerate([{"id": "msg_1"}, {"id": "msg_2"}]):
+        iterator._process_chunk(
+            json.dumps({"type": "response.output_item.done", "output_index": index, "item": item})
+        )
+
+    assert iterator.get_streamed_output_items() == [{"id": "msg_1"}, {"id": "msg_2"}]
+
+
+def test_process_chunk_collector_fallback_index_avoids_collision():
+    """A missing/invalid index appends after the max key, never overwriting an entry."""
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+
+    iterator._process_chunk(
+        json.dumps(
+            {"type": "response.output_item.done", "output_index": 5, "item": {"id": "msg_5"}}
+        )
+    )
+    iterator._process_chunk(
+        json.dumps({"type": "response.output_item.done", "item": {"id": "msg_fallback"}})
+    )
+    items = iterator.get_streamed_output_items()
+    assert items == [{"id": "msg_5"}, {"id": "msg_fallback"}]
+
+
+def test_process_chunk_collector_duplicate_index_appends():
+    """A repeated index is never dropped: the second item is appended after the max key."""
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+
+    iterator._process_chunk(
+        json.dumps(
+            {"type": "response.output_item.done", "output_index": 1, "item": {"id": "msg_a"}}
+        )
+    )
+    iterator._process_chunk(
+        json.dumps(
+            {"type": "response.output_item.done", "output_index": 1, "item": {"id": "msg_b"}}
+        )
+    )
+    assert iterator.get_streamed_output_items() == [{"id": "msg_a"}, {"id": "msg_b"}]
+
+
+def test_get_streamed_output_items_empty_when_no_done_events():
+    logging_obj = _logging_obj_for_collector()
+    iterator = _make_collector_iterator(logging_obj=logging_obj)
+    assert iterator.get_streamed_output_items() == []
+
+
+def _streamed_item_config() -> Mock:
+    """transform_streaming_response returns output_item.done events with item/index preserved."""
+    mock_config = Mock()
+    mock_config.transform_streaming_response.side_effect = (
+        lambda model, parsed_chunk, logging_obj: Mock(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            item=parsed_chunk.get("item"),
+            output_index=parsed_chunk.get("output_index"),
+        )
+    )
+    return mock_config
+
+
+def _make_collector_iterator(*, logging_obj: Mock) -> SyncResponsesAPIStreamingIterator:
+    return SyncResponsesAPIStreamingIterator(
+        response=Mock(headers={}),
+        model="gpt-4o-mini",
+        responses_api_provider_config=_streamed_item_config(),
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="openai",
+        call_type="responses",
+    )
+
+
+def _logging_obj_for_collector() -> Mock:
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+    return logging_obj

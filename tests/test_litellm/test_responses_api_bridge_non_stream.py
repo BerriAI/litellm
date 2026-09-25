@@ -66,6 +66,83 @@ def test_should_collect_response_from_stream():
     assert collected._hidden_params.get("headers") == {"x-test": "1"}
 
 
+class _RecoverableResponsesStream(_FakeResponsesStream):
+    """Terminal response.completed carries an empty output array even though
+    output_item.done events streamed the full answer (issue #41009)."""
+
+    def __init__(self, response, streamed_items):
+        super().__init__(response)
+        self._streamed_items = streamed_items
+
+    def get_streamed_output_items(self):
+        return self._streamed_items
+
+
+class _RecoverableAsyncResponsesStream(_RecoverableResponsesStream):
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._emitted:
+            self._emitted = True
+            self.completed_response = _CompletedEvent(self._response)
+            return {"type": "response.completed"}
+        raise StopAsyncIteration
+
+
+def test_collect_response_from_stream_rebuilds_empty_output_from_streamed_items():
+    handler = ResponsesToCompletionBridgeHandler()
+    response = ResponsesAPIResponse.model_construct(
+        id="resp-recover",
+        created_at=0,
+        output=[],
+        object="response",
+        model="gpt-5.6-sol",
+    )
+    streamed_items = [
+        {
+            "id": "msg_1",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hi! How can I help?", "annotations": []}],
+        }
+    ]
+    stream = _RecoverableResponsesStream(response, streamed_items)
+
+    collected = handler._collect_response_from_stream(stream)
+
+    assert len(collected.output) == 1
+    assert "Hi! How can I help?" in str(collected.output[0])
+
+
+@pytest.mark.asyncio
+async def test_collect_response_from_stream_async_rebuilds_empty_output_from_streamed_items():
+    handler = ResponsesToCompletionBridgeHandler()
+    response = ResponsesAPIResponse.model_construct(
+        id="resp-recover-async",
+        created_at=0,
+        output=[],
+        object="response",
+        model="gpt-5.6-sol",
+    )
+    streamed_items = [
+        {
+            "id": "msg_1",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hi! How can I help?", "annotations": []}],
+        }
+    ]
+    stream = _RecoverableAsyncResponsesStream(response, streamed_items)
+
+    collected = await handler._collect_response_from_stream_async(stream)
+
+    assert len(collected.output) == 1
+    assert "Hi! How can I help?" in str(collected.output[0])
+
+
 def create_mock_completion_response(
     model: str = "gpt-4",
     prompt_tokens: int = 10,

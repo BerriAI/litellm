@@ -87,6 +87,14 @@ class ResponsesToCompletionBridgeHandler:
         response: Final = self._coerce_response_object(response_obj, hidden_params)
         if not isinstance(response, ResponsesAPIResponse):
             raise ValueError("Stream completed response is invalid")
+        # Some providers emit a terminal response.completed event with an empty output
+        # array even though output_item.done events streamed the full answer. Rebuild
+        # the output from those streamed items before failing on empty choices.
+        get_streamed_items: Final = getattr(stream_iter, "get_streamed_output_items", None)
+        if len(response.output) == 0 and callable(get_streamed_items):
+            streamed_items: Final = get_streamed_items()
+            if streamed_items:
+                response.output = streamed_items  # pyright: ignore[reportAttributeAccessIssue]  # assigning typed SSE items back to ResponsesAPIResponse.output
         return response
 
     async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
@@ -102,6 +110,11 @@ class ResponsesToCompletionBridgeHandler:
         response: Final = self._coerce_response_object(response_obj, hidden_params)
         if not isinstance(response, ResponsesAPIResponse):
             raise ValueError("Stream completed response is invalid")
+        get_streamed_items: Final = getattr(stream_iter, "get_streamed_output_items", None)
+        if len(response.output) == 0 and callable(get_streamed_items):
+            streamed_items: Final = get_streamed_items()
+            if streamed_items:
+                response.output = streamed_items  # pyright: ignore[reportAttributeAccessIssue]  # assigning typed SSE items back to ResponsesAPIResponse.output
         return response
 
     def validate_input_kwargs(self, kwargs: dict) -> ResponsesToCompletionBridgeHandlerInputKwargs:
