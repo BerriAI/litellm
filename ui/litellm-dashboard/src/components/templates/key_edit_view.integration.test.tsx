@@ -303,6 +303,7 @@ describe("KeyEditView", () => {
               fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
             }),
           }),
+          expect.any(Array),
         );
       });
     });
@@ -323,6 +324,7 @@ describe("KeyEditView", () => {
               fallbacks: null,
             }),
           }),
+          expect.any(Array),
         );
       });
     });
@@ -632,7 +634,10 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ throttle_on_budget_exceeded: true }),
+        expect.any(Array),
+      );
     });
   });
 
@@ -662,7 +667,10 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ enable_prompt_caching: true }),
+        expect.any(Array),
+      );
     });
   });
 
@@ -1526,7 +1534,10 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null, team_id: null }));
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ organization_id: null, team_id: null }),
+          expect.any(Array),
+        );
       });
       expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toMatchObject({
         organization_id: null,
@@ -1568,7 +1579,9 @@ describe("KeyEditView", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach)));
+      await waitFor(() =>
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach), expect.any(Array)),
+      );
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
       view.rerender(renderEditor({ ...key, project_id: null }));
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeEnabled();
@@ -1866,7 +1879,10 @@ describe("KeyEditView", () => {
       await save();
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "svc-b-budget" }));
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ end_user_budget_id: "svc-b-budget" }),
+          expect.any(Array),
+        );
       });
     });
 
@@ -1878,7 +1894,7 @@ describe("KeyEditView", () => {
       await save();
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }));
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }), expect.any(Array));
       });
     });
 

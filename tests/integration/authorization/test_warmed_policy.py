@@ -1,14 +1,14 @@
+import os
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 from typing import Final
-import os
 
 import psycopg
 import pytest
-from pydantic import JsonValue
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
+from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, eventually, object_value
 from tests.integration._support.database import read_rows
@@ -193,6 +193,71 @@ def test_warmed_team_role_demotion_prevents_later_management_writes(gateway: Gat
         assert isinstance(members, list)
         assert next(object_value(member)["role"] for member in members if object_value(member)["user_id"] == user) == "user"
         assert_serving(gateway, model, caller, 200)
+
+
+def _key_row(key: str) -> dict[str, JsonValue]:
+    rows: Final = read_rows(
+        'SELECT max_budget, key_alias FROM "LiteLLM_VerificationToken" WHERE token = %s',
+        (sha256(key.encode()).hexdigest(),),
+    )
+    assert len(rows) == 1
+    return rows[0]
+
+
+@pytest.mark.covers("mgmt.key.update.team_admin_member_key_budget_requires_opt_in")
+def test_team_admin_changes_member_key_budget_only_when_opted_in(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        admin: Final = scenario.user(user_role="internal_user")
+        member: Final = scenario.user(user_role="internal_user")
+        team: Final = scenario.team(
+            models=[model],
+            members_with_roles=[{"user_id": admin, "role": "admin"}, {"user_id": member, "role": "user"}],
+        )
+        other_team: Final = scenario.team(models=[model], members_with_roles=[{"user_id": member, "role": "user"}])
+        member_key: Final = scenario.key(
+            user_id=member, team_id=team, models=[model], max_budget=10, key_alias="member"
+        )
+        personal_key: Final = scenario.key(user_id=member, models=[model], max_budget=10)
+        foreign_key: Final = scenario.key(user_id=member, team_id=other_team, models=[model], max_budget=10)
+        admin_key: Final = scenario.key(
+            user_id=admin, team_id=team, models=[model], allowed_routes=["/key/update", "/v1/chat/completions"]
+        )
+        member_caller: Final = scenario.key(
+            user_id=member, team_id=team, models=[model], allowed_routes=["/key/update", "/v1/chat/completions"]
+        )
+        assert_serving(gateway, model, member_key, 200)
+        with _team_admins_may_edit(gateway, []):
+            denied: Final = gateway.request("POST", "/key/update", {"key": member_key, "max_budget": 0}, key=admin_key)
+            assert denied.status_code == 403, denied.text
+            assert _key_row(member_key) == {"max_budget": 10.0, "key_alias": "member"}
+        with _team_admins_may_edit(gateway, ["member_key_budgets"]):
+            for target in (personal_key, foreign_key):
+                out_of_scope: Final = gateway.request(
+                    "POST", "/key/update", {"key": target, "max_budget": 0}, key=admin_key
+                )
+                assert out_of_scope.status_code == 403, out_of_scope.text
+                assert _key_row(target)["max_budget"] == 10.0
+            by_member: Final = gateway.request(
+                "POST", "/key/update", {"key": admin_key, "max_budget": 0}, key=member_caller
+            )
+            assert by_member.status_code == 403, by_member.text
+            not_budget: Final = gateway.request(
+                "POST", "/key/update", {"key": member_key, "key_alias": "renamed"}, key=admin_key
+            )
+            assert not_budget.status_code == 403, not_budget.text
+            assert _key_row(member_key) == {"max_budget": 10.0, "key_alias": "member"}
+            changed: Final = gateway.request(
+                "POST", "/key/update", {"key": member_key, "max_budget": 0, "budget_duration": "30d"}, key=admin_key
+            )
+            assert changed.status_code == 200, changed.text
+            assert _key_row(member_key) == {"max_budget": 0.0, "key_alias": "member"}
+            assert_serving(gateway, model, member_key, 422, "budget_exceeded")
+            restored: Final = gateway.request(
+                "POST", "/key/update", {"key": member_key, "max_budget": 10}, key=admin_key
+            )
+            assert restored.status_code == 200, restored.text
+            assert_serving(gateway, model, member_key, 200)
 
 
 @pytest.mark.covers("mgmt.key.update.expiry_changes_reach_warmed_workers")

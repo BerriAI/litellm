@@ -49,6 +49,7 @@ import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
 
 export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
   return (totalSpend ?? 0) < spend;
@@ -187,7 +188,7 @@ export default function KeyInfoView({
     );
   }
 
-  const handleKeyUpdate = async (formValues: Record<string, any>) => {
+  const handleKeyUpdate = async (formValues: Record<string, any>, dirtyFields: readonly string[] = []) => {
     try {
       if (!accessToken) return;
 
@@ -357,6 +358,25 @@ export default function KeyInfoView({
           monthly: "30d",
         };
         formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
+      }
+
+      const memberKeyEditContext = {
+        userRole: userRole || "",
+        userId: userID || "",
+        keyUserId: currentKeyData.user_id,
+        keyTeamId: currentKeyData.team_id,
+        teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
+      };
+      const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
+      if (editingMemberKeyAsTeamAdmin) {
+        const trimmed = teamAdminMemberKeyPayload(formValues, dirtyFields);
+        if (trimmed.kind === "blocked") {
+          toast.error(
+            `Team admins can only change budget fields on other members' keys, not ${trimmed.fields.join(", ")}`,
+          );
+          return;
+        }
+        formValues = trimmed.payload;
       }
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
