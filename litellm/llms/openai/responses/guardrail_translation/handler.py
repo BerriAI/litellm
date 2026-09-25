@@ -238,7 +238,7 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call_output": "output", "message": "content"}
+    {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
 
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
@@ -994,7 +994,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _spread_text_rewrite_over_stream_events(
         self,
-        stream_events: Sequence[Any],
+        stream_events: Sequence[object],
         rewritten_text: str,
         guardrail_name: str,
     ) -> None:

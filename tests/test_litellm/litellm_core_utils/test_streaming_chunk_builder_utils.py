@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -7,6 +8,7 @@ import pytest
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -1648,3 +1650,148 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+@pytest.mark.parametrize(
+    ("message_delta_usage", "expected_cache_creation", "expected_cache_read"),
+    [
+        (
+            {
+                "input_tokens": 2,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 58352,
+                "output_tokens": 408,
+            },
+            0,
+            58352,
+        ),
+        ({"output_tokens": 408}, 58352, 0),
+        ({"input_tokens": 2, "output_tokens": 408}, 58352, 0),
+    ],
+    ids=["delta_restates_cache_counts", "delta_reports_output_only", "delta_reports_input_and_output_only"],
+)
+def test_anthropic_stream_usage_takes_cache_counts_from_last_event_that_reports_them(
+    message_delta_usage: Mapping[str, int], expected_cache_creation: int, expected_cache_read: int
+) -> None:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {
+                    "input_tokens": 2,
+                    "cache_creation_input_tokens": 58352,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 1,
+                },
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": dict(message_delta_usage)},
+        {"type": "message_stop"},
+    )
+
+    response: Final = stream_chunk_builder(
+        chunks=[iterator.chunk_parser(event) for event in events],
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response.usage.cache_creation_input_tokens == expected_cache_creation
+    assert response.usage.cache_read_input_tokens == expected_cache_read
+    assert response.usage.prompt_tokens == 58354
+    assert response.usage.prompt_tokens_details.cache_creation_tokens == expected_cache_creation
+    assert response.usage.prompt_tokens_details.cached_tokens == expected_cache_read
+    assert (
+        response.usage.prompt_tokens
+        - response.usage.cache_read_input_tokens
+        - response.usage.cache_creation_input_tokens
+        == 2
+    )
+
+
+_ZERO_USAGE_TEXT_CHUNKS: Final = (
+    _openai_chunk(choices=[{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}]),
+    _openai_chunk(choices=[{"index": 0, "delta": {"content": " there"}, "finish_reason": None}]),
+    _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        pytest.param({"prompt_tokens": 0, "completion_tokens": 17, "total_tokens": 17}, id="zero_prompt"),
+        pytest.param({"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}, id="zero_completion"),
+        pytest.param({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, id="all_zero"),
+    ],
+)
+def test_calculate_usage_keeps_an_explicit_provider_zero(reported: Mapping[str, int]) -> None:
+    chunks: Final = [*_ZERO_USAGE_TEXT_CHUNKS, _openai_chunk(choices=[], usage=reported)]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="Hi there",
+        messages=[{"role": "user", "content": "hi"}],
+        count_prompt_tokens=lambda: 999,
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        reported["prompt_tokens"],
+        reported["completion_tokens"],
+        reported["prompt_tokens"] + reported["completion_tokens"],
+    )
+
+
+def test_stream_chunk_builder_keeps_an_explicit_zero_prompt_count_end_to_end() -> None:
+    reported: Final = {"prompt_tokens": 0, "completion_tokens": 17, "total_tokens": 17}
+    chunks: Final = [*_ZERO_USAGE_TEXT_CHUNKS, _openai_chunk(choices=[], usage=reported)]
+
+    response: Final = stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (0, 17, 17)
+
+
+def test_calculate_usage_estimates_only_when_no_chunk_reported_usage() -> None:
+    chunks: Final = list(_ZERO_USAGE_TEXT_CHUNKS)
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="Hi there",
+        count_prompt_tokens=lambda: 77,
+    )
+
+    assert usage.prompt_tokens == 77
+    assert usage.completion_tokens > 0
+    assert usage.total_tokens == 77 + usage.completion_tokens
+
+
+def test_calculate_usage_keeps_a_reported_count_over_a_later_chunks_zero() -> None:
+    chunks: Final = [
+        _openai_chunk(
+            choices=[{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}],
+            usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        ),
+        _openai_chunk(
+            choices=[{"index": 0, "delta": {"content": " there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 0, "completion_tokens": 17, "total_tokens": 17},
+        ),
+    ]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="Hi there",
+        count_prompt_tokens=lambda: 999,
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (5, 17, 22)

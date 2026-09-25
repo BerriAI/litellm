@@ -268,12 +268,10 @@ def test_request_maps_reasoning_effort_to_thinking(config):
 
 
 def test_passthrough_disables_anthropic_beta_filtering(config):
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
-        AnthropicMessagesConfig,
-    )
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 
     assert config.should_filter_anthropic_beta_headers() is False
-    assert AnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
+    assert AzureAnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
 
 
 def test_anthropic_beta_survives_provider_filter_on_passthrough_path(config):

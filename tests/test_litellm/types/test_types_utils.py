@@ -1,9 +1,16 @@
+import json
 from typing import Final
 
 import pytest
 
 
-from litellm.types.utils import HiddenParams, all_litellm_params, text_tokens_without_nested_reasoning
+from litellm.types.utils import (
+    HiddenParams,
+    ImageObject,
+    ImageResponse,
+    all_litellm_params,
+    text_tokens_without_nested_reasoning,
+)
 
 
 def test_rust_is_a_known_litellm_param():
@@ -763,11 +770,68 @@ def test_delta_function_tool_call_unchanged_by_custom_support():
 
 def test_image_response_keeps_background():
     """https://github.com/BerriAI/litellm/issues/38649"""
-    from litellm.types.utils import ImageResponse
-
     response = ImageResponse(created=1, data=[{"b64_json": "aGk="}], background="transparent", output_format="png")
     assert response.background == "transparent"
     assert response.model_dump()["background"] == "transparent"
+
+
+def test_image_response_serialization_honors_dump_options():
+    response: Final = ImageResponse(
+        data=[
+            ImageObject(
+                url="https://example.com/image.png",
+                provider_specific_fields={"width": 1024, "height": 1536, "content_type": "image/png"},
+            )
+        ]
+    )
+    expected: Final = [
+        {
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude_none=True)["data"] == expected
+    assert json.loads(response.model_dump_json(exclude_none=True))["data"] == expected
+    assert response.model_dump()["data"][0]["provider_specific_fields"] == expected[0]["provider_specific_fields"]
+    assert "url" not in response.model_dump(exclude={"data": {0: {"url"}}})["data"][0]
+    assert response.model_dump(include={"data": {"__all__": {"url"}}})["data"] == [
+        {"url": "https://example.com/image.png"}
+    ]
+    assert response.model_dump(include={"data": {0: True}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude={"data": {0: True}})["data"] == []
+
+    two_image_response: Final = ImageResponse(
+        data=[
+            ImageObject(url="https://example.com/image.png"),
+            ImageObject(url="https://example.com/second-image.png"),
+        ]
+    )
+    assert two_image_response.model_dump(exclude={"data": {1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(exclude={"data": {-1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(include={"data": {-1: {"url"}}})["data"] == [
+        {"url": "https://example.com/second-image.png"}
+    ]
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,13 @@ parameters:
   migration_candidate_image:
     type: string
     default: ""
+  migration_baseline_image:
+    type: string
+    default: "ghcr.io/berriai/litellm-database:v1.102.0"
   migration_source_sha:
+    type: string
+    default: ""
+  routing_parity_base:
     type: string
     default: ""
 orbs:
@@ -173,6 +179,9 @@ commands:
       image:
         type: string
         default: postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
+      server_args:
+        type: string
+        default: ""
     steps:
       - run:
           name: Start PostgreSQL
@@ -183,7 +192,7 @@ commands:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=<< parameters.db_name >> \
               -p 5432:5432 \
-              << parameters.image >>
+              << parameters.image >> << parameters.server_args >>
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -1508,7 +1517,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
 
   installing_litellm_on_python_3_13:
     docker:
@@ -1532,7 +1541,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
 
   installing_litellm_on_python_v2_migration_resolver:
     docker:
@@ -1561,10 +1570,11 @@ jobs:
           url: tcp://localhost:5432
           timeout: "60"
       - run:
-          name: Run v2 migration resolver proxy smoke test
+          name: Run both migration resolvers against Postgres
           command: |
             uv run --no-sync python -m pytest -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_v2_resolver
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings \
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
 
   helm_chart_testing:
     machine:
@@ -2945,7 +2955,10 @@ jobs:
     parameters:
       suite:
         type: enum
-        enum: [startup, recovery, legacy]
+        enum: [startup, recovery, legacy, upgrade, shaped]
+      baseline:
+        type: boolean
+        default: false
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -2953,6 +2966,7 @@ jobs:
     environment:
       LITELLM_MIGRATION_TESTS: "1"
       LITELLM_MIGRATION_TEST_IMAGE: litellm-docker-database:ci
+      LITELLM_MIGRATION_BASELINE_IMAGE: << pipeline.parameters.migration_baseline_image >>
       MIGRATION_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       MIGRATION_TEST_CONTAINER_ADMIN_URL: postgresql://postgres:postgres@host.docker.internal:5432/postgres
       MIGRATION_TEST_OUTPUT: /tmp/migration-results
@@ -2980,6 +2994,16 @@ jobs:
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
+      - when:
+          condition: << parameters.baseline >>
+          steps:
+            - run:
+                name: Pull the baseline release the upgrade starts from
+                environment:
+                  BASELINE_IMAGE: << pipeline.parameters.migration_baseline_image >>
+                command: |
+                  [[ "$BASELINE_IMAGE" =~ ^ghcr.io/berriai/[a-z0-9._/-]+(@sha256:[0-9a-f]{64}|:v[0-9][0-9a-z.-]*)$ ]] || exit 1
+                  docker pull "$BASELINE_IMAGE"
       - run:
           name: Run migration startup regressions
           environment:
@@ -3032,28 +3056,29 @@ jobs:
       - run:
           name: Run Docker container with bad DATABASE_URL
           command: |
+            set +e
             docker run --name my-app \
               -p 4000:4000 \
               -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
               myapp:latest \
-              --port 4000 > docker_output.log 2>&1 || true
+              --port 4000 > docker_output.log 2>&1
+            echo "$?" > docker_exit_code
+            set -e
       - run:
           name: Display Docker logs
           command: cat docker_output.log
       - run:
-          name: Check for expected error
+          name: Proxy must refuse to serve on an unreachable database
           command: |
-            if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
-               (grep -q "Database setup failed after multiple retries" docker_output.log || \
-                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log); then
-              echo "Expected error found. Test passed."
-            else
-              echo "Expected error not found. Test failed."
-              cat docker_output.log
-              exit 1
-            fi
+            fail() { echo "FAILED: $1"; cat docker_output.log; exit 1; }
+            exit_code="$(cat docker_exit_code)"
+            [ "$exit_code" -ne 0 ] || fail "proxy exited 0 with an unreachable database"
+            grep -q "P1001" docker_output.log || fail "log does not name the unreachable database server"
+            ! grep -q "Application startup complete" docker_output.log || fail "proxy reached serving state"
+            ! docker exec my-app true 2>/dev/null || fail "container is still running"
+            echo "Proxy refused to serve (exit $exit_code) and never reached startup. Test passed."
 
   provider_replay_harness:
     docker:
@@ -3089,6 +3114,10 @@ jobs:
     parameters:
       suite:
         type: string
+      mode:
+        type: enum
+        enum: [standard, replica]
+        default: standard
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -3123,20 +3152,91 @@ jobs:
                 command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
       - start_redis
       - run:
           name: Run owned integration contracts
-          command: bash .circleci/scripts/run_integration.sh << parameters.suite >>
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >> << parameters.mode >>
           no_output_timeout: 15m
       - run:
           name: Stop owned database and Redis
           when: always
           command: |
-            mkdir -p test-results/integration-<< parameters.suite >>
-            docker logs postgres-db > test-results/integration-<< parameters.suite >>/postgres.log 2>&1 || true
-            docker logs redis-cache > test-results/integration-<< parameters.suite >>/redis.log 2>&1 || true
+            mkdir -p test-results/services-<< parameters.suite >>-<< parameters.mode >>
+            docker logs postgres-db > test-results/services-<< parameters.suite >>-<< parameters.mode >>/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/services-<< parameters.suite >>-<< parameters.mode >>/redis.log 2>&1 || true
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+  routing_parity:
+    parameters:
+      suite:
+        type: string
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Check out base product code
+          environment:
+            ROUTING_PARITY_BASE: << pipeline.parameters.routing_parity_base >>
+          command: |
+            [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
+            git rm -r -f --quiet litellm enterprise litellm-proxy-extras
+            git checkout "$ROUTING_PARITY_BASE" -- litellm enterprise litellm-proxy-extras
+            git reset --quiet
+            test -f litellm/rust_bridge/_native.abi3.so
+      - start_postgres:
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
+      - start_redis
+      - run:
+          name: Run base side
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >> parity base
+          no_output_timeout: 15m
+      - run:
+          name: Stop base database and Redis
+          when: always
+          command: |
+            mkdir -p test-results/services-<< parameters.suite >>-parity-base
+            docker logs postgres-db > test-results/services-<< parameters.suite >>-parity-base/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/services-<< parameters.suite >>-parity-base/redis.log 2>&1 || true
+            docker rm -f postgres-db redis-cache
+            test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - run:
+          name: Check out head product code
+          command: |
+            git rm -r -f --quiet litellm enterprise litellm-proxy-extras
+            git checkout "$CIRCLE_SHA1" -- litellm enterprise litellm-proxy-extras
+            git reset --quiet
+            test -f litellm/rust_bridge/_native.abi3.so
+      - start_postgres:
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
+      - start_redis
+      - run:
+          name: Run head side
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >> parity head
+          no_output_timeout: 15m
+      - run:
+          name: Stop head database and Redis
+          when: always
+          command: |
+            mkdir -p test-results/services-<< parameters.suite >>-parity-head
+            docker logs postgres-db > test-results/services-<< parameters.suite >>-parity-head/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/services-<< parameters.suite >>-parity-head/redis.log 2>&1 || true
+            docker rm -f postgres-db redis-cache
+            test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - run:
+          name: Compare routing parity
+          command: PYTHONPATH="$PWD/tests" .venv/bin/python -m integration._support.routing check test-results/parity-<< parameters.suite >>/base test-results/parity-<< parameters.suite >>/head
       - store_test_results:
           path: test-results
       - store_artifacts:
@@ -3187,29 +3287,68 @@ workflows:
           name: migration-legacy-and-pooling
           suite: legacy
           requires: [build_docker_database_image]
+      - migration_startup_tests:
+          name: migration-upgrade
+          suite: upgrade
+          baseline: true
+          requires: [build_docker_database_image]
+      - migration_startup_tests:
+          name: migration-upgrade-shaped
+          suite: shaped
+          baseline: true
+          requires: [build_docker_database_image]
   migration_startup_scheduled:
     triggers:
       - schedule:
           cron: "17 0,6,12,18 * * *"
           filters:
             branches:
-              only: litellm_internal_staging
+              only: main
     jobs: *migration_jobs
+  routing_parity:
+    when:
+      not:
+        equal: ["", << pipeline.parameters.routing_parity_base >>]
+    jobs:
+      - routing_parity:
+          name: routing-parity-<< matrix.suite >>
+          matrix:
+            parameters:
+              suite: [management, accounting, database, providers, extensions, cost, mcp]
   integration:
-    unless: << pipeline.parameters.run_migration_tests >>
+    unless:
+      or:
+        - << pipeline.parameters.run_migration_tests >>
+        - not:
+            equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
       - integration_contracts:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, sdk, cost, browser]
+              suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, browser]
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - integration_contracts:
+          name: integration-<< matrix.suite >>-replica
+          matrix:
+            parameters:
+              suite: [management, database]
+              mode: [replica]
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
   build_and_test:
-    unless: << pipeline.parameters.run_migration_tests >>
+    unless:
+      or:
+        - << pipeline.parameters.run_migration_tests >>
+        - not:
+            equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
       - using_litellm_on_windows:
           filters: &main_branches

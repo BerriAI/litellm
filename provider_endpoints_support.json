@@ -457,6 +457,24 @@
         "interactions": true
       }
     },
+    "nadir": {
+      "display_name": "Nadir (`nadir`)",
+      "url": "https://docs.litellm.ai/docs/providers/nadir",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "cerebras": {
       "display_name": "Cerebras (`cerebras`)",
       "url": "https://docs.litellm.ai/docs/providers/cerebras",
@@ -744,7 +762,7 @@
       }
     },
     "qwen_ai_platform": {
-      "display_name": "Qwen AI Platform (`qwen_ai_platform`)",
+      "display_name": "Qianwen AI Platform (`qwen_ai_platform`)",
       "url": "https://docs.litellm.ai/docs/providers/qwencloud",
       "endpoints": {
         "chat_completions": true,
@@ -866,6 +884,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "edenai": {
+      "display_name": "Eden AI (`edenai`)",
+      "url": "https://docs.litellm.ai/docs/providers/edenai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "interactions": false,
+        "video_generations": true
       }
     },
     "duckduckgo": {

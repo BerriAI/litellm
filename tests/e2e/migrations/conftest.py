@@ -60,3 +60,32 @@ def containers(migration_image: str, tmp_path: Path, request: SubRequest) -> Con
     output: Final = Path(configured) / request.node.name if configured else tmp_path
     output.mkdir(parents=True, exist_ok=True)
     return Containers(migration_image, output)
+
+
+@pytest.fixture(scope="session")
+def baseline_image(tmp_path_factory: pytest.TempPathFactory) -> str:
+    configured: Final = os.environ.get("LITELLM_MIGRATION_BASELINE_IMAGE")
+    assert configured, "LITELLM_MIGRATION_BASELINE_IMAGE must name the released image the upgrade starts from"
+    image: Final = docker("image", "inspect", configured, "--format", "{{.Id}}")
+    assert image.startswith("sha256:"), "Unable to identify the baseline image"
+    output: Final = Path(os.environ.get("MIGRATION_TEST_OUTPUT", str(tmp_path_factory.getbasetemp())))
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "baseline-image.json").write_text(json.dumps({"requested": configured, "image_id": image}))
+    return image
+
+
+@pytest.fixture(scope="session")
+def baseline_template(
+    databases: Databases, baseline_image: str, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Database]:
+    output: Final = Path(os.environ.get("MIGRATION_TEST_OUTPUT", str(tmp_path_factory.getbasetemp()))) / "baseline-seed"
+    with databases.create() as database:
+        with Containers(baseline_image, output).start(database) as replica:
+            ready((replica,), database)
+        yield database
+
+
+@pytest.fixture
+def baseline_database(databases: Databases, baseline_template: Database) -> Iterator[Database]:
+    with databases.create(baseline_template) as database:
+        yield database

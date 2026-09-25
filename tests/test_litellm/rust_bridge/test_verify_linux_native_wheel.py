@@ -56,10 +56,11 @@ def _write_wheel(
     metadata_tags: tuple[str, ...] | None = (_EXPECTED_TAG,),
     dist_info: str = _DIST_INFO,
     duplicate_wheel: bool = False,
+    native_bytes: bytes = b"synthetic native extension",
 ) -> Path:
     wheel: Final = tmp_path / f"litellm-1.100.0-{filename_tag}.whl"
     with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(_NATIVE_MEMBER, b"synthetic native extension")
+        archive.writestr(_NATIVE_MEMBER, native_bytes)
         archive.writestr(
             f"{dist_info}/METADATA",
             "Metadata-Version: 2.1\nName: litellm\nVersion: 1.100.0\n",
@@ -195,3 +196,17 @@ def test_rejects_production_module_exposing_panic_hook(tmp_path: Path) -> None:
     wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
 
     assert _run_verifier(wheel, exposes_panic=True) == 1
+
+
+@pytest.mark.parametrize("embedded", (False, True))
+def test_vocabulary_is_packaged_once(tmp_path: Path, embedded: bool) -> None:
+    ranks: Final = b"AA== 0\nAQ== 1\nAg== 2\n"
+    wheel: Final = _write_wheel(
+        tmp_path,
+        filename_tag=_EXPECTED_TAG,
+        native_bytes=b"native engine" + (ranks if embedded else b""),
+    )
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("litellm/litellm_core_utils/tokenizers/" + "a" * 40, ranks)
+
+    assert _run_verifier(wheel) == (1 if embedded else 0)

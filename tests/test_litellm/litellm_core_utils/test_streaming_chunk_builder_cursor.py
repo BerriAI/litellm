@@ -15,7 +15,7 @@ calculate_usage() never fires, and the request is billed for 1 output
 token even when several thousand tokens of text were actually streamed.
 
 These tests pin the post-fix behavior: completion_tokens should reset
-to 0 when the only update we saw was the cursor, allowing the
+to None when the only update we saw was the cursor, allowing the
 text-based fallback to estimate from the real completion text.
 """
 
@@ -63,10 +63,10 @@ def _make_chunk(
 class TestAnthropicCursorBug:
     """The core regression: completion_tokens=1 cursor must not leak through."""
 
-    def test_only_message_start_cursor_resets_completion_to_zero(self):
+    def test_only_message_start_cursor_resets_completion_to_unreported(self):
         """
         Stream cancelled before message_delta — only the message_start cursor
-        (output_tokens=1) was seen. Per-chunk accumulator must reset to 0 so
+        (output_tokens=1) was seen. Per-chunk accumulator must reset to None so
         token_counter fallback can estimate from completion text.
         """
         # Anthropic message_start: input_tokens accurate, output_tokens=1 cursor
@@ -83,11 +83,11 @@ class TestAnthropicCursorBug:
         result = processor._calculate_usage_per_chunk(chunks=chunks)
 
         assert result["prompt_tokens"] == 1024
-        # The cursor value of 1 must NOT leak through — should be reset to 0
+        # The cursor value of 1 must NOT leak through — should be reset to None
         # so the text-based fallback estimates the real completion length.
-        assert result["completion_tokens"] == 0, (
+        assert result["completion_tokens"] is None, (
             "completion_tokens=1 from message_start cursor leaked through. "
-            "Should reset to 0 when only cursor was seen, so token_counter "
+            "Should reset to None when only cursor was seen, so token_counter "
             "fallback in calculate_usage() can estimate from completion text."
         )
 
@@ -233,10 +233,10 @@ class TestAnthropicCursorBug:
         result = processor._calculate_usage_per_chunk(chunks=chunks)
 
         assert result["cache_read_input_tokens"] == 4096
-        assert result["completion_tokens"] == 0, (
+        assert result["completion_tokens"] is None, (
             "cache chunks alone don't count as completion progress — only "
             "completion_tokens > 0 in a usage event proves real output happened. "
-            "Reset to 0 forces token_counter fallback."
+            "Reset to None forces token_counter fallback."
         )
 
     @pytest.mark.parametrize("placeholder", [1, 3, 8])
@@ -326,7 +326,7 @@ class TestAnthropicCursorBug:
         ]
         processor = ChunkProcessor(chunks=chunks, messages=[])
         result = processor._calculate_usage_per_chunk(chunks=chunks)
-        assert result["completion_tokens"] == 0
+        assert result["completion_tokens"] is None
         assert result["completion_tokens_details"] is None
 
     def test_estimated_reasoning_is_capped_to_trusted_completion_total(self):
@@ -403,11 +403,11 @@ class TestNonAnthropicStreamingIntact:
         result = processor._calculate_usage_per_chunk(chunks=chunks)
         assert result["completion_tokens"] == 5
 
-    def test_no_usage_chunks_leaves_zero(self):
-        """Stream with zero usage info → completion_tokens stays 0
+    def test_no_usage_chunks_leaves_unreported(self):
+        """Stream with zero usage info → both counts stay None
         (token_counter fallback will handle it)."""
         chunks = [_make_chunk(content="hi"), _make_chunk(content=" there")]
         processor = ChunkProcessor(chunks=chunks, messages=[])
         result = processor._calculate_usage_per_chunk(chunks=chunks)
-        assert result["prompt_tokens"] == 0
-        assert result["completion_tokens"] == 0
+        assert result["prompt_tokens"] is None
+        assert result["completion_tokens"] is None

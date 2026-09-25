@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -38,6 +39,7 @@ interface AttachmentFormValues {
   models: string[];
   tags: string[];
   priority: number | null;
+  default: boolean;
 }
 
 const EMPTY_VALUES: AttachmentFormValues = {
@@ -47,6 +49,7 @@ const EMPTY_VALUES: AttachmentFormValues = {
   models: [],
   tags: [],
   priority: null,
+  default: false,
 };
 
 const INT32_MIN = -2147483648;
@@ -64,6 +67,7 @@ const attachmentShape = {
     .min(INT32_MIN, `Priority must be at least ${INT32_MIN}`)
     .max(INT32_MAX, `Priority must be at most ${INT32_MAX}`)
     .nullable(),
+  default: z.boolean(),
 };
 
 const buildAttachmentSchema = (scopeType: ScopeType, teamsLoaded: boolean, availableTeams: string[]) =>
@@ -453,9 +457,23 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
                   />
                 )}
               </FormField>
+
+              <FormField
+                control={form.control}
+                name="default"
+                label={labelWithHint(
+                  "Default (fallback)",
+                  "A default attachment is applied only when no non-default attachment matches the request.",
+                )}
+                description="Use this for the guardrail everyone gets unless they opt in to another attachment."
+              >
+                {({ value, onChange, ref, ...field }) => (
+                  <Switch {...field} inputRef={ref} checked={value === true} onCheckedChange={onChange} />
+                )}
+              </FormField>
             </FieldGroup>
 
-            {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
+            {impactResult && <ImpactPreviewAlert impactResult={impactResult} isDefault={form.watch("default")} />}
 
             <div className="flex justify-end space-x-2 mt-4">
               <Button type="button" variant="secondary" onClick={handleClose}>

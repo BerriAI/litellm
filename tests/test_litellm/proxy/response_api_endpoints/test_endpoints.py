@@ -2099,7 +2099,7 @@ class TestCursorVariantPerModelBudgetEnforcement:
 
         response = _post_cursor_with_real_auth(valid_token, attrs, request_model="claude-opus-5-thinking-high")
 
-        assert response.status_code == 429, response.text
+        assert response.status_code == 422, response.text
         error = response.json()["error"]
         assert error["type"] == "budget_exceeded"
         assert "exceeded budget for model=claude-opus-5" in error["message"]
@@ -2110,8 +2110,8 @@ class TestCursorVariantPerModelBudgetEnforcement:
         base_response = _post_cursor_with_real_auth(valid_token, attrs, request_model="claude-opus-5")
         alias_response = _post_cursor_with_real_auth(valid_token, attrs, request_model="claude-opus-5-fast")
 
-        assert base_response.status_code == 429, base_response.text
-        assert alias_response.status_code == 429, alias_response.text
+        assert base_response.status_code == 422, base_response.text
+        assert alias_response.status_code == 422, alias_response.text
         assert alias_response.json() == base_response.json()
 
 
@@ -2427,3 +2427,38 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+
+def test_responses_routes_document_response_models_in_openapi_schema():
+    from typing import cast
+
+    from fastapi import FastAPI
+
+    from litellm.proxy.response_api_endpoints.endpoints import router
+
+    def as_object(value: object) -> dict[str, object]:
+        assert isinstance(value, dict)
+        return cast(dict[str, object], value)
+
+    openapi_app = FastAPI()
+    openapi_app.include_router(router)
+    openapi: Final = cast(dict[str, object], openapi_app.openapi())
+
+    def ok_200_properties(path: str, method: str) -> dict[str, object]:
+        operation: Final = as_object(as_object(as_object(openapi)["paths"])[path])[method]
+        schema: Final = as_object(
+            as_object(
+                as_object(as_object(as_object(as_object(operation)["responses"])["200"])["content"])["application/json"]
+            )["schema"]
+        )
+        ref: Final = schema["$ref"]
+        assert isinstance(ref, str)
+        component: Final = ref.rsplit("/", 1)[-1]
+        return as_object(
+            as_object(as_object(as_object(as_object(openapi)["components"])["schemas"])[component])["properties"]
+        )
+
+    assert "output" in ok_200_properties("/v1/responses", "post")
+    assert "output" in ok_200_properties("/v1/responses/{response_id}", "get")
+    assert "deleted" in ok_200_properties("/v1/responses/{response_id}", "delete")
+    assert "data" in ok_200_properties("/v1/responses/{response_id}/input_items", "get")

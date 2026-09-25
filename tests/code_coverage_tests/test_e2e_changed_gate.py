@@ -10,6 +10,7 @@ import pytest
 GATE: Final = Path(__file__).resolve().parents[2] / ".github/e2e-stack/assert_tests_ran.py"
 SECRETS_TO_ENV: Final = GATE.with_name("secrets_to_env.py")
 SELECT_TESTS: Final = GATE.with_name("select_tests.py")
+REDACT_OUTPUT: Final = GATE.with_name("redact_output.py")
 CANARY: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 SELECTED: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 
@@ -105,15 +106,109 @@ def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_pat
     env_path: Final = tmp_path / ".env"
 
     result: Final = subprocess.run(
-        [sys.executable, str(SECRETS_TO_ENV), str(env_path)],
+        [sys.executable, "-I", str(SECRETS_TO_ENV), str(env_path)],
         input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
         capture_output=True,
         text=True,
+        env={**os.environ, "GITHUB_ACTIONS": "true"},
     )
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "::add-mask::sk-0123456789abcdef\n"
     assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
+
+
+def test_outside_actions_no_value_is_printed(tmp_path: Path) -> None:
+    env_path: Final = tmp_path / ".env"
+    local_env: Final = {key: value for key, value in os.environ.items() if key != "GITHUB_ACTIONS"}
+
+    result: Final = subprocess.run(
+        [sys.executable, "-I", str(SECRETS_TO_ENV), str(env_path)],
+        input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
+        capture_output=True,
+        text=True,
+        env=local_env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "sk-0123456789abcdef" not in result.stderr
+    assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
+
+
+def redact_output(tmp_path: Path, values: tuple[str, ...], text: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+    env_path: Final = tmp_path / ".env"
+    _ = env_path.write_text("".join(f"{name}='{value}'\n" for name, value in zip(("A", "B", "C"), values)))
+    stack_env: Final = tmp_path / "stack.env"
+    _ = stack_env.write_text("LITELLM_MASTER_KEY=sk-e2e-master0123\nREDIS_PORT=6379\n")
+    log: Final = tmp_path / "e2e-pass-1.log"
+    _ = log.write_text(text)
+    out_dir: Final = tmp_path / "redacted"
+    result: Final = subprocess.run(  # test-quality-ok: standalone script that imports its sibling by script directory
+        [
+            sys.executable,
+            str(REDACT_OUTPUT),
+            "--values",
+            str(env_path),
+            "--values",
+            str(stack_env),
+            "--out",
+            str(out_dir),
+            str(log),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result, out_dir / log.name
+
+
+def test_redacted_output_hides_every_masked_value_and_keeps_the_rest(tmp_path: Path) -> None:
+    text: Final = (
+        "FAILED key=sk-0123456789abcdef master=sk-e2e-master0123 flag=1 port=6379 message=Missing credentials\n"
+    )
+
+    result, redacted = redact_output(tmp_path, ("sk-0123456789abcdef", "1"), text)
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == "FAILED key=*** master=*** flag=1 port=6379 message=Missing credentials\n"
+    assert (redacted.stat().st_mode & 0o777) == 0o600
+    assert (tmp_path / "e2e-pass-1.log").read_text() == text
+    assert "sk-" not in result.stdout + result.stderr
+
+
+def test_a_masked_value_that_prefixes_a_longer_one_leaves_no_tail(tmp_path: Path) -> None:
+    result, redacted = redact_output(tmp_path, ("sk-0123456789", "sk-0123456789abcdef"), "token sk-0123456789abcdef\n")
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == "token ***\n"
+
+
+def test_a_json_secret_is_hidden_field_by_field_however_it_is_escaped(tmp_path: Path) -> None:
+    credentials: Final = (
+        '{"type": "service_account", "signing_key": "MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\\n'
+        'c2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\\n", "client_id": "104857600000000000001"}'
+    )
+    text: Final = (
+        "decoded MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\n"
+        "c2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\n"
+        "escaped MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\\nc2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\\n\n"
+        "twice MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\\\\nc2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\n"
+        "client 104857600000000000001 status 403\n"
+    )
+
+    result, redacted = redact_output(tmp_path, (credentials,), text)
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == "decoded ***\n***\nescaped ***\\n***\\n\ntwice ***\\\\n***\nclient *** status 403\n"
+
+
+def test_a_secret_with_xml_special_characters_is_hidden_in_the_junit_file(tmp_path: Path) -> None:
+    text: Final = '<failure message="got p&amp;ss&lt;w&quot;rd-1">body p&amp;ss&lt;w"rd-1</failure>\n'
+
+    result, redacted = redact_output(tmp_path, ('p&ss<w"rd-1',), text)
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == '<failure message="got ***">body ***</failure>\n'
 
 
 def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
@@ -136,6 +231,11 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
+        (("tests/e2e/logging/test_otel_v2_langfuse_generation_output_e2e.py",), ()),
+        (
+            ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
+            ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
+        ),
         (
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),

@@ -133,6 +133,62 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch):
+    """A generation finished just before a graceful restart is still queued in its batch
+    processor, so shutdown must flush every acquired export channel."""
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    flushed = MagicMock(return_value=True)
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert flushed.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_timeout(monkeypatch, caplog):
+    """The flush blocks on OTLP exports for up to its deadline, so it must run on a worker thread
+    with the shutdown deadline, and a channel that misses it is reported instead of ignored."""
+    import threading
+
+    from litellm.constants import LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    ran_on = MagicMock()
+
+    def flushed(timeout_millis: int) -> bool:
+        ran_on(threading.current_thread(), timeout_millis)
+        return False
+
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        await proxy_shutdown_event()
+
+    (flush_thread, timeout_millis), _ = ran_on.call_args
+    assert flush_thread is not threading.main_thread()
+    assert timeout_millis == LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
+    assert any("Langfuse shutdown flush incomplete" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
     """
     The gateway request fold lives in memory, so shutdown drains it to the database.
@@ -818,6 +874,35 @@ async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
     assert counter.exists()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("disable_model_info_refresh", "job_scheduled"), [(True, False), (False, True)])
+async def test_proxy_startup_event_honors_disable_model_info_refresh(
+    disable_model_info_refresh: bool, job_scheduled: bool
+) -> None:
+    """``general_settings.disable_model_info_refresh: true`` keeps the proxy from polling every
+    OpenAI-compatible deployment's ``/v1/models`` in the background, so a proxy fronting a replay
+    fixture (or a metered upstream) makes only the calls its clients asked for."""
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.dict(ps.general_settings, {"disable_model_info_refresh": disable_model_info_refresh}),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                job = scheduler.get_job("refresh_model_info")
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert (job is not None) is job_scheduled, (
+        f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
+    )
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
@@ -891,7 +976,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 
 @pytest.mark.asyncio
-async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
     from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
 
     prisma_client = MagicMock()
@@ -906,9 +991,59 @@ async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
 
     assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
     assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
-        "param_name": "auto_router_tuning_baseline_v2",
+        "param_name": "auto_router_tuning_baseline_v3",
         "param_value": json.dumps(dict(result)),
     }
+
+
+@pytest.mark.asyncio
+async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_refreshed_on_restart():
+    from litellm.router_utils.auto_router_tuning_baseline import mutable_tuned_identities, snapshot_tuning_baselines
+
+    deployments = [
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": name}, "code_keywords": [name]},
+            },
+        }
+        for name in ("a", "b")
+    ]
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(
+        side_effect=lambda where: (
+            MagicMock(param_value='{"legacy-router":"old-combined-hash"}')
+            if where["param_name"] == "auto_router_tuning_baseline_v2"
+            else None
+        )
+    )
+    prisma_client.db.litellm_config.create = AsyncMock()
+
+    baseline = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, deployments)
+
+    assert baseline == snapshot_tuning_baselines(deployments)
+    assert mutable_tuned_identities(deployments, baseline) == frozenset()
+    prisma_client.db.litellm_config.create.assert_awaited_once_with(
+        data={"param_name": "auto_router_tuning_baseline_v3", "param_value": json.dumps(dict(baseline))}
+    )
+    prisma_client.db.litellm_config.find_unique.side_effect = None
+    prisma_client.db.litellm_config.find_unique.return_value = MagicMock(param_value=json.dumps(dict(baseline)))
+    changed = [
+        {
+            "model_name": "a",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "different-model"}, "code_keywords": ["new-rule"]},
+            },
+        }
+    ]
+
+    reloaded = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, changed)
+
+    assert reloaded == baseline
+    assert mutable_tuned_identities(changed, reloaded) == frozenset({'yaml:["a",[]]'})
+    prisma_client.db.litellm_config.create.assert_awaited_once()
 
 
 @pytest.mark.asyncio

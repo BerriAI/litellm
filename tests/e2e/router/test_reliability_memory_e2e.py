@@ -38,6 +38,20 @@ size budget: the deterministic catch for a breadcrumb that copies the whole
 request. It runs before the phases because the leaking writer drops its own rows
 under the phases' traffic (a queue budget hit, a recursion limit on the nested
 copies), which would turn the size check into a missing-row check.
+
+A second, cheaper check holds the idle footprint: every worker's RSS as the harness
+read it at collection time, before this pytest process sent any traffic (see
+conftest.pytest_collection_finish), must sit under a fixed budget. On the
+release gate that is a fresh stack right after its readiness gate, one worker per
+gateway replica, so the reading is what a DB-backed boot costs on its own. A
+v1.100.x worker with a database idled at 886 MB RSS where v1.101.0rc1 idled at
+544 MB on the same database (1.3 GB against 560 MB at the pod level, under a
+2 GiB limit): the generated Prisma client at prisma-client-py's default recursive
+type depth, 91k TypedDict classes that v1.101.0 cut to 19k with
+recursive_type_depth = -1. The budget starts at the rc1 reading plus headroom and
+E2E_MEMORY_IDLE_RSS_BUDGET_MB overrides it; a later session on the same stack (the
+changed-files workflow's repeat passes, a developer's local loop) measures a proxy
+already warmed by traffic, which that headroom also has to cover.
 """
 
 from __future__ import annotations
@@ -55,6 +69,7 @@ import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import (
     MEMORY_CONCURRENCY,
+    MEMORY_IDLE_RSS_BUDGET_MB,
     MEMORY_REQUESTS_PER_PHASE,
     MEMORY_RETRIES_PER_REQUEST,
     MEMORY_RSS_BUDGET_MB,
@@ -62,15 +77,16 @@ from e2e_config import (
     MEMORY_RSS_SETTLE_SAMPLES,
     MEMORY_STORED_REQUEST_BUDGET_KB,
     MEMORY_TRANSCRIPT_TURNS,
+    PROXY_REPLICA_URLS,
     unique_marker,
 )
-from e2e_http import unwrap
 from lifecycle import ResourceManager
+from memory_readings import RssCapture, RssReading, WorkerKey, read_rss_everywhere
 from models import ChatMessage, RouterSettingsOverride, SpendLogRow
 from proxy_client import ProxyClient
 from reliability_support import chat_override, create_never_benched_refusing_deployment
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
 
 DEPLOYMENTS_PER_GROUP: Final = 2
 RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES
@@ -82,21 +98,6 @@ class FailedCall:
     seconds: float
     body_head: str
     call_id: str | None
-
-
-WorkerKey = tuple[str, str | None, int]
-
-
-@dataclass(frozen=True, slots=True)
-class RssReading:
-    replica: str
-    hostname: str | None
-    worker_pid: int
-    ram_usage_mb: float
-
-    @property
-    def worker(self) -> WorkerKey:
-        return (self.replica, self.hostname, self.worker_pid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +144,12 @@ def _fail_many(proxy: ProxyClient, key: str, model: str, override: RouterSetting
 
 def _read_rss_everywhere_after_pause(proxy: ProxyClient) -> tuple[RssReading, ...]:
     time.sleep(MEMORY_RSS_SAMPLE_INTERVAL_SECONDS)
-    return tuple(
-        RssReading(replica, body.hostname, body.worker_pid, body.memory.ram_usage_mb)
-        for replica, result in proxy.memory_summary_everywhere().items()
-        for body in (unwrap(result),)
-        if body.memory.ram_usage_mb is not None
+    capture: Final = read_rss_everywhere(proxy)
+    assert not capture.failures, (
+        f"{len(capture.failures)} replica(s) gave no RSS reading mid-checkpoint, so their workers cannot be "
+        f"compared with themselves: {'; '.join(capture.failures)}"
     )
+    return capture.readings
 
 
 def _readings_until_no_new_worker(
@@ -220,6 +221,26 @@ def _stored_request_kb(proxy: ProxyClient, call: FailedCall) -> float:
 
 
 class TestReliabilityMemory:
+    @pytest.mark.covers("reliability.perf.idle_memory.under_slo")
+    def test_workers_idle_under_rss_budget_before_traffic(self, idle_rss: RssCapture) -> None:
+        assert not idle_rss.failures, (
+            f"{len(idle_rss.failures)} replica(s) gave no RSS reading when the session started, so their idle "
+            f"footprint went unmeasured: {'; '.join(idle_rss.failures)}"
+        )
+        unmeasured: Final = frozenset(PROXY_REPLICA_URLS) - frozenset(reading.replica for reading in idle_rss.readings)
+        assert not unmeasured, (
+            f"{len(unmeasured)} of {len(PROXY_REPLICA_URLS)} replica(s) gave neither an RSS reading nor a failure "
+            f"reason when the session started, so their idle footprint went unmeasured: {', '.join(sorted(unmeasured))}"
+        )
+        heaviest: Final = idle_rss.heaviest
+        assert heaviest is not None, "no replica was configured to read, so nothing was measured"
+        assert heaviest.ram_usage_mb <= MEMORY_IDLE_RSS_BUDGET_MB, (
+            f"{heaviest.where} sat at {heaviest.ram_usage_mb:.0f} MB RSS when the session started, before it sent "
+            f"any traffic, past the {MEMORY_IDLE_RSS_BUDGET_MB:.0f} MB idle budget; a DB-backed v1.100.x worker idled "
+            f"at 886 MB where v1.101.0rc1 idled at 544 MB, and at that size the release stack's 2 GiB pod limit "
+            f"leaves the worker little room for traffic"
+        )
+
     @pytest.mark.covers("reliability.perf.memory.under_slo")
     def test_failing_requests_do_not_grow_rss_or_stored_request(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str

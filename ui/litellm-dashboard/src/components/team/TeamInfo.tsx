@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
@@ -118,6 +119,10 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
+import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
+import { useMemberBudgetReset } from "./useMemberBudgetReset";
+import { fetchClient } from "@/lib/http/api";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -247,10 +252,13 @@ export const retainedMcpToolPermissions = (
 export const mcpUnresolvableSaveError = (reason: string): string =>
   `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
 
+export type TeamMemberBudgetSource = components["schemas"]["TeamMemberResetBudgetResponse"]["budget_source"];
+
 export interface TeamMembership {
   user_id: string;
   team_id: string;
-  budget_id: string;
+  budget_id: string | null;
+  budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
   litellm_budget_table: {
@@ -880,17 +888,41 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
     await teamUpdateCall(token, updateData);
     queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-
-    toast.success("Team settings updated successfully");
     setIsEditing(false);
-    fetchTeamInfo();
   };
+
+  const memberBudgetReset = useMemberBudgetReset({
+    saveTeam: async (updateData) => {
+      if (!accessToken) return;
+      setIsTeamSaving(true);
+      try {
+        await persistTeamUpdate(accessToken, updateData);
+      } finally {
+        setIsTeamSaving(false);
+      }
+    },
+    resetMemberBudgets: async (bulkTeamId, userIds) => {
+      const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
+        params: { path: { team_id: bulkTeamId } },
+        body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
+      });
+      return data?.data ?? [];
+    },
+    refreshTeamData,
+  });
+
+  const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
+  useEffect(() => {
+    dismissMemberBudgetReset();
+  }, [teamId, dismissMemberBudgetReset]);
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
     if (!accessToken) return;
     setIsTeamSaving(true);
     try {
       await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+      toast.success("Team settings updated successfully");
+      await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -1001,8 +1033,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
-      if (values.team_member_budget !== undefined) {
-        updateData.team_member_budget = Number(values.team_member_budget);
+      const newTeamMemberBudget =
+        values.team_member_budget !== undefined ? Number(values.team_member_budget) : undefined;
+      if (newTeamMemberBudget !== undefined) {
+        updateData.team_member_budget = newTeamMemberBudget;
       }
 
       if (values.team_member_key_duration !== undefined) {
@@ -1148,7 +1182,28 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
+      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+      if (
+        newTeamMemberBudget !== undefined &&
+        shouldPromptMemberBudgetReset(
+          newTeamMemberBudget,
+          info.team_member_budget_table?.max_budget,
+          customBudgetUserIds,
+        )
+      ) {
+        const pendingReset = {
+          teamId,
+          updateData,
+          userIds: customBudgetUserIds,
+          newBudget: newTeamMemberBudget,
+        };
+        memberBudgetReset.prompt(pendingReset);
+        return;
+      }
+
       await persistTeamUpdate(accessToken, updateData);
+      toast.success("Team settings updated successfully");
+      await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -1361,6 +1416,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           canEditTeam={canEditTeam}
           handleMemberDelete={handleMemberDelete}
           onMemberSpendReset={refreshTeamData}
+          onMemberBudgetReset={refreshTeamData}
           setSelectedEditMember={setSelectedEditMember}
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}
@@ -1780,25 +1836,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
-                  <FormField
-                    control={form.control}
-                    name="disable_global_guardrails"
-                    label={labelWithHint(
-                      "Disable all global guardrails",
-                      "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
-                    )}
-                  >
-                    {({ id, value, onChange }) => (
-                      <Switch
-                        id={id}
-                        checked={value === true}
-                        onCheckedChange={(checked) => {
-                          onChange(checked);
-                          applyKillSwitchToGuardrails(checked);
-                        }}
-                      />
-                    )}
-                  </FormField>
+                  {is_proxy_admin && (
+                    <FormField
+                      control={form.control}
+                      name="disable_global_guardrails"
+                      label={labelWithHint(
+                        "Disable all global guardrails",
+                        "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <Switch
+                          id={id}
+                          checked={value === true}
+                          onCheckedChange={(checked) => {
+                            onChange(checked);
+                            applyKillSwitchToGuardrails(checked);
+                          }}
+                        />
+                      )}
+                    </FormField>
+                  )}
 
                   {canViewPolicies && (
                     <FormField
@@ -2418,6 +2476,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={handleDeleteCancel}
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
+      />
+
+      <ResetMemberBudgetsDialog
+        state={memberBudgetReset.state}
+        onReset={memberBudgetReset.reset}
+        onRetry={memberBudgetReset.retry}
+        onKeep={memberBudgetReset.keepCustom}
+        onDismiss={memberBudgetReset.dismiss}
       />
     </div>
   );

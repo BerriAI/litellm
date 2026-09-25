@@ -18,6 +18,7 @@ litellm-auth-gcp.workspace = true
 litellm-host.workspace = true
 litellm-framing.workspace = true
 litellm-http.workspace = true
+litellm-secrets.workspace = true
 base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"
@@ -34,7 +35,7 @@ tokio = { workspace = true, features = ["sync"] }
 url.workspace = true
 
 [dev-dependencies]
-aws-smithy-eventstream = "=0.61.1"
+aws-smithy-eventstream = "=0.61.4"
 aws-smithy-types = "1.6.1"
 rstest.workspace = true
 tokio.workspace = true

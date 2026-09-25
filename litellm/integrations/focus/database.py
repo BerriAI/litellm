@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import polars as pl
 
@@ -32,7 +32,7 @@ class FocusLiteLLMDatabase:
         client: Final = self._ensure_prisma_client()
 
         where_clauses: Final[list[str]] = []
-        query_params: Final[list[Any]] = []
+        query_params: Final[list[datetime | int]] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
@@ -112,7 +112,7 @@ class FocusLiteLLMDatabase:
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> dict[str, Any]:
+    async def get_table_info(self) -> dict[str, object]:
         """Return metadata about the spend table for diagnostics."""
         client: Final = self._ensure_prisma_client()
 

@@ -34,7 +34,6 @@ GLOB_CHARS = frozenset("*?")
 # tests has to be named by some shard or it runs nowhere. A child listed here is
 # itself decomposed one level deeper and is checked through its own entry.
 SHARDED_ROOTS: tuple[str, ...] = (
-    "tests/proxy_unit_tests",
     "tests/test_litellm",
     "tests/test_litellm/proxy",
 )
@@ -118,6 +117,13 @@ def _invoked_test_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
         if scalar.key in TEST_PATH_KEYS or TEST_RUNNER_RE.search(scalar.value)
         for match in TEST_TOKEN_RE.finditer(_uncommented(scalar.value))
     )
+
+
+def _unit_selection_tokens(repo_root: pathlib.Path = REPO_ROOT) -> frozenset[str]:
+    script: Final = repo_root / ".circleci/scripts/unit_selection.sh"
+    if not script.is_file():
+        return frozenset()
+    return frozenset(match.group(0).rstrip("/") for match in TEST_TOKEN_RE.finditer(_uncommented(script.read_text())))
 
 
 def _built_dockerfile_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
@@ -235,9 +241,7 @@ class Slice:
             return True  # a `-k` this parser cannot model is assumed to claim everything
         if any(term.lower() in relative_path.lower() for term in self.excluded):
             return False
-        return not self.required or any(
-            term.lower() in name.lower() for term in self.required for name in inner_names
-        )
+        return not self.required or any(term.lower() in name.lower() for term in self.required for name in inner_names)
 
 
 def _strings(node: object) -> Iterable[str]:
@@ -307,9 +311,7 @@ def _matchable_names(relative_path: str) -> frozenset[str]:
     except (OSError, SyntaxError):
         return frozenset({relative_path})
     return frozenset({relative_path}) | frozenset(
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     )
 
 
@@ -331,9 +333,7 @@ def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
     slices: Final = _slices()
     named_by_workflow: Final = _workflow_named_tokens()
     globbed: Final = tuple(
-        path
-        for path in _test_files()
-        if any(_token_covers(glob, path) for slice_ in slices for glob in slice_.globs)
+        path for path in _test_files() if any(_token_covers(glob, path) for slice_ in slices for glob in slice_.globs)
     )
     return tuple(
         Finding(
@@ -363,11 +363,7 @@ def _shard_children(root: str, repo_root: pathlib.Path = REPO_ROOT) -> tuple[str
             child.relative_to(repo_root).as_posix()
             for child in (repo_root / root).iterdir()
             if not child.name.startswith(".")
-            and (
-                _holds_tests(child)
-                if child.is_dir()
-                else child.name.startswith("test_") and child.suffix == ".py"
-            )
+            and (_holds_tests(child) if child.is_dir() else child.name.startswith("test_") and child.suffix == ".py")
         )
     )
 
@@ -499,13 +495,32 @@ def _check_shards() -> int:
     return 0
 
 
+def _integration_groups(runner: pathlib.Path) -> dict[str, tuple[str, ...]]:
+    module: Final = ast.parse(runner.read_text())
+    literal: Final = next(
+        node.value
+        for node in module.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "GROUPS"
+    )
+    mapping: Final = literal.args[0] if isinstance(literal, ast.Call) else literal
+    return {group: tuple(folders) for group, folders in ast.literal_eval(mapping).items()}
+
+
 def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozenset[str], tuple[Finding, ...]]:
-    manifest: Final = repo_root / "tests/integration/contracts.json"
-    if not manifest.exists():
+    runner: Final = repo_root / "tests/integration/run.py"
+    if not runner.exists():
         return frozenset(), ()
-    entries: Final = json.loads(manifest.read_text())
-    paths: Final = frozenset(node.split("::", 1)[0] for node in entries["tests"])
-    browser_paths: Final = frozenset(node.split("::", 1)[0] for node in entries.get("browser", {}))
+    groups: Final = _integration_groups(runner)
+    integration_root: Final = repo_root / "tests/integration"
+    paths: Final = frozenset(
+        str(path.relative_to(repo_root))
+        for folders in groups.values()
+        for folder in folders
+        for path in (integration_root / folder).glob("test_*.py")
+    )
+    browser_manifest: Final = repo_root / "tests/e2e/ui/tests/integrationCritical/expected.json"
+    browser_nodes: Final = json.loads(browser_manifest.read_text()) if browser_manifest.exists() else ()
+    browser_paths: Final = frozenset(node.split("::", 1)[0] for node in browser_nodes)
     circle_path: Final = repo_root / ".circleci/config.yml"
     circle: Final = yaml.safe_load(circle_path.read_text()) if circle_path.exists() else {}
     steps: Final = circle.get("jobs", {}).get("integration_contracts", {}).get("steps", ())
@@ -526,15 +541,14 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     )
     required: Final = (frozenset({"browser"}) if browser_paths else frozenset()) | frozenset(
         group
-        for group, folders in entries["groups"].items()
+        for group, folders in groups.items()
         if any(any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for path in paths)
     )
     ungrouped: Final = frozenset(
         path
         for path in paths
         if sum(
-            any(path.startswith(f"tests/integration/{folder}/") for folder in folders)
-            for folders in entries["groups"].values()
+            any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for folders in groups.values()
         )
         != 1
     )
@@ -547,10 +561,6 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         Finding(path, "integration contract is also selected by GitHub Actions")
         for path in paths
         if any(_token_covers(token, path) for token in gha_tokens)
-    ) + tuple(
-        Finding(path, "canonical integration test file is missing")
-        for path in paths
-        if not (repo_root / path).is_file()
     )
     browser_commands: Final = tuple(
         scalar.value
@@ -592,7 +602,7 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     ) + tuple(Finding(path, "canonical node must have exactly one integration group") for path in sorted(ungrouped))
     if not paths or not invoked or not scheduled:
         return frozenset(), findings + (
-            Finding(str(manifest.relative_to(repo_root)), "dedicated CircleCI runner is missing"),
+            Finding(str(runner.relative_to(repo_root)), "dedicated CircleCI runner is missing"),
         )
     return paths | browser_paths, findings + group_findings + browser_findings + exclusion_findings
 
@@ -607,7 +617,10 @@ def main() -> int:
     scalars = _all_scalars()
 
     integration_paths, ownership_findings = _integration_ownership()
-    test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | integration_paths) + ownership_findings
+    test_findings = (
+        _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | _unit_selection_tokens() | integration_paths)
+        + ownership_findings
+    )
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
     stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
 

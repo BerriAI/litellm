@@ -2298,6 +2298,56 @@ class TestStructuredMessagesWriteBack:
         assert result["input"][3] == {"role": "user", "content": "What is the codename?"}
 
     @pytest.mark.asyncio
+    async def test_codex_custom_tool_items_survive_tool_output_compression(self):
+        handler = OpenAIResponsesHandler()
+        additional_tools_item = {
+            "type": "additional_tools",
+            "tools": [{"type": "custom", "name": "exec", "description": "Run a JavaScript snippet"}],
+        }
+        reasoning_item = {
+            "id": "rs_456",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAA-signed-reasoning",
+        }
+        custom_tool_call_item = {
+            "id": "ctc_456",
+            "type": "custom_tool_call",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": 'const r = await tools.exec_command({"cmd": "cat memo.txt"});\ntext(r.output);',
+            "status": "completed",
+        }
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                additional_tools_item,
+                {"role": "user", "content": "What is the codename?"},
+                reasoning_item,
+                custom_tool_call_item,
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_exec",
+                    "output": [
+                        {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                        {"type": "input_text", "text": "memo " * 400},
+                    ],
+                },
+            ],
+        }
+
+        result = await handler.process_input_messages(data, ToolOutputRewriteGuardrail())
+
+        assert result["input"][0] is additional_tools_item
+        assert result["input"][1] == {"role": "user", "content": "What is the codename?"}
+        assert result["input"][2] is reasoning_item
+        assert result["input"][3] is custom_tool_call_item
+        assert result["input"][4]["type"] == "custom_tool_call_output"
+        assert result["input"][4]["call_id"] == "call_exec"
+        assert COMPRESSED_MARKER in str(result["input"][4]["output"])
+        assert len(result["input"]) == 5
+
+    @pytest.mark.asyncio
     async def test_web_search_call_item_preserved_verbatim(self):
         handler = OpenAIResponsesHandler()
         web_search_item = {

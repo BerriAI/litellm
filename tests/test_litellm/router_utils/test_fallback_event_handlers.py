@@ -1,12 +1,13 @@
 import json
 from datetime import datetime, timedelta
-from typing import NoReturn
+from typing import Final, NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
@@ -1305,6 +1306,14 @@ class TestOrderedFallbackLookupGroups:
             "requested-model",
         )
 
+    def test_fallback_hop_resumes_the_original_groups_chain_last(self):
+        from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
+
+        kwargs = {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+
+        assert fallback_lookup_groups(kwargs, "fb1") == ("fb1", "primary")
+        assert fallback_lookup_groups({"metadata": {"original_model_group": 42}}, "fb1") == ("fb1",)
+
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (
             get_fallback_model_group_for_lookup_groups,
@@ -1315,3 +1324,78 @@ class TestOrderedFallbackLookupGroups:
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
         assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
+
+
+class TestHasUnattemptedFallbackTarget:
+    def test_exhausted_chain_is_not_recoverable_but_a_fresh_entry_is(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            has_unattempted_fallback_target,
+        )
+
+        attempted: Final = AttemptedFallbackTargets()
+        attempted.record("primary")
+        attempted.record("fb1")
+        attempted.record("fb2")
+
+        assert has_unattempted_fallback_target(["fb1", "fb2"], {"attempted_targets": attempted}) is False
+        assert has_unattempted_fallback_target(["fb1", "fb3"], {"attempted_targets": attempted}) is True
+        assert has_unattempted_fallback_target(["fb1"], {}) is True
+        assert has_unattempted_fallback_target(None, {}) is False
+
+
+def test_get_fallback_model_group_matches_provider_prefixed_key():
+    """A bare model group routed via a wildcard (e.g. "gpt-4o" through
+    "openai/*") must match a fallback keyed on the provider-prefixed name,
+    which is the form the Admin UI offers for wildcard routes."""
+    fallbacks = [{"openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_get_fallback_model_group_exact_match_beats_prefixed_match():
+    fallbacks = [
+        {"openai/gpt-4o": ["claude-3-haiku"]},
+        {"gpt-4o": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_ignores_unknown_models():
+    """Provider inference fails for unknown bare names - the lookup must not
+    raise and must fall through to the generic fallback."""
+    fallbacks = [
+        {"openai/some-model": ["claude-3-haiku"]},
+        {"*": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="some-unknown-model-xyz")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_skips_prefixed_model_group():
+    """An already-prefixed model group must not double-prefix."""
+    fallbacks = [{"openai/openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
+
+    assert fallback_model_group is None
+
+
+def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias-style group name has no provider, and resolving it prints the SDK's provider-list banner,
+    so the lookup only infers a provider when some key is spelled <provider>/<group>."""
+
+    resolver: Final = MagicMock(return_value=("my-alias", "openai", None, None))
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", resolver)
+    fallbacks: Final = [{"gpt-5.5-pro": ["claude-sonnet-4-6"]}, {"*": ["gpt-5.5-mini"]}]
+
+    assert get_fallback_model_group(fallbacks=fallbacks, model_group="my-alias") == (["gpt-5.5-mini"], 1)
+    resolver.assert_not_called()

@@ -60,6 +60,20 @@ def test_translate_openai_response_to_anthropic_empty_choices() -> None:
     assert result["usage"]["input_tokens"] == 10
 
 
+@pytest.mark.parametrize("text,count,expected_stop", [
+    ("", 1, "compaction"), (None, 1, "compaction"), ("Answer", 1, "max_tokens"),
+    (" ", 1, "max_tokens"), ("", 2, "max_tokens"), ("", 0, "max_tokens"),
+])
+def test_native_compaction_response_roundtrip(text: str | None, count: int, expected_stop: str) -> None:
+    block: Final = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
+    message: Final = Message(content=text, provider_specific_fields={"compaction_blocks": [block] * count})
+    response: Final = ModelResponse(choices=[Choices(message=message, finish_reason="length")], usage=Usage())
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+    expected_text: Final = [{"type": "text", "text": text}] if text is not None and (text != "" or not count) else []
+    assert result["content"] == [*([block] * count), *expected_text]
+    assert result["stop_reason"] == expected_stop
+
+
 def test_translate_chat_refusal_to_anthropic_response():
     response = ModelResponse(
         id="chatcmpl-refusal",
@@ -1033,10 +1047,25 @@ def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: st
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
+        "vertex_ai/moonshotai/kimi-k2-thinking-maas",
+        "vertex_ai/xai/grok-4.1-fast-non-reasoning",
+    ],
+)
+def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_vertex_maas_models(model: str):
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, "vertex_ai")
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
         ("gemini/gemini-2.5-pro", "gemini"),
         ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
+        ("vertex_ai/gemma/gemma-2-2b-it", "vertex_ai"),
+        ("vertex_ai/openai/mg-endpoint-lit8592", "vertex_ai"),
         ("anthropic/claude-sonnet-4-5", "anthropic"),
         ("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
         ("no-such-model-lit5875", "no-such-provider-lit5875"),

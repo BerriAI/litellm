@@ -12,7 +12,7 @@ Authentication priority:
 
 import os
 import re
-from typing import Any, Final, Literal
+from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -48,7 +48,7 @@ class DatabricksBase:
     ]
 
     @classmethod
-    def redact_sensitive_data(cls, data: Any) -> Any:
+    def redact_sensitive_data(cls, data: object) -> object:
         """
         Redact sensitive information (tokens, secrets) from data before logging.
 

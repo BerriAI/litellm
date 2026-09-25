@@ -29,6 +29,10 @@ impl BaseOcrConfig for TextractDetectTextConfig {
     type ProviderRequest = DetectDocumentTextRequest;
     type Environment = TextractEnvironment;
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+    }
+
     fn get_health_check_document(&self) -> OcrDocument {
         health_check_document()
     }
