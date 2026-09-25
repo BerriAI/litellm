@@ -3775,6 +3775,64 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
     assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
 
 
+def test_finalize_presidio_anonymize_numbered_tokens_overlapping_spans():
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    # 1. Empty analyze_results returns text untouched
+    assert (
+        guardrail._finalize_presidio_anonymize_numbered_tokens(
+            text="Hello world",
+            analyze_results=[],
+            request_data={"metadata": {}},
+            masked_entity_count={},
+        )
+        == "Hello world"
+    )
+
+    # 2. Inverted/zero-length spans (s >= e) are ignored, and overlapping lower-score span is suppressed
+    text = "My name is John Smith, phone +1 415 555 2671, please check the order."
+    analyze_results = [
+        {"entity_type": "INVALID", "start": 25, "end": 25, "score": 0.99},
+        {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
+        {"entity_type": "PHONE_NUMBER", "start": 29, "end": 44, "score": 0.85},
+        {"entity_type": "UK_NHS", "start": 32, "end": 44, "score": 0.6},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+    assert result == "My name is <PERSON_1>, phone <PHONE_NUMBER_2>, please check the order."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<PERSON_1>"] == "John Smith"
+    assert pii_tokens["<PHONE_NUMBER_2>"] == "+1 415 555 2671"
+    assert "<UK_NHS_" not in pii_tokens
+    assert "<INVALID_" not in pii_tokens
+
+    # 3. Overlapping span where subsequent candidate has higher score and extends boundary
+    higher_score_text = "Code ABC-12345-XYZ is valid."
+    higher_score_results = [
+        {"entity_type": "GENERIC_ID", "start": 5, "end": 14, "score": 0.5},
+        {"entity_type": "SECRET_KEY", "start": 9, "end": 18, "score": 0.95},
+    ]
+    req_data2 = {"metadata": {}}
+    result2 = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=higher_score_text,
+        analyze_results=higher_score_results,
+        request_data=req_data2,
+        masked_entity_count={},
+    )
+    assert result2 == "Code <SECRET_KEY_1> is valid."
+    assert req_data2["metadata"]["pii_tokens"]["<SECRET_KEY_1>"] == "ABC-12345-XYZ"
+
+
 @pytest.mark.asyncio
 async def test_analyze_text_chunked_failure_stays_fail_closed():
     """If one chunk still fails, the chunked path raises exactly like a single

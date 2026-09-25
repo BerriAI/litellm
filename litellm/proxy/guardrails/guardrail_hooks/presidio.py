@@ -774,6 +774,53 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
+    @staticmethod
+    def _resolve_overlapping_spans(
+        analyze_results: Sequence[PresidioAnalyzeResponseItem],
+    ) -> Any:  # noqa: ANN401  # presidio return schema is dynamic
+        if not analyze_results:
+            return ()
+
+        sorted_by_span: Final = sorted(
+            analyze_results,
+            key=lambda x: (
+                int(x.get("start") or 0),
+                -int(x.get("end") or 0),
+                -float(x.get("score") or 0.0),
+            ),
+        )
+
+        merged: Final[list[PresidioAnalyzeResponseItem]] = []  # mutable-ok: required for sequential boundary merge
+        for item in sorted_by_span:
+            s = int(item.get("start") or 0)
+            e = int(item.get("end") or 0)
+            if s >= e:
+                continue
+            item_copy: PresidioAnalyzeResponseItem = {
+                "entity_type": item.get("entity_type"),
+                "start": s,
+                "end": e,
+                "score": float(item.get("score") or 0.0),
+            }
+            if not merged:
+                merged.append(item_copy)
+                continue
+
+            prev = merged[-1]
+            prev_e = int(prev.get("end") or 0)
+
+            if s < prev_e:
+                curr_score = float(item.get("score") or 0.0)
+                prev_score = float(prev.get("score") or 0.0)
+                prev["end"] = max(prev_e, e)
+                if curr_score > prev_score:
+                    prev["entity_type"] = item.get("entity_type")
+                    prev["score"] = curr_score
+            else:
+                merged.append(item_copy)
+
+        return tuple(merged)
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -799,9 +846,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
+        valid_analyze_results: Final = self._resolve_overlapping_spans(analyze_results)
+
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
+        sorted_forward: Final = sorted(valid_analyze_results, key=lambda x: int(x.get("start") or 0))
         seq_map: Final = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx
