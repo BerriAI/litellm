@@ -337,8 +337,7 @@ export const streamScopeForUpdate = (
       : {};
   const preserved: Record<string, GuardrailStreamScope> = Object.fromEntries(
     Object.entries(previousMap).filter(
-      (entry): entry is [string, GuardrailStreamScope] =>
-        !modes.includes(entry[0]) && isGuardrailStreamScope(entry[1]),
+      (entry): entry is [string, GuardrailStreamScope] => !modes.includes(entry[0]) && isGuardrailStreamScope(entry[1]),
     ),
   );
   const nextModes = [...modes, ...Object.keys(preserved)];

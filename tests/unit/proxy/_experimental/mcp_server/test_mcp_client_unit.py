@@ -289,7 +289,10 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool", arguments={"arg1": "value1"}, progress_callback=ANY
+            name="test_tool",
+            arguments={"arg1": "value1"},
+            progress_callback=ANY,
+            allow_input_required=False,
         )
 
 

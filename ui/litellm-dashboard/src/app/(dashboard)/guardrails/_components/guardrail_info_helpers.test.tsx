@@ -319,11 +319,7 @@ describe("guardrail_info_helpers", () => {
         ),
       ).toBeUndefined();
       expect(
-        streamScopeForUpdate(
-          ["pre_call"],
-          { pre_call: "both" },
-          { pre_call: "streaming", post_call: "non_streaming" },
-        ),
+        streamScopeForUpdate(["pre_call"], { pre_call: "both" }, { pre_call: "streaming", post_call: "non_streaming" }),
       ).toEqual({ post_call: "non_streaming" });
     });
   });
