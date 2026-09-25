@@ -259,16 +259,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     userSpendData.metadata?.api_key_limit,
     userSpendData.metadata?.total_api_keys,
   );
+  const serverExportArgs =
+    accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
   const serverExport: ServerExport | undefined =
-    apiKeyTruncation !== undefined && accessToken && dateValue.from && dateValue.to
-      ? (scope, format) =>
-          userDailyActivityExportCall({
-            accessToken,
-            startTime: new Date(dateValue.from!),
-            endTime: new Date(dateValue.to!),
-            exportType: scope,
-            format,
-          })
+    apiKeyTruncation !== undefined && serverExportArgs !== null
+      ? (scope, format) => userDailyActivityExportCall({ ...serverExportArgs, exportType: scope, format })
       : undefined;
   const spendFetchState = {
     coversRange: activeAggregated !== null || paginatedResult.coversRange,
