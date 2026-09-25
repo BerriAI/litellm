@@ -3,7 +3,8 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock, patch
+from typing import Final, Literal
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from unittest.mock import AsyncMock
 
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 
 
@@ -19,6 +21,17 @@ class _SlowInt(int):
     def __add__(self, value: int) -> "_SlowInt":
         time.sleep(0.05)
         return _SlowInt(int(self) + value)
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 def test_increment_cache_is_atomic_under_thread_concurrency():
@@ -148,6 +161,48 @@ def test_in_memory_cache_max_size_with_ttl():
     assert "key_1" in in_memory_cache.cache_dict
     assert "key_2" in in_memory_cache.cache_dict
     assert "key_3" in in_memory_cache.cache_dict
+
+
+@pytest.mark.parametrize("updated_key", ["first", "second"])
+def test_updating_full_cache_preserves_entries_and_expiration(updated_key: Literal["first", "second"]) -> None:
+    clock: Final = _FakeClock()
+    cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)
+    cache.set_cache("first", "original-a", ttl=10)
+    cache.set_cache("second", "original-b", ttl=30)
+
+    cache.set_cache(updated_key, "updated", ttl=60)
+
+    assert cache.get_cache("first") == ("updated" if updated_key == "first" else "original-a")
+    assert cache.get_cache("second") == ("updated" if updated_key == "second" else "original-b")
+
+    clock.advance(11.0)
+    assert cache.get_cache("first") is None
+    assert cache.get_cache("second") == ("updated" if updated_key == "second" else "original-b")
+
+    clock.advance(20.0)
+    assert cache.get_cache("second") is None
+
+
+@pytest.mark.parametrize(
+    ("updated_key", "expected_values"),
+    [
+        ("first", ("updated", None, "original-c")),
+        ("third", (None, "original-b", "updated")),
+    ],
+)
+def test_updating_cache_after_capacity_reduction_respects_limit(
+    updated_key: Literal["first", "third"], expected_values: tuple[str | None, str | None, str | None]
+) -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=3, clock=_FakeClock())
+    cache.set_cache("first", "original-a", ttl=10)
+    cache.set_cache("second", "original-b", ttl=20)
+    cache.set_cache("third", "original-c", ttl=30)
+    DualCache(in_memory_cache=cache).update_in_memory_max_size(2)
+
+    cache.set_cache(updated_key, "updated", ttl=60)
+
+    assert len(cache.cache_dict) == 2
+    assert tuple(cache.get_cache(key) for key in ("first", "second", "third")) == expected_values
 
 
 def test_in_memory_cache_expired_items_evicted_first():
