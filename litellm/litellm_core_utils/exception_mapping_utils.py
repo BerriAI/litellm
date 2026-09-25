@@ -341,6 +341,7 @@ def _map_openai_exception(
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
         or ("Invalid prompt" in error_str and "violating our usage policy" in error_str)
         or ("request was rejected as a result of the safety system" in error_str.lower())
+        or (custom_llm_provider == "dashscope" and "datainspectionfailed" in error_str.lower())
     ):
         raise ContentPolicyViolationError(
             message=f"ContentPolicyViolationError: {exception_provider} - {message}",
