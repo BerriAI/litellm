@@ -148,6 +148,7 @@ class GenAIMapper:
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {
         LiteLLM.SERVICE_NAME: lambda d: d.service_name,
         LiteLLM.SERVICE_CALL_TYPE: lambda d: d.call_type,
+        LiteLLM.SERVICE_CALLER: lambda d: d.caller,
     }
 
     def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:

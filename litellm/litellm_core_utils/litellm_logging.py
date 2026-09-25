@@ -25,6 +25,7 @@ from litellm import (
     json_logs,
     turn_off_message_logging,
 )
+from litellm._internal_context import post_response_phase
 from litellm._logging import (
     _is_debugging_on,
     _redact_string,
@@ -2749,9 +2750,10 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return self._success_handler_body(
-                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-            )
+            with post_response_phase():
+                return self._success_handler_body(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                )
         finally:
             self._restore_correlation_context()
 
@@ -3187,9 +3189,10 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return await self._async_success_handler_body(
-                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-            )
+            with post_response_phase():
+                return await self._async_success_handler_body(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                )
         finally:
             self._restore_correlation_context()
 

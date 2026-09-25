@@ -144,16 +144,19 @@ def test_service_span_data_from_payload():
     class _Payload:
         service = _Service()
         call_type = "async_set_cache"
+        caller = "async_set_cache <- async_add_cache"
         error = None
 
     data = ServiceSpanData.from_payload(_Payload())
     assert data.service_name == "redis"
     assert data.call_type == "async_set_cache"
+    assert data.caller == "async_set_cache <- async_add_cache"
     assert data.error is None
 
     class _FailPayload:
         service = _Service()
         call_type = "async_set_cache"
+        caller = None
         error = "boom"
 
     failed = ServiceSpanData.from_payload(_FailPayload())
