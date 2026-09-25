@@ -116,10 +116,11 @@ const CostBreakdown: React.FC<{ view: BenchmarkView; partialComparison: boolean 
 
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
-  const cheaper = stats.saved_spend != null && stats.saved_spend >= 0;
-  const dailyCosts = viewGroup(view) === null;
+  const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
+  const comparisonRequests = viewGroup(view) ? stats.turns : stats.cost_requests;
+  const trackedComparison = stats.savings_estimated_turns > 0 || stats.baseline_spend == null;
   const partialComparison =
-    dailyCosts && stats.cost_requests != null && stats.savings_estimated_turns < stats.cost_requests;
+    trackedComparison && comparisonRequests != null && stats.savings_estimated_turns < comparisonRequests;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -136,14 +137,14 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
                 variant="secondary"
                 className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
               >
-                {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
+                {stats.saved_pct !== 0 && (cheaper ? "-" : "+")}
                 {Math.abs(stats.saved_pct).toFixed(0)}%
               </Badge>
             )}
           </div>
           {partialComparison && (
             <p className="text-center text-xs text-muted-foreground">
-              {stats.savings_estimated_turns.toLocaleString()} of {stats.cost_requests?.toLocaleString()} requests have
+              {stats.savings_estimated_turns.toLocaleString()} of {comparisonRequests?.toLocaleString()} requests have
               savings estimates
             </p>
           )}

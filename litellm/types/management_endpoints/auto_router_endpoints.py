@@ -246,11 +246,12 @@ class AutoRouterBenchmarkTotals(BaseModel):
         "groups cover whole overlapping sessions. Turns without an estimate add no savings"
     )
     baseline_spend: float | None = Field(
-        description="Matching actual spend plus recorded savings. Daily totals compare estimated requests only; "
+        description="Matching actual spend plus savings for estimated requests. Historical-only groups retain "
+        "their recorded comparison; "
         "null when historical cost coverage or the savings estimate is unavailable"
     )
     saved_pct: float | None = Field(
-        description="Recorded savings divided by the matching estimated baseline; null when that baseline is unavailable"
+        description="Savings on compared requests divided by their estimated baseline; null when unavailable"
     )
     saved_per_session: float | None = Field(
         description="Recorded savings in whole overlapping sessions divided by their session count, independent "
@@ -296,7 +297,8 @@ class AutoRouterSessionResponse(BaseModel):
         description="Recorded signed savings, retaining historical estimates and adding current estimates once"
     )
     baseline_spend: float | None = Field(
-        description="Actual session spend plus recorded savings; turns without an estimate add no savings"
+        description="Actual session spend plus recorded savings; null for mixed estimated and unestimated turns. "
+        "Historical-only sessions retain their recorded comparison"
     )
     savings_estimated_baseline_spend: float | None = Field(
         description="Estimated single-model cost for covered turns only"

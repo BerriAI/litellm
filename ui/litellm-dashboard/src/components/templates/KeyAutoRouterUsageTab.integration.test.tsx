@@ -136,4 +136,48 @@ describe("KeyAutoRouterUsageTab", () => {
     expect(screen.getByText("Auto-router prompt caching")).toBeInTheDocument();
     expect(screen.getAllByText("50.0%").length).toBeGreaterThan(0);
   });
+
+  it("shows matching estimated costs and coverage when selecting a mixed-coverage router", async () => {
+    const user = userEvent.setup();
+    const mixed = {
+      ...stats,
+      turns: 2,
+      spend: 100,
+      llm_spend: 100,
+      classifier_cost: 0,
+      savings_estimated_turns: 1,
+      savings_estimated_actual_spend: 1,
+      saved_spend: 1,
+      baseline_spend: 2,
+      saved_pct: 50,
+    };
+    vi.stubGlobal("fetch", async (request: Request | string) => {
+      const url = typeof request === "string" ? request : request.url;
+      return jsonResponse(
+        url.includes("/auto_router/benchmarks")
+          ? { ...benchmarks, groups: [{ ...benchmarks.groups[0], ...mixed }] }
+          : noDeployments,
+      );
+    });
+    const activity = {
+      dateValue: { from: new Date(2025, 0, 1), to: new Date(2025, 0, 31) },
+      onDateChange: vi.fn(),
+    };
+    renderWithProviders(<KeyAutoRouterUsageTab accessToken="test-token" keyToken="key-hash-1" activity={activity} />);
+    expect(await screen.findByText("$12.75")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: "router-one" }));
+
+    expect(screen.getByText("-50%")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 requests have savings estimates")).toBeInTheDocument();
+    expect(screen.getByText("Actual spend on estimated requests")).toBeInTheDocument();
+    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
+      "$100.00",
+      "$100.00",
+      "$0.00",
+      "$1.00",
+      "$2.00",
+    ]);
+  });
 });

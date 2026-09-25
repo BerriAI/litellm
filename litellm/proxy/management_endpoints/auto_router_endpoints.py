@@ -688,7 +688,9 @@ def _savings_cohort(
     return saved_spend, actual_spend + saved_spend
 
 
-def _recorded_baseline_spend(estimated_turns: int, actual_spend: float, saved_spend: float) -> float | None:
+def _recorded_baseline_spend(turns: int, estimated_turns: int, actual_spend: float, saved_spend: float) -> float | None:
+    if 0 < estimated_turns < turns:
+        return None
     if estimated_turns == 0 and saved_spend == 0:
         return None
     return actual_spend + saved_spend
@@ -696,23 +698,27 @@ def _recorded_baseline_spend(estimated_turns: int, actual_spend: float, saved_sp
 
 async def _daily_router_costs(
     prisma_client: "PrismaClient", start_date: str, end_date: str, api_key: str | None, user_id: str | None
-) -> AutoRouterDailyCosts:
+) -> tuple[float, AutoRouterDailyCosts]:
     rows: Final = await _query_raw(prisma_client, AUTOROUTER_DAILY_COSTS_SQL, start_date, end_date, api_key, user_id)
     recorded: Final = AutoRouterDailyCosts.model_validate(rows[0]) if rows else AutoRouterDailyCosts()
     if recorded.complete:
-        return recorded
+        return recorded.saved_spend, recorded
     try:
         recovered: Final = await recover_daily_router_costs(prisma_client, start_date, end_date, api_key, user_id)
-        return recovered if recovered is not None else recorded
+        return recorded.saved_spend, recovered if recovered is not None else recorded
     except Exception:  # noqa: BLE001  # optional recovery must preserve durable daily savings and costs
         verbose_proxy_logger.warning("Auto-router historical cost recovery unavailable; using recorded daily costs")
-        return recorded
+        return recorded.saved_spend, recorded
 
 
 def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return_misses: Final = row.return_turns - row.return_hits
+    comparison_savings: Final = row.savings_estimated_saved_spend if row.savings_estimated_turns else row.saved_spend
+    comparison_actual: Final = row.savings_estimated_actual_spend if row.savings_estimated_turns else row.spend
     baseline_spend: Final = (
-        _recorded_baseline_spend(row.savings_estimated_turns, row.spend, row.saved_spend) if row.turns else 0.0
+        comparison_actual + comparison_savings
+        if row.savings_estimated_turns or not row.turns
+        else _recorded_baseline_spend(row.turns, 0, row.spend, row.saved_spend)
     )
     sessions: Final = row.sessions
     return AutoRouterBenchmarkTotals(
@@ -730,7 +736,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         saved_spend=row.saved_spend,
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
-        saved_pct=_pct(row.saved_spend, baseline_spend) if baseline_spend is not None else None,
+        saved_pct=_pct(comparison_savings, baseline_spend) if baseline_spend is not None else None,
         saved_per_session=row.saved_spend / sessions if sessions else 0.0,
         cache=AutoRouterCacheStats(
             coverage_pct=_pct(row.covered_turns, row.turns),
@@ -901,20 +907,6 @@ async def get_auto_router_benchmarks(
     if end_day < start_day:
         raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
 
-    from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity_aggregated
-
-    daily: Final = await get_daily_activity_aggregated(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyuserspend",
-        entity_id_field="user_id",
-        entity_id=user_id,
-        entity_metadata_field=None,
-        start_date=start_day.strftime("%Y-%m-%d"),
-        end_date=end_day.strftime("%Y-%m-%d"),
-        model=None,
-        api_key=api_key,
-    )
-
     raw_rows: Final = await _query_raw(
         prisma_client,
         AUTOROUTER_BENCHMARKS_SQL,
@@ -929,14 +921,13 @@ async def get_auto_router_benchmarks(
         *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
     )
     session_totals: Final = _benchmark_totals(_summed_agg_row(rows))
-    costs: Final = await _daily_router_costs(
+    saved_spend, costs = await _daily_router_costs(
         prisma_client,
         start_day.strftime("%Y-%m-%d"),
         end_day.strftime("%Y-%m-%d"),
         api_key,
         user_id,
     )
-    saved_spend: Final = daily.metadata.total_autorouter_savings_spend
     baseline_spend: Final = costs.baseline_spend(saved_spend)
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
@@ -1006,7 +997,7 @@ async def get_auto_router_session(
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=row.saved_spend,
-        baseline_spend=_recorded_baseline_spend(row.savings_estimated_turns, row.spend, row.saved_spend),
+        baseline_spend=_recorded_baseline_spend(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend),
         savings_estimated_baseline_spend=estimated_baseline_spend,
         baseline_model=row.baseline_model,
         baseline_models=row.baseline_models,

@@ -24890,7 +24890,7 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description Matching actual spend plus recorded savings. Daily totals compare estimated requests only; null when historical cost coverage or the savings estimate is unavailable
+             * @description Matching actual spend plus savings for estimated requests. Historical-only groups retain their recorded comparison; null when historical cost coverage or the savings estimate is unavailable
              */
             baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
@@ -24928,7 +24928,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description Recorded savings divided by the matching estimated baseline; null when that baseline is unavailable
+             * @description Savings on compared requests divided by their estimated baseline; null when unavailable
              */
             saved_pct: number | null;
             /**
@@ -24981,7 +24981,7 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description Matching actual spend plus recorded savings. Daily totals compare estimated requests only; null when historical cost coverage or the savings estimate is unavailable
+             * @description Matching actual spend plus savings for estimated requests. Historical-only groups retain their recorded comparison; null when historical cost coverage or the savings estimate is unavailable
              */
             baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
@@ -25009,7 +25009,7 @@ export interface components {
             llm_spend?: number | null;
             /**
              * Saved Pct
-             * @description Recorded savings divided by the matching estimated baseline; null when that baseline is unavailable
+             * @description Savings on compared requests divided by their estimated baseline; null when unavailable
              */
             saved_pct: number | null;
             /**
@@ -25318,7 +25318,7 @@ export interface components {
             };
             /**
              * Baseline Spend
-             * @description Actual session spend plus recorded savings; turns without an estimate add no savings
+             * @description Actual session spend plus recorded savings; null for mixed estimated and unestimated turns. Historical-only sessions retain their recorded comparison
              */
             baseline_spend: number | null;
             /**
