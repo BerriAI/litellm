@@ -381,18 +381,13 @@ async def test_500_after_mcp_tool_execution_is_not_retried(retry_policy, tools_e
     """
     router: Final = _create_router(num_retries=2, retry_policy=retry_policy)
     error: Final = _make_follow_up_error(tools_executed)
-    make_call: Final = AsyncMock(side_effect=error)
+    attempt: Final = AsyncMock(side_effect=error)
 
-    with (
-        patch.object(router, "make_call", make_call),
-        patch.object(router, "_async_get_healthy_deployments", return_value=(["d1", "d2"], ["d1", "d2"])),
-        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
-        pytest.raises(litellm.InternalServerError) as exc_info,
-    ):
-        await router.async_function_with_retries(num_retries=2, **_base_kwargs())
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        await router.async_function_with_retries(**{**_base_kwargs(), "original_function": attempt, "num_retries": 2})
 
     assert exc_info.value is error
-    assert make_call.await_count == (1 if tools_executed else 3)
+    assert attempt.await_count == (1 if tools_executed else 3)
 
 
 @pytest.mark.asyncio
@@ -404,18 +399,13 @@ async def test_500_after_mcp_tool_execution_stops_an_ongoing_retry_loop():
     """
     router: Final = _create_router(num_retries=3)
     after_tools: Final = _make_follow_up_error(tools_executed=True)
-    make_call: Final = AsyncMock(side_effect=[_make_follow_up_error(tools_executed=False), after_tools])
+    attempt: Final = AsyncMock(side_effect=[_make_follow_up_error(tools_executed=False), after_tools])
 
-    with (
-        patch.object(router, "make_call", make_call),
-        patch.object(router, "_async_get_healthy_deployments", return_value=(["d1", "d2"], ["d1", "d2"])),
-        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
-        pytest.raises(litellm.InternalServerError) as exc_info,
-    ):
-        await router.async_function_with_retries(num_retries=3, **_base_kwargs())
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        await router.async_function_with_retries(**{**_base_kwargs(), "original_function": attempt, "num_retries": 3})
 
     assert exc_info.value is after_tools
-    assert make_call.await_count == 2
+    assert attempt.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -434,21 +424,24 @@ async def test_500_after_mcp_tool_execution_does_not_fall_back(tools_executed):
         fallbacks=[{"test-model": ["backup-model"]}],
     )
     error: Final = _make_follow_up_error(tools_executed)
+    fallback_response: Final = litellm.ModelResponse()
 
-    async def primary_fails(original_function, *args, **kwargs):
+    async def primary_fails(**kwargs):
         if kwargs["model"] == "test-model":
             raise error
-        return "fallback response"
+        return fallback_response
 
-    make_call: Final = AsyncMock(side_effect=primary_fails)
+    attempt: Final = AsyncMock(side_effect=primary_fails)
+    call: Final = router.async_function_with_fallbacks(
+        **{**_base_kwargs(), "original_function": attempt, "num_retries": 0}
+    )
 
-    with patch.object(router, "make_call", make_call):
-        if tools_executed:
-            with pytest.raises(litellm.InternalServerError) as exc_info:
-                await router.async_function_with_fallbacks(num_retries=0, **_base_kwargs())
-            assert exc_info.value is error
-        else:
-            assert await router.async_function_with_fallbacks(num_retries=0, **_base_kwargs()) == "fallback response"
+    if tools_executed:
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            await call
+        assert exc_info.value is error
+    else:
+        assert await call is fallback_response
 
-    attempted_models: Final = [call.kwargs["model"] for call in make_call.await_args_list]
+    attempted_models: Final = [awaited.kwargs["model"] for awaited in attempt.await_args_list]
     assert attempted_models == (["test-model"] if tools_executed else ["test-model", "backup-model"])
