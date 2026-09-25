@@ -4486,6 +4486,25 @@ class Router:
                 f"Prompt variables is set but not a dictionary. Got={prompt_variables}, type={type(prompt_variables)}"
             )
 
+        from litellm.proxy.prompts.prompt_registry import (
+            IN_MEMORY_PROMPT_REGISTRY,
+            parse_prompt_version,
+        )
+
+        prompt_version: Final = parse_prompt_version(
+            kwargs.get("prompt_version") or prompt_management_deployment["litellm_params"].get("prompt_version")
+        )
+        prompt_spec: Final = (
+            IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(prompt_id, version=prompt_version)
+            if prompt_id is not None
+            else None
+        )
+        prompt_management_logger: Final = (
+            IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)
+            if prompt_spec is not None
+            else None
+        )
+
         (
             model,
             messages,
@@ -4495,8 +4514,11 @@ class Router:
             messages=messages,
             non_default_params=get_non_default_completion_params(kwargs=kwargs),
             prompt_id=prompt_id,
+            prompt_spec=prompt_spec,
+            prompt_management_logger=prompt_management_logger,
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
+            prompt_version=prompt_version,
             request_kwargs=kwargs,
             injected_for_every_deployment=True,
         )
@@ -4519,6 +4541,7 @@ class Router:
         kwargs["prompt_id"] = prompt_id
         kwargs["prompt_variables"] = prompt_variables
         kwargs["prompt_label"] = prompt_label
+        kwargs["prompt_version"] = prompt_version
 
         _model_list: Final = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model

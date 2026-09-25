@@ -16191,6 +16191,77 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
 
 
 @pytest.mark.asyncio
+async def test_prompt_management_factory_uses_deployment_prompt_version(monkeypatch):
+    """A deployment's prompt_version must select that version's own registered
+    callback, not whichever version's callback auto-detect happens to find first.
+    Regression test for https://github.com/BerriAI/litellm/issues/41735."""
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.proxy.prompts import prompt_registry
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "versioned-prompt-model",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "greeting",
+                    "prompt_version": 2,
+                },
+            }
+        ]
+    )
+
+    resolve_calls: list[dict] = []
+
+    def fake_resolve_prompt_spec(prompt_id, version=None, environment=None):
+        resolve_calls.append({"prompt_id": prompt_id, "version": version})
+        spec = MagicMock()
+        spec.litellm_params = MagicMock(prompt_id=f"{prompt_id}.v{version}")
+        return spec
+
+    version_2_logger = MagicMock(name="version_2_logger")
+    version_2_logger.get_chat_completion_prompt = MagicMock(
+        return_value=("anthropic_cache_control_hook/claude-sonnet-5", [{"role": "user", "content": "v2 rendered"}], {})
+    )
+
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "resolve_prompt_spec", fake_resolve_prompt_spec)
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY,
+        "get_prompt_callback_for_prompt",
+        lambda prompt: version_2_logger,
+    )
+
+    captured: dict = {}
+
+    async def _capture_acompletion(**kwargs):
+        captured.update(kwargs)
+        return litellm.ModelResponse()
+
+    monkeypatch.setattr(litellm, "acompletion", _capture_acompletion)
+    logging_obj = LiteLLMLogging(
+        model="versioned-prompt-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-41735",
+        function_id="f",
+    )
+
+    await router.acompletion(
+        model="versioned-prompt-model",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert resolve_calls == [{"prompt_id": "greeting", "version": 2}]
+    version_2_logger.get_chat_completion_prompt.assert_called_once()
+    assert captured["messages"] == [{"role": "user", "content": "v2 rendered"}]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "retry_policy,upstream_status,error_type,expected_upstream_calls",
     [
