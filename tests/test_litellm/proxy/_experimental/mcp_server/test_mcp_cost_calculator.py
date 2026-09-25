@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -8,9 +6,6 @@ import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.cost_calculator import MCPCostCalculator
 

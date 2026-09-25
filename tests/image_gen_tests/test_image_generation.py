@@ -3,14 +3,10 @@
 
 import logging
 import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from dotenv import load_dotenv
 from openai.types.image import Image
@@ -19,7 +15,6 @@ from litellm.caching import InMemoryCache
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
-import os
 import pytest
 
 import litellm
@@ -103,20 +98,6 @@ def load_vertex_ai_credentials():
 
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
-
-
-class TestVertexImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        # comment this when running locally
-        load_vertex_ai_credentials()
-
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {
-            "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "litellm-ci-cd",
-            "vertex_ai_location": "us-central1",
-            "n": 1,
-        }
 
 
 class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
@@ -269,7 +250,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
 
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "gemini/imagen-4.0-generate-001"}
+        return {"model": "gemini/gemini-3.1-flash-image"}
 
 
 @pytest.mark.skip(reason="Runwayml image generation API only tested locally")
@@ -387,6 +368,62 @@ async def test_aiml_image_generation_with_dynamic_api_key():
 
 
 @pytest.mark.asyncio
+async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
+    """End-to-end check that ``aiml/openai/gpt-image-2`` keeps the upstream
+    OpenAI request shape (``size``/``n``/``response_format``) instead of
+    being remapped to the AI/ML flux schema (``image_size``/``num_images``/
+    ``output_format``), and hits the correct upstream model name.
+    """
+    from unittest.mock import MagicMock, patch
+    import json as _json
+
+    mock_aiml_response = {
+        "created": 1703658209,
+        "data": [{"url": "https://example.com/gpt-image-2.png"}],
+    }
+
+    captured = {}
+
+    def capture_post_call(*args, **kwargs):
+        captured["url"] = kwargs.get("url") or (args[0] if args else None)
+        captured["headers"] = kwargs.get("headers", {})
+        captured["json"] = kwargs.get("json", {})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_aiml_response
+        mock_response.text = _json.dumps(mock_aiml_response)
+        return mock_response
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.side_effect = capture_post_call
+
+        await litellm.aimage_generation(
+            prompt="A T-Rex relaxing on a beach",
+            model="aiml/openai/gpt-image-2",
+            api_key="test-key-mocked-no-credits-needed",
+            size="1024x1536",
+            quality="high",
+            response_format="b64_json",
+            n=1,
+        )
+
+    assert captured["url"] is not None
+    assert "api.aimlapi.com" in captured["url"]
+    assert "/v1/images/generations" in captured["url"]
+
+    body = captured["json"]
+    assert body["model"] == "openai/gpt-image-2"
+    assert body["prompt"] == "A T-Rex relaxing on a beach"
+    assert body["size"] == "1024x1536"
+    assert body["quality"] == "high"
+    assert body["response_format"] == "b64_json"
+    assert body["n"] == 1
+    assert "image_size" not in body
+    assert "num_images" not in body
+    assert "output_format" not in body
+
+
+@pytest.mark.asyncio
 async def test_azure_image_generation_request_body():
     """Azure deployment URL selects the model; JSON body omits ``model`` (#26316)."""
     from litellm import aimage_generation
@@ -402,7 +439,7 @@ async def test_azure_image_generation_request_body():
     ) as mock_post:
         mock_post.side_effect = Exception("test")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await aimage_generation(
                 model="azure/gpt-image-1",
                 prompt="test prompt",

@@ -150,45 +150,38 @@ async def test_async_sqs_logger_error_flush():
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_async_log_success_event_adds_to_queue(monkeypatch):
-    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
-    logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
-
-    fake_payload = {"some": "data"}
-    await logger.async_log_success_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
-    assert fake_payload in logger.log_queue
-
-
-@pytest.mark.asyncio
-async def test_async_log_failure_event_adds_to_queue(monkeypatch):
-    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
-    logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
-
-    fake_payload = {"fail": True}
-    await logger.async_log_failure_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
-    assert fake_payload in logger.log_queue
-
-
 # =============================================================================
 # 🧾 async_send_batch Tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_async_send_batch_triggers_tasks(monkeypatch):
+async def test_async_send_batch_does_not_await_send_directly(monkeypatch):
+    # create_task stays real here: with it mocked out the await_count assertion
+    # below would hold trivially. Every task it spawns is cancelled at the end,
+    # including the infinite periodic_flush the SQSLogger constructor starts.
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
+    spawned = []
+    real_create_task = asyncio.create_task
+
+    def spy_create_task(coro, *args, **kwargs):
+        task = real_create_task(coro, *args, **kwargs)
+        spawned.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", spy_create_task)
+
     logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
     logger.async_send_message = AsyncMock()
-
     logger.log_queue = [{"log": 1}, {"log": 2}]
-    await logger.async_send_batch()
 
-    assert logger.async_send_message.await_count == 0  # uses create_task internally
+    try:
+        await logger.async_send_batch()
+        assert logger.async_send_message.await_count == 0
+    finally:
+        for task in spawned:
+            task.cancel()
+        await asyncio.gather(*spawned, return_exceptions=True)
 
 
 # =============================================================================

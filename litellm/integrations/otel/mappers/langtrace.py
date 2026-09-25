@@ -8,7 +8,7 @@ Scalar attributes are declared as a flat ``key -> extractor`` table (one lambda
 per mapping operation); the prompt/completion blobs are serialized as a tail.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
@@ -20,7 +20,6 @@ from litellm.integrations.otel.model.payloads import LLMCallSpanData
 
 
 class LangtraceMapper:
-
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         "gen_ai.operation.name": lambda d: "chat",
         "langtrace.service.name": lambda d: d.provider or None,
@@ -41,12 +40,8 @@ class LangtraceMapper:
     }
 
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
-        "llm.prompts": lambda d: (
-            json_or_none(list(d.messages_in)) if d.messages_in else None
-        ),
-        "llm.completions": lambda d: (
-            json_or_none(output_messages(d)) if d.choices_out else None
-        ),
+        "llm.prompts": lambda d: json_or_none(list(d.messages_in)) if d.messages_in else None,
+        "llm.completions": lambda d: json_or_none(output_messages(d)) if d.choices_out else None,
     }
 
     def map(self, data: SpanData) -> AttributeMap:

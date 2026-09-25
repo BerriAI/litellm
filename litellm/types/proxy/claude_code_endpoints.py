@@ -2,8 +2,6 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
-from typing import Dict, List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -11,22 +9,46 @@ class PluginAuthor(BaseModel):
     """Plugin author information."""
 
     name: str = Field(..., description="Author name")
-    email: Optional[str] = Field(None, description="Author email")
+    email: str | None = Field(None, description="Author email")
 
 
 class PluginOwner(BaseModel):
     """Marketplace owner information."""
 
     name: str = Field(..., description="Owner name")
-    email: Optional[str] = Field(None, description="Owner email")
+    email: str | None = Field(None, description="Owner email")
 
 
-class RegisterPluginRequest(BaseModel):
+class PluginSpec(BaseModel):
+    """Mutable fields shared by plugin create and update requests."""
+
+    source: dict[str, str] = Field(
+        ...,
+        description=(
+            "Plugin source reference. Supported formats:\n"
+            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
+            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
+            "- Zip archive on any https host (e.g. S3): "
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
+        ),
+    )
+    version: str | None = Field("1.0.0", description="Semantic version")
+    description: str | None = Field(None, description="Plugin description")
+    author: PluginAuthor | None = Field(None, description="Plugin author")
+    homepage: str | None = Field(None, description="Plugin homepage URL")
+    keywords: list[str] | None = Field(None, description="Search keywords")
+    category: str | None = Field(None, description="Plugin category")
+    domain: str | None = Field(None, description="Skill domain (e.g., 'Productivity')")
+    namespace: str | None = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
+
+
+class RegisterPluginRequest(PluginSpec):
     """
     Request body for registering a plugin in the marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket and referenced by their git source.
+    GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
     """
 
     name: str = Field(
@@ -34,27 +56,19 @@ class RegisterPluginRequest(BaseModel):
         description="Plugin name (kebab-case, e.g., 'my-plugin')",
         pattern=r"^[a-z0-9-]+$",
     )
-    source: Dict[str, str] = Field(
-        ...,
-        description=(
-            "Git source reference. Supported formats:\n"
-            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
-            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
-            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}"
-        ),
-    )
-    version: Optional[str] = Field("1.0.0", description="Semantic version")
-    description: Optional[str] = Field(None, description="Plugin description")
-    author: Optional[PluginAuthor] = Field(None, description="Plugin author")
-    homepage: Optional[str] = Field(None, description="Plugin homepage URL")
-    keywords: Optional[List[str]] = Field(None, description="Search keywords")
-    category: Optional[str] = Field(None, description="Plugin category")
-    domain: Optional[str] = Field(
-        None, description="Skill domain (e.g., 'Productivity')"
-    )
-    namespace: Optional[str] = Field(
-        None, description="Skill namespace within domain (e.g., 'workflows')"
-    )
+
+
+class UpdatePluginRequest(PluginSpec):
+    """
+    Request body for replacing an existing plugin.
+
+    The plugin name is the resource identity and is supplied as the path
+    parameter, so it cannot be changed here. This is a full replace: omitted
+    fields reset to their defaults, so version is cleared rather than
+    defaulting to the create-time "1.0.0".
+    """
+
+    version: str | None = Field(None, description="Semantic version; cleared if omitted")
 
 
 class PluginResponse(BaseModel):
@@ -62,9 +76,9 @@ class PluginResponse(BaseModel):
 
     id: str = Field(..., description="Plugin unique ID")
     name: str = Field(..., description="Plugin name")
-    version: Optional[str] = Field(None, description="Plugin version")
-    description: Optional[str] = Field(None, description="Plugin description")
-    source: Dict[str, str] = Field(..., description="Git source reference")
+    version: str | None = Field(None, description="Plugin version")
+    description: str | None = Field(None, description="Plugin description")
+    source: dict[str, str] = Field(..., description="Plugin source reference")
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 
@@ -81,24 +95,24 @@ class PluginListItem(BaseModel):
 
     id: str
     name: str
-    version: Optional[str]
-    description: Optional[str]
-    source: Dict[str, str]
-    author: Optional[PluginAuthor] = None
-    homepage: Optional[str] = None
-    keywords: Optional[List[str]] = None
-    category: Optional[str] = None
-    domain: Optional[str] = None
-    namespace: Optional[str] = None
+    version: str | None
+    description: str | None
+    source: dict[str, str]
+    author: PluginAuthor | None = None
+    homepage: str | None = None
+    keywords: list[str] | None = None
+    category: str | None = None
+    domain: str | None = None
+    namespace: str | None = None
     enabled: bool
-    created_at: Optional[str]
-    updated_at: Optional[str]
+    created_at: str | None
+    updated_at: str | None
 
 
 class ListPluginsResponse(BaseModel):
     """Response from listing plugins."""
 
-    plugins: List[PluginListItem]
+    plugins: list[PluginListItem]
     count: int
 
 
@@ -106,13 +120,13 @@ class MarketplacePluginEntry(BaseModel):
     """Plugin entry in marketplace.json."""
 
     name: str
-    source: Dict[str, str]
-    version: Optional[str] = None
-    description: Optional[str] = None
-    author: Optional[PluginAuthor] = None
-    homepage: Optional[str] = None
-    keywords: Optional[List[str]] = None
-    category: Optional[str] = None
+    source: dict[str, str]
+    version: str | None = None
+    description: str | None = None
+    author: PluginAuthor | None = None
+    homepage: str | None = None
+    keywords: list[str] | None = None
+    category: str | None = None
 
 
 class MarketplaceResponse(BaseModel):
@@ -125,6 +139,4 @@ class MarketplaceResponse(BaseModel):
 
     name: str = Field(..., description="Marketplace identifier")
     owner: PluginOwner = Field(..., description="Marketplace owner")
-    plugins: List[MarketplacePluginEntry] = Field(
-        default_factory=list, description="Available plugins"
-    )
+    plugins: list[MarketplacePluginEntry] = Field(default_factory=list, description="Available plugins")

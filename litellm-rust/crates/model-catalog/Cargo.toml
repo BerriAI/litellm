@@ -1,0 +1,25 @@
+[package]
+name = "litellm-model-catalog"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+schema = ["dep:schemars"]
+
+[dependencies]
+indexmap = { version = "2.14.0", features = ["serde"] }
+schemars = { version = "1.0", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+rstest.workspace = true
+litellm-model-catalog = { path = ".", features = ["schema"] }
+
+[[bench]]
+name = "catalog"
+harness = false

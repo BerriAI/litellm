@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import patch
 
 import httpx
@@ -8,12 +6,9 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
@@ -187,3 +182,70 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+def _config_registry(vector_store_id: str = "vs_from_config") -> VectorStoreRegistry:
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "config-store",
+                "litellm_params": {"vector_store_id": vector_store_id, "custom_llm_provider": "openai"},
+            }
+        ]
+    )
+    return registry
+
+
+def _db_store(vector_store_id: str, vector_store_name: str) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(
+        vector_store_id=vector_store_id,
+        custom_llm_provider="openai",
+        vector_store_name=vector_store_name,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def test_config_loaded_store_is_marked_config_owned_and_db_store_is_not():
+    registry = _config_registry()
+    registry.add_vector_store_to_registry(_db_store("vs_from_db", "db-store"))
+
+    assert registry.get_litellm_managed_vector_store_from_registry("vs_from_config")["is_config"] is True
+    assert registry.is_config_vector_store("vs_from_config") is True
+    assert registry.is_config_vector_store("vs_from_db") is False
+    assert registry.is_config_vector_store("vs_unknown") is False
+
+
+def test_db_row_does_not_overwrite_config_owned_store_in_registry():
+    registry = _config_registry()
+    registry.add_vector_store_to_registry(_db_store("vs_from_db", "db-store"))
+
+    registry.update_vector_store_in_registry("vs_from_config", _db_store("vs_from_config", "renamed-in-db"))
+    registry.update_vector_store_in_registry("vs_from_db", _db_store("vs_from_db", "renamed-in-db"))
+
+    assert registry.get_litellm_managed_vector_store_from_registry("vs_from_config") == {
+        **registry.get_litellm_managed_vector_store_from_registry("vs_from_config"),
+        "vector_store_name": "config-store",
+        "is_config": True,
+    }
+    assert registry.get_litellm_managed_vector_store_from_registry("vs_from_db")["vector_store_name"] == "renamed-in-db"
+
+
+@pytest.mark.asyncio
+async def test_config_owned_store_survives_db_liveness_check_while_missing_db_store_is_evicted():
+    registry = _config_registry()
+    registry.add_vector_store_to_registry(_db_store("vs_from_db", "db-store"))
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+
+    to_run = await registry.pop_vector_stores_to_run_with_db_fallback(
+        non_default_params={"vector_store_ids": ["vs_from_config", "vs_from_db"]},
+        prisma_client=prisma_client,
+    )
+
+    assert [vs["vector_store_id"] for vs in to_run] == ["vs_from_config"]
+    assert [vs["vector_store_id"] for vs in registry.vector_stores] == ["vs_from_config"]
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_awaited_once_with(
+        where={"vector_store_id": "vs_from_db"}
+    )

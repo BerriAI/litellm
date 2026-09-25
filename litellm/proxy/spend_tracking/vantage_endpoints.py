@@ -1,4 +1,11 @@
 import json
+from collections.abc import Mapping
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # the config repository's table protocol omits find_first
+)
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -13,6 +20,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.vantage_endpoints import (
     VantageDryRunRequest,
     VantageExportRequest,
@@ -23,20 +31,33 @@ from litellm.types.proxy.vantage_endpoints import (
     VantageSettingsView,
 )
 
-router = APIRouter()
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
 
-_sensitive_masker = SensitiveDataMasker()
+router: Final = APIRouter()
 
-VANTAGE_SETTINGS_PARAM_NAME = "vantage_settings"
+_sensitive_masker: Final = SensitiveDataMasker()
+
+VANTAGE_SETTINGS_PARAM_NAME: Final = "vantage_settings"
+
+
+class _VantageConfigRow(Protocol):
+    """The ``LiteLLM_Config`` row holding ``vantage_settings``, as this module reads it."""
+
+    @property
+    def param_value(self) -> str | Mapping[str, str] | None: ...
+
+
+def _config_table(prisma_client: "PrismaClient") -> TableActions[_VantageConfigRow]:
+    repository_table: Final = ConfigRepository(prisma_client).table
+    return cast(TableActions[_VantageConfigRow], repository_table)  # cast-ok: repo protocol omits find_first
 
 
 def _get_registered_vantage_logger():
     """Return the VantageLogger already registered in litellm.callbacks, if any."""
     from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-    vantage_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        callback_type=VantageLogger
-    )
+    vantage_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=VantageLogger)
     if vantage_loggers:
         return vantage_loggers[0]
     return None
@@ -52,10 +73,10 @@ async def _set_vantage_settings(api_key: str, integration_token: str, base_url: 
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    encrypted_api_key = encrypt_value_helper(api_key)
-    encrypted_integration_token = encrypt_value_helper(integration_token)
+    encrypted_api_key: Final = encrypt_value_helper(api_key)
+    encrypted_integration_token: Final = encrypt_value_helper(integration_token)
 
-    vantage_settings = {
+    vantage_settings: Final = {
         "api_key": encrypted_api_key,
         "integration_token": encrypted_integration_token,
         "base_url": base_url,
@@ -83,7 +104,7 @@ async def _get_vantage_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    vantage_config = await ConfigRepository(prisma_client).table.find_first(
+    vantage_config: Final = await _config_table(prisma_client).find_first(
         where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
     )
     if vantage_config is None or vantage_config.param_value is None:
@@ -96,23 +117,19 @@ async def _get_vantage_settings():
     else:
         settings = dict(vantage_config.param_value)
 
-    encrypted_api_key = settings.get("api_key")
+    encrypted_api_key: Final = settings.get("api_key")
     if encrypted_api_key:
-        decrypted_api_key = decrypt_value_helper(
-            encrypted_api_key, key="vantage_api_key", exception_type="error"
-        )
+        decrypted_api_key = decrypt_value_helper(encrypted_api_key, key="vantage_api_key", exception_type="error")
         if decrypted_api_key is None:
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Failed to decrypt Vantage API key. Check your salt key configuration."
-                },
+                detail={"error": "Failed to decrypt Vantage API key. Check your salt key configuration."},
             )
         settings["api_key"] = decrypted_api_key
 
-    encrypted_integration_token = settings.get("integration_token")
+    encrypted_integration_token: Final = settings.get("integration_token")
     if encrypted_integration_token:
-        decrypted_integration_token = decrypt_value_helper(
+        decrypted_integration_token: Final = decrypt_value_helper(
             encrypted_integration_token,
             key="vantage_integration_token",
             exception_type="error",
@@ -120,9 +137,7 @@ async def _get_vantage_settings():
         if decrypted_integration_token is None:
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Failed to decrypt Vantage integration token. Check your salt key configuration."
-                },
+                detail={"error": "Failed to decrypt Vantage integration token. Check your salt key configuration."},
             )
         settings["integration_token"] = decrypted_integration_token
 
@@ -152,7 +167,7 @@ async def get_vantage_settings(
         )
 
     try:
-        settings = await _get_vantage_settings()
+        settings: Final = await _get_vantage_settings()
 
         if not settings:
             return VantageSettingsView(
@@ -162,7 +177,7 @@ async def get_vantage_settings(
                 status=None,
             )
 
-        masked_settings = _sensitive_masker.mask_dict(settings)
+        masked_settings: Final = _sensitive_masker.mask_dict(settings)
 
         return VantageSettingsView(
             api_key_masked=masked_settings.get("api_key"),
@@ -174,10 +189,10 @@ async def get_vantage_settings(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving Vantage settings: {str(e)}")
+        verbose_proxy_logger.error("Error retrieving Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to retrieve Vantage settings: {str(e)}"},
+            detail={"error": f"Failed to retrieve Vantage settings: {e}"},
         )
 
 
@@ -210,27 +225,21 @@ async def update_vantage_settings(
         )
 
     try:
-        current_settings = await _get_vantage_settings()
+        current_settings: Final = await _get_vantage_settings()
 
         if not current_settings:
             raise HTTPException(
                 status_code=404,
-                detail={
-                    "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
-                },
+                detail={"error": "Vantage settings not found. Please initialize settings first using /vantage/init"},
             )
 
-        updated_api_key = (
-            request.api_key
-            if request.api_key is not None
-            else current_settings.get("api_key", "")
-        )
-        updated_token = (
+        updated_api_key: Final = request.api_key if request.api_key is not None else current_settings.get("api_key", "")
+        updated_token: Final = (
             request.integration_token
             if request.integration_token is not None
             else current_settings.get("integration_token", "")
         )
-        updated_base_url = (
+        updated_base_url: Final = (
             request.base_url
             if request.base_url is not None
             else current_settings.get("base_url", "https://api.vantage.sh")
@@ -244,17 +253,15 @@ async def update_vantage_settings(
 
         verbose_proxy_logger.info("Vantage settings updated successfully")
 
-        return VantageInitResponse(
-            message="Vantage settings updated successfully", status="success"
-        )
+        return VantageInitResponse(message="Vantage settings updated successfully", status="success")
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating Vantage settings: {str(e)}")
+        verbose_proxy_logger.error("Error updating Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update Vantage settings: {str(e)}"},
+            detail={"error": f"Failed to update Vantage settings: {e}"},
         )
 
 
@@ -266,14 +273,14 @@ async def is_vantage_setup_in_db() -> bool:
         if prisma_client is None:
             return False
 
-        vantage_config = await ConfigRepository(prisma_client).table.find_first(
+        vantage_config: Final = await _config_table(prisma_client).find_first(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 
         return vantage_config is not None and vantage_config.param_value is not None
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error checking Vantage status: {str(e)}")
+        verbose_proxy_logger.error("Error checking Vantage status: %s", e)
         return False
 
 
@@ -296,7 +303,7 @@ async def is_vantage_setup() -> bool:
             return True
         return False
     except Exception as e:
-        verbose_proxy_logger.error(f"Error checking Vantage setup: {str(e)}")
+        verbose_proxy_logger.error("Error checking Vantage setup: %s", e)
         return False
 
 
@@ -335,17 +342,15 @@ async def init_vantage_settings(
 
         verbose_proxy_logger.info("Vantage settings initialized successfully")
 
-        return VantageInitResponse(
-            message="Vantage settings initialized successfully", status="success"
-        )
+        return VantageInitResponse(message="Vantage settings initialized successfully", status="success")
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error initializing Vantage settings: {str(e)}")
+        verbose_proxy_logger.error("Error initializing Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to initialize Vantage settings: {str(e)}"},
+            detail={"error": f"Failed to initialize Vantage settings: {e}"},
         )
 
 
@@ -382,44 +387,32 @@ async def vantage_dry_run_export(
         from litellm.integrations.focus.export_engine import FocusExportEngine
         from litellm.integrations.focus.transformer import FocusTransformer
 
-        database = FocusLiteLLMDatabase()
-        transformer = FocusTransformer()
+        database: Final = FocusLiteLLMDatabase()
+        transformer: Final = FocusTransformer()
 
         import polars as pl
 
-        data = await database.get_usage_data(limit=request.limit)
-        normalized = transformer.transform(data)
+        data: Final = await database.get_usage_data(limit=request.limit)
+        normalized: Final = transformer.transform(data)
 
         def _to_json_safe_dicts(frame: pl.DataFrame) -> list:
             """Cast Decimal columns to Float64 so .to_dicts() produces
             JSON-serializable float values instead of decimal.Decimal."""
-            decimal_cols = [
-                col
-                for col, dtype in zip(frame.columns, frame.dtypes)
-                if isinstance(dtype, pl.Decimal)
-            ]
+            decimal_cols = [col for col, dtype in zip(frame.columns, frame.dtypes) if isinstance(dtype, pl.Decimal)]
             if decimal_cols:
-                frame = frame.with_columns(
-                    [pl.col(c).cast(pl.Float64) for c in decimal_cols]
-                )
+                frame = frame.with_columns([pl.col(c).cast(pl.Float64) for c in decimal_cols])
             return frame.to_dicts()
 
-        usage_sample = (
-            _to_json_safe_dicts(data.head(min(50, len(data))))
-            if not data.is_empty()
-            else []
-        )
-        normalized_sample = (
-            _to_json_safe_dicts(normalized.head(min(50, len(normalized))))
-            if not normalized.is_empty()
-            else []
+        usage_sample: Final = _to_json_safe_dicts(data.head(min(50, len(data)))) if not data.is_empty() else []
+        normalized_sample: Final = (
+            _to_json_safe_dicts(normalized.head(min(50, len(normalized)))) if not normalized.is_empty() else []
         )
 
         # Use the same pre-transform column names as
         # FocusExportEngine.dry_run_export_usage_data for consistency.
-        total_spend = FocusExportEngine._sum_column(data, "spend")
-        total_tokens = FocusExportEngine._sum_column(data, "total_tokens")
-        summary = {
+        total_spend: Final = FocusExportEngine._sum_column(data, "spend")
+        total_tokens: Final = FocusExportEngine._sum_column(data, "total_tokens")
+        summary: Final = {
             "total_records": len(normalized),
             "total_spend": float(total_spend) if total_spend is not None else 0,
             "total_tokens": float(total_tokens) if total_tokens is not None else 0,
@@ -427,7 +420,7 @@ async def vantage_dry_run_export(
             "unique_models": FocusExportEngine._count_unique(data, "model"),
         }
 
-        dry_run_result = {
+        dry_run_result: Final = {
             "usage_data": usage_sample,
             "normalized_data": normalized_sample,
             "summary": summary,
@@ -445,10 +438,10 @@ async def vantage_dry_run_export(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing Vantage dry run export: {str(e)}")
+        verbose_proxy_logger.error("Error performing Vantage dry run export: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to perform Vantage dry run export: {str(e)}"},
+            detail={"error": f"Failed to perform Vantage dry run export: {e}"},
         )
 
 
@@ -487,7 +480,7 @@ async def vantage_export(
         # on every export call.
         logger = _get_registered_vantage_logger()
         if logger is None:
-            settings = await _get_vantage_settings()
+            settings: Final = await _get_vantage_settings()
             if not settings:
                 raise HTTPException(
                     status_code=404,
@@ -518,10 +511,10 @@ async def vantage_export(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing Vantage export: {str(e)}")
+        verbose_proxy_logger.error("Error performing Vantage export: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to perform Vantage export: {str(e)}"},
+            detail={"error": f"Failed to perform Vantage export: {e}"},
         )
 
 
@@ -554,7 +547,7 @@ async def delete_vantage_settings(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        vantage_config = await ConfigRepository(prisma_client).table.find_first(
+        vantage_config: Final = await _config_table(prisma_client).find_first(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 
@@ -564,28 +557,22 @@ async def delete_vantage_settings(
                 detail={"error": "Vantage settings not found"},
             )
 
-        await ConfigRepository(prisma_client).table.delete(
-            where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
-        )
+        await ConfigRepository(prisma_client).table.delete(where={"param_name": VANTAGE_SETTINGS_PARAM_NAME})
 
         # Deregister in-memory VantageLogger so the scheduler stops firing
         from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-        litellm.logging_callback_manager.remove_callbacks_by_type(
-            litellm.callbacks, VantageLogger
-        )
+        litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, VantageLogger)
 
         verbose_proxy_logger.info("Vantage settings deleted successfully")
 
-        return VantageInitResponse(
-            message="Vantage settings deleted successfully", status="success"
-        )
+        return VantageInitResponse(message="Vantage settings deleted successfully", status="success")
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error deleting Vantage settings: {str(e)}")
+        verbose_proxy_logger.error("Error deleting Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to delete Vantage settings: {str(e)}"},
+            detail={"error": f"Failed to delete Vantage settings: {e}"},
         )

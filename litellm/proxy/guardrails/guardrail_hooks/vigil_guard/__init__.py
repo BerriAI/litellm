@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _vigil_guard_callback = VigilGuardGuardrail(
+    _vigil_guard_callback: Final = VigilGuardGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         unreachable_fallback=litellm_params.unreachable_fallback,
@@ -24,11 +24,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _vigil_guard_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.VIGIL_GUARD.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.VIGIL_GUARD.value: VigilGuardGuardrail,
 }

@@ -8,7 +8,7 @@ import { ParsedMessage } from "./prettyMessagesTypes";
 describe("HistoryTree", () => {
   it("should return null when messages array is empty", () => {
     const { container } = render(<HistoryTree messages={[]} />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('should render message count with plural "messages" for multiple messages', () => {
@@ -40,5 +40,23 @@ describe("HistoryTree", () => {
 
     expect(screen.getByText("Hello")).toBeInTheDocument();
     expect(screen.getByText("Hi there")).toBeInTheDocument();
+  });
+
+  it("should expand with Enter and collapse with Space from the keyboard", async () => {
+    const user = userEvent.setup();
+    const messages: ParsedMessage[] = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there" },
+    ];
+    render(<HistoryTree messages={messages} />);
+
+    expect(screen.getByText("Hello")).not.toBeVisible();
+
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("Hello")).toBeVisible();
+
+    await user.keyboard(" ");
+    expect(screen.getByText("Hello")).not.toBeVisible();
   });
 });

@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -28,6 +29,7 @@ def _make_guardrail(name="g", should_run=True, override=None):
     cb.event_hook = GuardrailEventHooks.post_call
     cb.should_run_guardrail = MagicMock(return_value=should_run)
     cb.async_post_call_success_hook = AsyncMock(return_value=override)
+    cb.run_in_parallel = False
     return cb
 
 
@@ -95,3 +97,26 @@ async def test_post_call_success_hook_guardrail_returns_modified_response(
         data={}, response={"orig": True}, user_api_key_dict=make_user_api_key_auth()
     )
     assert out == modified
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_in_parallel", [False, True], ids=["sequential", "parallel"])
+async def test_post_call_block_names_the_blocking_guardrail_in_applied_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch, run_in_parallel
+):
+    def _passer_that_records(data, user_api_key_dict, response):
+        data["metadata"]["applied_guardrails"] = ["passer"]
+
+    passer = _make_guardrail("passer")
+    passer.async_post_call_success_hook = AsyncMock(side_effect=_passer_that_records)
+    passer.run_in_parallel = run_in_parallel
+    blocker = _make_guardrail("blocker")
+    blocker.async_post_call_success_hook = AsyncMock(side_effect=HTTPException(status_code=400, detail="blocked"))
+    blocker.run_in_parallel = run_in_parallel
+    monkeypatch.setattr(litellm, "callbacks", [passer, blocker])
+    data = {"model": "m", "metadata": {}}
+    with pytest.raises(HTTPException):
+        await proxy_logging.post_call_success_hook(
+            data=data, response=MagicMock(), user_api_key_dict=make_user_api_key_auth()
+        )
+    assert data["metadata"]["applied_guardrails"] == ["passer", "blocker"]

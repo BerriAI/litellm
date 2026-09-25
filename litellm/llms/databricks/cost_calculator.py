@@ -3,13 +3,34 @@ Helper util for handling databricks-specific cost calculation
 - e.g.: handling 'dbrx-instruct-*'
 """
 
-from typing import Tuple
+from types import MappingProxyType
+from typing import Final
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
-from litellm.utils import get_model_info
+
+_LEGACY_ENDPOINT_NAMES: Final = MappingProxyType(
+    {
+        "dbrx-instruct": "databricks-dbrx-instruct",
+        "meta-llama-3.1-70b-instruct": "databricks-meta-llama-3-1-70b-instruct",
+        "meta-llama-3.1-405b-instruct": "databricks-meta-llama-3-1-405b-instruct",
+        "mixtral-8x7b-instruct-v0.1": "databricks-mixtral-8x7b-instruct",
+        "bge-large-en": "databricks-bge-large-en",
+        "gte-large-en": "databricks-gte-large-en",
+        "llama-2-70b-chat": "databricks-llama-2-70b-chat",
+    }
+)
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def _registry_key(model: str) -> str:
+    name: Final = model.removeprefix("databricks/")
+    return next(
+        (key for prefix, key in _LEGACY_ENDPOINT_NAMES.items() if name.startswith(prefix)),
+        name,
+    )
+
+
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -20,47 +41,8 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    base_model = model
-    if model.startswith("databricks/dbrx-instruct") or model.startswith(
-        "dbrx-instruct"
-    ):
-        base_model = "databricks-dbrx-instruct"
-    elif model.startswith("databricks/meta-llama-3.1-70b-instruct") or model.startswith(
-        "meta-llama-3.1-70b-instruct"
-    ):
-        base_model = "databricks-meta-llama-3-1-70b-instruct"
-    elif model.startswith(
-        "databricks/meta-llama-3.1-405b-instruct"
-    ) or model.startswith("meta-llama-3.1-405b-instruct"):
-        base_model = "databricks-meta-llama-3-1-405b-instruct"
-    elif model.startswith("databricks/mixtral-8x7b-instruct-v0.1") or model.startswith(
-        "mixtral-8x7b-instruct-v0.1"
-    ):
-        base_model = "databricks-mixtral-8x7b-instruct"
-    elif model.startswith("databricks/mixtral-8x7b-instruct-v0.1") or model.startswith(
-        "mixtral-8x7b-instruct-v0.1"
-    ):
-        base_model = "databricks-mixtral-8x7b-instruct"
-    elif model.startswith("databricks/bge-large-en") or model.startswith(
-        "bge-large-en"
-    ):
-        base_model = "databricks-bge-large-en"
-    elif model.startswith("databricks/gte-large-en") or model.startswith(
-        "gte-large-en"
-    ):
-        base_model = "databricks-gte-large-en"
-    elif model.startswith("databricks/llama-2-70b-chat") or model.startswith(
-        "llama-2-70b-chat"
-    ):
-        base_model = "databricks-llama-2-70b-chat"
-    ## GET MODEL INFO
-    model_info = get_model_info(model=base_model, custom_llm_provider="databricks")
-
-    ## CALCULATE INPUT COST
-
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
-
-    ## CALCULATE OUTPUT COST
-    completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
-
-    return prompt_cost, completion_cost
+    return generic_cost_per_token(
+        model=_registry_key(model),
+        usage=usage,
+        custom_llm_provider="databricks",
+    )

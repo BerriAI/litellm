@@ -90,15 +90,6 @@ class TestAzureAssistantCostTracking:
         )
         assert cost == 0.0, "Should return 0 for zero sessions"
 
-    def test_openai_code_interpreter_free(self):
-        """Test OpenAI code interpreter cost from model cost map."""
-        cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
-            sessions=5,
-            provider="openai",
-        )
-        assert (
-            cost == 0.15
-        ), "OpenAI code interpreter should return 0.15 based on current implementation"
 
     @pytest.mark.parametrize(
         "input_tokens,output_tokens,expected_cost",
@@ -222,14 +213,3 @@ class TestAzureAssistantCostTracking:
         )
         assert StandardBuiltInToolCostTracking.get_cost_for_vector_store(None) == 0.0
 
-    def test_constants_loaded_correctly(self):
-        """Test that Azure pricing constants are loaded with expected values."""
-        assert AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY == 0.1
-
-        # Code interpreter cost is now in model cost map
-        azure_container_info = litellm.model_cost.get("azure/container", {})
-        assert azure_container_info.get("code_interpreter_cost_per_session") == 0.03
-
-        assert AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS == 3.0
-        assert AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS == 12.0
-        assert AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY == 0.1

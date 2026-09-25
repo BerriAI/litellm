@@ -22,6 +22,13 @@ import litellm
 import litellm.integrations.newrelic.newrelic as nr_module
 from litellm.integrations.newrelic.newrelic import NewRelicLogger
 
+
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 # The module may have been imported before sys.modules was patched (e.g. via
 # litellm's own startup imports), leaving _newrelic_agent=None. Point it at
 # the mock agent so all tests see a non-None agent.
@@ -268,8 +275,9 @@ class TestParseBoolEnv:
             assert mock_warn.call_count == 2
             # Warning should mention the variable name and the raw value
             for call in mock_warn.call_args_list:
-                assert "MY_VAR" in call.args[0]
-                assert repr(raw) in call.args[0]
+                rendered = _rendered_log_message(call)
+                assert "MY_VAR" in rendered
+                assert repr(raw) in rendered
 
 
 # ---------------------------------------------------------------------------

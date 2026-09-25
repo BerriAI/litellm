@@ -362,8 +362,8 @@ class TestAzureAnthropicConfig:
             )
         assert "xhigh" in str(exc_info.value)
 
-    def test_extra_body_promotion_does_not_clobber_top_level(self):
-        """Top-level ``optional_params`` wins over duplicates in ``extra_body``."""
+    def test_extra_body_promotion_overrides_mapped_top_level(self):
+        """The caller's ``extra_body`` wins over a mapped top-level duplicate, like the native ``anthropic`` passthrough."""
         config = AzureAnthropicConfig()
 
         messages = [{"role": "user", "content": "Hello"}]
@@ -383,7 +383,31 @@ class TestAzureAnthropicConfig:
             headers=headers,
         )
 
-        assert result["output_config"] == {"effort": "low"}
+        assert result["output_config"] == {"effort": "high"}
+
+    def test_legacy_thinking_upgrade_keeps_caller_effort_from_extra_body(self, local_model_cost_map):
+        config = AzureAnthropicConfig()
+
+        mapped = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}, "max_tokens": 100},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
+        assert mapped["thinking"] == {"type": "adaptive"}
+        assert mapped["output_config"] == {"effort": "low"}
+
+        result = config.transform_request(
+            model="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={**mapped, "extra_body": {"output_config": {"effort": "high"}}},
+            litellm_params={"api_key": "test-key"},
+            headers={"api-key": "test-key", "anthropic-version": "2023-06-01"},
+        )
+
+        assert result["thinking"] == {"type": "adaptive"}
+        assert result["output_config"] == {"effort": "high"}
+        assert "extra_body" not in result
 
     def test_context_management_mixed_edits_beta_headers(self):
         """Test that context_management with both compact and other edits adds both beta headers"""
@@ -413,3 +437,51 @@ class TestAzureAnthropicConfig:
         assert "anthropic-beta" in headers
         assert "compact-2026-01-12" in headers["anthropic-beta"]
         assert "context-management-2025-06-27" in headers["anthropic-beta"]
+
+
+def _mid_conversation_system_conversation() -> list[dict]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+        {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"},
+        {"role": "assistant", "content": "Second answer"},
+        {"role": "user", "content": "Third question"},
+    ]
+
+
+def test_chat_unflagged_model_converts_mid_conversation_system_instead_of_hoisting(local_model_cost_map):
+    """A hoisted reminder rewrites the top-level system block and invalidates the
+    prompt cache for the whole conversation (#36559)."""
+    result = AzureAnthropicConfig().transform_request(
+        model="claude-opus-4-7",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "assistant", "user"]
+    texts = [b["text"] for b in result["messages"][2]["content"] if b.get("type") == "text"]
+    assert texts[0] == "Second question"
+    assert texts[-1] == "<system-reminder>Answer with exactly one word.</system-reminder>"
+
+
+def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
+    result = AzureAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+    assert result["messages"][3] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
+    }
+

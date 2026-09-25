@@ -18,6 +18,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/team/",
     "/v2/team/",
     "/organization/",
+    "/v2/organization/",
     "/customer/",
     "/end_user/",
     "/sso/",
@@ -25,6 +26,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v2/login",
     "/v3/login",
     "/logout",
+    "/session/logout",
     "/token",
     "/onboarding/",
     "/audit",
@@ -34,6 +36,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Models & routing config
     "/model/",
     "/v1/model/info",
+    "/v1/model/deprecations",
     "/v2/model/",
     "/model_group",
     "/model_access_group/",
@@ -43,10 +46,13 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/router/",
     "/router_settings",
     "/adaptive_router/",
+    "/auto_router/",
     "/fallback",
     "/fallbacks",
     "/cache_settings",
+    "/coordination_redis/",
     "/cost_tracking",
+    "/cost_optimization/",
     "/cost/",
     "/credentials",
     "/credential",
@@ -68,6 +74,10 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/project/",
     "/memory/",
     "/mcp/",
+    # Control plane (see the List Endpoints + Tables standard). Every resource
+    # eventually moves under this prefix, so allowlist it once rather than
+    # per-resource.
+    "/management/v1/",
     # Spend / analytics
     "/spend/",
     "/analytics/",
@@ -75,6 +85,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/user_agent",
     "/usage/",
     "/daily/",
+    # Deployment-wide gateway request counts. Scoped to the analytics read rather
+    # than all of /gateway/, which stays free for data-plane routes.
+    "/gateway/daily/",
     # CloudZero cost-export admin (init / settings / export / dry-run / delete)
     "/cloudzero/",
     # Caching admin
@@ -84,6 +97,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/active/callbacks",
     "/callbacks",
     "/team_callback",
+    # Rust data-plane gateway → proxy control-plane API (logging today, auth later)
+    "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
     "/email/",
@@ -134,11 +149,13 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/fallback/login",
+        "/mcp",  # bare spelling of the aggregate MCP endpoint; /mcp/ prefix covers the rest
     }
 )
 
 BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
     {
         "/swagger",  # API documentation static assets belong to the backend
+        "/mcp",  # lazily-mounted MCP sub-app serves on the backend component
     }
 )

@@ -1,6 +1,6 @@
 "use client";
 
-import AdminPanel from "@/components/AdminPanel";
+import AdminPanel from "./_components/AdminPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 

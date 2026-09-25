@@ -15,18 +15,17 @@ never promoted whole.
 
 import json
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 
-from litellm.integrations.otel.model.metadata import RequestIdentity
+from litellm.integrations.otel.model.metadata import REQUESTER_METADATA_PATH, RequestIdentity
 from litellm.integrations.otel.model.semconv import GenAI, LiteLLM
 
 # Attribute key -> value extractor over (identity, request_model,
 # team_metadata_keys). The single definition of what may be promoted and under
 # which key. Only the ``TEAM_METADATA`` extractor consults team_metadata_keys
 # (to filter the team's metadata to an allowlist); the rest ignore it.
-_PROMOTABLE: Final[
-    dict[str, Callable[[RequestIdentity, str | None, tuple[str, ...]], str | None]]
-] = {
+_PROMOTABLE: Final[dict[str, Callable[[RequestIdentity, str | None, tuple[str, ...]], str | None]]] = {
     LiteLLM.TEAM_ID: lambda identity, model, team_metadata_keys: identity.team_id,
     LiteLLM.TEAM_ALIAS: lambda identity, model, team_metadata_keys: identity.team_alias,
     LiteLLM.TEAM_METADATA: lambda identity, model, team_metadata_keys: _filtered_team_metadata_json(
@@ -81,17 +80,23 @@ def promoted_baggage(
     ``team_metadata_keys`` selects sub-keys of the team's metadata to promote
     under ``litellm.team.metadata``. Empty values are dropped.
     """
-    out: dict[str, str] = {}
-    for key, extract in _PROMOTABLE.items():
-        if key in promoted_keys:
-            value = extract(identity, request_model, team_metadata_keys)
-            if value:
-                out[key] = value
-    for meta_key in metadata_keys:
-        value = identity.metadata.get(meta_key)
-        if value:
-            out[f"{LiteLLM.METADATA_PREFIX}{meta_key}"] = value
-    return out
+    identity_values: Final = {
+        key: value
+        for key, extract in _PROMOTABLE.items()
+        if key in promoted_keys and (value := extract(identity, request_model, team_metadata_keys))
+    }
+    return {**identity_values, **promoted_metadata(identity.metadata, metadata_keys)}
+
+
+def promoted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
+    """Allowlisted entries of a flattened metadata mapping under ``litellm.metadata.*``."""
+    return MappingProxyType(
+        {
+            f"{LiteLLM.METADATA_PREFIX}{meta_key.removeprefix(REQUESTER_METADATA_PATH)}": value
+            for meta_key in metadata_keys
+            if (value := metadata.get(meta_key))
+        }
+    )
 
 
 def _filtered_team_metadata_json(
@@ -106,7 +111,7 @@ def _filtered_team_metadata_json(
     """
     if not isinstance(metadata, Mapping) or not allowed_keys:
         return None
-    filtered = {key: metadata[key] for key in allowed_keys if key in metadata}
+    filtered: Final = {key: metadata[key] for key in allowed_keys if key in metadata}
     if not filtered:
         return None
     return json.dumps(filtered, default=str, sort_keys=True)

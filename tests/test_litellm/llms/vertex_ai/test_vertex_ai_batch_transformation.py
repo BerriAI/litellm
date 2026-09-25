@@ -26,12 +26,12 @@ def test_output_file_id_uses_predictions_jsonl_with_output_info():
     )
 
 
-def test_output_file_id_falls_back_to_output_uri_prefix_with_predictions_jsonl():
+def test_output_file_id_is_none_until_output_info():
     response = {
         "outputInfo": {},
         "outputConfig": {
             "gcsDestination": {
-                "outputUriPrefix": "gs://test-bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-pro/prediction-model-456"
+                "outputUriPrefix": "gs://test-bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-pro"
             }
         },
     }
@@ -42,10 +42,7 @@ def test_output_file_id_falls_back_to_output_uri_prefix_with_predictions_jsonl()
         )
     )
 
-    assert (
-        output_file_id
-        == "gs://test-bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-pro/prediction-model-456/predictions.jsonl"
-    )
+    assert output_file_id is None
 
 
 def test_vertex_ai_cancel_batch():

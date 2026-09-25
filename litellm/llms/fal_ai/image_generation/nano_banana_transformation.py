@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
@@ -8,17 +8,22 @@ from .transformation import FalAIBaseConfig
 
 class FalAINanoBananaConfig(FalAIBaseConfig):
     """
-    Configuration for Fal AI's Nano Banana / Gemini 2.5 Flash Image models.
+    Configuration for Fal AI's Nano Banana family (Gemini Flash / Pro Image models).
 
-    Serves the imagen4 deprecation migration path. The same underlying model is
-    exposed under two endpoints that share an identical schema:
+    Serves the imagen4 deprecation migration path. Every endpoint shares the same
+    request schema, so one config covers all of them:
     - fal-ai/nano-banana
     - fal-ai/gemini-25-flash-image
+    - fal-ai/nano-banana-2
+    - fal-ai/nano-banana-pro
+
+    Provider-specific params such as ``resolution`` ("0.5K", "1K", "2K", "4K") are
+    forwarded as-is and drive the per-resolution price in the cost map.
 
     Documentation: https://fal.ai/models/fal-ai/nano-banana
     """
 
-    SUPPORTED_ASPECT_RATIOS: List[str] = [
+    SUPPORTED_ASPECT_RATIOS: list[str] = [
         "21:9",
         "16:9",
         "3:2",
@@ -33,22 +38,18 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
-        base_url: str = (
-            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
-        ).rstrip("/")
-        endpoint = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
+        base_url: Final[str] = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
+        endpoint: Final = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
         return f"{base_url}/{endpoint}"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return ["n", "response_format", "size"]
 
     def map_openai_params(
@@ -58,7 +59,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for key, value in non_default_params.items():
             if key == "response_format":
                 continue
@@ -81,7 +82,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
             return "1:1"
         try:
             width, height = (int(part) for part in size.split("x"))
-            target = width / height
+            target: Final = width / height
         except (ValueError, ZeroDivisionError):
             return "1:1"
 

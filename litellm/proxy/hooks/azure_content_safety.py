@@ -1,5 +1,5 @@
 import traceback
-from typing import Optional
+from typing import Final
 
 from fastapi import HTTPException
 
@@ -18,6 +18,8 @@ class _PROXY_AzureContentSafety(
     CustomLogger
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
+
+    enforces_request_content: bool = True
 
     def __init__(self, endpoint, api_key, thresholds=None):
         try:
@@ -42,12 +44,10 @@ class _PROXY_AzureContentSafety(
 
         self.thresholds = self._configure_thresholds(thresholds)
 
-        self.client = ContentSafetyClient(
-            self.endpoint, AzureKeyCredential(self.api_key)
-        )
+        self.client = ContentSafetyClient(self.endpoint, AzureKeyCredential(self.api_key))
 
     def _configure_thresholds(self, thresholds=None):
-        default_thresholds = {
+        default_thresholds: Final = {
             self.text_category.HATE: 4,
             self.text_category.SELF_HARM: 4,
             self.text_category.SEXUAL: 4,
@@ -64,11 +64,9 @@ class _PROXY_AzureContentSafety(
         return thresholds
 
     def _compute_result(self, response):
-        result = {}
+        result: Final = {}
 
-        category_severity = {
-            item.category: item.severity for item in response.categories_analysis
-        }
+        category_severity: Final = {item.category: item.severity for item in response.categories_analysis}
         for category in self.text_category:
             severity = category_severity.get(category)
             if severity is not None:
@@ -79,26 +77,24 @@ class _PROXY_AzureContentSafety(
 
         return result
 
-    async def test_violation(self, content: str, source: Optional[str] = None):
+    async def test_violation(self, content: str, source: str | None = None):
         verbose_proxy_logger.debug("Testing Azure Content-Safety for: %s", content)
 
         # Construct a request
-        request = self.analyze_text_options(
+        request: Final = self.analyze_text_options(
             text=content,
             output_type=self.analyze_text_output_type.EIGHT_SEVERITY_LEVELS,
         )
 
         # Analyze text
         try:
-            response = await self.client.analyze_text(request)
+            response: Final = await self.client.analyze_text(request)
         except self.azure_http_error:
-            verbose_proxy_logger.debug(
-                "Error in Azure Content-Safety: %s", traceback.format_exc()
-            )
+            verbose_proxy_logger.debug("Error in Azure Content-Safety: %s", traceback.format_exc())
             verbose_proxy_logger.debug(traceback.format_exc())
             raise
 
-        result = self._compute_result(response)
+        result: Final = self._compute_result(response)
         verbose_proxy_logger.debug("Azure Content-Safety Result: %s", result)
 
         for key, value in result.items():
@@ -130,9 +126,7 @@ class _PROXY_AzureContentSafety(
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                "litellm.proxy.hooks.azure_content_safety.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.hooks.azure_content_safety.py::async_pre_call_hook(): Exception occured - %s", e
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 

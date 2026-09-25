@@ -2,14 +2,10 @@
 #    This tests if ahealth_check() actually works
 
 import os
-import sys
 
 import pytest
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
@@ -132,7 +128,7 @@ async def test_azure_img_gen_health_check():
         retry_delay *= 2  # Exponential backoff
 
     # Should not reach here, but just in case
-    assert False, "Health check failed after all retries"
+    pytest.fail("Health check failed after all retries")
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -785,19 +781,19 @@ async def test_image_generation_health_check_prompt(monkeypatch):
 
     # Default prompt is used when env var is unset
     monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
-    litellm_constants, health_check = reload_modules()
-    health_check_calls = await run_health_check(health_check)
+    reloaded_constants, reloaded_health_check = reload_modules()
+    health_check_calls = await run_health_check(reloaded_health_check)
 
     assert len(health_check_calls) == 1
     assert (
-        health_check_calls[0]["prompt"] == litellm_constants.DEFAULT_HEALTH_CHECK_PROMPT
+        health_check_calls[0]["prompt"] == reloaded_constants.DEFAULT_HEALTH_CHECK_PROMPT
     )
 
     # Environment override should change the prompt without code changes
     override_prompt = "environment override prompt"
     monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", override_prompt)
-    litellm_constants, health_check = reload_modules()
-    health_check_calls = await run_health_check(health_check)
+    _, reloaded_health_check = reload_modules()
+    health_check_calls = await run_health_check(reloaded_health_check)
 
     assert len(health_check_calls) == 1
     assert health_check_calls[0]["prompt"] == override_prompt

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Final
 
 from pydantic import Field, model_validator
 
@@ -9,7 +9,7 @@ from .base import GuardrailConfigModel
 
 
 class ZscalerAIGuardConfigModel(GuardrailConfigModel):
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description=(
             "API key for Zscaler AI Guard authentication. "
@@ -17,7 +17,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         ),
     )
 
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description=(
             "Zscaler AI Guard API endpoint. Determines policy resolution behavior:\n"
@@ -34,7 +34,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         },
     )
 
-    policy_id: Optional[int] = Field(
+    policy_id: int | None = Field(
         default=None,
         description=(
             "Global policy ID for Zscaler AI Guard. Required when using /execute-policy endpoint.\n\n"
@@ -47,7 +47,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         },
     )
 
-    send_user_api_key_alias: Optional[bool] = Field(
+    send_user_api_key_alias: bool | None = Field(
         default=False,
         description=(
             "Send user API key alias in request headers as 'user-api-key-alias'. "
@@ -61,7 +61,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         },
     )
 
-    send_user_api_key_user_id: Optional[bool] = Field(
+    send_user_api_key_user_id: bool | None = Field(
         default=False,
         description=(
             "Send user API key user_id in request headers as 'user-api-key-user-id'. "
@@ -70,13 +70,22 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
 
-    send_user_api_key_team_id: Optional[bool] = Field(
+    send_user_api_key_team_id: bool | None = Field(
         default=False,
         description=(
             "Send user API key team_id in request headers as 'user-api-key-team-id'. "
             "Enables team-level tracking and analytics in Zscaler AI Guard."
         ),
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
+    )
+
+    timeout: float | None = Field(
+        default=None,
+        description=(
+            "Timeout for each Zscaler AI Guard API call, in seconds. Must be positive. "
+            "Raise it if scans fail under load with 'Connection timed out'. "
+            "Defaults to 5 seconds."
+        ),
     )
 
     @model_validator(mode="after")
@@ -88,7 +97,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         import os
 
         # Resolve actual api_base value (including env fallback)
-        api_base = self.api_base or os.getenv(
+        api_base: Final = self.api_base or os.getenv(
             "ZSCALER_AI_GUARD_URL",
             "https://api.us1.zseclipse.net/v1/detection/execute-policy",
         )
@@ -96,21 +105,19 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         # Resolve actual policy_id value
         policy_id = self.policy_id
         if policy_id is None:
-            env_policy = os.getenv("ZSCALER_AI_GUARD_POLICY_ID")
+            env_policy: Final = os.getenv("ZSCALER_AI_GUARD_POLICY_ID")
             if env_policy:
                 try:
                     policy_id = int(env_policy)
                 except ValueError:
                     verbose_proxy_logger.warning(
-                        f"ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: {env_policy}"
+                        "ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: %s", env_policy
                     )
 
         # Check for configuration issues
         assert api_base is not None  # always set via env default above
-        is_resolve_policy = api_base.endswith("/resolve-and-execute-policy")
-        is_execute_policy = (
-            api_base.endswith("/execute-policy") and not is_resolve_policy
-        )
+        is_resolve_policy: Final = api_base.endswith("/resolve-and-execute-policy")
+        is_execute_policy: Final = api_base.endswith("/execute-policy") and not is_resolve_policy
 
         # Scenario A: execute-policy without policy_id
         if is_execute_policy and (policy_id is None or policy_id < 1):

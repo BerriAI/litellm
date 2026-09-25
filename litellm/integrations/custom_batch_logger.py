@@ -6,7 +6,7 @@ Use this if you want your logs to be stored in memory and flushed periodically.
 
 import asyncio
 import time
-from typing import List, Optional
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,10 +25,10 @@ class CustomBatchLogger(CustomLogger):
 
     def __init__(
         self,
-        flush_lock: Optional[asyncio.Lock] = None,
-        batch_size: Optional[int] = None,
-        flush_interval: Optional[int] = None,
-        max_queue_size: Optional[int] = None,
+        flush_lock: asyncio.Lock | None = None,
+        batch_size: int | None = None,
+        flush_interval: int | None = None,
+        max_queue_size: int | None = None,
         **kwargs,
     ) -> None:
         """
@@ -36,25 +36,19 @@ class CustomBatchLogger(CustomLogger):
             flush_lock (Optional[asyncio.Lock], optional): Lock to use when flushing the queue. Defaults to None. Only used for custom loggers that do batching
             max_queue_size (Optional[int], optional): Maximum number of events to retain in ``log_queue``. When the limit is exceeded (e.g. because the send destination is unreachable and events are preserved for retry), the oldest events are dropped. Defaults to ``DEFAULT_MAX_QUEUE_SIZE``.
         """
-        self.log_queue: List = []
+        self.log_queue: list = []
         self.flush_interval = flush_interval or litellm.DEFAULT_FLUSH_INTERVAL_SECONDS
         self.batch_size: int = batch_size or litellm.DEFAULT_BATCH_SIZE
         self.last_flush_time = time.time()
         self.flush_lock = flush_lock
-        self.max_queue_size: int = (
-            max_queue_size
-            if max_queue_size is not None
-            else self.DEFAULT_MAX_QUEUE_SIZE
-        )
+        self.max_queue_size: int = max_queue_size if max_queue_size is not None else self.DEFAULT_MAX_QUEUE_SIZE
 
         super().__init__(**kwargs)
 
-    async def periodic_flush(self):
+    async def periodic_flush(self) -> None:
         while True:
             await asyncio.sleep(self.flush_interval)
-            verbose_logger.debug(
-                f"CustomLogger periodic flush after {self.flush_interval} seconds"
-            )
+            verbose_logger.debug("CustomLogger periodic flush after %s seconds", self.flush_interval)
             await self.flush_queue()
 
     async def flush_queue(self):
@@ -63,10 +57,8 @@ class CustomBatchLogger(CustomLogger):
 
         async with self.flush_lock:
             if self.log_queue:
-                log_queue_length = len(self.log_queue)
-                verbose_logger.debug(
-                    "CustomLogger: Flushing batch of %s events", len(self.log_queue)
-                )
+                log_queue_length: Final = len(self.log_queue)
+                verbose_logger.debug("CustomLogger: Flushing batch of %s events", len(self.log_queue))
                 try:
                     await self.async_send_batch()
                 except Exception:
@@ -76,19 +68,17 @@ class CustomBatchLogger(CustomLogger):
                     # their own errors, so this only affects loggers that opt
                     # in to surfacing failures (e.g. Rubrik).
                     verbose_logger.exception(
-                        "CustomLogger: async_send_batch raised; preserving "
-                        "%s events in queue for retry",
+                        "CustomLogger: async_send_batch raised; preserving %s events in queue for retry",
                         log_queue_length,
                     )
                     # Guard against unbounded queue growth if the destination
                     # is persistently unreachable. Drop the oldest events
                     # beyond ``max_queue_size``.
-                    overflow = len(self.log_queue) - self.max_queue_size
+                    overflow: Final = len(self.log_queue) - self.max_queue_size
                     if overflow > 0:
                         del self.log_queue[:overflow]
                         verbose_logger.warning(
-                            "CustomLogger: log queue exceeded max_queue_size=%s; "
-                            "dropped %s oldest events.",
+                            "CustomLogger: log queue exceeded max_queue_size=%s; dropped %s oldest events.",
                             self.max_queue_size,
                             overflow,
                         )

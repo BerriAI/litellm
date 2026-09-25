@@ -1,6 +1,10 @@
+pub mod audio_transcription;
+pub mod chat_completions;
+pub mod constants;
 pub mod error;
+pub mod messages;
 pub mod ocr;
-pub mod realtime;
-pub mod router;
+mod outbound;
+pub mod responses;
 
-pub use error::{CoreError, CoreResult};
+pub use error::Error;

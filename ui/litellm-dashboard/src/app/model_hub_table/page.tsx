@@ -7,7 +7,6 @@ function PublicModelHubTableContent() {
   const searchParams = useSearchParams()!;
   const key = searchParams.get("key");
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  console.log("PublicModelHubTable accessToken:", accessToken);
 
   useEffect(() => {
     if (!key) {

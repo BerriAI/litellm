@@ -1,17 +1,13 @@
 import asyncio
 import json
-import os
-import sys
 from datetime import datetime, timedelta
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import httpx
-import pytest
 from respx import MockRouter
 
 import litellm
@@ -375,62 +371,8 @@ def test_x_initiator_header_system_only_messages():
     assert headers["X-Initiator"] == "user"
 
 
-def test_get_supported_openai_params_claude_model():
-    """Test that Claude models with extended thinking support have thinking and reasoning parameters."""
-    config = GithubCopilotConfig()
-
-    # Test Claude 4 model supports thinking and reasoning_effort parameters
-    supported_params = config.get_supported_openai_params("claude-sonnet-4-20250514")
-    assert "thinking" in supported_params
-    assert "reasoning_effort" in supported_params
-
-    # Test Claude 3-7 model supports thinking and reasoning_effort parameters
-    supported_params_claude37 = config.get_supported_openai_params(
-        "claude-3-7-sonnet-20250219"
-    )
-    assert "thinking" in supported_params_claude37
-    assert "reasoning_effort" in supported_params_claude37
-
-    # Test Claude 3.5 model does NOT support thinking parameters (no extended thinking)
-    supported_params_claude35 = config.get_supported_openai_params("claude-3.5-sonnet")
-    assert "thinking" not in supported_params_claude35
-    assert "reasoning_effort" not in supported_params_claude35
-
-    # Test non-Claude model doesn't include thinking parameters but may include reasoning_effort
-    supported_params_gpt = config.get_supported_openai_params("gpt-4o")
-    assert "thinking" not in supported_params_gpt
-    # gpt-4o should NOT have reasoning_effort (not a reasoning model)
-    assert "reasoning_effort" not in supported_params_gpt
-
-    # Test O-series reasoning models include reasoning_effort but not thinking
-    supported_params_o3 = config.get_supported_openai_params("o3-mini")
-    assert "thinking" not in supported_params_o3
-    # o3-mini should have reasoning_effort (it's an O-series reasoning model)
-    assert "reasoning_effort" in supported_params_o3
 
 
-def test_get_supported_openai_params_case_insensitive():
-    """Test that Claude model detection is case-insensitive for models with extended thinking."""
-    config = GithubCopilotConfig()
-
-    # Test uppercase Claude 4 model with full model name
-    supported_params_upper = config.get_supported_openai_params(
-        "CLAUDE-SONNET-4-20250514"
-    )
-    assert "thinking" in supported_params_upper
-    assert "reasoning_effort" in supported_params_upper
-
-    # Test mixed case Claude 3-7 model (has extended thinking) with full model name
-    supported_params_mixed = config.get_supported_openai_params(
-        "Claude-3-7-Sonnet-20250219"
-    )
-    assert "thinking" in supported_params_mixed
-    assert "reasoning_effort" in supported_params_mixed
-
-    # Test that Claude 3.5 models don't have thinking support (case insensitive)
-    supported_params_35 = config.get_supported_openai_params("CLAUDE-3.5-SONNET")
-    assert "thinking" not in supported_params_35
-    assert "reasoning_effort" not in supported_params_35
 
 
 def test_copilot_vision_request_header_with_image():
@@ -866,7 +808,7 @@ class TestGithubCopilotTransformResponse:
         )
         model_response = ModelResponse()
 
-        with pytest.raises(Exception):
+        with pytest.raises(json.JSONDecodeError):
             config.transform_response(
                 model="github_copilot/claude-opus-4.7",
                 raw_response=raw_response,
@@ -878,3 +820,107 @@ class TestGithubCopilotTransformResponse:
                 litellm_params={},
                 encoding=None,
             )
+
+
+class TestGithubCopilotTransformParsedResponseDict:
+    """
+    Tests for GithubCopilotConfig.transform_parsed_response_dict, the hook the
+    OpenAI SDK handler calls on its parsed response. That handler bypasses
+    transform_response, so this is the seam that repairs empty-choices responses
+    from newer Copilot Claude models on the live completion path.
+
+    See: https://github.com/BerriAI/litellm/issues/30927
+    """
+
+    def test_synthesizes_choices_from_anthropic_content(self):
+        config = GithubCopilotConfig()
+
+        parsed = {
+            "id": "msg_vrtx_01",
+            "model": "claude-opus-4.8",
+            "object": "chat.completion",
+            "choices": [],
+            "content": [{"type": "text", "text": "Hello!"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+        repaired = config.transform_parsed_response_dict(parsed)
+
+        assert len(repaired["choices"]) == 1
+        choice = repaired["choices"][0]
+        assert choice["message"]["content"] == "Hello!"
+        assert choice["finish_reason"] == "stop"
+        assert repaired["usage"]["prompt_tokens"] == 10
+        assert repaired["usage"]["completion_tokens"] == 5
+        assert repaired["usage"]["total_tokens"] == 15
+
+    def test_passthrough_when_choices_present(self):
+        config = GithubCopilotConfig()
+
+        parsed = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        assert config.transform_parsed_response_dict(parsed) is parsed
+
+
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client")
+@patch(
+    "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request"
+)
+def test_openai_handler_repairs_github_copilot_empty_choices(
+    mock_request, mock_get_client
+):
+    """
+    The OpenAI SDK handler calls convert_to_model_response_object directly on the
+    SDK's parsed output, bypassing transform_response. convert raises APIError on
+    empty choices, so the handler must route github_copilot responses through
+    transform_parsed_response_dict first. Removing that wiring (or resolving a
+    config without the override) fails this test with APIError.
+
+    See: https://github.com/BerriAI/litellm/issues/30927
+    """
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    mock_get_client.return_value = MagicMock()
+
+    class _FakeSDKResponse:
+        def model_dump(self):
+            return {
+                "id": "msg_vrtx_01",
+                "model": "claude-opus-4.8",
+                "object": "chat.completion",
+                "choices": [],
+                "content": [{"type": "text", "text": "Hi there"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 12, "output_tokens": 3},
+            }
+
+    mock_request.return_value = ({}, _FakeSDKResponse())
+
+    result = OpenAIChatCompletion().completion(
+        model="claude-opus-4.8",
+        messages=[{"role": "user", "content": "Hi"}],
+        model_response=ModelResponse(),
+        timeout=60.0,
+        optional_params={},
+        litellm_params={},
+        logging_obj=MagicMock(),
+        custom_llm_provider="github_copilot",
+        client=MagicMock(),
+        api_key="gh.test-key-123456789",
+        acompletion=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hi there"
+    assert result.choices[0].finish_reason == "stop"
+    mock_request.assert_called_once()

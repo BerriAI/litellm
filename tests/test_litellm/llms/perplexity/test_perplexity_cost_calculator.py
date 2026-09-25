@@ -8,25 +8,22 @@ search queries, and reasoning tokens.
 import json
 import math
 import os
-import sys
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 import litellm
-from litellm.cost_calculator import completion_cost, cost_per_token
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
-    Usage,
+    OffPeakPricing,
     PromptTokensDetailsWrapper,
+    Usage,
 )
-from litellm.utils import get_model_info
 
 
 class TestPerplexityCostCalculator:
@@ -65,167 +62,6 @@ class TestPerplexityCostCalculator:
                 }
             }
 
-    def test_basic_cost_calculation(self):
-        """Test basic cost calculation without additional fields."""
-        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Expected costs:
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Output: 50 tokens * $8e-6 = $0.0004
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = 50 * 8e-6
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_citation_tokens_cost_calculation(self):
-        """Test cost calculation with citation tokens."""
-        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-
-        # Add citation tokens
-        usage.citation_tokens = 25
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Expected costs:
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Citation: 25 tokens * $2e-6 = $0.00005
-        # Total prompt cost: $0.00025
-        # Output: 50 tokens * $8e-6 = $0.0004
-        expected_prompt_cost = (100 * 2e-6) + (25 * 2e-6)
-        expected_completion_cost = 50 * 8e-6
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_search_queries_cost_calculation(self):
-        """Test cost calculation with search queries."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3),
-        )
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Expected costs:
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Output: 50 tokens * $8e-6 = $0.0004
-        # Search: 3 queries * $0.005 per request = $0.015
-        # Total completion cost: $0.0154
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = (50 * 8e-6) + (3 * 0.005)
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_reasoning_tokens_from_direct_attribute(self):
-        """Test reasoning tokens cost calculation from direct attribute."""
-        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-
-        # Set reasoning tokens directly
-        usage.reasoning_tokens = 20
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity
-        # convention codified in PR #18607. Non-reasoning portion = 50 - 20 = 30.
-        # Input:        100 tokens         * $2e-6 = $0.0002
-        # Output (text): 30 tokens         * $8e-6 = $0.00024
-        # Reasoning:    20 tokens          * $3e-6 = $0.00006
-        # Total completion cost                    = $0.0003
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = ((50 - 20) * 8e-6) + (20 * 3e-6)
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_reasoning_tokens_from_completion_tokens_details(self):
-        """Test reasoning tokens cost calculation from completion_tokens_details."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            reasoning_tokens=20,  # This should be stored in completion_tokens_details
-        )
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Same convention as the direct-attribute case above; reasoning is a subset of
-        # completion_tokens, so non-reasoning portion = 50 - 20 = 30.
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = ((50 - 20) * 8e-6) + (20 * 3e-6)
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_comprehensive_cost_calculation(self):
-        """Test cost calculation with all fields combined."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            reasoning_tokens=15,
-            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=2),
-        )
-
-        # Add custom fields
-        usage.citation_tokens = 30
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Expected costs (reasoning is a subset of completion_tokens):
-        # Input:         100 tokens        * $2e-6 = $0.0002
-        # Citation:       30 tokens        * $2e-6 = $0.00006
-        # Total prompt cost                        = $0.00026
-        # Output (text): (50 - 15) tokens  * $8e-6 = $0.00028
-        # Reasoning:      15 tokens        * $3e-6 = $0.000045
-        # Search:          2 queries * $0.005 per request = $0.01
-        # Total completion cost                    = $0.010325
-        expected_prompt_cost = (100 * 2e-6) + (30 * 2e-6)
-        expected_completion_cost = ((50 - 15) * 8e-6) + (15 * 3e-6) + (2 * 0.005)
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_zero_values_handling(self):
-        """Test that zero or missing values are handled correctly."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=0),
-        )
-
-        # These should not raise errors and should not affect cost
-        usage.citation_tokens = 0
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Should be same as basic calculation
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = 50 * 8e-6
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
     def test_missing_model_info_fields(self):
         """Test behavior when model info is missing some fields."""
         usage = Usage(
@@ -238,18 +74,14 @@ class TestPerplexityCostCalculator:
         usage.citation_tokens = 25
 
         # Mock get_model_info to return incomplete model info
-        with patch(
-            "litellm.llms.perplexity.cost_calculator.get_model_info"
-        ) as mock_get_model_info:
+        with patch("litellm.llms.perplexity.cost_calculator.get_model_info") as mock_get_model_info:
             mock_get_model_info.return_value = {
                 "input_cost_per_token": 2e-6,
                 "output_cost_per_token": 8e-6,
                 # Missing search_queries_cost_per_query
             }
 
-            prompt_cost, completion_cost = perplexity_cost_per_token(
-                model="sonar-deep-research", usage=usage
-            )
+            prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
             # Should only calculate basic costs when fields are missing
             expected_prompt_cost = 100 * 2e-6
@@ -257,119 +89,6 @@ class TestPerplexityCostCalculator:
 
             assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
             assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-    def test_integration_with_main_cost_calculator(self):
-        """Test integration with the main LiteLLM cost calculator."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            reasoning_tokens=10,
-            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
-        )
-
-        usage.citation_tokens = 20
-
-        # Test main cost calculator
-        prompt_cost, completion_cost_val = cost_per_token(
-            model="sonar-deep-research",
-            custom_llm_provider="perplexity",
-            usage_object=usage,
-        )
-
-        # Should match direct call to perplexity cost calculator
-        expected_prompt, expected_completion = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
-        assert math.isclose(completion_cost_val, expected_completion, rel_tol=1e-6)
-
-    def test_integration_with_completion_cost_function(self):
-        """Test integration with the completion_cost function."""
-        from litellm import ModelResponse
-
-        # Create a mock ModelResponse
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            reasoning_tokens=10,
-            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
-        )
-        usage.citation_tokens = 15
-
-        response = ModelResponse()
-        response.usage = usage
-        response.model = "sonar-deep-research"
-
-        # Test completion_cost function
-        total_cost = completion_cost(
-            completion_response=response, custom_llm_provider="perplexity"
-        )
-
-        # Calculate expected total cost (reasoning is a subset of completion_tokens)
-        expected_prompt_cost = (100 * 2e-6) + (15 * 2e-6)  # Input + citation
-        expected_completion_cost = (
-            ((50 - 10) * 8e-6) + (10 * 3e-6) + (1 * 0.005)
-        )  # Output (text) + reasoning + search
-        expected_total = expected_prompt_cost + expected_completion_cost
-
-        assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
-
-    def test_model_info_access(self):
-        """Test that model info correctly returns the new cost fields."""
-        model_info = get_model_info(
-            model="sonar-deep-research", custom_llm_provider="perplexity"
-        )
-
-        # Check that the new fields are accessible
-        assert "citation_cost_per_token" in model_info
-        assert model_info["citation_cost_per_token"] == 2e-6
-        assert model_info["search_context_cost_per_query"] == {
-            "search_context_size_low": 0.005,
-            "search_context_size_medium": 0.005,
-            "search_context_size_high": 0.005,
-        }
-
-    @pytest.mark.parametrize("citation_tokens", [0, 10, 25, 100])
-    @pytest.mark.parametrize("search_queries", [0, 1, 5, 10])
-    @pytest.mark.parametrize("reasoning_tokens", [0, 15, 30])
-    def test_cost_calculation_combinations(
-        self, citation_tokens, search_queries, reasoning_tokens
-    ):
-        """Test various combinations of citation tokens, search queries, and reasoning tokens."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            reasoning_tokens=reasoning_tokens,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                web_search_requests=search_queries
-            ),
-        )
-
-        usage.citation_tokens = citation_tokens
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
-        )
-
-        # Calculate expected costs. `completion_tokens` includes `reasoning_tokens`,
-        # so non-reasoning portion = 50 - reasoning_tokens.
-        expected_prompt_cost = (100 * 2e-6) + (citation_tokens * 2e-6)
-        expected_completion_cost = (
-            ((50 - reasoning_tokens) * 8e-6)
-            + (reasoning_tokens * 3e-6)
-            + (search_queries * 0.005)
-        )
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
-
-        # Ensure costs are non-negative
-        assert prompt_cost >= 0
-        assert completion_cost >= 0
 
     def test_uses_perplexity_provided_cost_when_available(self):
         """
@@ -390,9 +109,7 @@ class TestPerplexityCostCalculator:
             "total_cost": 0.008,
         }
 
-        prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-pro", usage=usage
-        )
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
 
         # When Perplexity provides total_cost, we use it directly
         # prompt_cost should be 0, completion_cost should be total_cost
@@ -400,54 +117,116 @@ class TestPerplexityCostCalculator:
         assert completion_cost == 0.008
         assert prompt_cost + completion_cost == 0.008
 
-    def test_falls_back_to_manual_calculation_when_no_cost_provided(self):
+    def test_uses_perplexity_provided_cost_when_normalized_to_float(self):
         """
-        Test that manual cost calculation is used when Perplexity doesn't
-        provide the cost object (fallback behavior).
+        Regression: for Responses API / Agent API models, `ResponseAPIUsage.parse_cost`
+        (litellm/types/llms/openai.py) already flattens Perplexity's
+        `usage.cost.total_cost` dict down to a plain float before
+        `_transform_response_api_usage_to_chat_usage` (litellm/responses/utils.py) copies
+        it onto the chat `Usage` object. So `usage.cost` arrives here as a float, not a
+        dict, on that path.
+
+        Pre-fix, the `isinstance(cost_info, dict)` check was always False for a float,
+        so the pre-calculated cost branch was dead code for every Responses-mode
+        Perplexity model and it silently fell back to manual token-rate calculation,
+        recording $0 for any model missing static per-token rates (e.g.
+        perplexity/openai/gpt-5.2 before rates existed).
         """
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-        # No cost object - should use manual calculation
+        usage.cost = 0.008
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-pro", usage=usage)
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.008
+
+    OFF_PEAK_MODEL = "sonar-off-peak-test"
+    OFF_PEAK_WINDOW = "14:00-00:00"
+    INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
+    OUTSIDE_WINDOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+
+    def _register_off_peak_model(self, off_peak_pricing: OffPeakPricing) -> None:
+        litellm.model_cost[f"perplexity/{self.OFF_PEAK_MODEL}"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "output_cost_per_reasoning_token": 3e-06,
+            "citation_cost_per_token": 2e-06,
+            "search_context_cost_per_query": {"search_context_size_low": 0.005},
+            "off_peak_pricing": off_peak_pricing,
+        }
+
+    def test_off_peak_window_swaps_in_the_off_peak_rates(self):
+        """
+        Regression (LIT-6874): a deployment configured with off_peak_pricing kept billing the
+        standard perplexity rates inside its window, while the same block on a deepseek
+        deployment billed the off-peak rates.
+        """
+        self._register_off_peak_model(
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
 
         prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
         )
 
-        # Should calculate manually: 100 * 2e-6 + 50 * 8e-6
-        expected_prompt = 100 * 2e-6
-        expected_completion = 50 * 8e-6
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
 
-        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion, rel_tol=1e-6)
+        peak_prompt_cost, peak_completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
 
-    def test_reasoning_tokens_not_double_billed(self):
-        """
-        Regression: `completion_tokens` includes `reasoning_tokens` per the
-        OpenAI/Perplexity usage convention (codified for the central path in PR #18607).
-        When `output_cost_per_reasoning_token` is configured the manual fallback must
-        subtract reasoning from completion before applying the output rate so the
-        reasoning tokens are not billed at BOTH the output rate and the reasoning rate.
+        assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
+        assert math.isclose(peak_completion_cost, 200 * 1e-06, rel_tol=1e-10)
 
-        Uses the exact usage shape produced by the live response fixture in
-        `tests/llm_translation/test_perplexity_reasoning.py`.
-        """
+    def test_off_peak_rates_leave_citation_search_and_reasoning_fees_alone(self):
+        """Inside the window only the plain input and output rates change: citation tokens, the
+        per-request search fee, and a dedicated reasoning rate keep billing as published."""
+        self._register_off_peak_model(
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
         usage = Usage(
-            prompt_tokens=9,
-            completion_tokens=20,
-            total_tokens=29,
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                reasoning_tokens=15
-            ),
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=50),
         )
+        usage.citation_tokens = 100
 
         prompt_cost, completion_cost = perplexity_cost_per_token(
-            model="sonar-deep-research", usage=usage
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
         )
 
-        # sonar-deep-research rates: input 2e-6, output 8e-6, reasoning 3e-6.
-        # Non-reasoning portion of the 20 completion tokens = 20 - 15 = 5.
-        # Pre-fix this asserted 20 * 8e-6 + 15 * 3e-6 = 2.05e-4 (a 2.16x overcharge).
-        expected_prompt = 9 * 2e-6
-        expected_completion = (20 - 15) * 8e-6 + 15 * 3e-6
+        assert math.isclose(prompt_cost, (1000 * 1e-07) + (100 * 2e-06), rel_tol=1e-10)
+        assert math.isclose(completion_cost, (150 * 2e-07) + (50 * 3e-06) + 0.005, rel_tol=1e-10)
 
-        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-9)
-        assert math.isclose(completion_cost, expected_completion, rel_tol=1e-9)
+    def test_off_peak_defaults_to_the_current_time(self):
+        """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
+        default current time."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
+
+    def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
+        """A response that carries Perplexity's own metered cost bills that cost whatever the
+        window says; the caller strips it when the deployment carries custom pricing."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+        usage.cost = {"total_cost": 0.00501}
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.00501

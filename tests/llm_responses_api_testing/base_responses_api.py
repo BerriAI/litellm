@@ -1,22 +1,16 @@
 import httpx
 import json
 import pytest
-import sys
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
-import os
 from litellm._uuid import uuid
 import time
 import base64
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from abc import ABC, abstractmethod
 
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
@@ -28,6 +22,7 @@ from openai.types.responses.response_create_params import (
     ResponseInputParam,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+import openai
 
 
 def validate_responses_api_response(response, final_chunk: bool = False):
@@ -338,7 +333,7 @@ class BaseResponsesAPITest(ABC):
                 )
                 assert result is not None
                 assert result.id == response.id
-                assert result.output == response.output
+                assert result.output_text == response.output_text
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
         else:
@@ -352,7 +347,7 @@ class BaseResponsesAPITest(ABC):
                 )
                 assert result is not None
                 assert result.id == response.id
-                assert result.output == response.output
+                assert result.output_text == response.output_text
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
 
@@ -700,12 +695,12 @@ class BaseResponsesAPITest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
 
         if sync_mode:
-            with pytest.raises(Exception):
+            with pytest.raises(openai.APIError):
                 litellm.cancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
         else:
-            with pytest.raises(Exception):
+            with pytest.raises(openai.APIError):
                 await litellm.acancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
@@ -746,7 +741,8 @@ class BaseResponsesAPITest(ABC):
         E2E test for Shell tool on OpenAI Responses API.
         Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
         validates that the request is accepted and returns a valid response.
-        Only runs for OpenAI/Azure (Responses API with shell support).
+        Only runs for OpenAI; offline coverage for the Azure route lives in
+        tests/test_litellm/responses/test_responses_api_request_body.py.
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = (
@@ -754,8 +750,10 @@ class BaseResponsesAPITest(ABC):
             or base_completion_call_args.get("model")
             or ""
         )
-        if "openai/" not in str(model) and "azure/" not in str(model):
-            pytest.skip("Shell tool e2e is only run for OpenAI/Azure Responses API")
+        if "openai/" not in str(model):
+            pytest.skip(
+                "Shell tool e2e is OpenAI-only; no Azure deployment supports the shell tool yet, re-enable once one exists"
+            )
         tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
         input_msg = "List files in /mnt/data and show python --version."
         try:
@@ -765,7 +763,10 @@ class BaseResponsesAPITest(ABC):
                 max_output_tokens=256,
                 tools=tools,
                 tool_choice="auto",
+                timeout=90,
             )
+        except litellm.Timeout:
+            pytest.skip("Provider did not answer the shell tool request within 90s")
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to litellm.InternalServerError")
         except litellm.BadRequestError as e:

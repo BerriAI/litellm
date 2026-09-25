@@ -9,16 +9,15 @@ uses BaseAWSLLM to obtain AWS credentials and wraps them in a custom
 AwsSecurityCredentialsSupplier for google-auth.
 """
 
-from typing import Dict
+from typing import Final
 
-GOOGLE_IMPORT_ERROR_MESSAGE = (
-    "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' "
-    "or pip install google-cloud-aiplatform"
+GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
+    "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )
 
 # AWS params recognized in WIF credential JSON for explicit auth.
 # These match the kwargs accepted by BaseAWSLLM.get_credentials().
-_AWS_CREDENTIAL_KEYS = frozenset(
+_AWS_CREDENTIAL_KEYS: Final = frozenset(
     {
         "aws_access_key_id",
         "aws_secret_access_key",
@@ -41,7 +40,7 @@ class VertexAIAwsWifAuth:
     """
 
     @staticmethod
-    def extract_aws_params(json_obj: dict) -> Dict[str, str]:
+    def extract_aws_params(json_obj: dict) -> dict[str, str]:
         """
         Extract LiteLLM-specific aws_* keys from a WIF credential JSON dict.
 
@@ -77,7 +76,7 @@ class VertexAIAwsWifAuth:
         # Validate region first — required for the GCP token exchange.
         # Check before get_credentials() to avoid unnecessary AWS API calls
         # (e.g. STS AssumeRole) on misconfiguration.
-        aws_region = aws_params.get("aws_region_name")
+        aws_region: Final = aws_params.get("aws_region_name")
         if not aws_region:
             raise ValueError(
                 "aws_region_name is required in the WIF credential JSON "
@@ -88,28 +87,26 @@ class VertexAIAwsWifAuth:
         # Build a credentials provider that re-resolves AWS creds on each call.
         # This ensures rotated/refreshed STS tokens are picked up during
         # long-running processes when google-auth refreshes the GCP token.
-        base_aws = BaseAWSLLM()
-        aws_params_copy = dict(aws_params)  # avoid mutating caller's dict
+        base_aws: Final = BaseAWSLLM()
+        aws_params_copy: Final = dict(aws_params)  # avoid mutating caller's dict
 
         def _get_aws_credentials():
             return base_aws.get_credentials(**aws_params_copy)
 
         # Create the custom supplier with a lazy credentials provider
-        supplier = AwsCredentialsSupplier(
+        supplier: Final = AwsCredentialsSupplier(
             credentials_provider=_get_aws_credentials,
             aws_region=aws_region,
         )
 
         # Build kwargs for aws.Credentials — forward optional fields from JSON
-        creds_kwargs = dict(
+        creds_kwargs: Final = dict(
             audience=json_obj.get("audience"),
             subject_token_type=json_obj.get("subject_token_type"),
             token_url=json_obj.get("token_url"),
             credential_source=None,  # Not using metadata endpoints
             aws_security_credentials_supplier=supplier,
-            service_account_impersonation_url=json_obj.get(
-                "service_account_impersonation_url"
-            ),
+            service_account_impersonation_url=json_obj.get("service_account_impersonation_url"),
         )
         # Forward universe_domain if present (defaults to googleapis.com)
         if "universe_domain" in json_obj:

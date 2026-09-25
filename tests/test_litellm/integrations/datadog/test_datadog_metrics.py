@@ -1,4 +1,3 @@
-import os
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
@@ -11,25 +10,16 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.fixture
-def clean_env():
-    """Set test env vars and restore originals after test."""
-    keys = ["DD_API_KEY", "DD_APP_KEY", "DD_SITE", "DD_ENV", "DD_SERVICE", "DD_VERSION"]
-    originals = {k: os.environ.get(k) for k in keys}
-
-    os.environ["DD_API_KEY"] = "test_api_key"
-    os.environ["DD_APP_KEY"] = "test_app_key"
-    os.environ["DD_SITE"] = "test.datadoghq.com"
-    os.environ["DD_ENV"] = "test-env"
-    os.environ["DD_SERVICE"] = "test-service"
-    os.environ["DD_VERSION"] = "1.0.0"
-
-    yield
-
-    for k, v in originals.items():
-        if v is not None:
-            os.environ[k] = v
-        elif k in os.environ:
-            del os.environ[k]
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in (
+        ("DD_API_KEY", "test_api_key"),
+        ("DD_APP_KEY", "test_app_key"),
+        ("DD_SITE", "test.datadoghq.com"),
+        ("DD_ENV", "test-env"),
+        ("DD_SERVICE", "test-service"),
+        ("DD_VERSION", "1.0.0"),
+    ):
+        monkeypatch.setenv(key, value)
 
 
 @pytest.mark.asyncio
@@ -61,6 +51,38 @@ async def test_extract_tags(clean_env):
     assert "model_group:gpt-4" in tags
     assert "status_code:200" in tags
     assert "team:test-team" in tags
+
+
+@pytest.mark.asyncio
+async def test_extract_tags_normalizes_team_alias(clean_env):
+    """Team aliases with uppercase or special characters match what Datadog stores."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        metadata={"user_api_key_team_alias": "P&T CTO-B2B"},
+    )
+
+    tags = logger._extract_tags(log=payload, status_code="200")
+
+    assert "team:p_t_cto-b2b" in tags
+
+
+@pytest.mark.asyncio
+async def test_extract_tags_keeps_non_string_team_id(clean_env):
+    """A numeric team id still produces a team tag instead of aborting the metric."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        metadata={"user_api_key_team_id": 67890},
+    )
+
+    tags = logger._extract_tags(log=payload, status_code="200")
+
+    assert "team:67890" in tags
 
 
 @pytest.mark.asyncio

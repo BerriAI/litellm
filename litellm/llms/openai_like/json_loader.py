@@ -4,7 +4,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Final
 
 from litellm._logging import verbose_logger
 
@@ -27,7 +27,7 @@ class SimpleProviderConfig:
 class JSONProviderRegistry:
     """Load providers from JSON once on import"""
 
-    _providers: Dict[str, SimpleProviderConfig] = {}
+    _providers: dict[str, SimpleProviderConfig] = {}
     _loaded = False
 
     @classmethod
@@ -36,7 +36,7 @@ class JSONProviderRegistry:
         if cls._loaded:
             return
 
-        json_path = Path(__file__).parent / "providers.json"
+        json_path: Final = Path(__file__).parent / "providers.json"
 
         if not json_path.exists():
             # No JSON file yet, that's okay
@@ -45,20 +45,18 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data = json.load(f)
+                data: Final = json.load(f)
 
             for slug, config in data.items():
                 cls._providers[slug] = SimpleProviderConfig(slug, config)
 
             cls._loaded = True
         except Exception as e:
-            verbose_logger.warning(
-                f"Warning: Failed to load JSON provider configs: {e}"
-            )
+            verbose_logger.warning("Warning: Failed to load JSON provider configs: %s", e)
             cls._loaded = True
 
     @classmethod
-    def get(cls, slug: str) -> Optional[SimpleProviderConfig]:
+    def get(cls, slug: str) -> SimpleProviderConfig | None:
         """Get a provider configuration by slug"""
         return cls._providers.get(slug)
 
@@ -68,9 +66,14 @@ class JSONProviderRegistry:
         return slug in cls._providers
 
     @classmethod
+    def get_by_base_url(cls, base_url: str) -> SimpleProviderConfig | None:
+        """Get a provider configuration by its default base url"""
+        return next((provider for provider in cls._providers.values() if provider.base_url == base_url), None)
+
+    @classmethod
     def supports_responses_api(cls, slug: str) -> bool:
         """Check if a JSON provider supports the Responses API"""
-        provider = cls._providers.get(slug)
+        provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
         return "/v1/responses" in provider.supported_endpoints

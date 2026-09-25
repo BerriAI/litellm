@@ -152,9 +152,9 @@ class TestVertexAIPSCEndpointSupport:
         assert url == expected_url, f"Expected {expected_url}, but got {url}"
 
     def test_standard_proxy_with_googleapis(self):
-        """Test that standard proxies with googleapis.com in URL use simple format"""
+        """Test that standard proxies with a path in the URL use simple format"""
         vertex_base = VertexBase()
-        proxy_api_base = "https://my-proxy.googleapis.com"
+        proxy_api_base = "https://my-proxy.googleapis.com/vertex-proxy"
         endpoint_id = "gemini-pro"  # Not numeric
         project_id = "test-project"
         location = "us-central1"

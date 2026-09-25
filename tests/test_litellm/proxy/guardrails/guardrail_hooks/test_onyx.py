@@ -1,5 +1,3 @@
-import os
-import sys
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,8 +5,6 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from httpx import Request, Response
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import ModelResponse
@@ -18,14 +14,13 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
 
 
-def test_onyx_guard_config():
+def test_onyx_guard_config(monkeypatch: pytest.MonkeyPatch):
     """Test Onyx guard configuration with init_guardrails_v2."""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
 
-    # Set environment variables for testing
-    os.environ["ONYX_API_BASE"] = "https://test.onyx.security"
-    os.environ["ONYX_API_KEY"] = "test-api-key"
+    monkeypatch.setenv("ONYX_API_BASE", "https://test.onyx.security")
+    monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
     init_guardrails_v2(
         all_guardrails=[
@@ -41,18 +36,17 @@ def test_onyx_guard_config():
         config_file_path="",
     )
 
-    # Clean up
-    if "ONYX_API_BASE" in os.environ:
-        del os.environ["ONYX_API_BASE"]
-    if "ONYX_API_KEY" in os.environ:
-        del os.environ["ONYX_API_KEY"]
+    registered = [c for c in litellm.callbacks if isinstance(c, OnyxGuardrail)]
+    assert len(registered) == 1
+    assert registered[0].guardrail_name == "onyx-guard"
+    assert registered[0].default_on is True
+    assert registered[0].event_hook == "pre_call"
 
 
-def test_onyx_guard_with_custom_timeout_from_kwargs():
+def test_onyx_guard_with_custom_timeout_from_kwargs(monkeypatch: pytest.MonkeyPatch):
     """Test Onyx guard instantiation with custom timeout passed via kwargs."""
-    # Set environment variables for testing
-    os.environ["ONYX_API_BASE"] = "https://test.onyx.security"
-    os.environ["ONYX_API_KEY"] = "test-api-key"
+    monkeypatch.setenv("ONYX_API_BASE", "https://test.onyx.security")
+    monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
     with patch(
         "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -74,23 +68,16 @@ def test_onyx_guard_with_custom_timeout_from_kwargs():
         assert timeout_param.read == 45.0
         assert timeout_param.connect == 5.0
 
-    # Clean up
-    if "ONYX_API_BASE" in os.environ:
-        del os.environ["ONYX_API_BASE"]
-    if "ONYX_API_KEY" in os.environ:
-        del os.environ["ONYX_API_KEY"]
 
-
-def test_onyx_guard_with_timeout_none_uses_env_var():
+def test_onyx_guard_with_timeout_none_uses_env_var(monkeypatch: pytest.MonkeyPatch):
     """Test Onyx guard with timeout=None uses ONYX_TIMEOUT env var.
 
     When timeout=None is passed (as it would be from config model with default None),
     the ONYX_TIMEOUT environment variable should be used.
     """
-    # Set environment variables for testing
-    os.environ["ONYX_API_BASE"] = "https://test.onyx.security"
-    os.environ["ONYX_API_KEY"] = "test-api-key"
-    os.environ["ONYX_TIMEOUT"] = "60"
+    monkeypatch.setenv("ONYX_API_BASE", "https://test.onyx.security")
+    monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
+    monkeypatch.setenv("ONYX_TIMEOUT", "60")
 
     with patch(
         "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -112,23 +99,13 @@ def test_onyx_guard_with_timeout_none_uses_env_var():
         assert timeout_param.read == 60.0
         assert timeout_param.connect == 5.0
 
-    # Clean up
-    if "ONYX_API_BASE" in os.environ:
-        del os.environ["ONYX_API_BASE"]
-    if "ONYX_API_KEY" in os.environ:
-        del os.environ["ONYX_API_KEY"]
-    if "ONYX_TIMEOUT" in os.environ:
-        del os.environ["ONYX_TIMEOUT"]
 
-
-def test_onyx_guard_with_timeout_none_defaults_to_10():
+def test_onyx_guard_with_timeout_none_defaults_to_10(monkeypatch: pytest.MonkeyPatch):
     """Test Onyx guard with timeout=None and no env var defaults to 10 seconds."""
-    # Set environment variables for testing
-    os.environ["ONYX_API_BASE"] = "https://test.onyx.security"
-    os.environ["ONYX_API_KEY"] = "test-api-key"
+    monkeypatch.setenv("ONYX_API_BASE", "https://test.onyx.security")
+    monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
     # Ensure ONYX_TIMEOUT is not set
-    if "ONYX_TIMEOUT" in os.environ:
-        del os.environ["ONYX_TIMEOUT"]
+    monkeypatch.delenv("ONYX_TIMEOUT", raising=False)
 
     with patch(
         "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -150,34 +127,18 @@ def test_onyx_guard_with_timeout_none_defaults_to_10():
         assert timeout_param.read == 10.0
         assert timeout_param.connect == 5.0
 
-    # Clean up
-    if "ONYX_API_BASE" in os.environ:
-        del os.environ["ONYX_API_BASE"]
-    if "ONYX_API_KEY" in os.environ:
-        del os.environ["ONYX_API_KEY"]
-
 
 class TestOnyxGuardrail:
     """Test suite for Onyx Security Guardrail integration."""
 
-    def setup_method(self):
-        """Setup test environment."""
-        # Clean up any existing environment variables
-        for key in ["ONYX_API_BASE", "ONYX_API_KEY", "ONYX_TIMEOUT"]:
-            if key in os.environ:
-                del os.environ[key]
+    @pytest.fixture(autouse=True)
+    def clear_onyx_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in ("ONYX_API_BASE", "ONYX_API_KEY", "ONYX_TIMEOUT"):
+            monkeypatch.delenv(key, raising=False)
 
-    def teardown_method(self):
-        """Clean up test environment."""
-        # Clean up any environment variables set during tests
-        for key in ["ONYX_API_BASE", "ONYX_API_KEY", "ONYX_TIMEOUT"]:
-            if key in os.environ:
-                del os.environ[key]
-
-    def test_initialization_with_defaults(self):
+    def test_initialization_with_defaults(self, monkeypatch: pytest.MonkeyPatch):
         """Test successful initialization with default values."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -189,10 +150,10 @@ class TestOnyxGuardrail:
         assert guardrail.guardrail_name == "test-guard"
         assert guardrail.event_hook == "pre_call"
 
-    def test_initialization_with_env_vars(self):
+    def test_initialization_with_env_vars(self, monkeypatch: pytest.MonkeyPatch):
         """Test initialization with environment variables."""
-        os.environ["ONYX_API_BASE"] = "https://custom.onyx.security"
-        os.environ["ONYX_API_KEY"] = "custom-api-key"
+        monkeypatch.setenv("ONYX_API_BASE", "https://custom.onyx.security")
+        monkeypatch.setenv("ONYX_API_KEY", "custom-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="post_call", default_on=True
@@ -202,20 +163,19 @@ class TestOnyxGuardrail:
         assert guardrail.api_key == "custom-api-key"
         assert guardrail.event_hook == "post_call"
 
-    def test_initialization_fails_when_api_key_missing(self):
+    def test_initialization_fails_when_api_key_missing(self, monkeypatch: pytest.MonkeyPatch):
         """Test that initialization fails when API key is not set."""
         # Ensure API key is not set
-        if "ONYX_API_KEY" in os.environ:
-            del os.environ["ONYX_API_KEY"]
+        monkeypatch.delenv("ONYX_API_KEY", raising=False)
 
         with pytest.raises(
             ValueError, match="ONYX_API_KEY environment variable is not set"
         ):
             OnyxGuardrail(guardrail_name="test-guard", event_hook="pre_call")
 
-    def test_initialization_with_default_timeout(self):
+    def test_initialization_with_default_timeout(self, monkeypatch: pytest.MonkeyPatch):
         """Test that default timeout is 10.0 seconds."""
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -232,9 +192,9 @@ class TestOnyxGuardrail:
             assert timeout_param.read == 10.0
             assert timeout_param.connect == 5.0
 
-    def test_initialization_with_custom_timeout_parameter(self):
+    def test_initialization_with_custom_timeout_parameter(self, monkeypatch: pytest.MonkeyPatch):
         """Test initialization with custom timeout parameter."""
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -254,14 +214,14 @@ class TestOnyxGuardrail:
             assert timeout_param.read == 30.0
             assert timeout_param.connect == 5.0
 
-    def test_initialization_with_timeout_from_env_var(self):
+    def test_initialization_with_timeout_from_env_var(self, monkeypatch: pytest.MonkeyPatch):
         """Test initialization with timeout from ONYX_TIMEOUT environment variable.
 
         Note: The env var is only used when timeout=None is explicitly passed,
         since the default parameter value is 10.0 (not None).
         """
-        os.environ["ONYX_API_KEY"] = "test-api-key"
-        os.environ["ONYX_TIMEOUT"] = "25"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
+        monkeypatch.setenv("ONYX_TIMEOUT", "25")
 
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -282,10 +242,10 @@ class TestOnyxGuardrail:
             assert timeout_param.read == 25.0
             assert timeout_param.connect == 5.0
 
-    def test_initialization_timeout_parameter_overrides_env_var(self):
+    def test_initialization_timeout_parameter_overrides_env_var(self, monkeypatch: pytest.MonkeyPatch):
         """Test that timeout parameter overrides ONYX_TIMEOUT environment variable."""
-        os.environ["ONYX_API_KEY"] = "test-api-key"
-        os.environ["ONYX_TIMEOUT"] = "25"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
+        monkeypatch.setenv("ONYX_TIMEOUT", "25")
 
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.onyx.onyx.get_async_httpx_client"
@@ -306,10 +266,9 @@ class TestOnyxGuardrail:
             assert timeout_param.connect == 5.0
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_no_violations(self):
+    async def test_apply_guardrail_request_no_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for request with no violations detected."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         # Setup guardrail
         guardrail = OnyxGuardrail(
@@ -372,10 +331,9 @@ class TestOnyxGuardrail:
         assert call_args.kwargs["json"]["conversation_id"] == "test-call-id"
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_with_violations(self):
+    async def test_apply_guardrail_request_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for request with violations detected."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         # Setup guardrail
         guardrail = OnyxGuardrail(
@@ -423,10 +381,9 @@ class TestOnyxGuardrail:
         assert "prompt_injection" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_no_violations(self):
+    async def test_apply_guardrail_response_no_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with no violations detected."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         # Setup guardrail
         guardrail = OnyxGuardrail(
@@ -497,10 +454,9 @@ class TestOnyxGuardrail:
         assert call_args.kwargs["json"]["conversation_id"] == "test-call-id-2"
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_with_violations(self):
+    async def test_apply_guardrail_response_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with violations detected."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         # Setup guardrail
         guardrail = OnyxGuardrail(
@@ -558,10 +514,9 @@ class TestOnyxGuardrail:
         assert "illegal_instructions" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_api_error_handling(self):
+    async def test_apply_guardrail_api_error_handling(self, monkeypatch: pytest.MonkeyPatch):
         """Test handling of API errors in apply_guardrail."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -591,10 +546,9 @@ class TestOnyxGuardrail:
             assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_timeout_error_handling(self):
+    async def test_apply_guardrail_timeout_error_handling(self, monkeypatch: pytest.MonkeyPatch):
         """Test handling of timeout errors in apply_guardrail (graceful degradation)."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard",
@@ -629,10 +583,9 @@ class TestOnyxGuardrail:
             assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_read_timeout_error_handling(self):
+    async def test_apply_guardrail_read_timeout_error_handling(self, monkeypatch: pytest.MonkeyPatch):
         """Test handling of read timeout errors in apply_guardrail."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard",
@@ -667,10 +620,9 @@ class TestOnyxGuardrail:
             assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_connect_timeout_error_handling(self):
+    async def test_apply_guardrail_connect_timeout_error_handling(self, monkeypatch: pytest.MonkeyPatch):
         """Test handling of connect timeout errors in apply_guardrail."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard",
@@ -705,10 +657,9 @@ class TestOnyxGuardrail:
             assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_no_logging_obj(self):
+    async def test_apply_guardrail_no_logging_obj(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail without logging object (uses UUID)."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -747,10 +698,9 @@ class TestOnyxGuardrail:
         assert call_args.kwargs["json"]["conversation_id"] == "test-uuid"
 
     @pytest.mark.asyncio
-    async def test_validate_with_guard_server_method(self):
+    async def test_validate_with_guard_server_method(self, monkeypatch: pytest.MonkeyPatch):
         """Test the _validate_with_guard_server internal method."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -788,10 +738,9 @@ class TestOnyxGuardrail:
             )
 
     @pytest.mark.asyncio
-    async def test_validate_with_guard_server_blocked(self):
+    async def test_validate_with_guard_server_blocked(self, monkeypatch: pytest.MonkeyPatch):
         """Test _validate_with_guard_server when request is blocked."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -825,10 +774,9 @@ class TestOnyxGuardrail:
         assert config_model.__name__ == "OnyxGuardrailConfigModel"
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_with_modelresponse(self):
+    async def test_apply_guardrail_with_modelresponse(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail with ModelResponse object for response type."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="post_call", default_on=True
@@ -880,10 +828,9 @@ class TestOnyxGuardrail:
         assert "payload" in call_args.kwargs["json"]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_error_handling(self):
+    async def test_apply_guardrail_response_error_handling(self, monkeypatch: pytest.MonkeyPatch):
         """Test error handling when processing response data."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="post_call", default_on=True
@@ -925,11 +872,11 @@ class TestOnyxIntegration:
     """Test integration scenarios."""
 
     @pytest.mark.asyncio
-    async def test_full_guardrail_flow(self):
+    async def test_full_guardrail_flow(self, monkeypatch: pytest.MonkeyPatch):
         """Test full guardrail flow with multiple hooks."""
         # Set environment variables
-        os.environ["ONYX_API_BASE"] = "https://test.onyx.security"
-        os.environ["ONYX_API_KEY"] = "test-key"
+        monkeypatch.setenv("ONYX_API_BASE", "https://test.onyx.security")
+        monkeypatch.setenv("ONYX_API_KEY", "test-key")
 
         init_guardrails_v2(
             all_guardrails=[
@@ -966,17 +913,11 @@ class TestOnyxIntegration:
         )
         assert len(custom_loggers) >= 3
 
-        # Clean up
-        if "ONYX_API_BASE" in os.environ:
-            del os.environ["ONYX_API_BASE"]
-        if "ONYX_API_KEY" in os.environ:
-            del os.environ["ONYX_API_KEY"]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_empty_request_data(self):
+    async def test_apply_guardrail_empty_request_data(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail with empty request data."""
-        # Set required API key
-        os.environ["ONYX_API_KEY"] = "test-api-key"
+        monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
 
         guardrail = OnyxGuardrail(
             guardrail_name="test-guard", event_hook="pre_call", default_on=True

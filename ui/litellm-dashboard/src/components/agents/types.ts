@@ -1,14 +1,14 @@
-export interface AgentKeyInfo {
-  key_alias?: string;
-  token_prefix?: string;
-  has_key: boolean;
+import type { components } from "@/lib/http/schema";
+
+export interface AgentAttachedKey {
+  token: string;
+  key_alias?: string | null;
+  key_name?: string | null;
 }
 
-export interface AgentObjectPermission {
-  mcp_servers?: string[];
-  mcp_access_groups?: string[];
-  mcp_tool_permissions?: Record<string, string[]>;
-}
+export type AgentObjectPermission = components["schemas"]["AgentObjectPermission"];
+export type AgentKillSwitchConfig = components["schemas"]["AgentKillSwitchConfig"];
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
 
 export interface Agent {
   agent_id: string;
@@ -23,6 +23,9 @@ export interface Agent {
     [key: string]: any;
   };
   object_permission?: AgentObjectPermission;
+  access_group_ids?: string[] | null;
+  kill_switch?: AgentKillSwitchConfig | null;
+  keys?: AgentAttachedKey[] | null;
   spend?: number;
   tpm_limit?: number | null;
   rpm_limit?: number | null;

@@ -1,15 +1,10 @@
 import asyncio
-import os
-import sys
 import time
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from typing import Dict, List, Optional, Union
 
 import pytest
@@ -78,6 +73,31 @@ class CustomRoutingStrategy(CustomRoutingStrategyBase):
         request_kwargs: Optional[Dict] = None,
     ):
         pass
+
+
+def test_reset_custom_routing_strategy():
+    """
+    Setting a custom routing strategy installs instance-level overrides for
+    get_available_deployment / async_get_available_deployment. Re-initializing the
+    routing strategy must clear them so the class implementations are used again.
+    """
+    router = _create_router()
+    router.set_custom_routing_strategy(CustomRoutingStrategy(router))
+
+    assert "get_available_deployment" in router.__dict__
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._reset_custom_routing_strategy()
+
+    assert "get_available_deployment" not in router.__dict__
+    assert "async_get_available_deployment" not in router.__dict__
+    assert (
+        router.async_get_available_deployment.__func__
+        is Router.async_get_available_deployment
+    )
+
+    # idempotent: resetting again when nothing is overridden must not raise
+    router._reset_custom_routing_strategy()
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ Maps OpenAI-compatible audio transcription calls to Azure Speech REST
 recognition for short audio.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -16,11 +16,11 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 
@@ -41,9 +41,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     STT_ENDPOINT_PATH = "/speech/recognition/conversation/cognitiveservices/v1"
     DEFAULT_LANGUAGE = "en-US"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return ["language", "response_format"]
 
     def map_openai_params(
@@ -53,7 +51,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model=model)
+        supported_params: Final = self.get_supported_openai_params(model=model)
         for key, value in non_default_params.items():
             if key in supported_params:
                 optional_params[key] = value
@@ -63,11 +61,11 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("AZURE_SPEECH_API_KEY")
         if not api_key:
@@ -76,22 +74,20 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 status_code=401,
             )
 
-        validated_headers = headers.copy()
+        validated_headers: Final = headers.copy()
         validated_headers["Ocp-Apim-Subscription-Key"] = api_key
-        validated_headers["Content-Type"] = validated_headers.get(
-            "Content-Type", "audio/wav"
-        )
+        validated_headers["Content-Type"] = validated_headers.get("Content-Type", "audio/wav")
         validated_headers["Accept"] = "application/json"
         return validated_headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = api_base or get_secret_str("AZURE_SPEECH_API_BASE")
         if api_base is None:
@@ -105,12 +101,10 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 status_code=400,
             )
 
-        base_url = self._resolve_stt_base_url(api_base=api_base)
-        query_params = {
+        base_url: Final = self._resolve_stt_base_url(api_base=api_base)
+        query_params: Final = {
             "language": optional_params.get("language", self.DEFAULT_LANGUAGE),
-            "format": self._get_azure_response_format(
-                optional_params.get("response_format")
-            ),
+            "format": self._get_azure_response_format(optional_params.get("response_format")),
         }
         return f"{base_url}{self.STT_ENDPOINT_PATH}?{urlencode(query_params)}"
 
@@ -121,7 +115,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
-        processed_audio = process_audio_file(audio_file)
+        processed_audio: Final = process_audio_file(audio_file)
         return AudioTranscriptionRequestData(
             data=processed_audio.file_content,
             files=None,
@@ -132,26 +126,21 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
-        response_json = raw_response.json()
-        recognition_status = response_json.get("RecognitionStatus")
+        response_json: Final = raw_response.json()
+        recognition_status: Final = response_json.get("RecognitionStatus")
         if recognition_status is not None and recognition_status != "Success":
             raise AzureSpeechAudioTranscriptionException(
-                message=(
-                    "Azure AI Speech transcription failed with "
-                    f"RecognitionStatus={recognition_status}."
-                ),
+                message=(f"Azure AI Speech transcription failed with RecognitionStatus={recognition_status}."),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
-        text = self._extract_text(response_json)
-        response = TranscriptionResponse(text=text)
+        text: Final = self._extract_text(response_json)
+        response: Final = TranscriptionResponse(text=text)
         response._hidden_params = response_json
         return response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AzureSpeechAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -160,13 +149,11 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def _resolve_stt_base_url(self, api_base: str) -> str:
         api_base = api_base.rstrip("/")
-        parsed_url = urlparse(api_base)
-        hostname = parsed_url.hostname or ""
+        parsed_url: Final = urlparse(api_base)
+        hostname: Final = parsed_url.hostname or ""
 
         if self._is_cognitive_services_endpoint(hostname=hostname):
-            region = self._extract_region_from_hostname(
-                hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN
-            )
+            region: Final = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_stt_base_url(region=region)
 
         if self._is_stt_endpoint(hostname=hostname):
@@ -184,14 +171,10 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return api_base
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
-        return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(
-            f".{self.COGNITIVE_SERVICES_DOMAIN}"
-        )
+        return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(f".{self.COGNITIVE_SERVICES_DOMAIN}")
 
     def _is_stt_endpoint(self, hostname: str) -> bool:
-        return hostname == self.STT_SPEECH_DOMAIN or hostname.endswith(
-            f".{self.STT_SPEECH_DOMAIN}"
-        )
+        return hostname == self.STT_SPEECH_DOMAIN or hostname.endswith(f".{self.STT_SPEECH_DOMAIN}")
 
     def _is_azure_openai_endpoint(self, hostname: str) -> bool:
         return hostname.endswith(".openai.azure.com")
@@ -206,18 +189,18 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return f"https://{region}.{self.STT_SPEECH_DOMAIN}"
         return f"https://{self.STT_SPEECH_DOMAIN}"
 
-    def _get_azure_response_format(self, response_format: Optional[str]) -> str:
+    def _get_azure_response_format(self, response_format: str | None) -> str:
         if response_format == "verbose_json":
             return "detailed"
         return "simple"
 
-    def _extract_text(self, response_json: Dict[str, Any]) -> str:
+    def _extract_text(self, response_json: dict[str, Any]) -> str:
         if isinstance(response_json.get("DisplayText"), str):
             return response_json["DisplayText"]
 
-        nbest = response_json.get("NBest")
+        nbest: Final = response_json.get("NBest")
         if isinstance(nbest, list) and nbest:
-            best = nbest[0]
+            best: Final = nbest[0]
             if isinstance(best, dict):
                 return best.get("Display") or best.get("Lexical") or ""
 

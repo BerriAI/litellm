@@ -1,20 +1,18 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.utils import Message
 
 
 @pytest.mark.asyncio
@@ -435,3 +433,288 @@ async def test_get_chat_completion_message_history_empty_response_dict():
 
         # Verify the session was still created correctly
         assert result["litellm_session_id"] == "test-session"
+
+
+def _chat_completion_response(request_id: str, content: str) -> dict:
+    return {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": 1748575031,
+        "model": "claude-haiku-4-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
+class _FakePrismaDB:
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls = []
+
+    async def query_raw(self, query, *args):
+        self.calls.append(args)
+        if not self._results:
+            return []
+        return list(self._results.pop(0))
+
+
+class _FakePrismaClient:
+    def __init__(self, results):
+        self.db = _FakePrismaDB(results)
+
+
+def _spend_log(request_id: str, session_id: str, prompt: str, answer: str) -> dict:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": session_id,
+        "proxy_server_request": {
+            "input": [{"role": "user", "content": prompt}],
+            "model": "claude-bridge",
+        },
+        "response": _chat_completion_response(request_id, answer),
+    }
+
+
+@pytest.fixture
+def instant_session_lookup_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm.constants, "RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.0)
+
+
+@pytest.mark.asyncio
+async def test_message_history_reconstructs_list_shaped_input():
+    """
+    The Responses API sends `input` as a list of items, which is what lands in the stored
+    proxy_server_request. The user turns have to survive session reconstruction.
+    """
+    request_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
+    mock_spend_logs = [
+        _spend_log(
+            request_id,
+            "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
+            "Remember this: my favorite color is chartreuse.",
+            "OK",
+        )
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "Remember this: my favorite color is chartreuse."),
+        ("assistant", "OK"),
+    ]
+    assert result["litellm_session_id"] == "a96757c4-c6dc-4c76-b37e-e7dfa526b701"
+
+
+@pytest.mark.asyncio
+async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flushed_yet(
+    instant_session_lookup_retries: None,
+):
+    """
+    A follow-up sent right after the previous turn can beat that turn's spend log to the
+    DB. The lookup has to try again instead of handing back an empty conversation.
+    """
+    request_id = "chatcmpl-6c1f5f6c-6a2b-4c62-8d1f-0d9d4ce0a1b2"
+    session_id = "b7d0a5b0-6d20-4a68-9d24-6ba0f6d1f1a3"
+    spend_log = _spend_log(
+        request_id,
+        session_id,
+        "Remember this: my favorite color is chartreuse.",
+        "OK",
+    )
+    fake_prisma_client = _FakePrismaClient(results=[[], [spend_log]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "Remember this: my favorite color is chartreuse."),
+        ("assistant", "OK"),
+    ]
+    assert result["litellm_session_id"] == session_id
+    assert fake_prisma_client.db.calls == [(request_id,), (request_id,)]
+
+
+@pytest.mark.asyncio
+async def test_message_history_reconstructs_every_turn_of_the_session_in_order():
+    session_id = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
+    first_request_id = "chatcmpl-1111"
+    second_request_id = "chatcmpl-2222"
+    fake_prisma_client = _FakePrismaClient(
+        results=[
+            [
+                _spend_log(first_request_id, session_id, "My favorite color is chartreuse.", "Got it."),
+                _spend_log(second_request_id, session_id, "And my favorite city is Lisbon.", "Noted."),
+            ]
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            second_request_id
+        )
+
+    messages = result["messages"]
+    assert [(message.get("role"), message.get("content")) for message in messages] == [
+        ("user", "My favorite color is chartreuse."),
+        ("assistant", "Got it."),
+        ("user", "And my favorite city is Lisbon."),
+        ("assistant", "Noted."),
+    ]
+    assert result["litellm_session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_stops_retrying_once_the_budget_is_spent(
+    instant_session_lookup_retries: None,
+):
+    fake_prisma_client = _FakePrismaClient(results=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            "chatcmpl-does-not-exist"
+        )
+
+    assert spend_logs == []
+    assert len(fake_prisma_client.db.calls) == litellm.constants.RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_message_history_looks_up_the_decoded_chat_completion_id():
+    """
+    A `previous_response_id` handed back by the proxy is base64 encoded; spend logs store
+    the bare chat completion id, so that is what the lookup has to query on.
+    """
+    request_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
+    encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="anthropic",
+        model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
+        response_id=request_id,
+    )
+    fake_prisma_client = _FakePrismaClient(
+        results=[[_spend_log(request_id, "session-a", "Hello.", "Hi.")]]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            encoded_response_id
+        )
+
+    assert fake_prisma_client.db.calls == [(request_id,)]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
+    instant_session_lookup_retries: None,
+):
+    """
+    A deployment that writes no spend logs has nothing to wait for, so the miss path keeps
+    the single query it always had.
+    """
+    fake_prisma_client = _FakePrismaClient(results=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), patch(
+        "litellm.proxy.proxy_server.disable_spend_logs", True
+    ):
+        spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            "chatcmpl-does-not-exist"
+        )
+
+    assert spend_logs == []
+    assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+
+
+def test_normalize_redacted_arguments_skips_custom_tool_calls():
+    """Custom tool calls have no .function; the normalizer must skip them, not crash (session replay path)."""
+    message = Message(
+        content=None,
+        tool_calls=[
+            {"id": "call_c", "type": "custom", "custom": {"name": "run_code", "input": "print(1)"}},
+            {"id": "call_f", "type": "function", "function": {"name": "get_weather", "arguments": "redacted-by-litellm"}},
+        ],
+    )
+
+    _normalize_redacted_tool_call_arguments(message)
+
+    assert message.tool_calls[0].custom.input == "print(1)"
+    assert message.tool_calls[1].function.arguments == "{}"
+
+
+@pytest.mark.asyncio
+async def test_message_history_normalizes_redacted_tool_call_arguments():
+    """Sessions stored with turn_off_message_logging hold the bare sentinel
+    in tool-call arguments; replay must normalize it to valid JSON."""
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-redacted-1",
+            "call_type": "aresponses",
+            "session_id": "sess-redacted",
+            "proxy_server_request": {
+                "input": "what is the weather in sf",
+                "model": "gpt-4o",
+            },
+            "response": {
+                "id": "chatcmpl-redacted-1",
+                "model": "gpt-4o",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "redacted-by-litellm",
+                                    },
+                                }
+                            ],
+                            "function_call": None,
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "created": 1748575031,
+                "usage": {"total_tokens": 10, "prompt_tokens": 5, "completion_tokens": 5},
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-redacted-1"
+        )
+
+    assistant_message = result["messages"][-1]
+    tool_call = assistant_message.tool_calls[0]
+    assert tool_call.function.arguments == "{}"
+    assert json.loads(tool_call.function.arguments) == {}

@@ -5,17 +5,42 @@ Symbols pinned here:
   - ``PrismaClient.writer_db``
   - ``PrismaClient.connect``
   - ``PrismaClient.disconnect``
+  - ``PrismaClient.start_view_setup_task``
+  - ``PrismaClient.stop_view_setup_task``
+  - ``PrismaClient._run_view_setup``
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy.utils import PrismaClient
+
+_PROBE_SQL = "SELECT to_regclass($1) IS NOT NULL AS present"
+
+
+def _absent() -> list[dict[str, bool]]:
+    return [{"present": False}]
+
+
+def _present() -> list[dict[str, bool]]:
+    return [{"present": True}]
+
+
+def _wire_view_setup(prisma_client: PrismaClient, probe: AsyncMock) -> MagicMock:
+    prisma_client.db.query_raw = probe
+    prisma_client.check_view_exists = AsyncMock()
+    prisma_client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    call_order = MagicMock()
+    call_order.attach_mock(probe, "probe")
+    call_order.attach_mock(prisma_client.check_view_exists, "views")
+    call_order.attach_mock(prisma_client._set_spend_logs_row_count_in_proxy_state, "row_count")
+    return call_order
 
 
 @pytest.mark.asyncio
@@ -36,7 +61,7 @@ async def test_prismaclient_init_wires_default_config(
         proxy_logging_obj=proxy_logging,
     )
     pinned = {
-        "iam_token_db_auth": pc.iam_token_db_auth,
+        "token_auth": pc.token_auth,
         "db_reconnect_cooldown_seconds": pc._db_reconnect_cooldown_seconds,
         "db_health_watchdog_interval_seconds": pc._db_health_watchdog_interval_seconds,
         "db_health_watchdog_enabled": pc._db_health_watchdog_enabled,
@@ -48,7 +73,7 @@ async def test_prismaclient_init_wires_default_config(
         "db_reconnect_lock_is_lock": isinstance(pc._db_reconnect_lock, asyncio.Lock),
     }
     assert pinned == {
-        "iam_token_db_auth": None,
+        "token_auth": None,
         "db_reconnect_cooldown_seconds": 15,
         "db_health_watchdog_interval_seconds": 30,
         "db_health_watchdog_enabled": True,
@@ -205,3 +230,221 @@ async def test_disconnect_raises_when_underlying_fails(
     prisma_client.db.disconnect = AsyncMock(side_effect=RuntimeError("disconnect boom"))
     with pytest.raises(RuntimeError, match="disconnect boom"):
         await prisma_client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_view_setup_waits_for_the_spend_logs_table_before_creating_views(prisma_client: PrismaClient) -> None:
+    probe = AsyncMock(side_effect=[_absent(), _absent(), _present()])
+    call_order = _wire_view_setup(prisma_client, probe)
+
+    outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=5)
+
+    actual = {
+        "outcome": outcome,
+        "calls": [call[0] for call in call_order.mock_calls],
+        "probe_args": probe.await_args.args,
+    }
+    assert actual == {
+        "outcome": "ready",
+        "calls": ["probe", "probe", "probe", "row_count", "views"],
+        "probe_args": (_PROBE_SQL, '"LiteLLM_SpendLogs"'),
+    }
+
+
+@pytest.mark.asyncio
+async def test_view_setup_probe_resolves_through_the_connection_search_path(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_SCHEMA", "litellm_tenant")
+    probe = AsyncMock(return_value=_present())
+    _wire_view_setup(prisma_client, probe)
+
+    await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=5)
+
+    assert probe.await_args.args == (_PROBE_SQL, '"LiteLLM_SpendLogs"')
+
+
+@pytest.mark.asyncio
+async def test_view_setup_sets_the_row_count_even_when_view_creation_keeps_failing(
+    prisma_client: PrismaClient,
+) -> None:
+    _wire_view_setup(prisma_client, AsyncMock(return_value=_present()))
+    prisma_client.check_view_exists.side_effect = RuntimeError("permission denied for schema public")
+
+    outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=0.02)
+
+    actual = {
+        "outcome": outcome,
+        "row_count_set": prisma_client._set_spend_logs_row_count_in_proxy_state.await_count >= 1,
+    }
+    assert actual == {"outcome": "timed_out", "row_count_set": True}
+
+
+@pytest.mark.asyncio
+async def test_view_setup_gives_up_when_the_table_never_appears(prisma_client: PrismaClient) -> None:
+    probe = AsyncMock(return_value=_absent())
+    _wire_view_setup(prisma_client, probe)
+
+    outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=0.02)
+
+    actual = {
+        "outcome": outcome,
+        "kept_polling": probe.await_count > 1,
+        "views_attempted": prisma_client.check_view_exists.await_count,
+        "row_count_attempted": prisma_client._set_spend_logs_row_count_in_proxy_state.await_count,
+    }
+    assert actual == {
+        "outcome": "timed_out",
+        "kept_polling": True,
+        "views_attempted": 0,
+        "row_count_attempted": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_view_setup_retries_when_view_creation_fails_mid_migration(prisma_client: PrismaClient) -> None:
+    probe = AsyncMock(return_value=_present())
+    call_order = _wire_view_setup(prisma_client, probe)
+    prisma_client.check_view_exists.side_effect = [RuntimeError('column "tpd_limit" does not exist'), None]
+
+    outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=5)
+
+    actual = {
+        "outcome": outcome,
+        "calls": [call[0] for call in call_order.mock_calls],
+    }
+    assert actual == {
+        "outcome": "ready",
+        "calls": ["probe", "row_count", "views", "probe", "row_count", "views"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_view_setup_retries_when_the_table_probe_itself_fails(prisma_client: PrismaClient) -> None:
+    probe = AsyncMock(side_effect=[RuntimeError("connection reset"), _present()])
+    call_order = _wire_view_setup(prisma_client, probe)
+
+    outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=5)
+
+    actual = {
+        "outcome": outcome,
+        "calls": [call[0] for call in call_order.mock_calls],
+    }
+    assert actual == {
+        "outcome": "ready",
+        "calls": ["probe", "probe", "row_count", "views"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_view_setup_logs_an_error_naming_the_table_on_timeout(
+    prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    _wire_view_setup(prisma_client, AsyncMock(return_value=_absent()))
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=0.01)
+
+    errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    actual = {
+        "outcome": outcome,
+        "error_count": len(errors),
+        "names_table": '"LiteLLM_SpendLogs"' in errors[0],
+        "tells_operator_to_migrate": "migrations" in errors[0] and "restart" in errors[0],
+    }
+    assert actual == {
+        "outcome": "timed_out",
+        "error_count": 1,
+        "names_table": True,
+        "tells_operator_to_migrate": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_view_setup_reports_the_last_error_when_views_keep_failing_on_a_present_table(
+    prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    _wire_view_setup(prisma_client, AsyncMock(return_value=_present()))
+    prisma_client.check_view_exists.side_effect = RuntimeError("permission denied for schema public")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=0.01)
+
+    errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    actual = {
+        "outcome": outcome,
+        "error_count": len(errors),
+        "names_the_error": "permission denied for schema public" in errors[0],
+        "blames_missing_migrations": "did not appear" in errors[0],
+        "tells_operator_to_restart": "restart" in errors[0],
+    }
+    assert actual == {
+        "outcome": "timed_out",
+        "error_count": 1,
+        "names_the_error": True,
+        "blames_missing_migrations": False,
+        "tells_operator_to_restart": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_view_setup_stays_quiet_when_views_are_ready(
+    prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    _wire_view_setup(prisma_client, AsyncMock(return_value=_present()))
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=0.01)
+
+    actual = {
+        "outcome": outcome,
+        "errors": [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR],
+    }
+    assert actual == {"outcome": "ready", "errors": []}
+
+
+@pytest.mark.asyncio
+async def test_stop_view_setup_task_cancels_a_task_parked_between_polls(prisma_client: PrismaClient) -> None:
+    probe = AsyncMock(return_value=_absent())
+    _wire_view_setup(prisma_client, probe)
+
+    prisma_client.start_view_setup_task()
+    task = prisma_client._view_setup_task
+    await asyncio.sleep(0)
+    await asyncio.wait_for(prisma_client.stop_view_setup_task(), timeout=1)
+
+    actual = {
+        "probed_before_parking": probe.await_count,
+        "task_cancelled": task is not None and task.cancelled(),
+        "reference_cleared": prisma_client._view_setup_task,
+        "views_attempted": prisma_client.check_view_exists.await_count,
+    }
+    assert actual == {
+        "probed_before_parking": 1,
+        "task_cancelled": True,
+        "reference_cleared": None,
+        "views_attempted": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stop_view_setup_task_is_a_noop_without_a_task(prisma_client: PrismaClient) -> None:
+    await asyncio.wait_for(prisma_client.stop_view_setup_task(), timeout=1)
+    assert prisma_client._view_setup_task is None
+
+
+@pytest.mark.asyncio
+async def test_start_view_setup_task_twice_keeps_the_first_task(prisma_client: PrismaClient) -> None:
+    _wire_view_setup(prisma_client, AsyncMock(return_value=_absent()))
+
+    prisma_client.start_view_setup_task()
+    first = prisma_client._view_setup_task
+    prisma_client.start_view_setup_task()
+    second = prisma_client._view_setup_task
+    await asyncio.wait_for(prisma_client.stop_view_setup_task(), timeout=1)
+
+    actual = {
+        "first_is_task": isinstance(first, asyncio.Task),
+        "second_is_first": second is first,
+    }
+    assert actual == {"first_is_task": True, "second_is_first": True}

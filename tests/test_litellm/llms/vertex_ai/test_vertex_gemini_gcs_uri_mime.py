@@ -3,8 +3,6 @@
 Split from test_vertex.py to satisfy CI per-file size limits.
 """
 import asyncio
-import os
-import sys
 import time
 
 from dotenv import load_dotenv
@@ -16,7 +14,6 @@ import pytest
 import litellm
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 

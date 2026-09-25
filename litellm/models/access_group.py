@@ -6,7 +6,6 @@ Canonical definition for ``litellm_accessgrouptable``. Re-exported from
 """
 
 from datetime import datetime
-from typing import List, Optional
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -14,13 +13,13 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
     access_group_id: str
     access_group_name: str
-    description: Optional[str] = None
-    access_model_names: List[str] = []
-    access_mcp_server_ids: List[str] = []
-    access_agent_ids: List[str] = []
-    assigned_team_ids: List[str] = []
-    assigned_key_ids: List[str] = []
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
+    description: str | None = None
+    access_model_names: list[str] = []
+    access_mcp_server_ids: list[str] = []
+    access_agent_ids: list[str] = []
+    assigned_team_ids: list[str] = []
+    assigned_key_ids: list[str] = []
+    created_at: datetime | None = None
+    created_by: str | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None

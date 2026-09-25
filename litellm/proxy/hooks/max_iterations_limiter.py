@@ -11,12 +11,12 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.exceptions import RateLimitType
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -32,7 +32,7 @@ else:
 # Redis Lua script for atomic increment with TTL.
 # Returns the new count after increment.
 # Only sets EXPIRE on first increment (when count becomes 1).
-MAX_ITERATIONS_INCREMENT_SCRIPT = """
+MAX_ITERATIONS_INCREMENT_SCRIPT: Final = """
 local key = KEYS[1]
 local ttl = tonumber(ARGV[1])
 
@@ -45,7 +45,7 @@ return current
 """
 
 # Default TTL for session iteration counters (1 hour)
-DEFAULT_MAX_ITERATIONS_TTL = 3600
+DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
 
 
 class _PROXY_MaxIterationsHandler(CustomLogger):
@@ -70,16 +70,12 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
-        self.ttl = int(
-            os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL)
-        )
+        self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
         # Register Lua script with Redis if available (same pattern as v3 limiter)
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    MAX_ITERATIONS_INCREMENT_SCRIPT
-                )
+            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                MAX_ITERATIONS_INCREMENT_SCRIPT
             )
         else:
             self.increment_script = None
@@ -90,7 +86,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Check session iteration count before making the API call.
 
@@ -98,11 +94,11 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         agent litellm_params. If the session has exceeded max_iterations, raises 429.
         """
         # Extract session_id from request data
-        session_id = self._get_session_id(data)
+        session_id: Final = self._get_session_id(data)
         if session_id is None:
             return None
 
-        max_iterations = self._get_max_iterations(user_api_key_dict)
+        max_iterations: Final = self._get_max_iterations(user_api_key_dict)
         if max_iterations is None:
             return None
 
@@ -113,13 +109,11 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         )
 
         # Increment and check
-        cache_key = self._make_cache_key(session_id)
-        current_count = await self._increment_and_get(cache_key)
+        cache_key: Final = self._make_cache_key(session_id)
+        current_count: Final = await self._increment_and_get(cache_key)
 
         if current_count > max_iterations:
-            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
-                data.get("model") if data else None
-            )
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
             raise ProxyRateLimitError(
                 detail=(
                     f"Max iterations exceeded for session {session_id}. "
@@ -139,39 +133,39 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         return None
 
-    def _get_session_id(self, data: dict) -> Optional[str]:
+    def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""
-        metadata = data.get("metadata") or {}
+        metadata: Final = data.get("metadata") or {}
         session_id = metadata.get("session_id")
         if session_id is not None:
             return str(session_id)
 
         # Also check litellm_metadata (used for /thread and /assistant endpoints)
-        litellm_metadata = data.get("litellm_metadata") or {}
+        litellm_metadata: Final = data.get("litellm_metadata") or {}
         session_id = litellm_metadata.get("session_id")
         if session_id is not None:
             return str(session_id)
 
         return None
 
-    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[int]:
+    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> int | None:
         """Extract max_iterations from agent litellm_params, with fallback to key metadata."""
         # Try agent litellm_params first
-        agent_id = user_api_key_dict.agent_id
+        agent_id: Final = user_api_key_dict.agent_id
         if agent_id is not None:
             from litellm.proxy.agent_endpoints.agent_registry import (
                 global_agent_registry,
             )
 
-            agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
+            agent: Final = global_agent_registry.get_agent_by_id(agent_id=agent_id)
             if agent is not None:
-                litellm_params = agent.litellm_params or {}
+                litellm_params: Final = agent.litellm_params or {}
                 max_iterations = litellm_params.get("max_iterations")
                 if max_iterations is not None:
                     return int(max_iterations)
 
         # Fallback to key metadata for backwards compatibility
-        metadata = user_api_key_dict.metadata or {}
+        metadata: Final = user_api_key_dict.metadata or {}
         max_iterations = metadata.get("max_iterations")
         if max_iterations is not None:
             return int(max_iterations)
@@ -195,7 +189,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         """
         if self.increment_script is not None:
             try:
-                result = await self.increment_script(
+                result: Final = await self.increment_script(
                     keys=[cache_key],
                     args=[self.ttl],
                 )
@@ -211,12 +205,12 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     async def _in_memory_increment(self, cache_key: str) -> int:
         """Increment counter in in-memory cache with TTL."""
-        current = await self.internal_usage_cache.async_get_cache(
+        current: Final = await self.internal_usage_cache.async_get_cache(
             key=cache_key,
             litellm_parent_otel_span=None,
             local_only=True,
         )
-        new_value = (int(current) if current is not None else 0) + 1
+        new_value: Final = (int(current) if current is not None else 0) + 1
         await self.internal_usage_cache.async_set_cache(
             key=cache_key,
             value=new_value,

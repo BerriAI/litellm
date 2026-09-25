@@ -20,7 +20,7 @@ def _window(freq: str = "hourly", hour: int = 5) -> FocusTimeWindow:
 
 
 def test_should_require_bucket_name():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='bucket_name must be provided for S'):
         FocusS3Destination(prefix="focus", config={})
 
 

@@ -12,11 +12,14 @@ Coverage:
 - custom instructions  → default prompt is not used even when tools present
 """
 
+import json
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+import litellm
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     AnthropicContextManagementError,
     apply_context_management,
@@ -1198,8 +1201,11 @@ def _fake_user_api_key_auth(
     team_models=None,
     team_id=None,
     model_max_budget=None,
+    team_model_max_budget=None,
     end_user_model_max_budget=None,
     end_user_id=None,
+    user_model_max_budget=None,
+    user_id=None,
     token=None,
 ):
     """Build a minimal stand-in for ``UserAPIKeyAuth`` with just the fields
@@ -1216,8 +1222,11 @@ def _fake_user_api_key_auth(
     auth.team_id = team_id
     auth.team_model_aliases = None
     auth.model_max_budget = model_max_budget
+    auth.team_model_max_budget = team_model_max_budget
     auth.end_user_model_max_budget = end_user_model_max_budget
     auth.end_user_id = end_user_id
+    auth.user_model_max_budget = user_model_max_budget
+    auth.user_id = user_id
     auth.token = token
     return auth
 
@@ -1499,6 +1508,55 @@ async def test_summary_model_denied_when_team_member_scope_excludes_it():
     assert result.applied_edits[0].get("error") == "summary_model_access_denied"
 
 
+async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage():
+    """A member-level scope that cannot be read fails closed: the summary
+    model is not invoked while the membership row is unreachable."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage")
+    auth.user_id = "user-outage"
+
+    class _UnreachableMembershipPrisma:
+        class db:
+            class litellm_teammembership:
+                @staticmethod
+                async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                    raise httpx.ConnectError("All connection attempts failed")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_project_object",
+            AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", _UnreachableMembershipPrisma()),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+
+
 async def test_summary_model_denied_when_key_over_model_budget():
     """A caller whose per-model budget for the summary model is exhausted cannot
     trigger the summary call via compaction."""
@@ -1544,6 +1602,78 @@ async def test_summary_model_denied_when_key_over_model_budget():
     mock_call.assert_not_awaited()
     limiter.is_key_within_model_budget.assert_awaited_once()
     assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+
+
+async def test_summary_model_denied_when_user_over_model_budget():
+    """Internal-user per-model budget is enforced for the summary subrequest too.
+
+    This file propagates `user_api_key_user_model_max_budget` into the summary
+    subrequest's metadata, so its spend charges the user's counter. Enforcing
+    only the key and end-user scopes would let compaction increment a counter it
+    can never be refused by, which is the asymmetry this PR exists to remove.
+    """
+    import litellm
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        user_model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        user_id="user-over-budget",
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_user_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+
+    # The limiter is a mock, so it would accept any kwargs. Pin the call shape and
+    # check it against the real method, or a rename there would keep this test
+    # green while breaking compaction in production.
+    limiter.is_user_within_model_budget.assert_awaited_once_with(
+        user_id="user-over-budget",
+        user_model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        model="claude-haiku-4-5",
+    )
+    import inspect
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    real_params = inspect.signature(
+        _PROXY_VirtualKeyModelMaxBudgetLimiter.is_user_within_model_budget
+    ).parameters
+    for kwarg in ("user_id", "user_model_max_budget", "model"):
+        assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter no longer accepts"
 
 
 async def test_summary_model_denied_when_end_user_over_model_budget():
@@ -1780,6 +1910,78 @@ async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
     mock_call.assert_awaited_once()
     assert result.compaction_block is not None
     assert not result.applied_edits[0].get("error")
+
+
+async def test_summary_model_denied_when_team_over_model_budget():
+    """The team per-model budget gates the summary subrequest, whose spend is
+    charged to the team counter via the propagated `user_api_key_team_model_max_budget`.
+    The key's own `model_max_budget` is handed to the limiter so a key-level
+    override keeps taking precedence over the team cap here as it does in auth."""
+    import litellm
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+    key_budget = {"claude-opus-4-8": {"budget_limit": 1}}
+    team_budget = {"claude-haiku-4-5": {"budget_limit": 5, "time_period": "1d"}}
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        model_max_budget=key_budget,
+        team_model_max_budget=team_budget,
+        team_id="team-over-budget",
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_key_within_model_budget = AsyncMock(return_value=True)
+    limiter.is_team_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(  # test-quality-ok: apply_compact_20260112 reads the summary model setting as a module global, no seam
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),  # test-quality-ok: forces the over-threshold branch
+        patch(  # test-quality-ok: the summary call is the observable that must NOT happen when the team is over budget
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch(  # test-quality-ok: the limiter is a proxy_server module global the editor imports, no injection seam
+            "litellm.proxy.proxy_server.model_max_budget_limiter", limiter
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+    limiter.is_team_within_model_budget.assert_awaited_once_with(
+        team_id="team-over-budget",
+        team_model_max_budget=team_budget,
+        key_model_max_budget=key_budget,
+        model="claude-haiku-4-5",
+    )
+    import inspect
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    real_params = inspect.signature(
+        _PROXY_VirtualKeyModelMaxBudgetLimiter.is_team_within_model_budget
+    ).parameters
+    for kwarg in ("team_id", "team_model_max_budget", "key_model_max_budget", "model"):
+        assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter does not accept"
 
 
 async def test_scoped_budget_metadata_propagated_to_summary_call():
@@ -2042,12 +2244,12 @@ async def test_dispatcher_trigger_below_minimum_raises_through():
 
 
 # ---------------------------------------------------------------------------
-# _run_polyfill_if_enabled: drop_params gate
+# _run_polyfill_if_enabled: additional_drop_params gate (drop_params must NOT gate)
 # ---------------------------------------------------------------------------
 
 
-async def test_run_polyfill_skipped_when_drop_params_true():
-    """When drop_params=True the polyfill must be skipped (returns None)."""
+async def test_run_polyfill_skipped_when_context_management_in_additional_drop_params():
+    """additional_drop_params=["context_management"] is the explicit opt-out."""
     from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
         _run_polyfill_if_enabled,
     )
@@ -2059,10 +2261,37 @@ async def test_run_polyfill_skipped_when_drop_params_true():
         system=None,
         context_management_spec={"edits": [{"type": "compact_20260112"}]},
         litellm_metadata={},
-        drop_params=True,
+        additional_drop_params=["context_management"],
         llm_router=None,
     )
     assert result is None
+
+
+async def test_run_polyfill_runs_when_litellm_drop_params_true(monkeypatch):
+    """drop_params must not disable the polyfill: context_management is a
+    LiteLLM-supported param (polyfilled where not native), and drop_params only
+    exists to strip genuinely unsupported params."""
+    from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+        _run_polyfill_if_enabled,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await _run_polyfill_if_enabled(
+            model=MODEL,
+            messages=_simple_messages(),
+            tools=None,
+            system=None,
+            context_management_spec={"edits": [{"type": "compact_20260112"}]},
+            litellm_metadata={},
+            additional_drop_params=None,
+            llm_router=None,
+        )
+    assert result is not None
+    assert result.applied_edits[0]["type"] == "compact_20260112"
 
 
 async def test_run_polyfill_skipped_when_spec_empty():
@@ -2078,10 +2307,167 @@ async def test_run_polyfill_skipped_when_spec_empty():
         system=None,
         context_management_spec=None,
         litellm_metadata={},
-        drop_params=False,
+        additional_drop_params=None,
         llm_router=None,
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Adapter handler entry points: polyfill vs drop_params / additional_drop_params
+# ---------------------------------------------------------------------------
+
+_CLEAR_TOOL_USES_SPEC: Dict[str, Any] = {
+    "edits": [
+        {
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 1},
+            "keep": {"type": "tool_uses", "value": 0},
+        }
+    ]
+}
+
+_CLEARED_PLACEHOLDER = "[Cleared by context management]"
+
+
+def _tool_use_messages() -> List[Dict[str, Any]]:
+    return [
+        {"role": "user", "content": "check the weather in two cities"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "SF"}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny in SF"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_02", "name": "get_weather", "input": {"city": "NY"}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_02", "content": "rainy in NY"}],
+        },
+        {"role": "user", "content": "now summarize both"},
+    ]
+
+
+def _openai_chat_response():
+    from litellm.types.utils import ModelResponse
+
+    return ModelResponse(
+        id="chatcmpl-test",
+        model="gpt-4o",
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"role": "assistant", "content": "done"}}],
+        usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+    )
+
+
+async def _call_async_adapter_handler(**handler_kwargs: Any):
+    from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    captured: Dict[str, Any] = {}
+
+    async def _capture_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _openai_chat_response()
+
+    with patch("litellm.acompletion", side_effect=_capture_acompletion):
+        response = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+            max_tokens=128,
+            messages=_tool_use_messages(),
+            model=MODEL,
+            context_management=_CLEAR_TOOL_USES_SPEC,
+            litellm_router=MagicMock(),
+            **handler_kwargs,
+        )
+    return response, captured
+
+
+def _assert_polyfill_applied(response: Any, captured: Dict[str, Any]) -> None:
+    applied_edits = (response.get("context_management") or {}).get("applied_edits")
+    assert applied_edits, "polyfill must run and report applied_edits"
+    assert applied_edits[0]["type"] == "clear_tool_uses_20250919"
+    forwarded = json.dumps(captured["messages"], default=str)
+    assert _CLEARED_PLACEHOLDER in forwarded
+    assert "sunny in SF" not in forwarded
+    assert "rainy in NY" in forwarded
+
+
+async def test_async_handler_runs_polyfill_when_request_drop_params_true():
+    """Regression (LIT-3768): per-request drop_params=True silently skipped the
+    polyfill, so Claude Code requests (where the proxy defaults drop_params on)
+    lost context editing on non-Anthropic models."""
+    response, captured = await _call_async_adapter_handler(drop_params=True)
+    _assert_polyfill_applied(response, captured)
+
+
+async def test_async_handler_runs_polyfill_when_litellm_drop_params_true(monkeypatch):
+    """Regression (LIT-3768): proxy-wide litellm.drop_params=True silently
+    skipped the polyfill too."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    response, captured = await _call_async_adapter_handler()
+    _assert_polyfill_applied(response, captured)
+
+
+async def test_async_handler_additional_drop_params_strips_context_management():
+    """additional_drop_params=["context_management"] stays the escape hatch:
+    the polyfill must not run and the request is forwarded untouched."""
+    response, captured = await _call_async_adapter_handler(additional_drop_params=["context_management"])
+    assert response.get("context_management") is None
+    forwarded = json.dumps(captured["messages"], default=str)
+    assert _CLEARED_PLACEHOLDER not in forwarded
+    assert "sunny in SF" in forwarded
+
+
+def _call_sync_adapter_handler(**handler_kwargs: Any):
+    from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    captured: Dict[str, Any] = {}
+
+    def _capture_completion(**kwargs):
+        captured.update(kwargs)
+        return _openai_chat_response()
+
+    with patch("litellm.completion", side_effect=_capture_completion):
+        response = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+            max_tokens=128,
+            messages=_tool_use_messages(),
+            model=MODEL,
+            context_management=_CLEAR_TOOL_USES_SPEC,
+            litellm_router=None,
+            **handler_kwargs,
+        )
+    return response, captured
+
+
+def test_sync_handler_runs_polyfill_when_request_drop_params_true():
+    """The sync entry point reads its own kwargs; cover its gate separately."""
+    response, captured = _call_sync_adapter_handler(drop_params=True)
+    _assert_polyfill_applied(response, captured)
+
+
+def test_sync_handler_runs_polyfill_when_litellm_drop_params_true(monkeypatch):
+    """Proxy-wide litellm.drop_params=True must not skip the polyfill on the
+    sync entry point either."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    response, captured = _call_sync_adapter_handler()
+    _assert_polyfill_applied(response, captured)
+
+
+def test_sync_handler_additional_drop_params_strips_context_management():
+    """The additional_drop_params=["context_management"] escape hatch is honored
+    on the sync entry point too: no polyfill, request forwarded untouched."""
+    response, captured = _call_sync_adapter_handler(additional_drop_params=["context_management"])
+    assert response.get("context_management") is None
+    forwarded = json.dumps(captured["messages"], default=str)
+    assert _CLEARED_PLACEHOLDER not in forwarded
+    assert "sunny in SF" in forwarded
 
 
 async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata():
@@ -2120,7 +2506,7 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
                 "user_api_key_user_id": "user-xyz",
                 "litellm_call_id": "call-1",
             },
-            drop_params=False,
+            additional_drop_params=None,
             llm_router=_RouterStub(),
         )
 
@@ -2289,3 +2675,88 @@ def test_endpoint_runs_failure_hook_on_500_context_management_error():
     body = response.json()
     assert body["type"] == "error"
     failure_hook.assert_awaited_once()
+
+
+def test_count_effective_tokens_counts_midturn_system_correction():
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _count_effective_tokens,
+    )
+
+    base: List[Dict[str, Any]] = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    correction = {
+        "role": "system",
+        "content": [{"type": "text", "text": "use the corrected result " * 20}],
+    }
+
+    without_correction = _count_effective_tokens(
+        model=MODEL, effective_messages=base, compaction_block=None, tools=None
+    )
+    with_correction = _count_effective_tokens(
+        model=MODEL,
+        effective_messages=base + [correction],
+        compaction_block=None,
+        tools=None,
+    )
+
+    assert with_correction > without_correction
+
+
+def test_build_summary_messages_keeps_midturn_system_correction_in_place():
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _build_summary_messages,
+    )
+
+    summary_messages = _build_summary_messages(
+        effective_messages=[
+            {"role": "user", "content": "original question"},
+            {"role": "system", "content": "use the corrected result"},
+            {"role": "assistant", "content": "acknowledged"},
+        ],
+        prompt="summarize the conversation",
+        system="caller system prompt",
+    )
+
+    assert [m["role"] for m in summary_messages] == [
+        "system",
+        "user",
+        "system",
+        "assistant",
+        "user",
+    ]
+    assert summary_messages[0]["content"] == "caller system prompt"
+    assert summary_messages[2]["content"] == "use the corrected result"
+    assert summary_messages[-1]["content"] == "summarize the conversation"
+
+
+async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_SUMMARY_MODEL_SETTING_KEY,
+    )
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "claude-haiku-4-5")
+    warm_tokenizer(MODEL)
+    messages = [{"role": "user", "content": text * 100}, *_simple_messages()]
+    result, took, lags = await timed_with_loop_lags(
+        lambda: apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec={"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 10_000_000}},
+        )
+    )
+
+    assert result.messages == messages
+    assert result.compaction_block is None
+    assert_loop_stayed_free(took, lags)

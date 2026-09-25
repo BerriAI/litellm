@@ -7,7 +7,6 @@ import time
 from openai import AsyncOpenAI
 from tests.test_team import list_teams
 from typing import Optional
-from tests.test_keys import generate_key
 from fastapi import HTTPException
 
 
@@ -320,7 +319,6 @@ async def test_user_model_access():
 import json
 from litellm._uuid import uuid
 import pytest
-import aiohttp
 from typing import Dict, Tuple
 
 

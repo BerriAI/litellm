@@ -6,14 +6,12 @@ Covers:
   - BaseResponsesAPIStreamingIterator (responses) sync + async
 """
 
-import os
-import sys
 import time
-from unittest.mock import MagicMock, patch
+from importlib import import_module
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -69,8 +67,12 @@ class TestCustomStreamWrapperMaxDuration:
 
     @pytest.mark.asyncio
     async def test_should_raise_on_async_anext_when_exceeded(self):
-        """__anext__ should check the limit before iterating."""
+        """__anext__ should check the limit before iterating, dispatching the
+        same failure-callback/logging path every other stream failure goes
+        through (dispatch_failure_handlers is async on the real Logging class,
+        so the mock needs to be awaitable too)."""
         wrapper = _make_custom_stream_wrapper()
+        wrapper.logging_obj.dispatch_failure_handlers = AsyncMock()
         wrapper._stream_created_time = time.time() - 20
         with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0):
             with pytest.raises(litellm.Timeout):
@@ -106,16 +108,16 @@ class TestResponsesStreamingIteratorMaxDuration:
 
     def test_should_not_raise_when_duration_is_none(self):
         it = self._make_base_iterator()
-        with patch(
-            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS",
+        with patch.object(
+            import_module("litellm.responses.streaming_iterator"), "LITELLM_MAX_STREAMING_DURATION_SECONDS",
             None,
         ):
             it._check_max_streaming_duration()
 
     def test_should_not_raise_when_under_limit(self):
         it = self._make_base_iterator()
-        with patch(
-            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS",
+        with patch.object(
+            import_module("litellm.responses.streaming_iterator"), "LITELLM_MAX_STREAMING_DURATION_SECONDS",
             60.0,
         ):
             it._check_max_streaming_duration()
@@ -123,8 +125,8 @@ class TestResponsesStreamingIteratorMaxDuration:
     def test_should_raise_timeout_when_exceeded(self):
         it = self._make_base_iterator()
         it._stream_created_time = time.time() - 20
-        with patch(
-            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS",
+        with patch.object(
+            import_module("litellm.responses.streaming_iterator"), "LITELLM_MAX_STREAMING_DURATION_SECONDS",
             10.0,
         ):
             with pytest.raises(litellm.Timeout, match="max streaming duration"):

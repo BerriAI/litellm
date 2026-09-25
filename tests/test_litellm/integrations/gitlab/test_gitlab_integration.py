@@ -1,12 +1,7 @@
-import os
-import sys
 
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from unittest.mock import MagicMock, patch
 from litellm.integrations.gitlab.gitlab_prompt_manager import GitLabPromptManager
@@ -92,7 +87,7 @@ def test_gitlab_prompt_manager_error_handling_load(mock_client_class):
     with pytest.raises(
         Exception, match="Failed to load prompt 'gitlab::oops' from GitLab"
     ):
-        GitLabPromptManager(config, prompt_id="oops").prompt_manager
+        _ = GitLabPromptManager(config, prompt_id="oops").prompt_manager
 
 
 def test_gitlab_prompt_manager_config_validation_via_client_ctor():
@@ -105,7 +100,7 @@ def test_gitlab_prompt_manager_config_validation_via_client_ctor():
         side_effect=ValueError("project and access_token are required"),
     ):
         with pytest.raises(ValueError, match="project and access_token are required"):
-            GitLabPromptManager({}).prompt_manager
+            _ = GitLabPromptManager({}).prompt_manager
 
 
 # -----------------------------

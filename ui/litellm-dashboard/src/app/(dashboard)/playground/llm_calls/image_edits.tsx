@@ -1,6 +1,7 @@
 import openai from "openai";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import { toast } from "@/lib/toast";
 
 export async function makeOpenAIImageEditsRequest(
   imageFiles: File | File[],
@@ -11,20 +12,20 @@ export async function makeOpenAIImageEditsRequest(
   tags?: string[],
   signal?: AbortSignal,
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
     console.log = function () {};
   }
-  console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
 
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : undefined,
+    defaultHeaders: buildPlaygroundHeaders(tags, customHeaders),
   });
 
   try {
@@ -37,7 +38,6 @@ export async function makeOpenAIImageEditsRequest(
 
     for (let i = 0; i < imagesToProcess.length; i++) {
       const image = imagesToProcess[i];
-      console.log(`Processing image ${i + 1} of ${imagesToProcess.length}`);
 
       const response = await client.images.edit(
         {
@@ -47,8 +47,6 @@ export async function makeOpenAIImageEditsRequest(
         },
         { signal },
       );
-
-      console.log(`Response for image ${i + 1}:`, response.data);
 
       if (response.data && response.data[0]) {
         // Handle either URL or base64 data from response
@@ -67,13 +65,12 @@ export async function makeOpenAIImageEditsRequest(
     }
 
     if (results.length > 1) {
-      NotificationManager.success(`Successfully processed ${results.length} images`);
+      toast.success(`Successfully processed ${results.length} images`);
     }
   } catch (error: any) {
     console.error("Error making image edit request:", error);
 
     if (signal?.aborted) {
-      console.log("Image edits request was cancelled");
     } else {
       let errorMessage = "Failed to edit image(s)";
 
@@ -83,7 +80,7 @@ export async function makeOpenAIImageEditsRequest(
         errorMessage = error.message;
       }
 
-      NotificationManager.fromBackend(`Image edit failed: ${errorMessage}`);
+      toast.fromError(`Image edit failed: ${errorMessage}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

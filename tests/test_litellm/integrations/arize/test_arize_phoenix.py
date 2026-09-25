@@ -37,8 +37,8 @@ class TestArizePhoenixConfig(unittest.TestCase):
         # Call the function to get the configuration
         config = ArizePhoenixLogger.get_arize_phoenix_config()
 
-        # Verify the configuration - now uses standard Authorization Bearer format
-        self.assertEqual(config.otlp_auth_headers, "Authorization=Bearer test_api_key")
+        # gRPC metadata keys must be lowercase, so the auth header key is lowercased
+        self.assertEqual(config.otlp_auth_headers, "authorization=Bearer test_api_key")
         self.assertEqual(config.endpoint, "grpc://test.endpoint")
         self.assertEqual(config.protocol, "otlp_grpc")
 
@@ -136,7 +136,7 @@ class TestArizePhoenixConfig(unittest.TestCase):
                 "PHOENIX_COLLECTOR_ENDPOINT": "grpc://localhost:6006",
                 "PHOENIX_API_KEY": "test_api_key",
             },
-            "Authorization=Bearer test_api_key",
+            "authorization=Bearer test_api_key",
             "grpc://localhost:6006",
             "otlp_grpc",
             id="explicit grpc endpoint with grpc:// prefix",
@@ -213,6 +213,40 @@ def test_get_arize_phoenix_config_expection_on_missing_api_key(monkeypatch, env_
         ValueError, match="PHOENIX_API_KEY must be set when using Phoenix Cloud"
     ):
         ArizePhoenixLogger.get_arize_phoenix_config()
+
+
+@pytest.mark.parametrize(
+    "collector_endpoint, expected_key",
+    [
+        pytest.param("grpc://localhost:6006", "authorization", id="grpc prefix"),
+        pytest.param("http://localhost:4317", "authorization", id="grpc port 4317"),
+        pytest.param("http://localhost:6006", "Authorization", id="http"),
+    ],
+)
+def test_get_arize_phoenix_config_auth_header_key_casing(
+    monkeypatch, collector_endpoint, expected_key
+):
+    """Regression for #34882: gRPC metadata keys must be lowercase.
+
+    HTTP headers are case-insensitive, but the OTLP/gRPC exporter rejects an
+    uppercase ``Authorization`` metadata key, so span export silently fails.
+    """
+    for key in [
+        "PHOENIX_API_KEY",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_COLLECTOR_HTTP_ENDPOINT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("PHOENIX_API_KEY", "test_api_key")
+    monkeypatch.setenv("PHOENIX_COLLECTOR_ENDPOINT", collector_endpoint)
+
+    config = ArizePhoenixLogger.get_arize_phoenix_config()
+
+    assert config.otlp_auth_headers == f"{expected_key}=Bearer test_api_key"
+    header_key = config.otlp_auth_headers.split("=", 1)[0]
+    if config.protocol == "otlp_grpc":
+        assert header_key == header_key.lower()
 
 
 # ---------------------------------------------------------------------------

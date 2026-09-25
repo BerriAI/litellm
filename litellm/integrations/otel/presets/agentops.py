@@ -9,9 +9,12 @@ this preset registers a custom exporter (``kind="agentops"``) that mints the JWT
 worker thread, off any event loop — and caches it for the process lifetime.
 """
 
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Final
 
 import httpx
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,26 +26,23 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
-_AGENTOPS_ENDPOINT = "https://otlp.agentops.cloud/v1/traces"
-_AGENTOPS_AUTH_ENDPOINT = "https://api.agentops.ai/v3/auth/token"
-_AGENTOPS_EXPORTER_KIND = "agentops"
+_AGENTOPS_ENDPOINT: Final = "https://otlp.agentops.ai/v1/traces"
+_AGENTOPS_AUTH_ENDPOINT: Final = "https://api.agentops.ai/v3/auth/token"
+_AGENTOPS_EXPORTER_KIND: Final = "agentops"
 
 
 class _AgentOpsSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     api_key: str | None = Field(default=None, validation_alias="AGENTOPS_API_KEY")
-    service_name: str = Field(
-        default="agentops", validation_alias="AGENTOPS_SERVICE_NAME"
-    )
-    environment: str | None = Field(
-        default=None, validation_alias="AGENTOPS_ENVIRONMENT"
-    )
+    service_name: str = Field(default="agentops", validation_alias="AGENTOPS_SERVICE_NAME")
+    environment: str | None = Field(default=None, validation_alias="AGENTOPS_ENVIRONMENT")
 
 
 def agentops_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     """Build the AgentOps config without any network I/O.
 
@@ -51,8 +51,8 @@ def agentops_preset(
     resource attribute — it is encoded in the JWT, which AgentOps uses to route
     the trace to the right project.
     """
-    settings = _AgentOpsSettings()
-    base = config_overrides or OpenTelemetryV2Config()
+    settings: Final = _AgentOpsSettings()
+    base: Final = config_overrides or OpenTelemetryV2Config()
     return base.model_copy(
         update={
             "exporters": [
@@ -60,9 +60,7 @@ def agentops_preset(
                 ExporterSpec(
                     kind=_AGENTOPS_EXPORTER_KIND,
                     endpoint=_AGENTOPS_ENDPOINT,
-                    options=(
-                        {"api_key": settings.api_key} if settings.api_key else None
-                    ),
+                    options=({"api_key": settings.api_key} if settings.api_key else None),
                     owner=ExporterOwner.AGENTOPS,
                 ),
             ],
@@ -70,17 +68,13 @@ def agentops_preset(
                 **base.resource_attributes,
                 "service.name": settings.service_name,
                 "telemetry.sdk.name": "agentops",
-                **(
-                    {"deployment.environment": settings.environment}
-                    if settings.environment
-                    else {}
-                ),
+                **({"deployment.environment": settings.environment} if settings.environment else {}),
             },
         }
     )
 
 
-def _build_agentops_exporter(spec: ExporterSpec) -> Any:
+def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
@@ -106,7 +100,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
             if not self._agentops_api_key:
                 return
             try:
-                token = _fetch_agentops_jwt(self._agentops_api_key).get("token")
+                token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
                 if token:
                     # ``_session`` is the requests.Session the base exporter
                     # POSTs through; updating its Authorization header is how the
@@ -115,14 +109,12 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 
-        def export(self, spans: Any) -> Any:
+        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
             self._ensure_authenticated()
             return super().export(spans)
 
-    options = spec.options or {}
-    return _LazyAuthAgentOpsExporter(
-        endpoint=spec.endpoint, api_key=options.get("api_key")
-    )
+    options: Final = spec.options or {}
+    return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
 def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:
@@ -131,7 +123,7 @@ def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:
     # every caller, so closing it here would break concurrent/subsequent
     # requests. This one-shot auth call gets its own client to close.
     with httpx.Client(timeout=10) as client:
-        response = client.post(
+        response: Final = client.post(
             url=_AGENTOPS_AUTH_ENDPOINT,
             headers={"Content-Type": "application/json", "Connection": "keep-alive"},
             json={"api_key": api_key},
