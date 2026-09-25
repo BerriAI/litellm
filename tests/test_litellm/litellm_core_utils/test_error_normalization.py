@@ -1,3 +1,5 @@
+import time
+
 import httpx
 import pytest
 
@@ -163,6 +165,18 @@ def test_variants_of_one_failure_share_a_normalized_error(messages: tuple[Except
     assert normalized == {expected}
 
 
+def test_normalize_error_passthrough_prefix_wins_over_upstream_body_text() -> None:
+    from fastapi import HTTPException
+
+    for detail in (
+        'Upstream passthrough request failed with status 400: {"error": {"message": "no deployments available for this model"}}',
+        'Upstream passthrough request failed with status 400: {"error": {"message": "max budget reached"}}',
+    ):
+        exc = HTTPException(status_code=400, detail=detail)
+        message = f"400: {detail}"
+        assert normalize_error(exc, "400", message) == "500_UPSTREAM_PASSTHROUGH", message
+
+
 def test_router_no_healthy_deployment_wording_clusters_as_no_healthy_deployments() -> None:
     for message in (RouterErrors.no_healthy_deployments.value, "No healthy deployments found."):
         exc = litellm.BadRequestError(message, llm_provider="openai", model="gpt-4o")
@@ -229,3 +243,36 @@ def test_normalized_error_never_embeds_dynamic_parts() -> None:
     info = StandardLoggingPayloadSetup.get_error_information(exc)
     assert info["error_message"] == "No team has access to anthropic.claude-sonnet-4-5"
     assert "claude" not in (info["normalized_error"] or "")
+
+
+def test_repeated_exceeded_in_a_288kb_message_classifies_in_linear_time() -> None:
+    model = ("exceeded " * 32_000)[:288_000]
+    message = (
+        f"/chat/completions: Invalid model name passed in model={model}. Call `/v1/models` to view available models"
+    )
+    exc = litellm.BadRequestError(message=message, model="unknown-model", llm_provider="openai")
+    started = time.perf_counter()
+    code = normalize_error(exc, "400", message)
+    elapsed = time.perf_counter() - started
+    assert code == "400_INVALID_REQUEST", code
+    assert elapsed < 1.0, f"normalize_error took {elapsed:.2f}s on a 288 KB message"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ExceededBudget: User=abc over budget. Spend=12.5, Budget=10.0",
+        "Exceeded budget for provider openai: 105.2 >= 100.0",
+        "LiteLLM Team: team-1, exceeded budget for model=gpt-4o-mini",
+        "ExceededBudget: Key over 1d budget. Spend=3.0, Budget=2.0",
+        "Budget has been exceeded! Key=sk-... Current cost: 11.0, Max budget: 10.0",
+        "EXCEEDED " + "x" * 65 + " BuDgEt",
+    ],
+)
+def test_real_budget_wordings_still_cluster_as_budget_exceeded(message: str) -> None:
+    assert normalize_error(Exception(message), "400", message) == "429_BUDGET_EXCEEDED"
+
+
+@pytest.mark.parametrize("message", ["budget then exceeded", "exceeded the limit\nbudget unaffected", "exceededbudge"])
+def test_exceeded_without_a_following_budget_on_the_same_line_is_not_budget(message: str) -> None:
+    assert normalize_error(Exception(message), "400", message) == "400_INVALID_REQUEST"

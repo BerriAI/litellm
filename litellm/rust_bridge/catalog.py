@@ -18,6 +18,7 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 
 class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
+    EMBEDDINGS = "embeddings"
     MESSAGES = "messages"
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
@@ -105,9 +106,12 @@ Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
     LoggerRule(Rollout.RUST_OPT_IN),
-    RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
-    RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
+    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, providers=frozenset({"anthropic"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),

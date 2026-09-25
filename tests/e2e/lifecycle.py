@@ -54,9 +54,7 @@ class ResourceManager:
 
     client: ResourceClient
     strict_cleanup: bool = False
-    _cleanups: List[Callable[[], object]] = field(
-        default_factory=list
-    )  # mutable-ok: append-only teardown registry
+    _cleanups: List[Callable[[], object]] = field(default_factory=list)
 
     def init(self) -> None:
         """No global setup needed today; present for lifecycle symmetry."""
@@ -85,8 +83,7 @@ class ResourceManager:
 
     def teardown(self) -> None:
         failures: Final = tuple(
-            failure for cleanup in reversed(self._cleanups)
-            if (failure := _run_cleanup(cleanup)) is not None
+            failure for cleanup in reversed(self._cleanups) if (failure := _run_cleanup(cleanup)) is not None
         )
         if failures and self.strict_cleanup:
             raise ExceptionGroup("Resource cleanup failed", failures)
