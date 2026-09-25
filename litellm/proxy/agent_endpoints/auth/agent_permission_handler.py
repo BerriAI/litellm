@@ -170,13 +170,16 @@ class AgentRequestHandler:
             if target is not None and target.identity_managed:
                 if (
                     not target.enabled
+                    or not target.directory_active
+                    or target.directory_access_group_ids == ()
                     or target.identity is None
                     or not target.identity.active
                     or user_api_key_auth is None
                 ):
                     return False
+                fresh_auth: Final = user_api_key_auth.model_copy(update={"requires_fresh_policy": True})
                 explicit: Final = await _granted_agent_ids(
-                    user_api_key_auth,
+                    fresh_auth,
                     _strict_agent_access,
                     build_effective_auth_contexts,
                 )
@@ -281,7 +284,11 @@ class AgentRequestHandler:
                 else ()
             )
             unified_agents: Final = (
-                tuple(await AgentRequestHandler._get_unified_access_group_agents(list(key_access_group_ids)))
+                tuple(
+                    await AgentRequestHandler._get_unified_access_group_agents(
+                        list(key_access_group_ids), check_db_only=strict
+                    )
+                )
                 if key_access_group_ids
                 else ()
             )
@@ -332,6 +339,7 @@ class AgentRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=strict,
             )
 
             if team_obj is None:
@@ -355,7 +363,11 @@ class AgentRequestHandler:
                 else ()
             )
             unified_agents: Final = (
-                tuple(await AgentRequestHandler._get_unified_access_group_agents(list(team_access_group_ids)))
+                tuple(
+                    await AgentRequestHandler._get_unified_access_group_agents(
+                        list(team_access_group_ids), check_db_only=strict
+                    )
+                )
                 if team_access_group_ids
                 else ()
             )
@@ -400,13 +412,15 @@ class AgentRequestHandler:
         return {agent.agent_id for agent in agents}
 
     @staticmethod
-    async def _get_unified_access_group_agents(access_group_ids: list[str]) -> list[str]:
+    async def _get_unified_access_group_agents(
+        access_group_ids: list[str], *, check_db_only: bool = False
+    ) -> list[str]:
         """
         Resolve unified access group ids to agent IDs.
         """
         from litellm.proxy.auth.auth_checks import _get_agent_ids_from_access_groups
 
-        return await _get_agent_ids_from_access_groups(access_group_ids=access_group_ids)
+        return await _get_agent_ids_from_access_groups(access_group_ids=access_group_ids, check_db_only=check_db_only)
 
     @staticmethod
     async def _get_agents_from_access_groups(
@@ -627,7 +641,7 @@ async def verified_human_agent_grants(user_id: str | None) -> frozenset[str]:
 
     if user_id is None:
         return frozenset()
-    human: Final = await MCPRequestHandler.reload_admitted_user(user_id)
+    human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
     sources: Final = await MCPRequestHandler._admitted_subject_sources(human)
     human_access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
     return frozenset().union(*(_granted_ids(access) for access in human_access))

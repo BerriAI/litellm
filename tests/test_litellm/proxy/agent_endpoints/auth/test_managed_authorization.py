@@ -75,12 +75,14 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
     auth: Final = UserAPIKeyAuth.model_validate(
         {
             "managed_agent_context": context,
+            "requires_fresh_policy": True,
             "managed_agent_policy": agent(),
             "billing_agent_policy": agent(),
             "invoked_agent_id": "forged-target",
             "agent_invocation_cost": 0.0,
         }
     )
+    assert auth.requires_fresh_policy is False
     assert auth.managed_agent_context is None
     assert auth.managed_agent_policy is None
     assert auth.billing_agent_policy is None
@@ -277,3 +279,40 @@ def test_execution_mode_must_match_verified_token_mode() -> None:
     failure: Final = actor_admission_failure(agent(execution_mode="delegated"), context)
     assert isinstance(failure, AgentIdentityFailure)
     assert "execution mode" in failure.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state,status", [("missing", 403), ("outage", 503), ("denied", 403), ("invalid-fee", 503)])
+async def test_invocation_cannot_bypass_missing_policy_permission_or_invalid_price(
+    monkeypatch: pytest.MonkeyPatch, state: str, status: int
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+
+    registered: Final = agent(litellm_params={"cost_per_query": -1 if state == "invalid-fee" else 0.25})
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(registered)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=None if state == "missing" else registered,
+        side_effect=RuntimeError("unavailable") if state == "outage" else None,
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=[] if state == "denied" else ["agent"])
+    auth: Final = UserAPIKeyAuth(user_id="human", object_permission=permission)
+    with pytest.raises(HTTPException) as failure:
+        await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database))
+    assert failure.value.status_code == status
+    assert auth.agent_invocation_cost is None
+
+
+def test_native_directory_agent_cannot_authenticate_with_a_virtual_key() -> None:
+    policy: Final = agent(
+        identity=BINDING.model_copy(update={"provisioning_source_id": "source"}), execution_mode="autonomous"
+    )
+    failure: Final = actor_admission_failure(policy, None)
+    assert isinstance(failure, AgentIdentityFailure)
+    assert "require their Entra token" in failure.message

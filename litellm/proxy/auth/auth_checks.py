@@ -1076,11 +1076,12 @@ async def common_checks(
         if not isinstance(managed_models, (list, tuple)) or not managed_models:
             raise HTTPException(403, "This agent has no model grants")
         _can_object_call_model(
-            model=_model,
+            model=_resolve_team_alias(_model, valid_token.team_model_aliases, valid_token.team_id, llm_router),
             llm_router=llm_router,
             models=list(managed_models),
             team_id=valid_token.team_id,
             object_type="agent",
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
         )
 
     if valid_token is not None:
@@ -2671,7 +2672,7 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await _user_table(UserRepository(prisma_client)).find_unique(
+            response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
 
@@ -2709,7 +2710,7 @@ async def get_user_object(
                         budget_duration=new_user_params["budget_duration"]
                     )
 
-                response = await _user_table(UserRepository(prisma_client)).create(
+                response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).create(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
@@ -3282,6 +3283,14 @@ async def get_team_object(
 
     # else, check db
     try:
+        if check_db_only:
+            row: Final = await _team_table(TeamRepository(prisma_client, use_writer=True)).find_unique(
+                where={"team_id": team_id}, include=_TEAM_GRANT_RELATIONS
+            )
+            if row is None:
+                raise TeamNotFoundError(team_id=team_id)
+            return LiteLLM_TeamTableCachedObj.model_validate(row.dict())
+
         return await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
             prisma_client=prisma_client,
@@ -3949,6 +3958,7 @@ async def get_object_permission(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
 ) -> LiteLLM_ObjectPermissionTable | None:
     """
     - Check if object permission id in proxy ObjectPermissionTable
@@ -3960,9 +3970,13 @@ async def get_object_permission(
 
     # check if in cache
     key: Final = object_permission_cache_key(object_permission_id)
-    deserialized_perm: Final = await user_api_key_cache.async_get_cache(
-        key=key,
-        model_type=LiteLLM_ObjectPermissionTable,
+    deserialized_perm: Final = (
+        None
+        if check_db_only
+        else await user_api_key_cache.async_get_cache(
+            key=key,
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
     )
     if deserialized_perm is not None:
         return deserialized_perm
@@ -3970,7 +3984,7 @@ async def get_object_permission(
     # else, check db
     try:
         response: Final = await _dictable_table(
-            ObjectPermissionRepository(prisma_client), "object_permission"
+            ObjectPermissionRepository(prisma_client, use_writer=check_db_only), "object_permission"
         ).find_unique(where={"object_permission_id": object_permission_id})
 
         if response is None:
@@ -4195,6 +4209,7 @@ async def _get_resources_from_access_groups(
     prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
 ) -> list[str]:
     """
     Fetch access groups by their IDs (from cache or DB) and collect
@@ -4237,6 +4252,7 @@ async def _get_resources_from_access_groups(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=check_db_only,
             )
             resources.extend(getattr(ag, resource_field, []))
         except Exception:
@@ -4272,6 +4288,7 @@ async def _get_mcp_server_ids_from_access_groups(
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
 ) -> list[str]:
     """
     Collect MCP server IDs from unified access groups.
@@ -4283,6 +4300,7 @@ async def _get_mcp_server_ids_from_access_groups(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
     )
 
 
@@ -4291,6 +4309,7 @@ async def _get_agent_ids_from_access_groups(
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
 ) -> list[str]:
     """
     Collect agent IDs from unified access groups.
@@ -4302,6 +4321,7 @@ async def _get_agent_ids_from_access_groups(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
     )
 
 

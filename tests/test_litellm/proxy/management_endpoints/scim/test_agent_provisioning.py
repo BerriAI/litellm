@@ -415,3 +415,332 @@ async def test_unsupported_filter_is_rejected_before_database_query(filter_value
         await service.list("Users", 1, 10, filter_value)
     assert failure.value.status_code == 400
     tx.litellm_scimresource.find_many.assert_not_awaited()
+
+
+def group_rows(native):
+    from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMUser
+
+    human: Final = native.model_copy(
+        update={
+            "id": "human-scim",
+            "local_id": "local-human",
+            "external_id": "external-human",
+            "document": SCIMUser(schemas=[], userName="human@example.com").model_dump(),
+        }
+    )
+    document: Final = SCIMGroup(schemas=[], externalId="directory-group", displayName="Mixed")
+    group: Final = native.model_copy(
+        update={
+            "id": "group-scim",
+            "kind": "Groups",
+            "local_id": None,
+            "external_id": "directory-group",
+            "document": document.model_dump(),
+            "member_ids": [native.id, human.id],
+        }
+    )
+    return human, group, document
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_human", [True, False])
+async def test_group_create_keeps_agents_out_of_human_teams(
+    include_human: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, native = provisioning_fixture()
+    human, group, document = group_rows(native)
+    rows: Final = [native, human] if include_human else [native]
+    group: Final = group.model_copy(update={"member_ids": [row.id for row in rows]})
+    tx.litellm_scimresource.find_unique.return_value = None
+    tx.litellm_scimresource.find_many.return_value = rows
+    tx.litellm_scimresource.create = AsyncMock(return_value=group)
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    create_team: Final = AsyncMock(return_value=document.model_copy(update={"id": "local-team"}))
+    monkeypatch.setattr(scim_v2, "create_group", create_team)
+    result: Final = await service.create_group(
+        document.model_copy(update={"members": [SCIMMember(value=row.id) for row in rows]})
+    )
+    assert result.id == group.id
+    assert {member.value for member in result.members} == set(group.member_ids)
+    if include_human:
+        create_team.assert_awaited_once()
+        assert create_team.call_args.kwargs["group"].members == [SCIMMember(value=human.local_id)]
+        assert tx.litellm_scimresource.update.call_args.kwargs == {
+            "where": {"id": group.id},
+            "data": {"local_id": "local-team"},
+        }
+    else:
+        create_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_create_rejects_members_missing_from_its_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, native = provisioning_fixture()
+    _, _, document = group_rows(native)
+    tx.litellm_scimresource.find_unique.return_value = None
+    tx.litellm_scimresource.create = AsyncMock()
+    create_team: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "create_group", create_team)
+    with pytest.raises(HTTPException) as failure:
+        await service.create_group(document.model_copy(update={"members": [SCIMMember(value="foreign-member")]}))
+    assert failure.value.status_code == 400
+    tx.litellm_scimresource.create.assert_not_awaited()
+    create_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_replay_reconciles_removed_humans_but_preserves_agent_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, native = provisioning_fixture()
+    _, group, document = group_rows(native)
+    old: Final = group.model_copy(update={"local_id": "local-team"})
+    updated: Final = old.model_copy(update={"member_ids": [native.id]})
+    tx.litellm_scimresource.find_unique.side_effect = [old, old, updated]
+    tx.litellm_scimresource.find_many.return_value = [native]
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(team_id="local-team"))
+    update_team: Final = AsyncMock(return_value=document.model_copy(update={"id": "local-team"}))
+    monkeypatch.setattr(scim_v2, "update_group", update_team)
+    result: Final = await service.create_group(document.model_copy(update={"members": [SCIMMember(value=native.id)]}))
+    assert result.id == old.id
+    assert result.members == [SCIMMember(value=native.id)]
+    assert tx.litellm_scimresource.update_many.call_args.kwargs["data"]["member_ids"] == [native.id]
+    update_team.assert_awaited_once()
+    assert update_team.call_args.kwargs["group_id"] == "local-team"
+    assert update_team.call_args.kwargs["group"].members == []
+
+
+@pytest.mark.asyncio
+async def test_group_external_id_is_immutable() -> None:
+    service, tx, native = provisioning_fixture()
+    _, group, document = group_rows(native)
+    tx.litellm_scimresource.find_unique.return_value = group
+    with pytest.raises(HTTPException) as failure:
+        await service.update_group(group.id, document.model_copy(update={"externalId": "other-directory-group"}))
+    assert failure.value.status_code == 409
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["create", "update"])
+async def test_native_replay_accepts_equivalent_uppercase_object_id(method: str) -> None:
+    service, tx, row = provisioning_fixture()
+    subject: Final = "abcdef01-abcd-4abc-8abc-abcdef012345"
+    user: Final = agent_user().model_copy(update={"externalId": subject.upper()})
+    stored: Final = row.model_copy(
+        update={"external_id": subject, "document": user.model_dump(by_alias=True, mode="json")}
+    )
+    tx.litellm_scimresource.find_unique.return_value = stored
+    result: Final = await service.create_user(user) if method == "create" else await service.update_user(row.id, user)
+    assert result.id == row.id
+    assert result.externalId == subject.upper()
+    tx.litellm_scimresource.update_many.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "operation,expected",
+    [
+        ({"op": "add", "path": "members", "value": [{"value": "human"}, {"value": "second"}]}, ["human", "second"]),
+        ({"op": "remove", "path": "members", "value": [{"value": "human"}]}, []),
+        ({"op": "remove", "path": "members"}, []),
+        ({"op": "replace", "path": "displayName", "value": "Renamed"}, ["human"]),
+    ],
+)
+def test_group_patch_add_remove_and_rename_keep_membership_consistent(
+    operation: dict[str, object], expected: list[str]
+) -> None:
+    group: Final = SCIMGroup(schemas=[], displayName="Original", members=[SCIMMember(value="human")])
+    result: Final = group_members_after_patch(group, SCIMPatchOp.model_validate({"Operations": [operation]}))
+    assert isinstance(result, SCIMGroup)
+    assert [member.value for member in result.members or []] == expected
+    assert result.displayName == ("Renamed" if operation["path"] == "displayName" else "Original")
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"op": "replace", "path": "externalId", "value": "foreign"},
+        {"op": "add", "path": "members", "value": [{"display": "missing-id"}]},
+    ],
+)
+def test_group_patch_failure_cannot_apply_subsequent_membership_changes(operation: dict[str, object]) -> None:
+    group: Final = SCIMGroup(schemas=[], displayName="Original", members=[SCIMMember(value="human")])
+    result: Final = group_members_after_patch(
+        group, SCIMPatchOp.model_validate({"Operations": [operation, {"op": "remove", "path": "members"}]})
+    )
+    assert isinstance(result, SCIMProvisioningFailure)
+    assert result.status == 400
+    assert group.members == [SCIMMember(value="human")]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"op": "remove"},
+        {"op": "replace", "value": "invalid"},
+        {"op": "remove", "path": "userName"},
+    ],
+)
+def test_invalid_agent_profile_patch_is_rejected(operation: dict[str, object]) -> None:
+    result: Final = apply_user_patch(agent_user(), SCIMPatchOp.model_validate({"Operations": [operation]}))
+    assert isinstance(result, SCIMProvisioningFailure)
+    assert result.status == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("external_id", [None, "invalid", PARENT])
+async def test_native_put_cannot_remove_or_change_subject(external_id: str | None) -> None:
+    service, tx, row = provisioning_fixture()
+    with pytest.raises(HTTPException) as failure:
+        await service.update_user(row.id, agent_user().model_copy(update={"externalId": external_id}))
+    assert failure.value.status_code == 409
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_patch_rejects_identity_mutation_without_writing() -> None:
+    service, tx, row = provisioning_fixture()
+    with pytest.raises(HTTPException) as failure:
+        await service.update_user(
+            row.id, SCIMPatchOp(Operations=[{"op": "replace", "path": "externalId", "value": PARENT}])
+        )
+    assert failure.value.status_code == 400
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_source_lookup_uses_writer_and_rejects_disabled_source(enabled: bool) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import source_for_auth
+
+    service, _, _ = provisioning_fixture()
+    service.client.writer_db.litellm_scimsource.find_unique = AsyncMock(
+        return_value=service.source.model_copy(update={"enabled": enabled})
+    )
+    if enabled:
+        result: Final = await source_for_auth(UserAPIKeyAuth(token="source-token-hash"), service.client)
+        assert result.source_id == service.source.source_id
+    else:
+        with pytest.raises(HTTPException) as failure:
+            await source_for_auth(UserAPIKeyAuth(token="source-token-hash"), service.client)
+        assert failure.value.status_code == 403
+    service.client.writer_db.litellm_scimsource.find_unique.assert_awaited_once_with(
+        where={"key_hash": "source-token-hash"}
+    )
+    assert await source_for_auth(None, service.client) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["put", "patch"])
+async def test_source_owned_human_cannot_be_reclassified_as_agent(operation: str) -> None:
+    service, tx, row = provisioning_fixture()
+    human: Final = SCIMUser(schemas=[], externalId=SUBJECT, userName="human@example.com")
+    tx.litellm_scimresource.find_unique.return_value = row.model_copy(
+        update={"document": human.model_dump(mode="json")}
+    )
+    incoming: Final = (
+        agent_user()
+        if operation == "put"
+        else SCIMPatchOp(
+            Operations=[{"op": "add", "path": SCIM_AGENT_USER_SCHEMA + ":identityParentId", "value": PARENT}]
+        )
+    )
+    with pytest.raises(HTTPException) as failure:
+        await service.update_user(row.id, incoming)
+    assert failure.value.status_code == 409
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deleted_native_subject_cannot_be_recreated_by_post_replay() -> None:
+    service, tx, row = provisioning_fixture()
+    tx.litellm_scimresource.find_unique.return_value = row.model_copy(update={"deleted": True})
+    with pytest.raises(HTTPException) as failure:
+        await service.create_user(agent_user())
+    assert failure.value.status_code == 409
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["foreign", "missing", "wrong-kind"])
+async def test_scoped_delete_rejects_unknown_or_foreign_resources(state: str) -> None:
+    service, tx, row = provisioning_fixture()
+    changed: Final = {"source_id": "other"} if state == "foreign" else {"kind": "Groups"}
+    tx.litellm_scimresource.find_unique.return_value = None if state == "missing" else row.model_copy(update=changed)
+    with pytest.raises(HTTPException) as failure:
+        await service.delete("Users", row.id)
+    assert failure.value.status_code == 404
+    tx.litellm_scimresource.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [("name.givenName", "New"), ("name.familyName", "Family"), ('emails[type eq "work"].value', "new@example.com")],
+)
+def test_native_profile_accepts_standard_entra_subattribute_updates(path: str, value: str) -> None:
+    user: Final = SCIMUser.model_validate(
+        {
+            **agent_user().model_dump(by_alias=True),
+            "name": {"givenName": "Old", "familyName": "Original"},
+            "emails": [{"type": "work", "value": "old@example.com"}, {"type": "home", "value": "home@example.com"}],
+        }
+    )
+    result: Final = apply_user_patch(user, SCIMPatchOp(Operations=[{"op": "replace", "path": path, "value": value}]))
+    assert isinstance(result, SCIMUser)
+    assert result.externalId == user.externalId
+    assert result.agent_user == user.agent_user
+    if path.startswith("name."):
+        assert getattr(result.name, path.split(".")[1]) == value
+        assert result.emails == user.emails
+    else:
+        assert result.emails[0].value == value
+        assert result.emails[1].value == "home@example.com"
+        assert result.name == user.name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create-replay", "put"])
+async def test_scoped_human_routes_preserve_reserved_identity_and_use_human_provisioner(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, row = provisioning_fixture()
+    human: Final = SCIMUser(schemas=[], userName="human@example.com", externalId=SUBJECT)
+    reserved: Final = row.model_copy(update={"document": human.model_dump(mode="json"), "local_id": "human"})
+    tx.litellm_scimresource.find_unique.return_value = reserved
+    tx.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="human"))
+    tx.litellm_agentstable.create = AsyncMock()
+    updated: Final = AsyncMock(return_value=human.model_copy(update={"id": "human"}))
+    monkeypatch.setattr(scim_v2, "update_user", updated)
+    result: Final = (
+        await service.create_user(human) if operation == "create-replay" else await service.update_user(row.id, human)
+    )
+    assert result.id == row.id
+    assert result.externalId == SUBJECT
+    assert result.agent_user is None
+    assert updated.call_args.kwargs["user_id"] == "human"
+    tx.litellm_agentstable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["missing-external-id", "deleted"])
+async def test_group_create_cannot_recreate_deleted_group_or_omit_directory_id(state: str) -> None:
+    service, tx, row = provisioning_fixture()
+    tx.litellm_scimresource.find_unique.return_value = row.model_copy(update={"kind": "Groups", "deleted": True})
+    with pytest.raises(HTTPException) as failure:
+        await service.create_group(
+            SCIMGroup(schemas=[], displayName="Group", externalId=None if state == "missing-external-id" else SUBJECT)
+        )
+    assert failure.value.status_code == (400 if state == "missing-external-id" else 409)
+    tx.litellm_scimresource.update_many.assert_not_awaited()

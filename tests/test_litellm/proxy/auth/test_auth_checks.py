@@ -1089,7 +1089,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
     monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
     db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
 
     result = await get_user_object(
         user_id=user_id,
@@ -1101,7 +1101,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
 
     assert result is not None
     assert result.user_id == user_id
-    mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
+    mock_prisma_client.writer_db.litellm_usertable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3056,7 +3056,7 @@ async def test_get_team_object_raises_404_when_not_found():
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -3079,6 +3079,7 @@ def _mock_prisma_for_team_lookup(find_unique):
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    mock_prisma_client.writer_db.litellm_teamtable.find_unique = find_unique
     return mock_prisma_client
 
 
@@ -9879,3 +9880,51 @@ async def test_authoritative_access_group_outage_does_not_use_cached_grants() ->
         await get_access_object("group", client, cache, check_db_only=True)
     assert failure.value.status_code == 404
     cache.async_get_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "models,key_aliases,team_aliases,allowed",
+    [
+        (["fast"], {}, {}, True),
+        ([], {}, {}, False),
+        (["other"], {}, {}, False),
+        (["target"], {"fast": "target"}, {}, True),
+        (["target"], {}, {"fast": "target"}, True),
+        (["fast"], {}, {"fast": "forbidden"}, False),
+    ],
+)
+async def test_managed_agent_model_policy_checks_dispatched_model(
+    models: list[str], key_aliases: dict[str, str], team_aliases: dict[str, str], allowed: bool
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.types.agents import AgentResponse
+
+    agent: Final = AgentResponse(
+        agent_id="managed", agent_name="Managed", agent_card_params={}, object_permission={"models": models}
+    )
+    auth: Final = UserAPIKeyAuth(
+        token="test-token", team_id="team", aliases=key_aliases, team_model_aliases=team_aliases
+    )
+    auth.managed_agent_policy = agent
+    checks: Final = common_checks(
+        request_body={"model": "fast", "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=auth,
+        request=MagicMock(spec=Request),
+    )
+    if allowed:
+        assert await checks is True
+    else:
+        with pytest.raises((HTTPException, ModelAccessDeniedProxyException)) as failure:
+            await checks
+        assert str(getattr(failure.value, "status_code", getattr(failure.value, "code", None))) == "403"

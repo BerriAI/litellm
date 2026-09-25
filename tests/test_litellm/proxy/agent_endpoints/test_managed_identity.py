@@ -220,22 +220,132 @@ def test_native_subject_binding_rejects_other_subjects_parents_and_scopes(overri
 def test_directory_owned_identity_cannot_be_unbound_or_reassigned(change: dict[str, str] | None) -> None:
     native_binding: Final = BINDING.model_copy(update={"provisioning_source_id": "source"})
     existing: Final = AgentResponse(
-        agent_id="agent-one", agent_name="Native", agent_card_params={}, identity=native_binding,
-        identity_managed=True, execution_mode="autonomous",
+        agent_id="agent-one",
+        agent_name="Native",
+        agent_card_params={},
+        identity=native_binding,
+        identity_managed=True,
+        execution_mode="autonomous",
     )
-    identity: Final = None if change is None else {
-        "provider": "microsoft_entra", "tenant_id": TENANT, "client_id": CLIENT,
-        "provisioning_source_id": "source", **change,
-    }
+    identity: Final = (
+        None
+        if change is None
+        else {
+            "provider": "microsoft_entra",
+            "tenant_id": TENANT,
+            "client_id": CLIENT,
+            "provisioning_source_id": "source",
+            **change,
+        }
+    )
     result: Final = managed_write_fields({"identity": identity}, existing, "admin")
     assert isinstance(result, AgentIdentityFailure)
     assert "directory-owned" in result.message
 
 
 def test_manual_registration_cannot_claim_directory_ownership() -> None:
-    result: Final = managed_write_fields({"identity": {
-        "provider": "microsoft_entra", "tenant_id": TENANT, "client_id": CLIENT,
-        "provisioning_source_id": "source",
-    }}, None, "admin")
+    result: Final = managed_write_fields(
+        {
+            "identity": {
+                "provider": "microsoft_entra",
+                "tenant_id": TENANT,
+                "client_id": CLIENT,
+                "provisioning_source_id": "source",
+            }
+        },
+        None,
+        "admin",
+    )
     assert isinstance(result, AgentIdentityFailure)
     assert "Only SCIM" in result.message
+
+
+def test_unchanged_binding_preserves_revision_and_authentication_evidence() -> None:
+    configuration: Final = BINDING.model_dump(
+        exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
+    )
+    assert managed_write_fields({"identity": configuration}, managed_agent(), "admin") == {}
+
+
+@pytest.mark.parametrize("identity", [None, BINDING.model_copy(update={"active": False})])
+def test_enabling_unbound_or_inactive_identity_requires_rebinding(identity: AgentIdentityBinding | None) -> None:
+    agent: Final = managed_agent().model_copy(update={"identity": identity, "enabled": False})
+    result: Final = managed_write_fields({"enabled": True}, agent, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Bind an identity" in result.message
+
+
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+def test_native_directory_identity_cannot_switch_to_delegated_execution(mode: str) -> None:
+    agent: Final = managed_agent().model_copy(
+        update={"identity": BINDING.model_copy(update={"provisioning_source_id": "source"})}
+    )
+    result: Final = managed_write_fields({"execution_mode": mode}, agent, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "autonomous mode" in result.message
+
+
+def test_delegated_identity_requires_a_scope() -> None:
+    agent: Final = managed_agent().model_copy(update={"identity": BINDING.model_copy(update={"required_scopes": ()})})
+    result: Final = managed_write_fields({"execution_mode": "delegated"}, agent, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "delegated scope" in result.message
+
+
+@pytest.mark.parametrize("budget", [{"max_budget": -1}, {"max_budget": float("inf")}])
+def test_invalid_budget_changes_are_rejected(budget: dict[str, object]) -> None:
+    result: Final = managed_write_fields({"budget": budget}, managed_agent(), "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Invalid agent identity or budget configuration" in result.message
+
+
+def test_budget_updates_preserve_current_window_until_duration_changes() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.types.proxy.agent_identity import AgentBudgetState
+
+    reset: Final = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    agent: Final = managed_agent().model_copy(
+        update={
+            "budget_id": "budget",
+            "litellm_budget_table": AgentBudgetState(
+                budget_id="budget", max_budget=1, budget_duration="1d", budget_reset_at=reset
+            ),
+        }
+    )
+    same: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1d"}}, agent, "admin")
+    assert not isinstance(same, AgentIdentityFailure)
+    assert same["litellm_budget_table"]["update"]["budget_reset_at"] == reset
+    assert same["litellm_budget_table"]["update"]["max_budget"] == 2
+    changed: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1h"}}, agent, "admin")
+    assert not isinstance(changed, AgentIdentityFailure)
+    assert changed["litellm_budget_table"]["update"]["budget_reset_at"] != reset
+    removed: Final = managed_write_fields({"budget": None}, agent, "admin")
+    assert removed == {"litellm_budget_table": {"disconnect": True}}
+    assert managed_write_fields({"budget": None}, managed_agent(), "admin") == {}
+
+
+def test_new_agent_budget_is_created_with_administrator_attribution() -> None:
+    result: Final = managed_write_fields({"budget": {"max_budget": 0}}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["litellm_budget_table"]["create"] == {
+        "max_budget": 0,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "created_by": "admin",
+        "updated_by": "admin",
+    }
+
+
+@pytest.mark.parametrize("roles", ["Agent.Invoke", [42], None])
+def test_malformed_application_roles_are_rejected(roles: object) -> None:
+    result: Final = classify_agent_subject(BINDING, claims(roles=roles), "autonomous")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Invalid application roles" in result.message
+
+
+def test_directory_binding_cannot_fall_back_to_an_application_token() -> None:
+    binding: Final = BINDING.model_copy(update={"provisioning_source_id": "source"})
+    result: Final = classify_agent_subject(binding, claims(), "autonomous")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "verified provisioned agent-user" in result.message

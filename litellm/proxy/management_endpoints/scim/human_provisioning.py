@@ -82,9 +82,11 @@ class SourceHumanProvisioner:
                     ]
                 }
             )
-            if len(matches) > 1:
-                raise HTTPException(409, "The username and email match different local users")
-            local_id: Final = matches[0].user_id if matches else user.userName
+            if matches:
+                raise HTTPException(
+                    409, "This local user already exists; automatic directory adoption is not permitted"
+                )
+            local_id: Final = user.userName
             scim_id: Final = str(uuid4())
             document: Final = user.model_copy(update={"id": scim_id})
             data: Final = LiteLLM_SCIMResourceCreateInput(

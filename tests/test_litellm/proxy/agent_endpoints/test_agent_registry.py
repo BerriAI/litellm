@@ -1398,3 +1398,58 @@ def test_load_agents_from_config_exposes_a_typed_kill_switch():
     (agent,) = registry.get_agent_list()
     assert agent.kill_switch is not None
     assert agent.kill_switch.model_dump() == _KILL_SWITCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "patch", "put"])
+async def test_agent_permissions_are_written_atomically_with_the_registration(operation: str) -> None:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    existing: Final = _stored_agent_row({"agent_id": "agent-123", "object_permission_id": "permissions"})
+    client.db.litellm_agentstable.find_unique = AsyncMock(return_value=existing)
+    client.db.litellm_agentstable.create = AsyncMock(return_value=existing)
+    client.db.litellm_agentstable.update = AsyncMock(return_value=existing)
+    client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=(
+            LiteLLM_ObjectPermissionTable(object_permission_id="permissions", models=["prior"], mcp_servers=["slack"])
+            if operation != "create"
+            else None
+        )
+    )
+    incoming: Final = {"agent_name": "Agent", "agent_card_params": {}, "object_permission": {"models": ["new"]}}
+    if operation == "create":
+        await registry.add_agent_to_db(incoming, client, created_by="admin")
+    else:
+        update: Final = registry.patch_agent_in_db if operation == "patch" else registry.update_agent_in_db
+        await update("agent-123", incoming, client, updated_by="admin")
+    write: Final = (
+        client.db.litellm_agentstable.create if operation == "create" else client.db.litellm_agentstable.update
+    )
+    permission: Final = write.call_args.kwargs["data"]["object_permission"][
+        "create" if operation == "create" else "update"
+    ]
+    assert permission["models"] == ["new"]
+    if operation != "create":
+        assert permission["mcp_servers"] == ["slack"]
+        assert permission["object_permission_id"] == "permissions"
+    client.db.litellm_objectpermissiontable.update.assert_not_called()
+    client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_invalid_identity_fails_before_registration_is_written() -> None:
+    from fastapi import HTTPException
+
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    client.db.litellm_agentstable.create = AsyncMock()
+    with pytest.raises(HTTPException) as failure:
+        await registry.add_agent_to_db(
+            {"agent_name": "Agent", "agent_card_params": {}, "identity": {"provider": "unknown"}},
+            client,
+            created_by="admin",
+        )
+    assert failure.value.status_code == 400
+    client.db.litellm_agentstable.create.assert_not_awaited()

@@ -112,3 +112,51 @@ async def test_access_groups_cap_agent_servers_without_granting_new_ones(
     assert tuple(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == expected
     if "slack" not in expected:
         assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["tools", "servers", "disabled", "outage"])
+async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="user-grant", mcp_servers=["slack"], mcp_tool_permissions={"slack": ["read", "write"]}
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="human", teams=[], organization_memberships=[], object_permission_id="user-grant"
+    )
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("human", user)
+    cache.set_cache(object_permission_cache_key("user-grant"), permission)
+    client: Final = MagicMock()
+    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    auth: Final = actor(("read", "write"), delegated=True)
+    assert set(await MCPRequestHandler.get_allowed_tools_for_server("slack", auth)) == {"read", "write"}
+    if change == "disabled":
+        client.writer_db.litellm_usertable.find_unique.return_value = user.model_copy(
+            update={"metadata": {"scim_active": False}}
+        )
+    elif change == "outage":
+        client.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("writer unavailable")
+    elif change == "servers":
+        client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission.model_copy(
+            update={"mcp_servers": [], "mcp_tool_permissions": {}}
+        )
+    else:
+        client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission.model_copy(
+            update={"mcp_tool_permissions": {"slack": ["read"]}}
+        )
+    if change in ("disabled", "outage"):
+        with pytest.raises(HTTPException):
+            await MCPRequestHandler.get_allowed_tools_for_server("slack", auth)
+    else:
+        assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (
+            ["read"] if change == "tools" else []
+        )
+    client.db.litellm_usertable.find_unique.assert_not_called()
+    client.db.litellm_objectpermissiontable.find_unique.assert_not_called()

@@ -31,6 +31,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMPatchOp,
     SCIMPatchOperation,
     SCIMUser,
+    SCIMUserName,
 )
 
 
@@ -71,8 +72,22 @@ def group_document(row: LiteLLM_SCIMResource) -> SCIMGroup:
     )
 
 
-def _user_changes(item: SCIMPatchOperation) -> dict[str, object] | SCIMProvisioningFailure:
-    allowed: Final = {"active": "active", "displayname": "displayName", "username": "userName", "name": "name"}
+async def remove_group_member(tx: Prisma, group: LiteLLM_SCIMResource, member_id: str) -> None:
+    where: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": group.id}
+    data: Final[LiteLLM_SCIMResourceUpdateInput] = {
+        "member_ids": [member for member in group.member_ids if member != member_id]
+    }
+    await tx.litellm_scimresource.update(where=where, data=data)
+
+
+def _user_changes(item: SCIMPatchOperation, current: SCIMUser) -> dict[str, object] | SCIMProvisioningFailure:
+    allowed: Final = {
+        "active": "active",
+        "displayname": "displayName",
+        "username": "userName",
+        "name": "name",
+        "emails": "emails",
+    }
     if item.path is None:
         value: Final = item.value
         if item.op == "remove" or not isinstance(value, dict):
@@ -81,6 +96,23 @@ def _user_changes(item: SCIMPatchOperation) -> dict[str, object] | SCIMProvision
         if any(key not in allowed.values() for key in changes):
             return SCIMProvisioningFailure(400, "Agent subject and parent identity are immutable")
         return changes
+    name_fields: Final = {"name." + name.lower(): name for name in SCIMUserName.model_fields}
+    name_field: Final = name_fields.get(item.path.lower())
+    if name_field is not None:
+        return {
+            "name": {
+                **(current.name.model_dump() if current.name else {}),
+                name_field: None if item.op == "remove" else item.value,
+            }
+        }
+    email_type: Final = re.fullmatch(r'emails\[type eq "([^"\r\n]+)"\]\.value', item.path, re.IGNORECASE)
+    if email_type is not None:
+        others: Final = tuple(email.model_dump() for email in current.emails or () if email.type != email_type[1])
+        selected: Final = next(
+            (email.model_dump() for email in current.emails or () if email.type == email_type[1]),
+            {"type": email_type[1]},
+        )
+        return {"emails": others if item.op == "remove" else ({**selected, "value": item.value}, *others)}
     key: Final = allowed.get(item.path.lower())
     if key is None:
         return SCIMProvisioningFailure(400, "This attribute is immutable or unsupported for an agent-user")
@@ -92,7 +124,7 @@ def _patch_user_operation(
 ) -> SCIMUser | SCIMProvisioningFailure:
     if isinstance(current, SCIMProvisioningFailure):
         return current
-    changes: Final = _user_changes(item)
+    changes: Final = _user_changes(item, current)
     if isinstance(changes, SCIMProvisioningFailure):
         return changes
     try:
@@ -271,7 +303,7 @@ class AgentProvisioningService:
                 )
                 if previous is not None:
                     if previous.deleted:
-                        raise HTTPException(409, "This subject was deleted; restore requires administrator approval")
+                        raise HTTPException(409, "This subject was deleted; automatic recreation is not permitted")
                     return await self._update_native(tx, previous, user)
                 registered: Final = await tx.litellm_agentidentity.find_unique(
                     where={
@@ -354,7 +386,11 @@ class AgentProvisioningService:
 
     async def _update_native(self, tx: Prisma, row: LiteLLM_SCIMResource, user: SCIMUser) -> SCIMUser:
         old: Final = user_document(row)
-        if user.agent_user != old.agent_user or user.externalId != row.external_id:
+        try:
+            subject_id: Final = str(UUID(user.externalId or ""))
+        except ValueError:
+            raise HTTPException(409, "Agent subject and parent identity are immutable") from None
+        if user.agent_user != old.agent_user or subject_id != row.external_id:
             raise HTTPException(409, "Agent subject and parent identity are immutable")
         if row.local_id is None or await tx.litellm_agentstable.find_unique(where={"agent_id": row.local_id}) is None:
             raise HTTPException(409, "The registered agent was deleted; automatic recreation is not permitted")
@@ -425,12 +461,7 @@ class AgentProvisioningService:
                 }
                 groups: Final = await tx.litellm_scimresource.find_many(where=memberships)
                 for group in groups:
-                    await tx.litellm_scimresource.update(
-                        where=LiteLLM_SCIMResourceWhereUniqueInput(id=group.id),
-                        data=LiteLLM_SCIMResourceUpdateInput(
-                            member_ids=[member for member in group.member_ids if member != row.id]
-                        ),
-                    )
+                    await remove_group_member(tx, group, row.id)
             await tx.litellm_scimresource.update(
                 where={"id": row.id}, data={"active": False, "deleted": True, "member_ids": []}
             )

@@ -631,3 +631,138 @@ class TestAgentRequestHandler:
                         assert await AgentRequestHandler.resolve_agent_access(
                             user_api_key_auth=mock_user_auth
                         ) == RestrictedAgentAccess(frozenset({agent.agent_id})), (key_grant, team_grant)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state,allowed",
+    [
+        ({}, True),
+        ({"enabled": False}, False),
+        ({"directory_active": False}, False),
+        ({"directory_access_group_ids": ()}, False),
+    ],
+)
+async def test_managed_invocation_requires_local_and_directory_admission(
+    monkeypatch: pytest.MonkeyPatch, state: dict[str, object], allowed: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    binding: Final = AgentIdentityBinding(
+        agent_id="target",
+        provider="microsoft_entra",
+        tenant_id="tenant",
+        client_id="client",
+        issuer="issuer",
+        revision="revision",
+    )
+    target: Final = AgentResponse(
+        agent_id="target", agent_name="Target", agent_card_params={}, identity=binding, identity_managed=True
+    ).model_copy(update=state)
+    client: Final = MagicMock()
+    client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="human-grant", agents=["target"])
+    auth: Final = UserAPIKeyAuth(user_id="human", object_permission=permission)
+    assert await AgentRequestHandler.is_agent_allowed("target", auth) is allowed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delegated", [True, False])
+async def test_managed_agent_invocation_grants_intersect_verified_user_grants(
+    monkeypatch: pytest.MonkeyPatch, delegated: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth import auth_checks
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+    database: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    own: Final = LiteLLM_ObjectPermissionTable(object_permission_id="own", agents=["shared", "agent-only"])
+    human_grants: Final = LiteLLM_ObjectPermissionTable(object_permission_id="human", agents=["shared", "human-only"])
+    human: Final = LiteLLM_UserTable(user_id="human", teams=[], object_permission=human_grants)
+    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(return_value=human))
+    auth: Final = UserAPIKeyAuth(agent_id="actor")
+    auth.managed_agent_policy = AgentResponse(
+        agent_id="actor", agent_name="Actor", agent_card_params={}, object_permission=own.model_dump()
+    )
+    auth.managed_agent_context = ManagedAgentContext(
+        agent_id="actor", mode="delegated" if delegated else "autonomous", user_id="human" if delegated else None
+    )
+    access: Final = await AgentRequestHandler.resolve_agent_access(auth)
+    assert access == RestrictedAgentAccess(frozenset({"shared"} if delegated else {"shared", "agent-only"}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", ["user", "team-member", "team-grant", "direct-grant", "access-group"])
+async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches(
+    monkeypatch: pytest.MonkeyPatch, revoked: str
+) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_TeamTable, LiteLLM_UserTable
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import verified_human_agent_grants
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+
+    direct: Final = revoked == "direct-grant"
+    grouped: Final = revoked == "access-group"
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["target"])
+    human: Final = LiteLLM_UserTable(
+        user_id="human",
+        teams=[] if direct else ["team"],
+        organization_memberships=[],
+        object_permission_id="grant" if direct else None,
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team",
+        models=[],
+        members_with_roles=[{"user_id": "human", "role": "user"}],
+        object_permission=None if grouped else permission,
+        access_group_ids=["group"] if grouped else [],
+    )
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="group", access_group_name="Group", access_agent_ids=["target"]
+    )
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("human", human)
+    cache.set_cache("team_id:team", team)
+    cache.set_cache(object_permission_cache_key("grant"), permission)
+    cache.set_cache("access_group_id:group", group)
+    client: Final = MagicMock()
+    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=human)
+    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    assert await verified_human_agent_grants("human") == frozenset({"target"})
+    client.writer_db.litellm_usertable.find_unique.return_value = (
+        human.model_copy(update={"teams": []}) if revoked == "user" else human
+    )
+    client.writer_db.litellm_teamtable.find_unique.return_value = (
+        team.model_copy(update={"members_with_roles": []})
+        if revoked == "team-member"
+        else team.model_copy(update={"object_permission": None})
+        if revoked == "team-grant"
+        else team
+    )
+    client.writer_db.litellm_objectpermissiontable.find_unique.return_value = (
+        permission.model_copy(update={"agents": []}) if direct else permission
+    )
+    client.writer_db.litellm_accessgrouptable.find_unique.return_value = (
+        group.model_copy(update={"access_agent_ids": []}) if grouped else group
+    )
+    assert await verified_human_agent_grants("human") == frozenset()
+    client.db.litellm_usertable.find_unique.assert_not_called()
+    client.db.litellm_teamtable.find_unique.assert_not_called()
+    client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+    client.db.litellm_accessgrouptable.find_unique.assert_not_called()

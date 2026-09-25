@@ -27,7 +27,7 @@ async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
             return tuple(sorted(own))
         if context.user_id is None:
             return ()
-        human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id)
+        human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id, requires_fresh_policy=True)
         allowed: Final = await MCPRequestHandler.resolve_admitted_subject_servers(human)
         return tuple(sorted(own.intersection(allowed)))
     except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
@@ -48,7 +48,7 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
             return own
         if context.user_id is None:
             return []
-        human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id)
+        human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id, requires_fresh_policy=True)
         human_tools: Final = await MCPRequestHandler.resolve_admitted_subject_tools(server_id, human)
         if own is None:
             return human_tools

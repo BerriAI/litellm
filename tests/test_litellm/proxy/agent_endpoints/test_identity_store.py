@@ -339,3 +339,128 @@ async def test_native_revocation_cannot_fall_back_to_human_or_unrestricted_agent
     result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
     assert isinstance(result, AgentIdentityFailure)
     assert result.code == "identity_denied"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("groups", ["both", "second-only"])
+async def test_multiple_directory_groups_union_and_removal_preserves_remaining_grants(groups: str) -> None:
+    store, sources, resources, _, _, resource = native_store()
+    sources.find_unique.return_value = sources.find_unique.return_value.model_copy(
+        update={
+            "group_mappings": [
+                {"external_group_id": PRINCIPAL, "access_group_ids": ["read"]},
+                {"external_group_id": TENANT, "access_group_ids": ["write"]},
+            ]
+        }
+    )
+    first: Final = resource.model_copy(update={"id": "group-one", "kind": "Groups", "external_id": PRINCIPAL})
+    second: Final = resource.model_copy(update={"id": "group-two", "kind": "Groups", "external_id": TENANT})
+    rows: Final = [first, second] if groups == "both" else [second]
+    resources.find_many.side_effect = lambda **query: [resource] if query["where"]["kind"] == "Users" else rows
+    result: Final = await store.agent("agent-one")
+    assert isinstance(result, AgentResponse)
+    assert result.directory_access_group_ids == (("read", "write") if groups == "both" else ("write",))
+    assert result.access_group_ids is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["source-unavailable", "wrong-tenant", "missing-subject", "subject-unavailable"])
+async def test_native_directory_policy_fails_closed_when_correspondence_cannot_be_proven(failure: str) -> None:
+    store, sources, _, humans, _, _ = native_store()
+    if failure == "source-unavailable":
+        sources.find_unique.side_effect = RuntimeError("writer unavailable")
+    elif failure == "wrong-tenant":
+        sources.find_unique.return_value = sources.find_unique.return_value.model_copy(update={"tenant_id": HUMAN})
+    elif failure == "missing-subject":
+        humans.find_unique.return_value = None
+    else:
+        humans.find_unique.side_effect = RuntimeError("writer unavailable")
+    result: Final = await store.agent("agent-one")
+    assert isinstance(result, AgentIdentityFailure)
+
+
+@pytest.mark.asyncio
+async def test_verified_subject_cannot_switch_to_an_unrelated_registered_parent() -> None:
+    store, _, _, humans, native, _ = native_store()
+    humans.find_unique.return_value = native.model_copy(update={"parent_client_id": PRINCIPAL})
+    result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
+    assert isinstance(result, AgentIdentityFailure)
+    assert "does not match" in result.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["human", "agent_user", "untrusted", "missing"])
+async def test_human_lookup_requires_trusted_interactive_enrollment(kind: str) -> None:
+    store, _, _, humans, native, _ = native_store()
+    humans.find_unique.return_value = (
+        None
+        if kind == "missing"
+        else native.model_copy(update={"kind": "human", "verified_via": "sso_interactive", "user_id": "local-human"})
+        if kind == "human"
+        else native.model_copy(update={"verified_via": "untrusted"})
+        if kind == "untrusted"
+        else native
+    )
+    result: Final = await store.verified_human(ISSUER, TENANT, HUMAN)
+    if kind == "human":
+        assert result is not None and not isinstance(result, AgentIdentityFailure)
+        assert result.user_id == "local-human"
+    else:
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_human_lookup_storage_failure_is_explicitly_unavailable() -> None:
+    store, _, _, humans = setup_store()
+    humans.find_unique.side_effect = RuntimeError("writer unavailable")
+    result: Final = await store.verified_human(ISSUER, TENANT, HUMAN)
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "policy_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_missing_revision_cannot_create_entra_authentication_evidence() -> None:
+    store, _, identities, _ = setup_store()
+    result: Final = await store.record_authentication(ManagedAgentContext(agent_id="agent-one", mode="autonomous"))
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "identity_denied"
+    identities.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_authentication_evidence_write_failure_is_not_success() -> None:
+    store, _, identities, _ = setup_store()
+    identities.update_many.side_effect = RuntimeError("writer unavailable")
+    result: Final = await store.record_authentication(
+        ManagedAgentContext(agent_id="agent-one", binding_revision="revision-one", mode="autonomous")
+    )
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "policy_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", [True, False])
+async def test_retired_binding_denies_and_history_outage_cannot_become_legacy_fallback(unavailable: bool) -> None:
+    from unittest.mock import MagicMock
+
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=None)
+    database.writer_db.litellm_verifiedsubject.find_unique = AsyncMock(return_value=None)
+    database.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(
+        return_value={"client_id": CLIENT}, side_effect=RuntimeError("unavailable") if unavailable else None
+    )
+    result: Final = await AgentIdentityStore.from_client(database).resolve_verified_claims(CLAIMS)
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == ("policy_unavailable" if unavailable else "identity_denied")
+    assert result.message == (
+        "Retired agent identity could not be checked" if unavailable else "This agent identity binding has been retired"
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_directory_repositories_cannot_admit_a_provisioned_agent() -> None:
+    store, _, _, _ = setup_store()
+    native: Final = stored_agent(identity=BINDING.model_copy(update={"provisioning_source_id": "source"}))
+    result: Final = await store.directory_policy(native)
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "policy_unavailable"

@@ -1085,7 +1085,7 @@ class MCPRequestHandler:
                 assert_never(identity.subject_type)
 
     @staticmethod
-    async def reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+    async def reload_admitted_user(user_id: str, *, requires_fresh_policy: bool = False) -> UserAPIKeyAuth:
         """Reload the live user an interactively-minted envelope references and admit them as themselves.
 
         The user's own object permission and ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the
@@ -1110,6 +1110,7 @@ class MCPRequestHandler:
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
+                check_db_only=requires_fresh_policy,
             )
             # Resolve the user's own MCP object permission (get_user_object does not load it) so the shared
             # get_allowed_mcp_servers can grant the user their litellm-granted servers. Reuses the same
@@ -1118,6 +1119,7 @@ class MCPRequestHandler:
             if user_object is not None and object_permission is None and user_object.object_permission_id:
                 object_permission = await get_object_permission(
                     object_permission_id=user_object.object_permission_id,
+                    check_db_only=requires_fresh_policy,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                 )
@@ -1146,6 +1148,7 @@ class MCPRequestHandler:
         # Server-only marker, set AFTER construction: the before-validator strips it from any validated
         # input, so caller-supplied data (key metadata, JWT claims) can never forge it.
         admitted.mcp_admitted_user_subject = True
+        admitted.requires_fresh_policy = requires_fresh_policy
         # Carry each granting team's per-server mcp_rpm_limit: this subject reaches servers through
         # several teams under its own identity, so without this a cross-team user outruns every team's
         # limit. Resolved from the same roster-checked sources as the grant union, so a team throttles
@@ -1833,6 +1836,7 @@ class MCPRequestHandler:
             scoped.object_permission = auth.object_permission
             scoped.object_permission_id = auth.object_permission_id
             scoped.access_group_ids = auth.access_group_ids
+        scoped.requires_fresh_policy = auth.requires_fresh_policy
         return scoped
 
     @staticmethod
@@ -1890,6 +1894,7 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(auth and auth.requires_fresh_policy),
             )
         except Exception as e:  # noqa: BLE001  # per-source isolation: one team's blip must not deny the others
             # Fault isolation is per SOURCE: an unresolvable team contributes nothing (fail closed for
@@ -2092,6 +2097,7 @@ class MCPRequestHandler:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=user_api_key_auth.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
         )
 
         if not team_obj:
@@ -2171,6 +2177,7 @@ class MCPRequestHandler:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=user_api_key_auth.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
         )
 
     @staticmethod
@@ -2465,6 +2472,7 @@ class MCPRequestHandler:
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
             if not raw_server_ids:
                 return []
@@ -2511,6 +2519,7 @@ class MCPRequestHandler:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=user_api_key_auth.parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
                 )
             if key_object_permission is None:
                 return []
@@ -2605,6 +2614,7 @@ class MCPRequestHandler:
                 user_id_upsert=False,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
         except Exception as e:  # noqa: BLE001  # a team-resolution blip narrows access, never raises
             verbose_logger.warning("Failed to resolve user teams for MCP grant: %s", e)
@@ -2676,6 +2686,7 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
             if team_obj is None:
                 return []
@@ -2689,6 +2700,7 @@ class MCPRequestHandler:
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
 
             servers: Final = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
@@ -2725,6 +2737,7 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
         except Exception as e:  # noqa: BLE001  # a named entitlement we cannot read denies, whatever the read failed with
             raise unloadable from e
@@ -2970,7 +2983,9 @@ class MCPRequestHandler:
             return None
 
         user_id: Final = user_api_key_auth.user_id
-        object_permission_id: Final = await MCPRequestHandler._user_object_permission_id(user_id, prisma_client)
+        object_permission_id: Final = await MCPRequestHandler._user_object_permission_id(
+            user_id, prisma_client, check_db_only=user_api_key_auth.requires_fresh_policy
+        )
         if object_permission_id is None:
             return None
 
@@ -2980,6 +2995,7 @@ class MCPRequestHandler:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=user_api_key_auth.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
         )
         if object_permission is None:
             raise ValueError(
@@ -2988,7 +3004,9 @@ class MCPRequestHandler:
         return object_permission
 
     @staticmethod
-    async def _user_object_permission_id(user_id: str, prisma_client: "PrismaClient") -> str | None:
+    async def _user_object_permission_id(
+        user_id: str, prisma_client: "PrismaClient", *, check_db_only: bool = False
+    ) -> str | None:
         """The permission row this human's user row links to, or None when they link none.
 
         Caches the link (with a sentinel for "links none") so a human without an entitlement costs no
@@ -3001,12 +3019,14 @@ class MCPRequestHandler:
 
         cache_key: Final = user_object_permission_id_cache_key(user_id)
         try:
-            cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+            cached: Final[object] = None if check_db_only else await user_api_key_cache.async_get_cache(key=cache_key)
             if cached == USER_NO_MCP_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:
                 return cached
-            user_row: Final = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+            user_row: Final = await UserRepository(prisma_client, use_writer=check_db_only).table.find_unique(
+                where={"user_id": user_id}
+            )
             linked: Final[object] = getattr(user_row, "object_permission_id", None) if user_row is not None else None
             object_permission_id: Final = linked if isinstance(linked, str) and linked else None
             await user_api_key_cache.async_set_cache(
@@ -3015,7 +3035,9 @@ class MCPRequestHandler:
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
             return object_permission_id
-        except Exception as e:  # noqa: BLE001  # unknown whether entitled at all: no ceiling, as before
+        except Exception as e:  # noqa: BLE001  # Legacy callers retain their existing optional user-ceiling behavior
+            if check_db_only:
+                raise HTTPException(503, "User policy is unavailable") from e
             verbose_logger.warning("MCP user entitlement: link for %r unresolved, no ceiling: %s", user_id, e)
             return None
 
@@ -3561,6 +3583,7 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
             if key_object_permission is None:
                 return []
@@ -3604,6 +3627,7 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
             if team_obj is None:
                 verbose_logger.debug("team_obj is None")

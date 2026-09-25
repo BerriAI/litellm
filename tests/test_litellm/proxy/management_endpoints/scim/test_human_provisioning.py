@@ -78,13 +78,11 @@ async def test_reservation_replay_preserves_identity_before_creating_a_local_use
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("existing", [True, False])
-async def test_reservation_claims_email_subject_and_local_identity(existing: bool) -> None:
+async def test_reservation_claims_email_subject_and_local_identity() -> None:
     service, tx, _, user = human_fixture()
-    tx.litellm_usertable.find_many.return_value = [SimpleNamespace(user_id="canonical")] if existing else []
     await service.reserve(user)
     data: Final = tx.litellm_scimresource.create.call_args.kwargs["data"]
-    assert data["local_id"] == ("canonical" if existing else user.userName)
+    assert data["local_id"] == user.userName
     assert data["human_email"] == user.userName
     assert data["human_subject_key"] == f"{TENANT}:{SUBJECT}"
     assert data["id"] == data["document"].data["id"]
@@ -164,3 +162,68 @@ async def test_failed_local_creation_does_not_mark_the_snapshot_reconciled(monke
     update.assert_not_awaited()
     assert tx.litellm_scimresource.update.await_count == 1
     assert tx.litellm_scimresource.update.call_args.kwargs["data"] == {"human_email": user.userName}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["reservation", "email-update"])
+async def test_ownership_collision_is_a_conflict_before_legacy_user_mutation(
+    phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from prisma.errors import UniqueViolationError
+
+    service, tx, row, user = human_fixture()
+    collision: Final = UniqueViolationError(
+        {"user_facing_error": {"error_code": "P2002", "message": "Unique identity"}}
+    )
+    create: Final = AsyncMock()
+    update: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "create_user", create)
+    monkeypatch.setattr(scim_v2, "update_user", update)
+    if phase == "reservation":
+        tx.litellm_scimresource.create.side_effect = collision
+    else:
+        tx.litellm_scimresource.find_unique.return_value = row
+        tx.litellm_scimresource.update.side_effect = collision
+    with pytest.raises(HTTPException) as failure:
+        await service.create(user)
+    assert failure.value.status_code == 409
+    create.assert_not_awaited()
+    update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_human_patch_preserves_scim_id_and_claims_the_changed_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    service, tx, row, user = human_fixture()
+    tx.litellm_usertable.find_unique.return_value = LiteLLM_UserTable(
+        user_id=row.local_id, user_email="human@example.com"
+    )
+    updated: Final = user.model_copy(update={"id": row.local_id, "active": False})
+    patch: Final = AsyncMock(return_value=updated)
+    monkeypatch.setattr(scim_v2, "patch_user", patch)
+    operations: Final = SCIMPatchOp(Operations=[{"op": "replace", "path": "active", "value": False}])
+    result: Final = await service.update(row, operations)
+    assert result.id == row.id and result.externalId == row.external_id
+    assert result.active is False
+    patch.assert_awaited_once_with(user_id=row.local_id, patch_ops=operations)
+    assert tx.litellm_scimresource.update.call_args.kwargs["data"]["active"] is False
+
+
+@pytest.mark.asyncio
+async def test_unavailable_ownership_database_is_not_reported_as_a_conflict() -> None:
+    service, tx, _, user = human_fixture()
+    tx.litellm_scimresource.find_unique.side_effect = RuntimeError("database unavailable")
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.create(user)
+    tx.litellm_scimresource.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_source_cannot_adopt_an_existing_local_or_sso_user() -> None:
+    service, tx, _, user = human_fixture()
+    tx.litellm_usertable.find_many.return_value = [SimpleNamespace(user_id="existing-admin")]
+    with pytest.raises(HTTPException) as failure:
+        await service.reserve(user)
+    assert failure.value.status_code == 409
+    tx.litellm_scimresource.create.assert_not_awaited()
