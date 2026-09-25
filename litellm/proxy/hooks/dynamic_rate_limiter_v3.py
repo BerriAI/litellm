@@ -244,6 +244,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         self.is_client_disconnected = is_client_disconnected
         self.llm_router: Router | None = None
+        self.enforcing = True
 
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
@@ -568,8 +569,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         fairness: Final = self._fairness_settings()
         reserve_tokens: Final = fairness is not None and fairness.enabled and model_group_info.tpm is not None
         estimated_tokens: Final = (
-            self.v3_limiter.estimate_tokens_for_request(
-                data, model=model, min_configured_tpm_limit=model_group_info.tpm, call_type=call_type
+            max(
+                self.v3_limiter.estimate_tokens_for_request(
+                    data, model=model, min_configured_tpm_limit=model_group_info.tpm, call_type=call_type
+                ),
+                1,
             )
             if reserve_tokens
             else 0
@@ -855,7 +859,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Returns:
             None if request is allowed, otherwise raises HTTPException
         """
-        if "model" not in data or self.llm_router is None:
+        if "model" not in data or self.llm_router is None or not self.enforcing:
             return None
 
         claim_request_stash_for_data(data)
@@ -974,7 +978,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if stash is not None and await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span):
                 return
 
-            if total_tokens == 0:
+            if total_tokens == 0 or not self.enforcing:
                 return
 
             # Create pipeline operations for token increments

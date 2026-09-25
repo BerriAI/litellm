@@ -4,7 +4,8 @@ Applies ``litellm_settings.fairness_settings`` to the running proxy.
 ``FairnessSettings`` is the admin-facing source of truth for fairness under load. The dynamic
 rate limiter still reads ``litellm.priority_reservation`` and ``litellm.priority_reservation_settings``,
 so enabling fairness mirrors the workload classes into those globals and registers the v3 limiter
-callback when the config file never did.
+callback when the config file never did. Disabling pauses a fairness-owned limiter instead of removing
+it, so requests admitted with a token reservation still settle it when they finish.
 """
 
 from collections.abc import Mapping
@@ -54,6 +55,11 @@ def parse_fairness_settings(value: object) -> FairnessSettings | None:
 
 
 def active_fairness_limiter() -> _PROXY_DynamicRateLimitHandlerV3 | None:
+    limiter: Final = _registered_limiter()
+    return limiter if limiter is not None and limiter.enforcing else None
+
+
+def _registered_limiter() -> _PROXY_DynamicRateLimitHandlerV3 | None:
     if not _limiter_registered():
         return None
     limiter: Final = get_custom_logger_compatible_class(_LIMITER_CALLBACK)
@@ -84,7 +90,9 @@ def apply_fairness_settings(
     if not was_enabled:
         _CONFIG_RESERVATION.priority_reservation = litellm.priority_reservation
         _CONFIG_RESERVATION.settings = litellm.priority_reservation_settings
-        _CONFIG_RESERVATION.limiter_added_by_fairness = not _limiter_registered()
+        _CONFIG_RESERVATION.limiter_added_by_fairness = (
+            _CONFIG_RESERVATION.limiter_added_by_fairness or not _limiter_registered()
+        )
     litellm.priority_reservation = settings.reserved_shares()
     litellm.priority_reservation_settings = PriorityReservationSettings(
         default_priority=settings.default_reserved_share,
@@ -96,7 +104,7 @@ def apply_fairness_settings(
 
 def _ensure_limiter_registered(internal_usage_cache: DualCache | None, llm_router: Router | None) -> None:
     already_registered: Final = _limiter_registered()
-    existing: Final = active_fairness_limiter()
+    existing: Final = _registered_limiter()
     if existing is None and (llm_router is None or internal_usage_cache is None):
         if not already_registered:
             litellm.logging_callback_manager.add_litellm_callback(_LIMITER_CALLBACK)
@@ -110,6 +118,7 @@ def _ensure_limiter_registered(internal_usage_cache: DualCache | None, llm_route
     )
     if not isinstance(initialized, _PROXY_DynamicRateLimitHandlerV3):
         return
+    initialized.enforcing = True
     if llm_router is not None:
         initialized.update_variables(llm_router=llm_router)
     if not already_registered:
@@ -119,9 +128,11 @@ def _ensure_limiter_registered(internal_usage_cache: DualCache | None, llm_route
 def _unregister_fairness_limiter() -> None:
     if not _CONFIG_RESERVATION.limiter_added_by_fairness:
         return
-    _CONFIG_RESERVATION.limiter_added_by_fairness = False
-    manager: Final = litellm.logging_callback_manager
-    limiter: Final = active_fairness_limiter()
-    manager.remove_callback_from_list_by_object(litellm.callbacks, _LIMITER_CALLBACK, require_self=False)
+    limiter: Final = _registered_limiter()
     if limiter is not None:
-        manager.remove_callback_from_all_lists(limiter)
+        limiter.enforcing = False
+        return
+    _CONFIG_RESERVATION.limiter_added_by_fairness = False
+    litellm.logging_callback_manager.remove_callback_from_list_by_object(
+        litellm.callbacks, _LIMITER_CALLBACK, require_self=False
+    )

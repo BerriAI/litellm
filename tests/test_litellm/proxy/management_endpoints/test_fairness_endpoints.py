@@ -7,10 +7,11 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils import litellm_logging
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _PROXY_DynamicRateLimitHandlerV3
-from litellm.proxy.hooks.fairness_settings import apply_fairness_settings
+from litellm.proxy.hooks.fairness_settings import _CONFIG_RESERVATION, apply_fairness_settings
 from litellm.proxy.management_endpoints.fairness_endpoints import (
     get_fairness_settings,
     get_fairness_status,
@@ -58,6 +59,7 @@ def isolated_globals(monkeypatch: pytest.MonkeyPatch) -> _FakeProxyConfig:
     monkeypatch.setattr(litellm, "fairness_settings", None)
     monkeypatch.setattr(litellm, "priority_reservation", None)
     monkeypatch.setattr(litellm, "priority_reservation_settings", None)
+    monkeypatch.setattr(_CONFIG_RESERVATION, "limiter_added_by_fairness", False)
     return proxy_config
 
 
@@ -216,12 +218,28 @@ def _limiter_callbacks() -> tuple[object, ...]:
     )
 
 
-def test_disabling_fairness_unregisters_the_limiter_it_added(
+def test_disabling_fairness_pauses_the_limiter_it_added_and_re_enabling_resumes_it(
     isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     apply_fairness_settings(_settings(), internal_usage_cache=DualCache(), llm_router=Router(model_list=[]))
-    assert len(_limiter_callbacks()) == 1, litellm.callbacks
+    (limiter,) = _limiter_callbacks()
+    assert isinstance(limiter, _PROXY_DynamicRateLimitHandlerV3) and limiter.enforcing, litellm.callbacks
+    apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
+    assert _limiter_callbacks() == (limiter,) and not limiter.enforcing, litellm.callbacks
+    apply_fairness_settings(_settings(), internal_usage_cache=None, llm_router=None)
+    assert _limiter_callbacks() == (limiter,) and limiter.enforcing, litellm.callbacks
+    apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
+    assert not limiter.enforcing
+
+
+def test_disabling_fairness_removes_a_limiter_name_it_added_before_the_router_existed(
+    isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    apply_fairness_settings(_settings(), internal_usage_cache=None, llm_router=None)
+    assert _limiter_callbacks() == ("dynamic_rate_limiter_v3",), litellm.callbacks
     apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
     assert _limiter_callbacks() == (), litellm.callbacks
 

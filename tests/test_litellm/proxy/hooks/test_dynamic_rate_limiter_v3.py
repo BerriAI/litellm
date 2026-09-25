@@ -1956,6 +1956,97 @@ async def test_fairness_reserves_estimated_tokens_pre_call_and_reconciles_to_act
 
 
 @pytest.mark.asyncio
+async def test_contentless_request_still_reserves_a_token_before_dispatch(monkeypatch):
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+
+    model = "fairness-contentless-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    data = {"model": model, "litellm_call_id": "contentless", "input": [], "encoding_format": "float"}
+    assert (
+        handler.v3_limiter.estimate_tokens_for_request(
+            data, model=model, min_configured_tpm_limit=100_000, call_type="aembedding"
+        )
+        == 0
+    )
+
+    async def admit() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(), cache=dual_cache, data=data, call_type="aembedding"
+        )
+
+    await asyncio.create_task(admit())
+    assert await _model_tokens(handler, dual_cache, model) == 1
+    assert await _priority_tokens(handler, dual_cache, model, "prod") == 1
+
+
+@pytest.mark.asyncio
+async def test_paused_limiter_settles_in_flight_reservation_and_admits_everything_else(monkeypatch):
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-paused-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=1, tpm=100_000))
+    data = {
+        "model": model,
+        "litellm_call_id": "in-flight",
+        "messages": [{"role": "user", "content": "summarize the fairness design in one paragraph"}],
+        "max_tokens": 200,
+    }
+
+    async def admit(call_id: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(),
+            cache=dual_cache,
+            data={**data, "litellm_call_id": call_id},
+            call_type="completion",
+        )
+
+    async def finish(call_id: str, actual_tokens: int) -> None:
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, call_id, "prod"),
+            response_obj=ModelResponse(
+                model=model,
+                usage=Usage(prompt_tokens=0, completion_tokens=actual_tokens, total_tokens=actual_tokens),
+            ),
+            start_time=None,
+            end_time=None,
+        )
+
+    async def in_flight_request_spanning_the_disable() -> int:
+        await admit("in-flight")
+        reserved = await _model_tokens(handler, dual_cache, model)
+        handler.enforcing = False
+        await asyncio.create_task(admit("after-disable"))
+        assert await _model_tokens(handler, dual_cache, model) == reserved
+        await finish("in-flight", 7)
+        return reserved
+
+    async def request_admitted_while_paused() -> None:
+        await admit("paused")
+        await finish("paused", 50)
+
+    reserved = await asyncio.create_task(in_flight_request_spanning_the_disable())
+    assert reserved > 7
+    assert await _model_tokens(handler, dual_cache, model) == 7
+    assert await _priority_tokens(handler, dual_cache, model, "prod") == 7
+
+    await asyncio.create_task(request_admitted_while_paused())
+    assert await _model_tokens(handler, dual_cache, model) == 7
+
+
+@pytest.mark.asyncio
 async def test_fairness_queue_admits_waiting_request_once_window_frees(time_controller, monkeypatch):
     from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
     from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
