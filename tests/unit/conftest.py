@@ -98,6 +98,10 @@ def _allow_loopback_only() -> None:
 _allow_loopback_only()
 
 
+def pytest_collectstart() -> None:
+    _allow_loopback_only()
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_runtest_setup() -> None:
     _allow_loopback_only()
