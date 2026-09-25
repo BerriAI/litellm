@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,6 +7,9 @@ import pytest
 
 import litellm
 from litellm.integrations.openmeter import OpenMeterLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import CallTypes
 
 
 class TestOpenMeterIntegration:
@@ -443,6 +447,50 @@ class TestOpenMeterIntegration:
         result = logger._common_logic(kwargs, response_obj)
         assert result["subject"] == "request-user"
 
+    def test_common_logic_meters_responses_api_response(self):
+        logger = OpenMeterLogger()
+
+        response_obj = _create_responses_api_response_as_logged(
+            response_id="resp_meter_1", input_tokens=30, output_tokens=70
+        )
+
+        kwargs = {
+            "user": "responses-user",
+            "model": "openai/gpt-5.6-luna",
+            "response_cost": 0.004,
+            "litellm_call_id": "responses-call-id",
+        }
+
+        result = logger._common_logic(kwargs, response_obj)
+
+        assert result["id"] == "resp_meter_1"
+        assert result["data"]["model"] == "openai/gpt-5.6-luna"
+        assert result["data"]["cost"] == 0.004
+        assert result["data"]["prompt_tokens"] == 30
+        assert result["data"]["completion_tokens"] == 70
+        assert result["data"]["total_tokens"] == 100
+
+    def test_common_logic_omits_usage_for_unrecognized_response(self):
+        logger = OpenMeterLogger()
+
+        kwargs = {
+            "user": "raw-dict-user",
+            "model": "gpt-4",
+            "response_cost": 0.002,
+            "litellm_call_id": "raw-dict-call-id",
+        }
+
+        response_obj = {
+            "id": "raw-dict-response-id",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        }
+
+        result = logger._common_logic(kwargs, response_obj)
+
+        assert "prompt_tokens" not in result["data"]
+        assert "completion_tokens" not in result["data"]
+        assert "total_tokens" not in result["data"]
+
     @patch("litellm.integrations.openmeter.HTTPHandler")
     def test_integration_token_user_id_scenario(self, mock_http_handler):
         """Integration test simulating the exact scenario that was failing"""
@@ -485,3 +533,35 @@ class TestOpenMeterIntegration:
         assert data["subject"] == "user123-from-token"
         assert isinstance(data["subject"], str)
         assert data["data"]["model"] == "gpt-3.5-turbo"
+
+
+def _create_responses_api_response_as_logged(
+    *, response_id: str, input_tokens: int, output_tokens: int
+) -> ResponsesAPIResponse:
+    """Builds the object OpenMeter actually receives for a Responses API call.
+
+    litellm's logging layer rewrites ResponseAPIUsage into chat-shaped Usage
+    before success callbacks run, via a setattr that pydantic validation would
+    otherwise reject. Driving the real transform keeps this fixture honest: a
+    hand-built ResponseAPIUsage would exercise a shape production never emits.
+    """
+    raw: ResponsesAPIResponse = ResponsesAPIResponse(
+        id=response_id,
+        created_at=0,
+        output=[],
+        usage=ResponseAPIUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
+    )
+    logging_obj: Logging = Logging(
+        model="openai/gpt-5.6-luna",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses.value,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="usage-normalization-call-id",
+        function_id="usage-normalization-function-id",
+    )
+    return logging_obj._transform_usage_objects(result=raw)
