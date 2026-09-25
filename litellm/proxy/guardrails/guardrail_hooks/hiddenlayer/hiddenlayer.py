@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -243,7 +243,8 @@ class HiddenlayerGuardrail(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
-            auth_timeout: Final = cast("float | None", kwargs.get("timeout")) or _AUTH_TIMEOUT_SECONDS
+            ctor_timeout: Final = kwargs.get("timeout")
+            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
@@ -452,7 +453,8 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
-            auth_timeout: Final = cast("float | None", kwargs.get("timeout")) or _AUTH_TIMEOUT_SECONDS
+            ctor_timeout: Final = kwargs.get("timeout")
+            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
