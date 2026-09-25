@@ -131,4 +131,64 @@ describe("AuditLogDrawer", () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(JSON.stringify({ max_budget: 10 }, null, 2)));
   });
+
+  describe("width", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
+    });
+
+    function sheetContent(): HTMLElement {
+      return screen.getByRole("dialog");
+    }
+
+    it("defaults to 75% width", () => {
+      render(<AuditLogDrawer {...defaultProps} />);
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("75%");
+    });
+
+    it("expands to full width and collapses back to the previous width", async () => {
+      const user = userEvent.setup();
+      render(<AuditLogDrawer {...defaultProps} />);
+
+      await user.click(screen.getByRole("button", { name: /expand drawer/i }));
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("100%");
+
+      await user.click(screen.getByRole("button", { name: /collapse drawer/i }));
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("75%");
+      expect(screen.getByRole("button", { name: /expand drawer/i })).toBeInTheDocument();
+    });
+
+    it("restores a stored width", () => {
+      localStorage.setItem("litellm:auditLogDrawerWidth", "58");
+      render(<AuditLogDrawer {...defaultProps} />);
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("58%");
+    });
+
+    it("keeps the saved width while expanded and restores it on collapse", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem("litellm:auditLogDrawerWidth", "58");
+      render(<AuditLogDrawer {...defaultProps} />);
+
+      await user.click(screen.getByRole("button", { name: /expand drawer/i }));
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("100%");
+      expect(localStorage.getItem("litellm:auditLogDrawerWidth")).toBe("58");
+
+      await user.click(screen.getByRole("button", { name: /collapse drawer/i }));
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("58%");
+      expect(localStorage.getItem("litellm:auditLogDrawerWidth")).toBe("58");
+    });
+
+    it("falls back to the default width for a non-numeric stored value", () => {
+      localStorage.setItem("litellm:auditLogDrawerWidth", "abc");
+      render(<AuditLogDrawer {...defaultProps} />);
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("75%");
+    });
+
+    it("falls back to the default width for an out-of-range stored value", () => {
+      localStorage.setItem("litellm:auditLogDrawerWidth", "10");
+      render(<AuditLogDrawer {...defaultProps} />);
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("75%");
+    });
+  });
 });

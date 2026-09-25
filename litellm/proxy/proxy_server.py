@@ -293,6 +293,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -553,7 +554,7 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -758,6 +759,9 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     run_scheduled_daily_global_spend_reconcile,
 )
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    run_scheduled_spend_capture_rate_check,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
@@ -856,6 +860,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
+from litellm.types.proxy.spend_capture_rate import SpendCaptureProvider, SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     ClassifierPlugin,
@@ -5058,6 +5063,11 @@ def _get_field_default(field_info: FieldInfo) -> JsonValue:
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
+
+
+def _current_general_settings() -> Mapping[str, object]:
+    """The live ``general_settings``, whichever object a config reload has bound since the caller was created."""
+    return general_settings
 
 
 @lru_cache(maxsize=4096)
@@ -10461,6 +10471,13 @@ class ProxyStartupEvent:
             prisma_client=prisma_client,
         )
 
+        cls._initialize_spend_capture_rate_check_job(
+            scheduler=scheduler,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            read_general_settings=_current_general_settings,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -10834,6 +10851,64 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
         )
+
+    @classmethod
+    def _initialize_spend_capture_rate_check_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+        read_general_settings: Callable[[], Mapping[str, object]],
+    ) -> None:
+        """The job always runs and re-reads ``spend_capture_rate_check`` each run; an absent setting clears the gauge."""
+        cls._spend_capture_rate_check_settings(read_general_settings())
+
+        async def alert(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        def publish(provider: str, capture_rate: float | None) -> None:
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=PrometheusLogger):
+                if isinstance(logger, PrometheusLogger):
+                    logger.set_spend_capture_rate(api_provider=provider, capture_rate=capture_rate)
+
+        async def check() -> None:
+            settings: Final = cls._spend_capture_rate_check_settings(read_general_settings())
+            if settings is None:
+                for provider in get_args(SpendCaptureProvider):
+                    publish(provider, None)
+                return
+            await run_scheduled_spend_capture_rate_check(
+                prisma_client,
+                settings,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=alert,
+                publish=publish,
+            )
+
+        scheduler.add_job(
+            check,
+            "cron",
+            hour=1,
+            minute=15,
+            timezone="UTC",
+            id=SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+
+    @staticmethod
+    def _spend_capture_rate_check_settings(
+        general_settings: Mapping[str, object],
+    ) -> SpendCaptureRateCheckSettings | None:
+        raw_settings: Final = general_settings.get("spend_capture_rate_check")
+        return None if raw_settings is None else SpendCaptureRateCheckSettings.model_validate(raw_settings)
 
     @classmethod
     async def _initialize_slack_alerting_jobs(
@@ -16429,8 +16504,9 @@ async def async_queue_request(
             # Covers both missing and JSON-string metadata (multipart /
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_hash"] = user_api_key_dict.api_key
+        logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        data["metadata"]["user_api_key"] = logged_api_key
+        data["metadata"]["user_api_key_hash"] = logged_api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers: Final = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
