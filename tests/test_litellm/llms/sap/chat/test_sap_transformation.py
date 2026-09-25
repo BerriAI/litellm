@@ -843,13 +843,13 @@ class TestCacheControl:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral", "ttl": "300"}},
+                    {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
                 ],
             }
         ]
         body = self._transform("anthropic--claude-3-5-sonnet", messages)
         cc = self._template(body)[0]["content"][0]["cache_control"]
-        assert cc == {"type": "ephemeral", "ttl": "300"}
+        assert cc == {"type": "ephemeral", "ttl": "5m"}
 
     def test_message_level_cache_control_folded_on_assistant_message(self):
         """cache_control on an assistant turn is folded into a content block."""
