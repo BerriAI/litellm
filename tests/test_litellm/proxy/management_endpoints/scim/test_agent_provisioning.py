@@ -124,6 +124,18 @@ def test_human_patch_cannot_smuggle_an_agent_identity(path: str | None, value: o
     assert patch_changes_identity(patch)
 
 
+@pytest.mark.parametrize("identity_marker", [True, False])
+def test_deep_patch_checks_identity_without_exhausting_the_call_stack(identity_marker: bool) -> None:
+    from functools import reduce
+
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import patch_changes_identity
+
+    leaf: Final = {"identityParentId": PARENT} if identity_marker else {"displayName": "Renamed"}
+    nested: Final = reduce(lambda value, _: {"nested": [value]}, range(1200), leaf)
+    patch: Final = SCIMPatchOp(Operations=[{"op": "replace", "value": nested}])
+    assert patch_changes_identity(patch) is identity_marker
+
+
 def test_patch_error_does_not_apply_later_operations() -> None:
     patch: Final = SCIMPatchOp(
         Operations=[

@@ -7847,7 +7847,7 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
         key="fresh-jwt-user", value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
-    prisma.db.litellm_usertable.find_unique = AsyncMock(
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=["team-a"])
     )
     proxy_globals.user_api_key_cache = cache

@@ -139,7 +139,7 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
         key="stale-cache-user", value=_user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
-    prisma.db.litellm_usertable.find_unique = AsyncMock(
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_user(user_id="stale-cache-user", teams=["team-a"])
     )
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
@@ -164,7 +164,7 @@ async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_the
         key="deactivated-user", value=_user(user_id="deactivated-user", teams=["team-a"]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
-    prisma.db.litellm_usertable.find_unique = AsyncMock(
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_user(user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False})
     )
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)

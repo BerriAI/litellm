@@ -177,7 +177,7 @@ async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_rep
     assert agent.agent_id == agent_id
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited_once_with(
         where={"agent_id": agent_id},
-        include={"object_permission": True},
+        include={"object_permission": True, "identity": True, "litellm_budget_table": True},
     )
 
 
@@ -202,7 +202,7 @@ async def test_get_agent_with_read_through_recovers_agent_by_name(clean_agent_re
     assert agent.agent_name == agent_name
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited_with(
         where={"agent_name": agent_name},
-        include={"object_permission": True},
+        include={"object_permission": True, "identity": True, "litellm_budget_table": True},
     )
 
 

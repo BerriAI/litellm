@@ -4373,24 +4373,28 @@ def _config_agent(agent_name: str) -> Dict[str, Any]:
     }
 
 
-class _FakeAgentRow:
-    """Stand-in for a prisma agent record: supports dict() and .object_permission."""
+def _agent_db_row(agent_id: str, agent_name: str):
+    import json
+    from datetime import datetime, timezone
 
-    def __init__(self, agent_id: str, agent_name: str) -> None:
-        self.agent_id = agent_id
-        self.agent_name = agent_name
-        self.object_permission = None
-        self.spend = 0.0
+    from prisma.models import LiteLLM_AgentsTable
 
-    def __iter__(self):
-        return iter(
-            {
-                "agent_id": self.agent_id,
-                "agent_name": self.agent_name,
-                "agent_card_params": {"name": self.agent_name, "url": "http://db-agent"},
-                "litellm_params": {},
-            }.items()
-        )
+    return LiteLLM_AgentsTable(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        agent_card_params=json.dumps({"name": agent_name, "url": "http://db-agent"}),
+        extra_headers=[],
+        agent_access_groups=[],
+        access_group_ids=[],
+        spend=0.0,
+        identity_managed=False,
+        enabled=True,
+        execution_mode="autonomous",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        created_by="admin",
+        updated_by="admin",
+    )
 
 
 @pytest.mark.asyncio
@@ -4414,7 +4418,7 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
     )
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[_FakeAgentRow("db-id", "db-agent")])
+    prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[_agent_db_row("db-id", "db-agent")])
 
     await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
 
@@ -4451,7 +4455,7 @@ async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_reg
         elif agents_source == "db":
             prisma_client = MagicMock()
             prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-                return_value=[_FakeAgentRow("db-id", "loaded-agent")]
+                return_value=[_agent_db_row("db-id", "loaded-agent")]
             )
             await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
         else:

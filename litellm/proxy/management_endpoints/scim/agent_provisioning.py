@@ -1,8 +1,10 @@
 import re
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import reduce, wraps
+from itertools import chain
 from typing import Concatenate, Final, Literal, ParamSpec, TypeVar
 from uuid import UUID, uuid4
 
@@ -199,21 +201,33 @@ def serialized_source(
     return execute
 
 
-def patch_changes_identity(patch: SCIMPatchOp) -> bool:
-    def marked(value: object) -> bool:
-        if isinstance(value, dict):
-            fields: Final = TypeAdapter(dict[str, object]).validate_python(value)
-            return any(
-                key.lower().startswith(SCIM_AGENT_USER_SCHEMA.lower())
-                or key.lower() in ("agent_user", "identityparentid")
-                or marked(item)
-                for key, item in fields.items()
-            )
-        if isinstance(value, list):
-            return any(marked(item) for item in TypeAdapter(list[object]).validate_python(value))
-        return isinstance(value, str) and value.lower().startswith(SCIM_AGENT_USER_SCHEMA.lower())
+def _identity_patch_children(value: object) -> tuple[object, ...] | Literal[True]:
+    if isinstance(value, dict):
+        fields: Final = TypeAdapter(dict[str, object]).validate_python(value)
+        if any(
+            key.lower().startswith(SCIM_AGENT_USER_SCHEMA.lower()) or key.lower() in ("agent_user", "identityparentid")
+            for key in fields
+        ):
+            return True
+        return tuple(fields.values())
+    if isinstance(value, list):
+        return TypeAdapter(tuple[object, ...]).validate_python(value)
+    if isinstance(value, str) and value.lower().startswith(SCIM_AGENT_USER_SCHEMA.lower()):
+        return True
+    return ()
 
-    return any(marked(item.path) or marked(item.value) for item in patch.Operations)
+
+def patch_changes_identity(patch: SCIMPatchOp) -> bool:
+    pending: Final = deque(  # mutable-ok: work queue avoids recursion on arbitrarily nested untrusted PATCH values
+        chain.from_iterable((item.path, item.value) for item in patch.Operations)
+    )
+    while pending:
+        match _identity_patch_children(pending.popleft()):
+            case True:
+                return True
+            case children:
+                pending.extend(children)
+    return False
 
 
 class AgentProvisioningService:
