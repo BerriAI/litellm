@@ -24,7 +24,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -32,11 +32,17 @@ from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    ProviderBillingCredentialMissing,
+    ProviderBillingRequestFailed,
+    capture_rate_report,
+)
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
@@ -52,6 +58,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -1181,6 +1188,84 @@ async def get_global_activity_exceptions(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": str(e)},
         )
+
+
+@router.get(
+    "/spend/capture_rate",
+    tags=["Budget & Spend Tracking"],  # mutable-ok: FastAPI tags kwarg is list-typed
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=CaptureRateReport,
+)
+async def get_spend_capture_rate(
+    start_date: Annotated[date, fastapi.Query(description="First UTC day of the range, YYYY-MM-DD")],
+    end_date: Annotated[date, fastapi.Query(description="Last UTC day of the range, YYYY-MM-DD, inclusive")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    provider: Annotated[
+        SpendCaptureProvider,
+        fastapi.Query(description="Provider whose bill to compare against; needs OPENAI_ADMIN_KEY set on the proxy"),
+    ] = "openai",
+    threshold: Annotated[
+        float, fastapi.Query(gt=0, le=1, description="Ratio under which the report flags below_threshold")
+    ] = 0.9,
+    project_ids: Annotated[
+        list[str] | None,
+        fastapi.Query(
+            description=(
+                "Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured "
+                "spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to"
+            )
+        ),
+    ] = None,
+) -> CaptureRateReport:
+    """
+    Compare the spend LiteLLM captured for a provider against that provider's own bill, per UTC day.
+
+    Admin only. Reads the provider's billing API with the billing credential set on the proxy
+    (OpenAI: `OPENAI_ADMIN_KEY`) and sums `LiteLLM_DailyUserSpend` for the same days.
+
+    Example:
+    ```
+    curl -H "Authorization: Bearer sk-1234" \
+      "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if not _is_admin_view_safe(user_api_key_dict):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only proxy admins can read the capture rate")
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+    if end_date < start_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_date must not be before start_date")
+    if (end_date - start_date).days >= SPEND_CAPTURE_RATE_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range too large; maximum is {SPEND_CAPTURE_RATE_MAX_RANGE_DAYS} days",
+        )
+    result: Final = await capture_rate_report(
+        prisma_client,
+        provider=provider,
+        start_date=start_date,
+        end_date=end_date,
+        threshold=threshold,
+        openai_project_ids=tuple(project_ids or ()),
+    )
+    match result:
+        case ProviderBillingCredentialMissing(env_var=env_var):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{env_var} is not set on the proxy, so the {provider} bill cannot be read",
+            )
+        case ProviderBillingRequestFailed(detail=detail):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not read the {provider} bill: {detail}"
+            )
+        case CaptureRateReport():
+            return result
+        case _:
+            assert_never(result)
 
 
 @router.get(

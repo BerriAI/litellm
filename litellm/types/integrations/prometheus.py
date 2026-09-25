@@ -281,6 +281,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_guardrail_errors_total",
     "litellm_guardrail_requests_total",
     "litellm_zero_cost_requests_total",
+    "litellm_spend_capture_rate",
     # Cache metrics
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
@@ -599,6 +600,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_PROVIDER.value,
         ZERO_COST_REASON_LABEL,
     )
+
+    litellm_spend_capture_rate = (UserAPIKeyLabelNames.API_PROVIDER.value,)
 
     litellm_input_tokens_metric = [
         UserAPIKeyLabelNames.END_USER.value,
