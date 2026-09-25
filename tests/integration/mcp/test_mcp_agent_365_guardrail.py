@@ -15,7 +15,6 @@ from typing import Final
 from urllib.parse import parse_qs
 
 import httpx
-import psutil
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
@@ -162,27 +161,45 @@ class Rig:
     peer: McpPeer
     entra: Wire
     agent_365: Wire
-    process_id: int
     server_id: str
 
     def caller_for(self, entry: EntryPoint, token: str = CALLER_TOKEN) -> McpCaller:
         return McpCaller(self.candidate, self.key, entry, self.alias, headers={"Authorization": f"Bearer {token}"})
 
-    def every_worker_serves_the_catalog(self, samples: int = 8) -> bool:
-        """Concurrent fresh connections spread across the accepting workers, so ``samples`` of them cover both."""
-        headers: Final = {"Authorization": f"Bearer {CALLER_TOKEN}"}
-        with ExitStack() as connections, ThreadPoolExecutor(max_workers=samples) as pool:
-            callers: Final = tuple(
-                McpCaller(
-                    replace(self.candidate, client=connections.enter_context(httpx.Client(base_url=base))),
-                    self.key,
-                    "mcp",
-                    self.alias,
-                    headers=headers,
-                )
-                for base in (self.candidate.client.base_url,) * samples
+    def catalog_by_worker(self, samples: int = 8) -> frozenset[tuple[int, bool]]:
+        """A fresh connection stays on the worker that accepted it, so its self-reported pid pairs with its catalog."""
+
+        def probe(connection: httpx.Client) -> tuple[int, bool] | None:
+            candidate: Final = replace(self.candidate, client=connection)
+            caller: Final = McpCaller(
+                candidate, self.key, "mcp", self.alias, headers={"Authorization": f"Bearer {CALLER_TOKEN}"}
             )
-            return all(f"{self.alias}-add" in listed.tools for listed in pool.map(McpCaller.list_tools, callers))
+            try:
+                summary: Final = connection.get(
+                    "/debug/memory/summary", headers={"Authorization": f"Bearer {candidate.key}"}
+                )
+                return int(summary.json()["worker_pid"]), f"{self.alias}-add" in caller.list_tools().tools
+            except httpx.TransportError:
+                return None
+
+        with ExitStack() as connections, ThreadPoolExecutor(max_workers=samples) as pool:
+            fresh: Final = tuple(
+                connections.enter_context(httpx.Client(base_url=str(self.candidate.client.base_url)))
+                for _ in range(samples)
+            )
+            return frozenset(seen for seen in pool.map(probe, fresh) if seen is not None)
+
+    def every_worker_serves_the_catalog(self, workers: int, without: int | None = None) -> frozenset[int]:
+        seen: Final = eventually(
+            self.catalog_by_worker,
+            lambda pairs: (
+                len({pid for pid, _ in pairs}) == workers
+                and without not in {pid for pid, _ in pairs}
+                and all(served for _, served in pairs)
+            ),
+            seconds=40,
+        )
+        return frozenset(pid for pid, _ in seen)
 
     def call_without_bearer(self, tool: str) -> Outcome:
         return McpCaller(self.candidate, self.key, "mcp", self.alias).call(f"{self.alias}-{tool}", {"a": 0})
@@ -235,9 +252,9 @@ def _rig(
         identity: Final = register_mcp(scenario, peer, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         caller: Final = McpCaller(owned.gateway, key, "mcp", alias, headers={"Authorization": f"Bearer {CALLER_TOKEN}"})
-        rig: Final = Rig(owned.gateway, caller, key, alias, alias, peer, entra, agent_365, owned.process.pid, identity)
+        rig: Final = Rig(owned.gateway, caller, key, alias, alias, peer, entra, agent_365, identity)
         if workers > 1:
-            eventually(rig.every_worker_serves_the_catalog, lambda served: served, seconds=40)
+            rig.every_worker_serves_the_catalog(workers)
         peer.drain()
         yield rig
 
@@ -473,17 +490,11 @@ def test_default_survives_a_worker_kill_and_keeps_blocking_denials_on_two_worker
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with _rig(gateway, tmp_path, fallback=None, workers=2) as rig:
-        workers: Final = eventually(
-            lambda: psutil.Process(rig.process_id).children(recursive=True),
-            lambda children: len(children) >= 2,
-            seconds=30,
-        )
-        os.kill(workers[0].pid, signal.SIGKILL)
-        eventually(
-            lambda: tuple(rig.caller.list_tools().tools for _ in range(4)),
-            lambda seen: all(f"{rig.alias}-add" in tools for tools in seen),
-            seconds=40,
-        )
+        before: Final = rig.every_worker_serves_the_catalog(2)
+        victim: Final = min(before)
+        os.kill(victim, signal.SIGKILL)
+        after: Final = rig.every_worker_serves_the_catalog(2, without=victim)
+        assert after - before, f"a replacement worker took over: before {before}, after {after}"
         rig.peer.drain()
         for index in range(10):
             passed: Final = rig.caller.call(f"{rig.alias}-outage", {"a": index})
