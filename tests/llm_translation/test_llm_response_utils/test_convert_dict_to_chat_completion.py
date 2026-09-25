@@ -2109,6 +2109,9 @@ class TestHandleInvalidParallelToolCalls:
 
         assert len(result) == 1
         assert result[0].function.name == "multi_tool_use.parallel"
+        # The call itself must come back untouched, not re-created.
+        assert result[0].id == "call_1"
+        assert result[0].function.arguments == arguments
 
 
 
