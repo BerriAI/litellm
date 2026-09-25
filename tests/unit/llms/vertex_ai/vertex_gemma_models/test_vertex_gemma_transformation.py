@@ -274,6 +274,165 @@ class TestVertexGemmaCompletion:
             assert "missing 'predictions' field" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_acompletion_surfaces_container_error_object_as_its_own_status_and_message(self, stream):
+        """
+        A serving container can reject the request with its own OpenAI-shaped error object,
+        which Vertex still wraps in an HTTP 200 :predict response. The container's status and
+        message must reach the caller instead of a 500 "no 'choices'".
+        """
+        from litellm.exceptions import BadRequestError
+
+        container_message = '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set'
+        vertex_response = {
+            "deployedModelId": "123",
+            "predictions": {
+                "code": 400,
+                "message": container_message,
+                "object": "error",
+                "param": None,
+                "type": "BadRequestError",
+            },
+        }
+
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = vertex_response
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            with pytest.raises(BadRequestError) as exc_info:
+                await litellm.acompletion(
+                    model="vertex_ai/gemma/gemma-2-2b-it",
+                    messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+                    tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+                    stream=stream,
+                    api_base="https://test.prediction.vertexai.goog/v1/projects/test/locations/us-central1/endpoints/123:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+
+        assert exc_info.value.status_code == 400
+        assert container_message in str(exc_info.value)
+        assert "no 'choices'" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_acompletion_keeps_container_error_status_beyond_400(self):
+        """The container's status is forwarded as is, not collapsed to 400."""
+        from litellm.exceptions import RateLimitError
+
+        vertex_response = {
+            "deployedModelId": "123",
+            "predictions": {"code": 429, "message": "engine overloaded", "object": "error", "type": "RateLimitError"},
+        }
+
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = vertex_response
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            with pytest.raises(RateLimitError) as exc_info:
+                await litellm.acompletion(
+                    model="vertex_ai/gemma/gemma-2-2b-it",
+                    messages=[{"role": "user", "content": "Test"}],
+                    api_base="https://test.prediction.vertexai.goog/v1/projects/test/locations/us-central1/endpoints/123:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+
+        assert exc_info.value.status_code == 429
+        assert "engine overloaded" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_acompletion_error_object_without_http_status_keeps_generic_handling(self):
+        """An error-shaped body whose code is not an HTTP error status is not trusted as one."""
+        from litellm.exceptions import APIError
+
+        vertex_response = {
+            "deployedModelId": "123",
+            "predictions": {"code": 0, "message": "unknown failure", "object": "error"},
+        }
+
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = vertex_response
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            with pytest.raises(APIError) as exc_info:
+                await litellm.acompletion(
+                    model="vertex_ai/gemma/gemma-2-2b-it",
+                    messages=[{"role": "user", "content": "Test"}],
+                    api_base="https://test.prediction.vertexai.goog/v1/projects/test/locations/us-central1/endpoints/123:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+
+        assert exc_info.value.status_code == 500
+
+    def test_sync_completion_surfaces_container_error_object_as_its_own_status_and_message(self):
+        """The synchronous path unwraps the same container error object."""
+        from litellm.exceptions import BadRequestError
+
+        container_message = '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set'
+        vertex_response = {
+            "deployedModelId": "123",
+            "predictions": {"code": 400, "message": container_message, "object": "error", "type": "BadRequestError"},
+        }
+
+        with (
+            patch("litellm.llms.vertex_ai.vertex_gemma_models.transformation._get_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = vertex_response
+            mock_client.post = Mock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            with pytest.raises(BadRequestError) as exc_info:
+                litellm.completion(
+                    model="vertex_ai/gemma/gemma-2-2b-it",
+                    messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+                    tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+                    api_base="https://test.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                    vertex_project="PROJECT_ID",
+                    vertex_location="us-central1",
+                )
+
+        assert exc_info.value.status_code == 400
+        assert container_message in str(exc_info.value)
+
+    @pytest.mark.asyncio
     async def test_acompletion_fake_streaming(self):
         """
         Test that streaming requests are faked properly for Vertex AI Gemma models.
