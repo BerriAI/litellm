@@ -419,3 +419,27 @@ def test_managed_route_scope_excludes_provider_resources(route: str, method: str
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
 
     assert managed_agent_route_allowed(route, method) is allowed
+
+
+@pytest.mark.parametrize(
+    "route,body,settings,cli_model,path_model,expected",
+    [
+        ("/v1/chat/completions", {"model": "body"}, {"completion_model": "default"}, "cli", "path", "default"),
+        ("/v1/moderations", {"model": "body"}, {"moderation_model": "default"}, "cli", None, "cli"),
+        ("/v1/audio/speech", {"model": "body"}, {"completion_model": "ignored"}, None, None, "body"),
+        ("/openai/deployments/path/embeddings", {"model": "body"}, {}, None, "path", "path"),
+        ("/v1/messages/count_tokens", {"model": "body"}, {"completion_model": "ignored"}, "cli", None, "body"),
+        ("/mcp/tools/call", {}, {"completion_model": "ignored"}, "cli", None, None),
+    ],
+)
+def test_managed_inference_resolves_dispatch_precedence(route, body, settings, cli_model, path_model, expected):
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+
+    assert managed_inference_request(route, body, settings, cli_model, path_model).get("model") == expected
+
+
+def test_managed_inference_without_any_model_cannot_skip_model_grants():
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+
+    with pytest.raises(HTTPException, match="explicit or configured model"):
+        managed_inference_request("/v1/moderations", {}, {}, None)

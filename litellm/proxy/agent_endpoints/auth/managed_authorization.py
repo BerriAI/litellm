@@ -73,6 +73,34 @@ def managed_agent_route_allowed(route: str, method: str | None) -> bool:
     )
 
 
+def managed_inference_request(
+    route: str,
+    body: Mapping[str, object],
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    path_model: object = None,
+) -> dict[str, object]:
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    if route not in _MANAGED_MODEL_ROUTES and not RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
+        return dict(body)
+    if route.endswith("/messages/count_tokens"):
+        return dict(body)
+    configured: Final = (
+        cli_model or settings.get("moderation_model")
+        if route.endswith(("/moderations", "/audio/transcriptions"))
+        else cli_model
+        if route.endswith("/audio/speech")
+        else settings.get("completion_model") or cli_model
+    )
+    effective: Final = configured or path_model or body.get("model")
+    if not isinstance(effective, str) or not effective:
+        raise_identity_failure(
+            AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
+        )
+    return {**body, "model": effective}
+
+
 async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:
     if auth.agent_id is None:
         return
