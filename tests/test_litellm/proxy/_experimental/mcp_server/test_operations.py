@@ -542,3 +542,126 @@ async def test_local_tool_json_array_is_converted_once_for_the_caller_revision(c
 
     assert [block.text for block in result.content] == [body]
     assert result.structured_content == (["a", "b"] if compat == "modern" else None)
+
+
+@pytest.mark.asyncio
+async def test_discovery_preserves_caller_scope_and_proxy_restrictions():
+    from mcp.types import DiscoverRequest, ListToolsResult, Tool
+
+    listed = AsyncMock(return_value=ListToolsResult(tools=[Tool(name="allowed", input_schema={"type": "object"})]))
+    context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["only-this"], mcp_proxy_mode=True, protocol_version="2025-06-18")
+    with patch("litellm.proxy._experimental.mcp_server.operations._execute_handle_list_tools", listed):
+        result = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert result.capabilities.tools is not None
+    assert result.capabilities.resources is None
+    assert result.capabilities.prompts is None
+    assert listed.await_args.args[0] is context
+    assert listed.await_args.args[0].user_api_key_auth.user_id == "scoped"
+    assert listed.await_args.args[0].mcp_servers == ("only-this",)
+
+
+@pytest.mark.asyncio
+async def test_discovery_denial_cannot_advertise_tools():
+    from mcp.types import DiscoverRequest
+    from fastapi import HTTPException
+
+    denied = AsyncMock(side_effect=HTTPException(status_code=403, detail="Forbidden"))
+    with patch("litellm.proxy._experimental.mcp_server.operations._execute_handle_list_tools", denied):
+        with pytest.raises(HTTPException) as error:
+            await GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="denied")))
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", ["none", "resources", "templates", "prompts"])
+async def test_discovery_lists_each_capability_with_the_same_caller(available):
+    from mcp.types import (
+        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        ListResourceTemplatesResult, Prompt, Resource, ResourceTemplate,
+    )
+    from litellm.proxy._experimental.mcp_server import operations
+
+    context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"])
+    tools = AsyncMock(return_value=ListToolsResult(tools=[]))
+    prompts = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="allowed")] if available == "prompts" else []))
+    resources = AsyncMock(return_value=ListResourcesResult(resources=[Resource(name="allowed", uri="test://allowed")] if available == "resources" else []))
+    templates = AsyncMock(return_value=ListResourceTemplatesResult(resource_templates=[ResourceTemplate(name="allowed", uri_template="test://{id}")] if available == "templates" else []))
+    with (
+        patch.object(operations, "_execute_handle_list_tools", tools),
+        patch.object(operations, "_execute_list_prompts", prompts),
+        patch.object(operations, "_execute_list_resources", resources),
+        patch.object(operations, "_execute_list_resource_templates", templates),
+    ):
+        result = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert result.capabilities.tools is None
+    assert (result.capabilities.prompts is not None) == (available == "prompts")
+    assert (result.capabilities.resources is not None) == (available in {"resources", "templates"})
+    for listing in (tools, prompts, resources, templates):
+        assert listing.await_args.args[0] is context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
+    from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+    from litellm.proxy._experimental.mcp_server import operations
+
+    ready = [asyncio.Event() for _ in range(4)]
+    closed = [asyncio.Event() for _ in range(4)]
+    release = asyncio.Event()
+    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]), ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+
+    def listing(index):
+        async def run(*args, **kwargs):
+            ready[index].set()
+            try:
+                await release.wait()
+                if index == 0 and outcome == "failure":
+                    raise ValueError("discovery failed")
+                if outcome != "success":
+                    await asyncio.Event().wait()
+                return responses[index]
+            finally:
+                closed[index].set()
+        return run
+
+    with (
+        patch.object(operations, "_execute_handle_list_tools", side_effect=listing(0)) as tools,
+        patch.object(operations, "_execute_list_prompts", side_effect=listing(1)),
+        patch.object(operations, "_execute_list_resources", side_effect=listing(2)),
+        patch.object(operations, "_execute_list_resource_templates", side_effect=listing(3)),
+    ):
+        task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
+        try:
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            if outcome == "cancel":
+                task.cancel()
+            else:
+                release.set()
+            if outcome == "success":
+                result = await asyncio.wait_for(task, 1)
+                assert result.capabilities.model_dump(exclude_none=True) == {}
+            else:
+                with pytest.raises(asyncio.CancelledError if outcome == "cancel" else ValueError):
+                    await asyncio.wait_for(task, 1)
+            assert all(event.is_set() for event in closed)
+            assert tools.call_args.kwargs["log_list_tools_to_spendlogs"] is False
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_enabled", [False, True])
+async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
+    from mcp.types import PaginatedRequestParams
+    from litellm.proxy._experimental.mcp_server import operations
+
+    listing = AsyncMock(return_value=operations.AggregateToolListing(tools=[], outcomes={}))
+    with patch.object(operations, "_list_mcp_tools", listing):
+        result = await operations._execute_handle_list_tools(
+            prepare_context(UserAPIKeyAuth(user_id="caller")), PaginatedRequestParams(),
+            log_list_tools_to_spendlogs=log_enabled,
+        )
+    assert result.tools == []
+    assert listing.await_args.kwargs["log_list_tools_to_spendlogs"] is log_enabled

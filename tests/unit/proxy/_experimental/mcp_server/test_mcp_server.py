@@ -489,7 +489,7 @@ async def test_sse_mcp_handler_mock():
     )
 
     with (
-        patch("litellm.proxy._experimental.mcp_server.server.server.run", run),
+        patch("litellm.proxy._experimental.mcp_server.server.serve_loop", run),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
@@ -511,7 +511,7 @@ async def test_sse_mcp_handler_mock():
         # Call the handler
         await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
-        assert run.await_args.args[:2] == (read_stream, write_stream)
+        assert run.await_args.args[1:3] == (read_stream, write_stream)
         assert mock_sse.connect_sse.call_args.args[0]["path"] == "/mcp/sse"
 
 

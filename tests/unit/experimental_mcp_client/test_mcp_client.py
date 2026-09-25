@@ -58,6 +58,15 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
 
 
+def _initialized(instructions: str | None = None) -> InitializeResult:
+    return InitializeResult(
+        protocol_version=LATEST_HANDSHAKE_VERSION,
+        capabilities=ServerCapabilities(),
+        server_info=Implementation(name="test", version="1"),
+        instructions=instructions,
+    )
+
+
 class _MockTransportClient(MCPClient):
     """An MCPClient whose streamable-HTTP transport runs on an httpx2 MockTransport."""
 
@@ -125,7 +134,7 @@ class TestMCPClient:
         mock_stdio_client.return_value = mock_stdio_ctx
 
         mock_session_instance = AsyncMock()
-        mock_session_instance.initialize = AsyncMock()
+        mock_session_instance.initialize = AsyncMock(return_value=_initialized())
         mock_session_ctx = AsyncMock()
         mock_session_ctx.__aenter__.return_value = mock_session_instance
         mock_session_ctx.__aexit__.return_value = None
@@ -168,7 +177,7 @@ class TestMCPClient:
         # Mock the session
         with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
-            mock_session_instance.initialize = AsyncMock()
+            mock_session_instance.initialize = AsyncMock(return_value=_initialized())
             mock_session_ctx = AsyncMock()
             mock_session_ctx.__aenter__.return_value = mock_session_instance
             mock_session_ctx.__aexit__.return_value = None
@@ -214,7 +223,7 @@ class TestMCPClient:
         # Mock the session
         with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
-            mock_session_instance.initialize = AsyncMock()
+            mock_session_instance.initialize = AsyncMock(return_value=_initialized())
             mock_session_ctx = AsyncMock()
             mock_session_ctx.__aenter__.return_value = mock_session_instance
             mock_session_ctx.__aexit__.return_value = None
@@ -266,7 +275,7 @@ class TestMCPClient:
         # Mock the session
         with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
-            mock_session_instance.initialize = AsyncMock()
+            mock_session_instance.initialize = AsyncMock(return_value=_initialized())
             mock_session_ctx = AsyncMock()
             mock_session_ctx.__aenter__.return_value = mock_session_instance
             mock_session_ctx.__aexit__.return_value = None
@@ -413,8 +422,7 @@ class TestMCPClientInstructionsCapture:
         )
 
         mock_session = AsyncMock()
-        init_result = MagicMock()
-        init_result.instructions = "  upstream says hello  "
+        init_result = _initialized("  upstream says hello  ")
         mock_session.initialize = AsyncMock(return_value=init_result)
 
         session_ctx = MagicMock()
@@ -442,8 +450,7 @@ class TestMCPClientInstructionsCapture:
         )
 
         mock_session = AsyncMock()
-        init_result = MagicMock()
-        init_result.instructions = None
+        init_result = _initialized()
         mock_session.initialize = AsyncMock(return_value=init_result)
 
         session_ctx = MagicMock()
@@ -600,8 +607,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_cleanup_error_after_success_is_swallowed(self, mock_session_cls):
         client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
-        init_result = MagicMock()
-        init_result.instructions = None
+        init_result = _initialized()
         self._make_session(mock_session_cls, AsyncMock(return_value=init_result))
         transport_ctx = self._make_transport(_FakeExceptionGroup("late", [httpx2.ConnectError("late cleanup error")]))
 
@@ -634,7 +640,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
     @pytest.mark.parametrize("original_error", (False, True))
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_session_exit_cancellation_preserves_original_failure(self, session_class, original_error):
-        self._make_session(session_class, AsyncMock(return_value=None))
+        self._make_session(session_class, AsyncMock(return_value=_initialized()))
         cancelled: Final = asyncio.CancelledError("cancelled while closing session")
         session_class.return_value.__aexit__ = AsyncMock(side_effect=cancelled)
         original: Final = RuntimeError("operation failed")
@@ -656,7 +662,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
     @pytest.mark.parametrize("phase", ("session", "transport"))
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_cleanup_preserves_process_exit(self, session_class, phase, signal_type):
-        self._make_session(session_class, AsyncMock(return_value=None))
+        self._make_session(session_class, AsyncMock(return_value=_initialized()))
         signal: Final = signal_type("process stopping")
         if phase == "session":
             session_class.return_value.__aexit__ = AsyncMock(side_effect=signal)
@@ -670,7 +676,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_session_and_termination_share_one_cleanup_deadline(self, session_class):
-        self._make_session(session_class, AsyncMock(return_value=None))
+        self._make_session(session_class, AsyncMock(return_value=_initialized()))
         deleting: Final = asyncio.Event()
 
         async def close_session(*args):
@@ -1883,16 +1889,17 @@ async def test_sse_read_failure_is_preserved() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_version", ["auto", "2025-06-18"])
 @pytest.mark.parametrize("transport", [MCPTransport.sse, MCPTransport.stdio])
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
-async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str) -> None:
+async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str, protocol_version: str) -> None:
     from mcp import ClientSession
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()
     read_timeout: Final = 0.2 if mode == "silent" else 30
     client: Final = MCPClient(
-        server_url="https://example.com/sse", transport_type=transport, timeout=read_timeout, logging_callback=logging_callback
+        server_url="https://example.com/sse", transport_type=transport, timeout=read_timeout, logging_callback=logging_callback, protocol_version=protocol_version
     )
 
     async def operation(session: ClientSession) -> CallToolResult:
@@ -2754,12 +2761,13 @@ async def test_http_close_cancellation_cannot_turn_into_success(original_error: 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_version", ("auto", "2025-06-18"))
 @pytest.mark.parametrize("cancel_mode", ("scope", "task", "wait_for", "read_timeout"))
 @pytest.mark.parametrize("concurrency", (1, 5))
 @pytest.mark.parametrize("termination", ("ok", "hang", "hang_body"))
 @pytest.mark.parametrize("raise_on_error", (False, True))
 async def test_cancellation_delivers_termination_over_tcp(
-    cancel_mode: str, concurrency: int, termination: str, raise_on_error: bool
+    cancel_mode: str, concurrency: int, termination: str, raise_on_error: bool, protocol_version: str
 ) -> None:
     started: Final = asyncio.Event()
     scope_ready: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
@@ -2813,6 +2821,8 @@ async def test_cancellation_delivers_termination_over_tcp(
                     await stop.wait()
                     return
                 if payload["method"] == "initialize":
+                    if cancel_mode != "read_timeout":
+                        await asyncio.sleep(0.75)
                     response: Final = json.dumps(
                         {
                             "jsonrpc": "2.0",
@@ -2839,7 +2849,7 @@ async def test_cancellation_delivers_termination_over_tcp(
     listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port: Final = listener.sockets[0].getsockname()[1]
     client: Final = MCPClient(
-        server_url=f"http://127.0.0.1:{port}/mcp", timeout=2 if cancel_mode == "read_timeout" else 0.5 if termination != "ok" else 30
+        server_url=f"http://127.0.0.1:{port}/mcp", protocol_version=protocol_version, timeout=2 if cancel_mode == "read_timeout" else 30
     )
 
     async def calls():
@@ -2866,7 +2876,7 @@ async def test_cancellation_delivers_termination_over_tcp(
 
     try:
         task: Final = asyncio.create_task(invoke())
-        await asyncio.wait_for(started.wait(), 3)
+        await asyncio.wait_for(started.wait(), 30)
         if cancel_mode == "scope":
             (await scope_ready).deadline = anyio.current_time() + 0.2
         if cancel_mode == "task":
@@ -2901,3 +2911,52 @@ async def test_cancellation_delivers_termination_over_tcp(
         closed: Final = await asyncio.wait_for(asyncio.gather(*connections, return_exceptions=True), 2)
         assert all(result is None or isinstance(result, asyncio.CancelledError) for result in closed), closed
         await asyncio.wait_for(listener.wait_closed(), 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "auto"])
+@pytest.mark.parametrize("accepted", [True, False])
+@pytest.mark.parametrize("callbacks", [False, True])
+async def test_configured_upstream_revision_is_offered_and_checked(revision, accepted, callbacks):
+    from mcp.types import JSONRPCRequest
+    from mcp_types.version import LATEST_HANDSHAKE_VERSION
+
+    offered = LATEST_HANDSHAKE_VERSION if revision == "auto" else revision
+
+    def respond(request):
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            assert payload.params["protocolVersion"] == offered
+            assert ("sampling" in payload.params["capabilities"]) == callbacks
+            assert ("elicitation" in payload.params["capabilities"]) == callbacks
+            return httpx2.Response(200, json={
+                "jsonrpc": "2.0", "id": payload.id,
+                "result": {"protocolVersion": offered if accepted else "unsupported",
+                           "capabilities": {"tools": {}}, "serverInfo": {"name": "upstream", "version": "1"}},
+            })
+        assert accepted, "No operation may execute after failed version negotiation"
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}})
+
+    client = _MockTransportClient(
+        respond, server_url="https://example.com/mcp", protocol_version=revision,
+        sampling_callback=AsyncMock() if callbacks else None,
+        elicitation_callback=AsyncMock() if callbacks else None,
+    )
+    if accepted:
+        result = await client.list_tools(raise_on_error=True)
+        assert [tool.name for tool in result] == ["echo"]
+    else:
+        with pytest.raises((MCPError, RuntimeError), match="protocol version"):
+            await client.list_tools(raise_on_error=True)
+
+
+@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", "", None])
+def test_upstream_protocol_configuration_rejects_unavailable_modes(revision):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MCPClient(protocol_version=revision)

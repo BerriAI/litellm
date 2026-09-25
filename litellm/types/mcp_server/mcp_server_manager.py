@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
 from litellm.types.mcp import (
@@ -10,11 +10,19 @@ from litellm.types.mcp import (
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
+    MCPUpstreamProtocol,
     normalize_upstream_header_name,
 )
 
+
 # MCPInfo now allows arbitrary additional fields for custom metadata
-MCPInfo = dict[str, Any]
+def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
+    if "protocol_version" in value:
+        TypeAdapter(MCPUpstreamProtocol).validate_python(value["protocol_version"])
+    return value
+
+
+MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
 
 
 class MCPOAuthMetadata(BaseModel):
@@ -66,6 +74,7 @@ class MCPServer(BaseModel):
     server_name: str | None = None
     url: str | None = None
     transport: MCPTransportType
+    protocol_version: MCPUpstreamProtocol = "auto"
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
     authentication_token: str | None = None
@@ -245,6 +254,14 @@ class MCPServer(BaseModel):
         breaking regression introduced with the M2M feature.
         """
         return self.oauth2_flow == "client_credentials"
+
+    @model_validator(mode="after")
+    def resolve_protocol_version(self) -> Self:
+        if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
+            self.protocol_version = TypeAdapter(MCPUpstreamProtocol).validate_python(
+                self.mcp_info.get("protocol_version", "auto")
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_identity_binding_mode(self) -> Self:

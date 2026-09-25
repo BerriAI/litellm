@@ -155,3 +155,43 @@ def test_server_initiated_sampling_and_elicitation_surface_as_errors_not_success
         assert outcome.error is not None, outcome.raw
         assert outcome.text is None or not outcome.text.startswith(("sampled:", "elicited:")), outcome.raw
         assert len(tool_calls(peer.drain())) == 1
+
+
+@pytest.mark.parametrize("downstream", ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"))
+@pytest.mark.parametrize("upstream", ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"))
+@pytest.mark.parametrize("peer_kind", ("http", "sse", "stdio"))
+@pytest.mark.parametrize("ingress", ("http", "sse"))
+def test_pinned_revision_pairs_list_and_call_through_gateway(
+    gateway: Gateway, downstream: str, upstream: str, peer_kind: PeerKind, ingress: str
+) -> None:
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.types.mcp import MCPTransport
+
+    with peer_of(peer_kind) as peer, gateway.scenario() as scenario:
+        alias: Final = "versions" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, mcp_info={"protocol_version": upstream})
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        endpoint: Final = str(gateway.client.base_url).rstrip("/") + ("/mcp/sse" if ingress == "sse" else "/mcp")
+        client: Final = MCPClient(
+            server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version=downstream,
+            extra_headers={"Authorization": f"Bearer {key}", "x-mcp-servers": identity}, timeout=15,
+        )
+
+        async def exercise() -> None:
+            tools: Final = await client.list_tools(raise_on_error=True)
+            assert f"{alias}-add" in tuple(tool.name for tool in tools)
+            result: Final = await client.call_tool(CallToolRequestParams(name=f"{alias}-add", arguments={"a": 3, "b": 4}))
+            assert result.is_error is False
+            assert result.content[0].text == "7"
+
+        peer.drain()
+        asyncio.run(exercise())
+        observed: Final = peer.drain()
+        negotiations: Final = tuple(item["body"] for item in observed if item["body"].get("method") == "initialize")
+        assert negotiations, "The operation must reach the upstream negotiation"
+        assert all(request["params"]["protocolVersion"] == upstream for request in negotiations), negotiations
+        assert len(tool_calls(observed)) == 1
