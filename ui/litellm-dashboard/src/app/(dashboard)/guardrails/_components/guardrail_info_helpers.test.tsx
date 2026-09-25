@@ -15,6 +15,10 @@ import {
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
   formatGuardrailMode,
+  formatGuardrailStreamScope,
+  streamScopeByModeFromConfig,
+  streamScopeForMode,
+  streamScopePayload,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -264,6 +268,39 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToSkipToolForCreate(undefined)).toBeUndefined();
       expect(choiceToSkipToolForCreate("yes")).toBe(true);
       expect(choiceToSkipToolForCreate("no")).toBe(false);
+    });
+  });
+
+  describe("stream_scope helpers", () => {
+    it("treats omitted config as both for every mode", () => {
+      expect(streamScopeForMode(undefined, "pre_call")).toBe("both");
+      expect(streamScopeByModeFromConfig(undefined, ["pre_call", "post_call"])).toEqual({
+        pre_call: "both",
+        post_call: "both",
+      });
+    });
+
+    it("applies a scalar to every selected mode and omits both-only payloads", () => {
+      expect(streamScopeForMode("streaming", "post_call")).toBe("streaming");
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "both", post_call: "both" })).toBeUndefined();
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "streaming", post_call: "streaming" })).toBe(
+        "streaming",
+      );
+    });
+
+    it("keeps a mixed map instead of collapsing it to a scalar", () => {
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "both", post_call: "streaming" })).toEqual({
+        post_call: "streaming",
+      });
+    });
+
+    it("formats scalar and per-mode stream scopes for display", () => {
+      expect(formatGuardrailStreamScope(undefined)).toBe("");
+      expect(formatGuardrailStreamScope("both")).toBe("Streaming and non-streaming");
+      expect(formatGuardrailStreamScope("non_streaming")).toBe("Non-streaming only");
+      expect(formatGuardrailStreamScope({ post_call: "streaming", pre_call: "both" })).toBe(
+        "post_call: Streaming only, pre_call: Streaming and non-streaming",
+      );
     });
   });
 });

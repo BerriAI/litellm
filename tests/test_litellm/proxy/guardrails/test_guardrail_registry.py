@@ -1084,3 +1084,23 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def test_configure_callback_scoping_copies_stream_scope_when_constructor_omits_it():
+    from litellm.proxy.guardrails.guardrail_registry import _configure_callback_scoping
+
+    class _CtorWithoutStreamScope(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(
+                guardrail_name="scoped",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+            )
+
+    instance = _CtorWithoutStreamScope()
+    params = LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="streaming")
+    _configure_callback_scoping(instance, "scoped", params)
+
+    assert instance.stream_scope_default == "streaming"
+    assert instance.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+    assert instance.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False

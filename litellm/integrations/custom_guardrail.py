@@ -20,8 +20,10 @@ from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
+    GuardrailStreamScope,
     LitellmParams,
     Mode,
+    runtime_stream_scope,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -139,6 +141,12 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
     return None
 
 
+def _request_is_streaming(data: object) -> bool:
+    if not isinstance(data, Mapping):
+        return False
+    return data.get("stream") is True
+
+
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
@@ -173,6 +181,7 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
+        stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None = None,
         **kwargs,
     ):
         """
@@ -218,6 +227,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.apply_stream_scope(stream_scope)
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -988,6 +998,22 @@ class CustomGuardrail(CustomLogger):
 
         return name in suppressed_compression_guardrails()
 
+    def apply_stream_scope(
+        self, stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None
+    ) -> None:
+        default, by_hook = runtime_stream_scope(stream_scope)
+        self.stream_scope_default: GuardrailStreamScope = default
+        self.stream_scope_by_hook: MappingProxyType[str, GuardrailStreamScope] = by_hook
+
+    def _stream_scope_allows(self, data: object, event_type: GuardrailEventHooks) -> bool:
+        scope: Final = self.stream_scope_by_hook.get(event_type.value, self.stream_scope_default)
+        if scope == "both":
+            return True
+        is_streaming: Final = _request_is_streaming(data)
+        if scope == "streaming":
+            return is_streaming
+        return not is_streaming
+
     def should_run_guardrail(
         self,
         data,
@@ -1031,8 +1057,8 @@ class CustomGuardrail(CustomLogger):
                         data, self.event_hook, event_type
                     )
                     if result is not None:
-                        return result
-                return True
+                        return bool(result) and self._stream_scope_allows(data, event_type)
+                return self._stream_scope_allows(data, event_type)
             return False
 
         if (
@@ -1056,8 +1082,8 @@ class CustomGuardrail(CustomLogger):
                 )
             result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(data, self.event_hook, event_type)
             if result is not None:
-                return result
-        return True
+                return bool(result) and self._stream_scope_allows(data, event_type)
+        return self._stream_scope_allows(data, event_type)
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """

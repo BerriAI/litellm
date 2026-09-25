@@ -895,6 +895,69 @@ class ContentFilterConfigModel(BaseModel):
 
 MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
 
+GuardrailStreamScope = Literal["streaming", "non_streaming", "both"]
+DEFAULT_GUARDRAIL_STREAM_SCOPE: Final[GuardrailStreamScope] = "both"
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"
+    logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
+    post_mcp_call = "post_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
+
+
+GUARDRAIL_EVENT_HOOK_VALUES: Final = frozenset(member.value for member in GuardrailEventHooks)
+
+
+def _as_guardrail_stream_scope(value: object) -> GuardrailStreamScope:
+    if not isinstance(value, str):
+        raise ValueError(f"stream_scope values must be strings, got {type(value).__name__}")
+    lowered: Final = value.lower()
+    match lowered:
+        case "streaming":
+            return "streaming"
+        case "non_streaming":
+            return "non_streaming"
+        case "both":
+            return "both"
+        case _:
+            raise ValueError(f"stream_scope must be one of both, streaming, non_streaming, got {value!r}")
+
+
+def _validated_stream_scope_hook(key: object) -> str:
+    if not isinstance(key, str):
+        raise ValueError(f"stream_scope keys must be strings, got {type(key).__name__}")
+    hook: Final = key.lower()
+    if hook not in GUARDRAIL_EVENT_HOOK_VALUES:
+        raise ValueError(
+            f"stream_scope keys must be guardrail modes ({sorted(GUARDRAIL_EVENT_HOOK_VALUES)}), got {key!r}"
+        )
+    return hook
+
+
+def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _as_guardrail_stream_scope(value)
+    if isinstance(value, Mapping):
+        return {_validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in value.items()}
+    raise ValueError(f"stream_scope must be a string or mapping, got {type(value).__name__}")
+
+
+def runtime_stream_scope(
+    stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None,
+) -> tuple[GuardrailStreamScope, MappingProxyType[str, GuardrailStreamScope]]:
+    if stream_scope is None:
+        return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType({})
+    if isinstance(stream_scope, str):
+        return stream_scope, MappingProxyType({})
+    return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(dict(stream_scope))
+
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
@@ -1136,6 +1199,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    stream_scope: GuardrailStreamScope | dict[str, GuardrailStreamScope] | None = Field(
+        default=None,
+        description=(
+            "Whether this guardrail runs on streaming requests, non-streaming requests, or both. "
+            "A string applies to every configured mode. A map overrides named modes "
+            "(pre_call, during_call, post_call, ...); omitted keys default to both. "
+            "Unset means both, matching historical behavior."
+        ),
+    )
+
+    @field_validator("stream_scope", mode="before")
+    @classmethod
+    def normalize_stream_scope(cls, v: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+        return coerce_stream_scope(v)
+
     @field_validator(
         "mode",
         "default_action",
@@ -1260,17 +1338,6 @@ class Guardrail(TypedDict, total=False):
 
 class guardrailConfig(TypedDict):
     guardrails: list[Guardrail]
-
-
-class GuardrailEventHooks(str, Enum):
-    pre_call = "pre_call"
-    post_call = "post_call"
-    during_call = "during_call"
-    logging_only = "logging_only"
-    pre_mcp_call = "pre_mcp_call"
-    during_mcp_call = "during_mcp_call"
-    post_mcp_call = "post_mcp_call"
-    realtime_input_transcription = "realtime_input_transcription"
 
 
 class DynamicGuardrailParams(TypedDict):

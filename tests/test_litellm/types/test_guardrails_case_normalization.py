@@ -184,3 +184,29 @@ class TestSensitiveDataRoutingValidation:
             on_sensitive_data="BLOCK",
         )
         assert params.on_sensitive_data == "block"
+
+
+class TestStreamScopeValidation:
+    def test_scalar_is_case_normalized(self):
+        params = LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="Streaming")
+        assert params.stream_scope == "streaming"
+
+    def test_map_keys_and_values_are_normalized(self):
+        params = LitellmParams(
+            guardrail="bedrock",
+            mode=["pre_call", "post_call"],
+            stream_scope={"Pre_Call": "Both", "POST_CALL": "Non_Streaming"},
+        )
+        assert params.stream_scope == {"pre_call": "both", "post_call": "non_streaming"}
+
+    def test_invalid_scalar_is_rejected(self):
+        with pytest.raises(ValidationError, match="stream_scope must be one of"):
+            LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="chunks")
+
+    def test_invalid_map_key_is_rejected(self):
+        with pytest.raises(ValidationError, match="stream_scope keys must be guardrail modes"):
+            LitellmParams(guardrail="bedrock", mode="post_call", stream_scope={"not_a_mode": "both"})
+
+    def test_invalid_map_value_is_rejected(self):
+        with pytest.raises(ValidationError, match="stream_scope must be one of"):
+            LitellmParams(guardrail="bedrock", mode="post_call", stream_scope={"post_call": "sometimes"})

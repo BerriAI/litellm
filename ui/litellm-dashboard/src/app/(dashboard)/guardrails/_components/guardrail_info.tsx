@@ -34,13 +34,19 @@ import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_f
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import {
   formatGuardrailMode,
+  formatGuardrailStreamScope,
   getGuardrailLogoAndName,
   guardrail_provider_map,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
+  streamScopeByModeFromConfig,
+  streamScopePayload,
+  toModeArray,
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
+  type GuardrailStreamScope,
 } from "./guardrail_info_helpers";
+import { StreamScopeFields } from "./StreamScopeFields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
@@ -228,6 +234,13 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       skipToolMessageToChoice(guardrailData.litellm_params?.skip_tool_message_in_guardrail),
     );
     form.setValue(
+      "stream_scope_by_mode",
+      streamScopeByModeFromConfig(
+        guardrailData.litellm_params?.stream_scope,
+        toModeArray(guardrailData.litellm_params?.mode),
+      ),
+    );
+    form.setValue(
       "guardrail_info",
       guardrailData.guardrail_info ? JSON.stringify(guardrailData.guardrail_info, null, 2) : "",
     );
@@ -293,6 +306,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       // Only include default_on if it has changed
       if (values.default_on !== guardrailData.litellm_params?.default_on) {
         updateData.litellm_params.default_on = values.default_on;
+      }
+
+      const modes = toModeArray(guardrailData.litellm_params?.mode);
+      const nextStreamScope = streamScopePayload(
+        modes,
+        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
+      );
+      const previousStreamScope = streamScopePayload(
+        modes,
+        streamScopeByModeFromConfig(guardrailData.litellm_params?.stream_scope, modes),
+      );
+      if (JSON.stringify(nextStreamScope ?? "both") !== JSON.stringify(previousStreamScope ?? "both")) {
+        updateData.litellm_params.stream_scope = nextStreamScope ?? "both";
       }
 
       const prevSkipChoice = skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail);
@@ -562,6 +588,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   <h3 className="text-lg font-medium">
                     {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
                   </h3>
+                  {formatGuardrailStreamScope(guardrailData.litellm_params?.stream_scope) ? (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {formatGuardrailStreamScope(guardrailData.litellm_params?.stream_scope)}
+                    </p>
+                  ) : null}
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
@@ -726,6 +757,23 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
                         <GuardrailField
                           control={form.control}
+                          name="stream_scope_by_mode"
+                          label={labelWithHint(
+                            "Request shape",
+                            "Run this guardrail on streaming requests, non-streaming requests, or both, for each configured mode.",
+                          )}
+                        >
+                          {({ value, onChange }) => (
+                            <StreamScopeFields
+                              modes={toModeArray(guardrailData.litellm_params?.mode)}
+                              value={(value as Record<string, GuardrailStreamScope> | undefined) ?? {}}
+                              onChange={onChange}
+                            />
+                          )}
+                        </GuardrailField>
+
+                        <GuardrailField
+                          control={form.control}
                           name="skip_system_message_choice"
                           label={labelWithHint(
                             "Skip system messages in guardrail",
@@ -860,6 +908,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       <p className="font-medium">Mode</p>
                       <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
                     </div>
+                    {formatGuardrailStreamScope(guardrailData.litellm_params?.stream_scope) ? (
+                      <div>
+                        <p className="font-medium">Request shape</p>
+                        <div>{formatGuardrailStreamScope(guardrailData.litellm_params?.stream_scope)}</div>
+                      </div>
+                    ) : null}
                     <div>
                       <p className="font-medium">Default On</p>
                       <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>

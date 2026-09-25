@@ -458,6 +458,7 @@ def _configure_callback_scoping(
             "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
+    custom_guardrail_callback.apply_stream_scope(litellm_params.stream_scope)
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 
@@ -634,7 +635,7 @@ class InMemoryGuardrailHandler:
             extra_params = dict(litellm_params) if litellm_params else {}
 
         # Remove params that are handled explicitly or are internal
-        for key in ["guardrail", "mode", "default_on"]:
+        for key in ["guardrail", "mode", "default_on", "stream_scope"]:
             extra_params.pop(key, None)
 
         _guardrail_callback: Final = _guardrail_class(

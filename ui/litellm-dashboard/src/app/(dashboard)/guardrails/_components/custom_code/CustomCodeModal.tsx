@@ -30,6 +30,12 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { StreamScopeFields } from "../StreamScopeFields";
+import {
+  streamScopeByModeFromConfig,
+  streamScopePayload,
+  type GuardrailStreamScope,
+} from "../guardrail_info_helpers";
 
 // Code templates
 const CODE_TEMPLATES = {
@@ -196,6 +202,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
+  const [streamScopeByMode, setStreamScopeByMode] = useState<Record<string, GuardrailStreamScope>>({});
   const [defaultOn, setDefaultOn] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
@@ -320,6 +327,12 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         // Edit mode: populate with existing data
         setGuardrailName(editData.guardrail_name || "");
         setMode(normalizeMode(editData.litellm_params?.mode));
+        setStreamScopeByMode(
+          streamScopeByModeFromConfig(
+            editData.litellm_params?.stream_scope,
+            normalizeMode(editData.litellm_params?.mode),
+          ),
+        );
         setDefaultOn(editData.litellm_params?.default_on || false);
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
@@ -327,6 +340,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         // Create mode: reset to defaults
         setGuardrailName("");
         setMode(["pre_call"]);
+        setStreamScopeByMode({});
         setDefaultOn(false);
         setSelectedTemplate("empty");
         setCode(CODE_TEMPLATES.empty.code);
@@ -399,11 +413,20 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         if (defaultOn !== editData.litellm_params?.default_on) {
           updateData.litellm_params.default_on = defaultOn;
         }
+        const nextStreamScope = streamScopePayload(mode, streamScopeByMode);
+        const previousStreamScope = streamScopePayload(
+          existingMode,
+          streamScopeByModeFromConfig(editData.litellm_params?.stream_scope, existingMode),
+        );
+        if (JSON.stringify(nextStreamScope ?? "both") !== JSON.stringify(previousStreamScope ?? "both")) {
+          updateData.litellm_params.stream_scope = nextStreamScope ?? "both";
+        }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
         toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
+        const streamScope = streamScopePayload(mode, streamScopeByMode);
         const guardrailData = {
           guardrail_name: guardrailName,
           litellm_params: {
@@ -411,6 +434,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             mode: mode,
             default_on: defaultOn,
             custom_code: code,
+            ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
           },
           guardrail_info: {},
         };
@@ -584,6 +608,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             <Switch checked={defaultOn} onCheckedChange={setDefaultOn} aria-label="Default On" />
           </div>
         </div>
+        {mode.length > 0 && (
+          <div className="border-b border-border py-4">
+            <StreamScopeFields modes={mode} value={streamScopeByMode} onChange={setStreamScopeByMode} />
+          </div>
+        )}
 
         {/* Main Content */}
         <div className="mt-4 flex gap-6">

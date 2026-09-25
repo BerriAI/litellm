@@ -528,6 +528,89 @@ class TestCustomGuardrailShouldRunGuardrail:
         assert always_on.should_run_guardrail(data=forged, event_type=GuardrailEventHooks.pre_call) is True
 
 
+_STREAM_SCOPE_HOOKS: Final = (
+    GuardrailEventHooks.pre_call,
+    GuardrailEventHooks.during_call,
+    GuardrailEventHooks.post_call,
+)
+
+
+class TestCustomGuardrailStreamScope:
+    @pytest.mark.parametrize("event_type", _STREAM_SCOPE_HOOKS)
+    @pytest.mark.parametrize("stream", [True, False])
+    @pytest.mark.parametrize("stream_scope", [None, "both"])
+    def test_both_and_omitted_run_on_streaming_and_non_streaming(
+        self,
+        event_type: GuardrailEventHooks,
+        stream: bool,
+        stream_scope: str | None,
+    ):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=event_type,
+            stream_scope=stream_scope,
+        )
+        assert guardrail.should_run_guardrail({"stream": stream}, event_type) is True
+
+    @pytest.mark.parametrize("event_type", _STREAM_SCOPE_HOOKS)
+    def test_scalar_streaming_skips_non_streaming(self, event_type: GuardrailEventHooks):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=event_type,
+            stream_scope="streaming",
+        )
+        assert guardrail.should_run_guardrail({"stream": True}, event_type) is True
+        assert guardrail.should_run_guardrail({"stream": False}, event_type) is False
+        assert guardrail.should_run_guardrail({}, event_type) is False
+
+    @pytest.mark.parametrize("event_type", _STREAM_SCOPE_HOOKS)
+    def test_scalar_non_streaming_skips_streaming(self, event_type: GuardrailEventHooks):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=event_type,
+            stream_scope="non_streaming",
+        )
+        assert guardrail.should_run_guardrail({"stream": False}, event_type) is True
+        assert guardrail.should_run_guardrail({}, event_type) is True
+        assert guardrail.should_run_guardrail({"stream": True}, event_type) is False
+
+    def test_per_mode_map_applies_to_named_hooks_only(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            stream_scope={"pre_call": "both", "post_call": "streaming"},
+        )
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+    def test_default_on_early_return_still_honors_stream_scope(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.post_call,
+            stream_scope="non_streaming",
+        )
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is False
+
+    def test_apply_stream_scope_overwrites_constructor_default(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="scoped",
+            default_on=True,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is True
+        guardrail.apply_stream_scope("streaming")
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+
 class TestApplyGuardrailCheck:
     def test_apply_guardrail_check_only_on_direct_implementation(self):
         """
