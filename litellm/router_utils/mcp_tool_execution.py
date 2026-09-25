@@ -40,15 +40,15 @@ def mcp_tools_executed(exception: BaseException | None) -> bool:
 
 
 class MCPToolReplayGuard:
-    """Tags errors raised inside ``with guard:`` once the request has executed an MCP tool call."""
+    """Tags errors raised inside ``with guard:`` once the request has sent an MCP tool call to a server."""
 
-    __slots__ = ("_tool_executed",)
+    __slots__ = ("_tool_dispatched",)
 
     def __init__(self) -> None:
-        self._tool_executed: bool = False
+        self._tool_dispatched: bool = False
 
-    def record_tool_execution(self) -> None:
-        self._tool_executed = True
+    def record_tool_dispatch(self) -> None:
+        self._tool_dispatched = True
 
     def __enter__(self) -> None:
         return None
@@ -59,5 +59,5 @@ class MCPToolReplayGuard:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if self._tool_executed and isinstance(exc, Exception):
+        if self._tool_dispatched and isinstance(exc, Exception):
             mark_mcp_tools_executed(exc)

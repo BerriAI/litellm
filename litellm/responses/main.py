@@ -353,7 +353,7 @@ async def aresponses_api_with_mcp(
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(
                     MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                 ),
-                on_tool_executed=replay_guard.record_tool_execution,
+                on_tool_dispatched=replay_guard.record_tool_dispatch,
             )
 
             if tool_results:

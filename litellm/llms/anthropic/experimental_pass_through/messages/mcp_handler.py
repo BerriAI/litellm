@@ -159,7 +159,7 @@ async def anthropic_messages_with_mcp(
             litellm_trace_id=context.litellm_trace_id,
             request_tags=list(context.request_tags) if context.request_tags else None,
             guardrail_context=context.guardrail_context,
-            on_tool_executed=replay_guard.record_tool_execution,
+            on_tool_dispatched=replay_guard.record_tool_dispatch,
         )
 
         # Every tool call was skipped, so there is nothing to feed back; a

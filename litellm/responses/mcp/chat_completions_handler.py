@@ -620,7 +620,7 @@ async def acompletion_with_mcp(
         litellm_trace_id=context.litellm_trace_id,
         request_tags=request_tags,
         guardrail_context=context.guardrail_context,
-        on_tool_executed=replay_guard.record_tool_execution,
+        on_tool_dispatched=replay_guard.record_tool_dispatch,
     )
 
     if not tool_results:

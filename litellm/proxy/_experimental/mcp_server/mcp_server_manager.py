@@ -6318,6 +6318,7 @@ class MCPServerManager:
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -6333,6 +6334,8 @@ class MCPServerManager:
             litellm_logging_obj: Optional request logger the guardrail hooks record
                 their evaluations onto, so MCP guardrail activity reaches the
                 Guardrails Monitor. See ``pre_call_tool_check``
+            on_dispatch: Optional callback run once the call passed its pre-call checks
+                and is sent to the server, even if the server never returns a result
 
 
         Returns:
@@ -6433,8 +6436,12 @@ class MCPServerManager:
                     _request_extra_headers.reset(extra_token)
                     _request_resolved_auth_headers.reset(resolved_token)
 
+            if on_dispatch is not None:
+                on_dispatch()
             tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
+            if on_dispatch is not None:
+                on_dispatch()
             return await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
                 original_tool_name=name,

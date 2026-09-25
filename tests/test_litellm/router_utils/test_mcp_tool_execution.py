@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import Final, NamedTuple
@@ -271,6 +272,45 @@ async def test_router_retries_when_a_guardrail_blocked_every_mcp_tool(
 
     assert ledger_gateway.tool.await_count == 0
     assert model.calls == ["initial", "follow_up", "initial", "follow_up"]
+
+
+@pytest.mark.asyncio
+@_ENDPOINTS
+@respx.mock
+async def test_router_does_not_replay_a_tool_call_that_failed_after_it_was_sent(
+    ledger_gateway: _LedgerGateway,
+    send: Callable[[litellm.Router], Awaitable[object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Given: The tool runs, but its call fails afterwards, here because a during-call guardrail
+           rejects the result, which leaves the router in the same spot as a timeout after the write
+    When:  Every follow-up model call returns a 500
+    Then:  The router does not replay the request, because the tool may already have written
+    """
+    tool_ran: Final = asyncio.Event()
+
+    def write(**_: object) -> dict[str, bool]:
+        tool_ran.set()
+        return {"written": True}
+
+    class RejectToolResult(CustomGuardrail):
+        async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+            await tool_ran.wait()
+            raise GuardrailRaisedException(message="tool result rejected", blocked_content=True)
+
+    ledger_gateway.tool.side_effect = write
+    monkeypatch.setattr(
+        litellm, "callbacks", [RejectToolResult(guardrail_name="reject", event_hook="during_mcp_call", default_on=True)]
+    )
+    model: Final = _FakeModel(failing_follow_ups=3)
+    _serve(model)
+
+    with pytest.raises(litellm.InternalServerError):
+        await send(_router(num_retries=2))
+
+    assert ledger_gateway.tool.await_count == 1
+    assert model.calls == ["initial", "follow_up"]
 
 
 @pytest.mark.asyncio
