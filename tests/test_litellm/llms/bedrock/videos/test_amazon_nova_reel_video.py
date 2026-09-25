@@ -1211,6 +1211,131 @@ def test_main_layer_bedrock_status_and_content_pass_default_timeout(monkeypatch)
     assert content_kwargs["timeout"] == 44.5
 
 
+def test_main_layer_bedrock_create_dispatch_threads_params(monkeypatch):
+    """The create branch must merge the aws_* auth params riding on litellm_params into
+    the handler optional params and thread timeout/api_key/avideo_generation through."""
+    from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration as _Handler
+    from litellm.videos import main as videos_main
+
+    seen: dict = {}
+
+    def fake_generation(self, **kwargs):
+        seen.update(kwargs)
+        return Mock()
+
+    monkeypatch.setattr(_Handler, "video_generation", fake_generation)
+    result = videos_main.video_generation(
+        prompt="waves at sunset",
+        model="bedrock/amazon.nova-reel-v1:0",
+        output_s3_uri="s3://bucket/out/",
+        aws_region_name="eu-central-1",
+        timeout=11.5,
+        api_key="sigv4-key",
+    )
+    assert result is not None
+    assert seen["timeout"] == 11.5
+    assert seen["api_key"] == "sigv4-key"
+    assert seen["avideo_generation"] is False
+    optional_params: Final[dict] = seen["optional_params"]
+    assert optional_params["output_s3_uri"] == "s3://bucket/out/"
+    # aws_* auth params ride on litellm_params and are merged in by the dispatch.
+    assert optional_params["aws_region_name"] == "eu-central-1"
+    # The real litellm_params object (not a copy) reaches the handler.
+    assert isinstance(seen["litellm_params"], videos_main.GenericLiteLLMParams)
+
+
+def test_dispatch_functions_forward_kwargs_verbatim(monkeypatch):
+    """The three dispatch shims forward their arguments verbatim to the handler."""
+    from litellm.llms.bedrock.videos.dispatch import (
+        dispatch_bedrock_video_content,
+        dispatch_bedrock_video_generation,
+        dispatch_bedrock_video_status,
+    )
+    from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration as _Handler
+
+    seen: dict[str, dict] = {}
+
+    def fake_generation(self, **kwargs):
+        seen["generation"] = kwargs
+        return Mock()
+
+    def fake_status(self, **kwargs):
+        seen["status"] = kwargs
+        return Mock()
+
+    def fake_content(self, **kwargs):
+        seen["content"] = kwargs
+        return b"mp4-bytes"
+
+    monkeypatch.setattr(_Handler, "video_generation", fake_generation)
+    monkeypatch.setattr(_Handler, "video_status", fake_status)
+    monkeypatch.setattr(_Handler, "video_content", fake_content)
+
+    litellm_params: Final = GenericLiteLLMParams(api_base="https://examplebedrock", api_key="k1")
+
+    dispatch_bedrock_video_generation(
+        model="amazon.nova-reel-v1:0",
+        prompt="waves",
+        video_generation_request_params={"output_s3_uri": "s3://bucket/out/"},
+        litellm_params=litellm_params,
+        logging_obj=None,
+        timeout=30.0,
+        is_async=True,
+        client="fake-client",
+        extra_headers={"X-Test": "1"},
+        api_key="sigv4-key",
+    )
+    generation_kwargs: Final[dict] = seen["generation"]
+    assert generation_kwargs["model"] == "amazon.nova-reel-v1:0"
+    assert generation_kwargs["prompt"] == "waves"
+    assert generation_kwargs["optional_params"] == {"output_s3_uri": "s3://bucket/out/"}
+    assert generation_kwargs["timeout"] == 30.0
+    assert generation_kwargs["avideo_generation"] is True
+    assert generation_kwargs["client"] == "fake-client"
+    assert generation_kwargs["extra_headers"] == {"X-Test": "1"}
+    assert generation_kwargs["api_key"] == "sigv4-key"
+    assert generation_kwargs["api_base"] == "https://examplebedrock"
+    assert generation_kwargs["litellm_params"] is litellm_params
+
+    dispatch_bedrock_video_status(
+        video_id="vid-1",
+        litellm_params=litellm_params,
+        logging_obj=None,
+        api_base="https://examplebedrock",
+        api_key="sigv4-key",
+        astatus=False,
+        timeout=600,
+    )
+    status_kwargs: Final[dict] = seen["status"]
+    assert status_kwargs == {
+        "video_id": "vid-1",
+        "litellm_params": litellm_params,
+        "logging_obj": None,
+        "api_base": "https://examplebedrock",
+        "api_key": "sigv4-key",
+        "astatus": False,
+        "timeout": 600,
+    }
+
+    content_result = dispatch_bedrock_video_content(
+        video_id="vid-1",
+        litellm_params=litellm_params,
+        logging_obj=None,
+        api_base="https://examplebedrock",
+        api_key="sigv4-key",
+        timeout=60.0,
+    )
+    assert content_result == b"mp4-bytes"
+    assert seen["content"] == {
+        "video_id": "vid-1",
+        "litellm_params": litellm_params,
+        "logging_obj": None,
+        "api_base": "https://examplebedrock",
+        "api_key": "sigv4-key",
+        "timeout": 60.0,
+    }
+
+
 #################################################
 # _to_epoch iso8601 timestamps
 #################################################
