@@ -34,7 +34,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    CONVERTED_SYSTEM_NOTE,
+    is_system_message,
+    message_field,
+    parts_of,
+)
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -1347,39 +1352,33 @@ class AmazonConverseConfig(BaseConfig):
         return cache_point
 
     @staticmethod
-    def _is_system_role_message(message: object) -> bool:
-        return isinstance(message, dict) and message.get("role") == "system"
-
-    @staticmethod
     def _assistant_has_tool_calls(message: object) -> bool:
-        return isinstance(message, dict) and message.get("role") == "assistant" and bool(message.get("tool_calls"))
+        return message_field(message, "role") == "assistant" and bool(message_field(message, "tool_calls"))
 
     @staticmethod
     def _opens_with_tool_result(message: object) -> bool:
-        if not isinstance(message, dict):
-            return False
-        if message.get("role") == "tool":
+        """Whether the message starts a tool-result turn on Converse.
+
+        ``_bedrock_converse_messages_pt`` builds ``toolResult`` blocks from ``tool``
+        messages only, so a ``function`` message never opens one."""
+        role: Final = message_field(message, "role")
+        if role == "tool":
             return True
-        if message.get("role") != "user":
+        if role != "user":
             return False
-        content = message.get("content")
-        return (
-            isinstance(content, list)
-            and len(content) > 0
-            and isinstance(content[0], dict)
-            and content[0].get("type") == "tool_result"
-        )
+        first_part: Final = next(iter(parts_of(message_field(message, "content"))), None)
+        return message_field(first_part, "type") == "tool_result"
 
     def _system_run_before(self, messages: Sequence[AllMessageValues], index: int) -> Sequence[AllMessageValues]:
         start: Final = next(
-            (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
+            (j + 1 for j in range(index - 1, -1, -1) if not is_system_message(messages[j])),
             0,
         )
         return messages[start:index]
 
     def _system_run_end(self, messages: Sequence[AllMessageValues], index: int) -> int:
         return next(
-            (j for j in range(index, len(messages)) if not self._is_system_role_message(messages[j])),
+            (j for j in range(index, len(messages)) if not is_system_message(messages[j])),
             len(messages),
         )
 
@@ -1405,10 +1404,10 @@ class AmazonConverseConfig(BaseConfig):
             if run and prev_idx >= 0 and self._assistant_has_tool_calls(messages[prev_idx]):
                 return (message, *run)
             return (message,)
-        if not self._is_system_role_message(message):
+        if not is_system_message(message):
             return (message,)
         run_start: Final = next(
-            (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
+            (j + 1 for j in range(index - 1, -1, -1) if not is_system_message(messages[j])),
             0,
         )
         run_end: Final = self._system_run_end(messages, index)
@@ -1441,7 +1440,7 @@ class AmazonConverseConfig(BaseConfig):
         return ChatCompletionUserMessage(role="user", content=body)
 
     def _converted_or_kept(self, message: AllMessageValues) -> AllMessageValues | None:
-        if not self._is_system_role_message(message):
+        if not is_system_message(message):
             return message
         return self._system_role_message_as_user(
             cast(ChatCompletionSystemMessage, message)  # cast-ok: the role is checked on the line above
@@ -1474,7 +1473,7 @@ class AmazonConverseConfig(BaseConfig):
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
         leading_count: Final = next(
-            (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+            (i for i, m in enumerate(messages) if not is_system_message(m)),
             len(messages),
         )
         hoisted: Final = messages[:leading_count]

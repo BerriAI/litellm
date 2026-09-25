@@ -49,6 +49,7 @@ CONVERTED_SYSTEM_NOTE: Final = (
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
+_RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
@@ -58,26 +59,30 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
-def _as_items(value: object) -> tuple[object, ...]:
+def parts_of(value: object) -> tuple[object, ...]:
     return tuple(value) if isinstance(value, Sequence) and not isinstance(value, str) else ()
 
 
-def _field(message: object, key: str) -> object:
-    """A message field, whether the message is a dict or a pydantic ``Message``."""
+def message_field(message: object, key: str) -> object:
+    """A message field, whether the message is a dict or a pydantic ``Message``.
+
+    Clients replay assistant turns straight from a response, so a history mixes
+    plain dicts with ``litellm.Message`` objects; every predicate reads through here.
+    """
     mapping: Final = _as_mapping(message)
     return mapping.get(key) if mapping is not None else getattr(message, key, None)
 
 
 def is_system_message(message: object) -> bool:
-    return _field(message, "role") == "system"
+    return message_field(message, "role") == "system"
 
 
 def _is_user_type(message: object) -> bool:
-    return _field(message, "role") in _USER_TYPE_ROLES
+    return message_field(message, "role") in _USER_TYPE_ROLES
 
 
 def _kind(message: object) -> _MessageKind:
-    role: Final = _field(message, "role")
+    role: Final = message_field(message, "role")
     if role == "system":
         return "system"
     if role in _TOOL_ROLES:
@@ -100,7 +105,7 @@ def split_leading_system_run(
 
 def _cache_control(holder: object) -> ChatCompletionCachedContent | None:
     """The client's ``cache_control`` rebuilt in the only shape Anthropic accepts."""
-    value: Final = _as_mapping(_field(holder, "cache_control"))
+    value: Final = _as_mapping(message_field(holder, "cache_control"))
     if value is None or value.get("type") != "ephemeral":
         return None
     ttl: Final = value.get("ttl")
@@ -121,14 +126,14 @@ def _text_parts(message: object) -> tuple[_TextPart, ...]:
     ``cache_control`` on the message itself belongs to the block built from string
     content; block-level ``cache_control`` stays with its block.
     """
-    content: Final = _field(message, "content")
+    content: Final = message_field(message, "content")
     if isinstance(content, str):
         return ((content, _cache_control(message)),) if content else ()
     return tuple(
         (text, _cache_control(part))
-        for part in _as_items(content)
-        if _field(part, "type") == "text"
-        for text in (_field(part, "text"),)
+        for part in parts_of(content)
+        if message_field(part, "type") == "text"
+        for text in (message_field(part, "text"),)
         if isinstance(text, str) and text
     )
 
@@ -239,17 +244,63 @@ def _block_containing(message_index: int, blocks: Sequence[tuple[bool, tuple[int
     return next(index for index, (_, indices) in enumerate(blocks) if message_index in indices)
 
 
-def _renders(message: object) -> bool:
-    """Whether ``anthropic_messages_pt`` puts a block on the wire for this user-type message.
-
-    A tool message always becomes a ``tool_result`` and string content always becomes
-    a text block (empty text gets a placeholder). A list renders only through parts of
-    a type the converter emits; ``None``, an empty list, and a list of other parts vanish.
-    """
-    if _field(message, "role") in _TOOL_ROLES:
+def _thinking_block_renders(block: object) -> bool:
+    """A thinking block the converter keeps: redacted, or signed so Anthropic can verify it."""
+    block_type: Final = message_field(block, "type")
+    if block_type == "redacted_thinking":
         return True
-    content: Final = _field(message, "content")
-    return isinstance(content, str) or any(_field(part, "type") in _RENDERED_PART_TYPES for part in _as_items(content))
+    signature: Final = message_field(block, "signature")
+    return block_type == "thinking" and isinstance(signature, str) and bool(signature)
+
+
+def _assistant_part_renders(part: object) -> bool:
+    """A text part always renders: the converter pads empty text with a placeholder."""
+    part_type: Final = message_field(part, "type")
+    if part_type == "thinking":
+        thinking: Final = message_field(part, "thinking")
+        return isinstance(thinking, str) and bool(thinking) and _thinking_block_renders(part)
+    return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
+        isinstance(part_type, str) and part_type.endswith("_tool_result")
+    )
+
+
+def _assistant_renders(message: object) -> bool:
+    """Whether ``anthropic_messages_pt`` puts a block on the wire for this assistant message.
+
+    String content (the converter pads an empty one with a placeholder), a text part,
+    a signed thinking part, a server tool part, tool calls, a function call, a kept
+    thinking block and compaction blocks each render. An assistant message with none
+    of them, such as ``content: None`` or an empty list, vanishes from the wire.
+    """
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return True
+    return (
+        any(_assistant_part_renders(part) for part in parts_of(content))
+        or any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
+        or bool(message_field(message, "tool_calls"))
+        or bool(message_field(message, "function_call"))
+        or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))
+    )
+
+
+def _renders(message: object) -> bool:
+    """Whether ``anthropic_messages_pt`` puts a block on the wire for this message.
+
+    A tool message always becomes a ``tool_result`` and a user message with string
+    content always becomes a text block (empty text gets a placeholder). A user list
+    renders only through parts of a type the converter emits; ``None``, an empty list,
+    and a list of other parts vanish. Assistant messages follow ``_assistant_renders``.
+    """
+    role: Final = message_field(message, "role")
+    if role in _TOOL_ROLES:
+        return True
+    if role == "assistant":
+        return _assistant_renders(message)
+    content: Final = message_field(message, "content")
+    return isinstance(content, str) or any(
+        message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content)
+    )
 
 
 def _rendered_block(
@@ -260,6 +311,26 @@ def _rendered_block(
     block_index: Final = _block_containing(message_index, blocks)
     _, indices = blocks[block_index]
     return block_index if any(_renders(messages[index]) for index in indices) else None
+
+
+def _system_may_follow(
+    block_index: int,
+    messages: Sequence[AllMessageValues],
+    blocks: Sequence[tuple[bool, tuple[int, ...]]],
+) -> bool:
+    """Whether a system message behind this block precedes an assistant turn or ends the array on the wire.
+
+    Blocks alternate between user-type and assistant, so the check is whether the
+    first later block that puts anything on the wire is an assistant block.
+    """
+    return next(
+        (
+            not is_user
+            for is_user, indices in blocks[block_index + 1 :]
+            if any(_renders(messages[index]) for index in indices)
+        ),
+        True,
+    )
 
 
 def _anchor_block(
@@ -274,15 +345,18 @@ def _anchor_block(
     the run's neighbours decide, so a request that replays these messages with more
     turns appended places the run identically. A block that puts nothing on the wire
     cannot anchor a run: the system message would land first or behind an assistant
-    turn, so the run converts in place instead.
+    turn, so the run converts in place instead. The same happens when the assistant
+    turn after the anchor puts nothing on the wire and a user turn follows it: the
+    system message would sit directly before that user turn, which Anthropic rejects.
     """
     previous: Final = run[0] - 1
-    if _is_user_type(messages[previous]):
-        return _rendered_block(previous, messages, blocks)
-    follower: Final = run[-1] + 1
-    if follower < len(messages) and _is_user_type(messages[follower]):
-        return _rendered_block(follower, messages, blocks)
-    return None
+    neighbour: Final = previous if _is_user_type(messages[previous]) else run[-1] + 1
+    if neighbour >= len(messages) or not _is_user_type(messages[neighbour]):
+        return None
+    block_index: Final = _rendered_block(neighbour, messages, blocks)
+    if block_index is None or not _system_may_follow(block_index, messages, blocks):
+        return None
+    return block_index
 
 
 def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:

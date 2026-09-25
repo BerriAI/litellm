@@ -7540,6 +7540,27 @@ def test_mid_conversation_system_after_multiple_tool_results():
     assert out_messages[5]["content"] == "done"
 
 
+def test_mid_conversation_system_reorders_around_a_pydantic_assistant_tool_call():
+    config = AmazonConverseConfig()
+    assistant = litellm.Message(
+        role="assistant",
+        content="calling tools",
+        tool_calls=[{"id": "call_a", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+    )
+    messages = [
+        {"role": "user", "content": "hi"},
+        assistant,
+        {"role": "system", "content": "reminder"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == ["user", "assistant", "tool", "user", "user"]
+    assert out_messages[1] is assistant
+    assert out_messages[3]["content"][1]["text"] == "reminder"
+
+
 def test_mid_conversation_multi_system_run_after_multiple_tool_results():
     config = AmazonConverseConfig()
     messages = [

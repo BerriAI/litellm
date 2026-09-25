@@ -251,3 +251,98 @@ def test_flagged_placement_keeps_a_system_behind_a_user_turn_merged_with_an_empt
     )
 
     assert _roles(placed) == ["user", "user", "system", "assistant"]
+
+
+EMPTY_ASSISTANT = pytest.mark.parametrize(
+    "empty_assistant",
+    [
+        {"role": "assistant", "content": None},
+        {"role": "assistant", "content": []},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "unsigned"}]},
+        litellm.Message(role="assistant", content=None),
+    ],
+    ids=["none", "empty-list", "unsigned-thinking-part", "pydantic-none"],
+)
+
+
+@EMPTY_ASSISTANT
+def test_flagged_placement_converts_a_run_when_the_assistant_turn_after_its_anchor_sends_nothing(empty_assistant):
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "reminder"},
+            empty_assistant,
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "assistant", "user"]
+    assert _texts(placed[1]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
+    assert placed[2] is empty_assistant
+
+
+@EMPTY_ASSISTANT
+def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_the_array(empty_assistant):
+    placed = place_mid_conversation_system(
+        [{"role": "user", "content": "q1"}, {"role": "system", "content": "reminder"}, empty_assistant],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "system", "assistant"]
+
+
+@pytest.mark.parametrize(
+    "assistant_turn",
+    [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+        },
+        {"role": "assistant", "content": "", "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
+        {"role": "assistant", "content": "", "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
+        {"role": "assistant", "content": None, "function_call": {"name": "f", "arguments": "{}"}},
+        litellm.Message(role="assistant", content="", tool_calls=[{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]),
+    ],
+    ids=["tool-calls", "signed-thinking-block", "redacted-thinking-block", "signed-thinking-part", "function-call", "pydantic-tool-calls"],
+)
+def test_flagged_placement_keeps_a_system_before_an_assistant_turn_that_renders_without_text(assistant_turn):
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "reminder"},
+            assistant_turn,
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "system", "assistant", "user"]
+
+
+@pytest.mark.parametrize(
+    "padded_assistant",
+    [
+        {"role": "assistant", "content": ""},
+        {"role": "assistant", "content": "   "},
+        {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+        litellm.Message(role="assistant", content=""),
+    ],
+    ids=["empty-string", "whitespace-string", "empty-text-part", "pydantic-empty-string"],
+)
+def test_flagged_placement_keeps_a_system_before_an_assistant_turn_whose_empty_text_the_converter_pads(
+    padded_assistant,
+):
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "reminder"},
+            padded_assistant,
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "system", "assistant", "user"]

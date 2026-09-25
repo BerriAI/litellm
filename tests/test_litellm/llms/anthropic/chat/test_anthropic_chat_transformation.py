@@ -6688,6 +6688,42 @@ def test_chat_flagged_model_anchors_a_system_on_a_user_turn_exactly_when_that_tu
     assert [m["role"] for m in with_reminder["messages"]] == expected_roles
 
 
+ASSISTANT_TURN_BY_SHAPE = {
+    "text": {"role": "assistant", "content": "First answer"},
+    "tool-calls": {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+    },
+    "signed-thinking-part": {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
+    "empty-string": {"role": "assistant", "content": ""},
+    "whitespace-string": {"role": "assistant", "content": "   "},
+    "empty-text-part": {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+    "none": {"role": "assistant", "content": None},
+    "empty-list": {"role": "assistant", "content": []},
+    "unsigned-thinking-part": {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm"}]},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ASSISTANT_TURN_BY_SHAPE))
+def test_chat_flagged_model_keeps_a_system_exactly_when_the_assistant_turn_after_it_reaches_the_wire(
+    local_model_cost_map, shape
+):
+    first_turn = {"role": "user", "content": "First question"}
+    tail = [ASSISTANT_TURN_BY_SHAPE[shape], {"role": "user", "content": "Second question"}]
+
+    without_reminder = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, [first_turn, *tail])
+    with_reminder = _chat_request(
+        AnthropicConfig(), FLAGGED_CLAUDE, [first_turn, {"role": "system", "content": REMINDER_TEXT}, *tail]
+    )
+
+    turn_reaches_wire = [m["role"] for m in without_reminder["messages"]] == ["user", "assistant", "user"]
+    expected_roles = ["user", "system", "assistant", "user"] if turn_reaches_wire else ["user", "user"]
+    assert [m["role"] for m in with_reminder["messages"]] == expected_roles
+    if not turn_reaches_wire:
+        assert _texts(with_reminder["messages"][0]) == ["First question", CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
+
+
 def test_chat_flagged_model_merges_adjacent_system_messages(local_model_cost_map):
     messages = [
         {"role": "system", "content": "You are terse."},
