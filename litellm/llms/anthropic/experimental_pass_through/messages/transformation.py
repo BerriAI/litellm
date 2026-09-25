@@ -252,7 +252,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
         # Check for Anthropic OAuth token in Authorization header
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key, api_base=api_base)
 
         header_names: Final = frozenset(name.lower() for name in headers)
         if "x-api-key" not in header_names and "authorization" not in header_names:

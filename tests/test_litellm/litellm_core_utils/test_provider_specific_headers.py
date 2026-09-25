@@ -146,3 +146,24 @@ class TestProviderSpecificHeaderUtils:
         """An empty list of scoped entries contributes nothing."""
         result = ProviderSpecificHeaderUtils.get_provider_specific_headers([], "anthropic")
         assert result == {}
+
+    def test_case_insensitive_dict_operations(self):
+        """Test the underlying _CaseInsensitiveDict class for 100% coverage."""
+        from litellm.litellm_core_utils.get_provider_specific_headers import _CaseInsensitiveDict
+        d = _CaseInsensitiveDict({"Authorization": "Bearer 123", "anthropic-version": "2023-06-01"})
+
+        assert d["Authorization"] == "Bearer 123"
+        assert d["authorization"] == "Bearer 123"
+        assert d["AUTHORIZATION"] == "Bearer 123"
+        with pytest.raises(KeyError):
+            _ = d["Missing-Key"]
+
+        assert "Authorization" in d
+        assert "authorization" in d
+        assert "AUTHORIZATION" in d
+        assert "Missing-Key" not in d
+        assert 123 not in d
+
+        assert d.get("authorization") == "Bearer 123"
+        assert d.get("Missing-Key") is None
+        assert d.get("Missing-Key", "default_val") == "default_val"

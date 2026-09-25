@@ -154,6 +154,28 @@ class TestOptionallyHandleAnthropicOAuth:
         assert returned_api_key is None
         assert "authorization" not in updated_headers
 
+    def test_oauth_stripped_for_third_party_api_base(self):
+        """OAuth token should be stripped from headers when routing to a non-Anthropic api_base."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+        # Test completely different hostname
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, None, api_base="https://custom-gateway.com/v1"
+        )
+        assert extracted_api_key is None
+        assert "authorization" not in updated_headers
+
+        # Test lookalike hostname
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, FAKE_OAUTH_TOKEN, api_base="https://api.anthropic.com.attacker.com/v1"
+        )
+        assert extracted_api_key is None
+        assert "authorization" not in updated_headers
+
 
 class TestGetAnthropicHeaders:
     """Tests for get_anthropic_headers method with OAuth support."""
@@ -464,8 +486,8 @@ class TestIsAnthropicOAuthKey:
 class TestProxyOAuthHeaderForwarding:
     """Tests for proxy-layer OAuth header preservation and forwarding."""
 
-    def test_clean_headers_preserves_oauth_authorization(self):
-        """clean_headers should preserve Authorization header with OAuth tokens."""
+    def test_clean_headers_strips_oauth_authorization_by_default(self):
+        """clean_headers should strip Authorization header with OAuth tokens when forward_llm_provider_auth_headers is False."""
         from starlette.datastructures import Headers
 
         from litellm.proxy.litellm_pre_call_utils import clean_headers
@@ -476,10 +498,9 @@ class TestProxyOAuthHeaderForwarding:
                 (b"content-type", b"application/json"),
             ]
         )
-        cleaned = clean_headers(raw_headers)
+        cleaned = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
 
-        assert "authorization" in cleaned
-        assert cleaned["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert "authorization" not in cleaned
         assert cleaned["content-type"] == "application/json"
 
     def test_clean_headers_strips_non_oauth_authorization(self):
@@ -557,8 +578,8 @@ class TestProxyOAuthHeaderForwarding:
         assert cleaned["x-goog-api-key"] == "google-api-key-123"
         assert cleaned["content-type"] == "application/json"
 
-    def test_clean_headers_preserves_oauth_regardless_of_forward_flag(self):
-        """clean_headers should always preserve OAuth tokens regardless of forward_llm_provider_auth_headers."""
+    def test_clean_headers_strips_oauth_unless_forward_flag_is_true(self):
+        """clean_headers should only preserve OAuth tokens when forward_llm_provider_auth_headers=True."""
         from starlette.datastructures import Headers
 
         from litellm.proxy.litellm_pre_call_utils import clean_headers
@@ -570,12 +591,11 @@ class TestProxyOAuthHeaderForwarding:
             ]
         )
 
-        # Should preserve OAuth even with flag=False
+        # Should strip OAuth with flag=False
         cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
-        assert "authorization" in cleaned_without_flag
-        assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert "authorization" not in cleaned_without_flag
 
-        # Should also preserve OAuth with flag=True
+        # Should preserve OAuth with flag=True
         cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -1984,7 +2004,6 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-
     @pytest.mark.parametrize(
         "model",
         [
@@ -2276,6 +2295,22 @@ def test_create_anthropic_model_list_response_lists_ids_as_told():
     assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
     assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
     assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")
+
+def test_optionally_handle_anthropic_oauth_invalid_url():
+    """Test that invalid URLs don't break OAuth validation and default to non-Anthropic."""
+    from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+    
+    headers = {"Authorization": "Bearer sk-ant-oat01-token"}
+    api_key = "sk-ant-oat01-token"
+    
+    # Test with a URL that will trigger ValueError in urllib.parse.urlparse
+    # In Python 3.12, urlparse('http://[::1') raises ValueError: Invalid IPv6 URL
+    updated_headers, updated_api_key = optionally_handle_anthropic_oauth(headers, api_key, api_base="http://[::1")
+    
+    # Since it raises ValueError, _is_anthropic_host returns False.
+    # Thus, it strips OAuth headers and sets api_key to None.
+    assert "Authorization" not in {k.lower(): v for k, v in updated_headers.items()}
+    assert updated_api_key is None
 
 
 class TestMalformedContentListItems:
