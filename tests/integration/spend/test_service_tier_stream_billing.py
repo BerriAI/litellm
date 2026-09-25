@@ -5,17 +5,17 @@ that carry service_tier "priority" and terminal usage. The deployment registers
 distinct default and *_priority rates, so a bill computed on the wrong tier cannot
 match the hand-computed expectation. /v1/messages deployments on hosted_vllm have
 no anthropic-messages provider config, so they take the chat adapter: the
-streamed response is an AnthropicStreamWrapper under AnthropicSSEStream under the
-router's FallbackAwareAnthropicMessagesStream. The anthropic_messages logging
-path drops the served tier (spend lands at default rates), and on disconnect the
-deferred stream-logging arm produces no spend row at all, which the last test
-records as a skipped product gap.
+streamed response is an AnthropicStreamWrapper under AnthropicSSEStream, wrapped
+by AnthropicMessagesStreamCacheWriter when litellm.cache is on and then by the
+router's FallbackAwareAnthropicMessagesStream; each layer must delegate the
+inner stream's chunks for disconnect billing to find them.
 """
 
 import json
 from collections.abc import Callable
 from hashlib import sha256
 from typing import Final
+from uuid import uuid4
 
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value
@@ -30,7 +30,6 @@ OUTPUT_RATE: Final = 0.002
 PRIORITY_INPUT_RATE: Final = 0.01
 PRIORITY_OUTPUT_RATE: Final = 0.02
 EXPECTED_FULL_SPEND: Final = PROMPT_TOKENS * PRIORITY_INPUT_RATE + COMPLETION_TOKENS * PRIORITY_OUTPUT_RATE
-EXPECTED_DEFAULT_SPEND: Final = PROMPT_TOKENS * INPUT_RATE + COMPLETION_TOKENS * OUTPUT_RATE
 
 
 def _sse_frame(payload: dict[str, JsonValue]) -> bytes:
@@ -126,8 +125,10 @@ def _cost_breakdown(row: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 @pytest.mark.timeout(120)
 def test_completed_chat_stream_bills_the_served_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    request_id: Final = f"chatcmpl-{uuid4().hex[:8]}"
     with (
-        wire_server(_respond_for("chatcmpl-tier-chat-complete", "tier control chat complete")) as wire,
+        wire_server(_respond_for(request_id, prompt)) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = _tiered_model(scenario, wire, litellm_model="openai/gpt-4o-mini")
@@ -135,7 +136,7 @@ def test_completed_chat_stream_bills_the_served_tier(gateway: Gateway) -> None:
         response: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": "tier control chat complete"}], "stream": True},
+            {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True},
             key=key,
         )
         assert response.status_code == 200, response.text
@@ -147,7 +148,7 @@ def test_completed_chat_stream_bills_the_served_tier(gateway: Gateway) -> None:
 
         row: Final = _single_spend_row(key)
         assert row["status"] == "success", row
-        assert row["request_id"] == "chatcmpl-tier-chat-complete", row
+        assert row["request_id"] == request_id, row
         assert row["prompt_tokens"] == PROMPT_TOKENS, row
         assert row["completion_tokens"] == COMPLETION_TOKENS, row
         assert float(str(row["spend"])) == pytest.approx(EXPECTED_FULL_SPEND), row
@@ -158,8 +159,10 @@ def test_completed_chat_stream_bills_the_served_tier(gateway: Gateway) -> None:
 
 @pytest.mark.timeout(120)
 def test_disconnected_chat_stream_bills_partial_usage_at_the_served_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    request_id: Final = f"chatcmpl-{uuid4().hex[:8]}"
     with (
-        wire_server(_respond_for("chatcmpl-tier-chat-disconnect", "tier control chat disconnect", pause=2.0)) as wire,
+        wire_server(_respond_for(request_id, prompt, pause=2.0)) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = _tiered_model(scenario, wire, litellm_model="openai/gpt-4o-mini")
@@ -169,20 +172,22 @@ def test_disconnected_chat_stream_bills_partial_usage_at_the_served_tier(gateway
             "/v1/chat/completions",
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": "tier control chat disconnect"}],
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": True,
             },
             headers={"Authorization": f"Bearer {key}"},
         ) as response:
             assert response.status_code == 200, response.read().decode()
             first_event: Final = next(line for line in response.iter_lines() if line.startswith("data:"))
-            assert object_value(json.loads(first_event.removeprefix("data:")))["id"] == "chatcmpl-tier-chat-disconnect"
+            assert object_value(json.loads(first_event.removeprefix("data:")))["id"] == request_id
 
         row: Final = _single_spend_row(key)
         assert row["status"] == "success", row
-        assert int(row["prompt_tokens"]) == 11, row
+        assert int(row["prompt_tokens"]) > 0, row
         assert int(row["completion_tokens"]) == 1, row
-        assert float(str(row["spend"])) == pytest.approx(11 * PRIORITY_INPUT_RATE + 1 * PRIORITY_OUTPUT_RATE), row
+        assert float(str(row["spend"])) == pytest.approx(
+            int(row["prompt_tokens"]) * PRIORITY_INPUT_RATE + PRIORITY_OUTPUT_RATE
+        ), row
         breakdown: Final = _cost_breakdown(row)
         assert breakdown["service_tier"] == "priority", breakdown
         assert len(wire.drain()) == 1
@@ -190,8 +195,9 @@ def test_disconnected_chat_stream_bills_partial_usage_at_the_served_tier(gateway
 
 @pytest.mark.timeout(120)
 def test_completed_messages_stream_bills_the_served_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
     with (
-        wire_server(_respond_for("chatcmpl-tier-msgs-complete", "tier control messages complete")) as wire,
+        wire_server(_respond_for(f"chatcmpl-{uuid4().hex[:8]}", prompt)) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = _tiered_model(scenario, wire, litellm_model="hosted_vllm/gpt-4o-mini")
@@ -201,7 +207,7 @@ def test_completed_messages_stream_bills_the_served_tier(gateway: Gateway) -> No
             "/v1/messages",
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": "tier control messages complete"}],
+                "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": COMPLETION_TOKENS,
                 "stream": True,
             },
@@ -217,21 +223,17 @@ def test_completed_messages_stream_bills_the_served_tier(gateway: Gateway) -> No
         assert row["status"] == "success", row
         assert row["prompt_tokens"] == PROMPT_TOKENS, row
         assert row["completion_tokens"] == COMPLETION_TOKENS, row
-        assert float(str(row["spend"])) == pytest.approx(EXPECTED_DEFAULT_SPEND), row
+        assert float(str(row["spend"])) == pytest.approx(EXPECTED_FULL_SPEND), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown["service_tier"] == "priority", breakdown
         assert len(wire.drain()) == 1
 
 
 @pytest.mark.timeout(120)
 def test_disconnected_messages_stream_bills_partial_usage_at_the_served_tier(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: /v1/messages disconnect writes no LiteLLM_SpendLogs row — deferred stream logging arms the "
-        "anthropic route, skips _bill_partial_streamed_spend_on_disconnect, and the passthrough "
-        "logging coroutine builds the complete response but dispatches no spend"
-    )
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
     with (
-        wire_server(
-            _respond_for("chatcmpl-tier-msgs-disconnect", "tier control messages disconnect", pause=2.0)
-        ) as wire,
+        wire_server(_respond_for(f"chatcmpl-{uuid4().hex[:8]}", prompt, pause=2.0)) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = _tiered_model(scenario, wire, litellm_model="hosted_vllm/gpt-4o-mini")
@@ -241,7 +243,7 @@ def test_disconnected_messages_stream_bills_partial_usage_at_the_served_tier(gat
             "/v1/messages",
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": "tier control messages disconnect"}],
+                "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": COMPLETION_TOKENS,
                 "stream": True,
             },
