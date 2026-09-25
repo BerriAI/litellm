@@ -865,6 +865,7 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     _assert_moonshot_stream_content(chunks)
     assert exc_info.value.status_code == 502
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
+    assert "first bytes=" not in exc_info.value.message
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:

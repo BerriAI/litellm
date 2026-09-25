@@ -387,12 +387,15 @@ class _EventStreamTally:
         detail: Final = (
             f"content-type={_response_header(response_headers, 'content-type')!r}, "
             f"x-amzn-requestid={_response_header(response_headers, 'x-amzn-requestid')!r}, "
-            f"{self.bytes_received} bytes received, first bytes={self.head!r}"
+            f"{self.bytes_received} bytes received"
         )
         if not self.events:
             return BedrockError(
                 status_code=502,
-                message=f"Bedrock answered the stream with HTTP 200 but its body decoded to no events ({detail})",
+                message=(
+                    "Bedrock answered the stream with HTTP 200 but its body decoded to no events "
+                    f"({detail}, first bytes={self.head!r})"
+                ),
             )
         return BedrockError(
             status_code=502,
