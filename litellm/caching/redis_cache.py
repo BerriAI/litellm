@@ -290,6 +290,34 @@ def _opaque_kwarg_key(value: object) -> str:
     return f"{type(value).__name__}-{id(value)}"
 
 
+_CLUSTER_ONLY_CONNECTION_KWARGS: Final[frozenset[str]] = frozenset({"response_callbacks"})
+
+
+def _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownParameterType]  # redis generics
+    cluster: async_redis_cluster_client,  # pyright: ignore[reportUnknownParameterType]  # redis generics
+) -> async_redis_client:
+    """Standalone async client pinned to one cluster node, for classic pub/sub.
+
+    RedisCluster has no multi-node pub/sub fan-out in redis-py, so callers that
+    need ``client.pubsub()`` get a plain client aimed at the cluster's default
+    node (or the first startup node when the cluster has not been initialized).
+    ``response_callbacks`` is a RedisCluster-only connection kwarg and is
+    dropped before it reaches ``Redis``/``ConnectionPool``.
+    """
+    from redis.asyncio import ConnectionPool, Redis
+
+    node: Final = cluster.get_default_node() or next(iter(cluster.nodes_manager.startup_nodes.values()), None)
+    if node is None:  # pyright: ignore[reportUnnecessaryComparison]  # get_default_node is None before cluster init
+        raise ValueError("cannot derive a pub/sub client: redis cluster has no default node and no startup nodes")
+    node_kwargs: Final[dict[str, object]] = {
+        key: cast(object, value)  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
+        for key, value in cluster.connection_kwargs.items()  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
+        if key not in _CLUSTER_ONLY_CONNECTION_KWARGS
+    }
+    pool: Final = ConnectionPool(host=node.host, port=node.port, **node_kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # cluster kwargs validated by redis-py at runtime
+    return Redis(connection_pool=pool)  # pyright: ignore[reportUnknownVariableType]  # redis generics
+
+
 @functools.lru_cache(maxsize=1)
 def _redis_health_error_types() -> tuple[type, ...]:
     """Exception types that mean the Redis backend itself is unhealthy.
@@ -737,6 +765,35 @@ class RedisCache(BaseCache):
 
         self.redis_async_client = redis_async_client
         return redis_async_client
+
+    def init_pubsub_client(self) -> async_redis_client:  # pyright: ignore[reportUnknownParameterType]  # redis generics
+        """Async client that supports classic pub/sub.
+
+        Standalone caches return the shared async client as-is. Cluster caches
+        get a derived per-event-loop client pinned to one node, cached beside
+        the main client so publishes and subscriptions do not build a new
+        connection pool per call.
+        """
+        from redis.asyncio import RedisCluster
+
+        from litellm import in_memory_llm_clients_cache
+
+        client: Final = self.init_async_client()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis generics
+        if not isinstance(client, RedisCluster):
+            return client  # pyright: ignore[reportUnknownVariableType]  # redis generics
+        cache_key: Final = f"{self._get_async_client_cache_key()}-pubsub"
+        cached_client: Final = in_memory_llm_clients_cache.get_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped in-memory client cache
+            key=cache_key
+        )
+        if cached_client is not None:
+            return cast(
+                async_redis_client, cached_client
+            )  # cast-ok: per-loop pub/sub client stored by this method  # pyright: ignore[reportUnknownVariableType]  # redis generics
+        pubsub_client: Final = _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownVariableType]  # redis generics
+            cluster=client
+        )
+        in_memory_llm_clients_cache.set_cache(key=cache_key, value=pubsub_client)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in-memory client cache
+        return pubsub_client  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
@@ -1785,7 +1842,20 @@ class RedisCache(BaseCache):
         self.redis_client.flushall()
 
     async def disconnect(self):
+        from litellm import in_memory_llm_clients_cache
+
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        cached_pubsub_client: Final = cast(  # cast-ok: only this module stores clients under this key  # pyright: ignore[reportUnknownVariableType]  # redis generics
+            async_redis_client | None,
+            in_memory_llm_clients_cache.get_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped in-memory client cache
+                key=f"{self._get_async_client_cache_key()}-pubsub"
+            ),
+        )
+        if cached_pubsub_client is not None:
+            try:
+                await cached_pubsub_client.aclose()  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]  # redis stubs leave aclose unknown
+            except Exception as e:
+                verbose_logger.debug("Error closing cached pub/sub Redis client: %s", e)
         try:
             self.redis_client.close()
         except Exception as e:

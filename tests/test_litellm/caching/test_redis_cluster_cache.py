@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.asyncio import Redis, RedisCluster
+from redis.asyncio.cluster import ClusterNode
 
 
 from litellm.caching.redis_cache import RedisCache
@@ -175,3 +177,78 @@ def test_router_create_redis_cache_cluster_detection(
     with patch.object(RedisCache, "__init__", _mock_redis_cache_init):
         redis_cache = Router._create_redis_cache(cache_config)
         assert isinstance(redis_cache, expected_cache_type)
+
+
+def _isolated_redis_cache(host: str) -> RedisCache:
+    """RedisCache whose sync client, pool, and health pings are stubbed out."""
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_connection_pool", return_value=MagicMock()),
+        patch.object(RedisCache, "_setup_health_pings", lambda self: None),
+    ):
+        return RedisCache(host=host, port=6379)
+
+
+def _cluster_for_pubsub(startup_node_host: str = "10.9.9.9") -> RedisCluster:
+    """Uninitialized RedisCluster carrying the connection kwargs a real one would."""
+    return RedisCluster(
+        startup_nodes=[ClusterNode(host=startup_node_host, port=7000)],
+        password="cluster-secret",
+        socket_timeout=7.0,
+    )
+
+
+def test_init_pubsub_client_derives_a_node_client_for_cluster_backend() -> None:
+    """LIT-8543: a cluster-backed cache must return a pub/sub-capable client.
+
+    The derived client pins a plain Redis connection pool to the cluster's
+    default node, inheriting the connection kwargs minus cluster-only keys.
+    """
+    cache = _isolated_redis_cache("cluster-pubsub-default-node")
+    cluster = _cluster_for_pubsub()
+    node = ClusterNode(host="10.1.2.3", port=7001)
+    cluster.nodes_manager.default_node = node
+    cache.init_async_client = MagicMock(return_value=cluster)
+
+    client = cache.init_pubsub_client()
+
+    assert isinstance(client, Redis) and not isinstance(client, RedisCluster)
+    kwargs = client.connection_pool.connection_kwargs
+    assert kwargs["host"] == "10.1.2.3"
+    assert kwargs["port"] == 7001
+    assert kwargs["password"] == "cluster-secret"
+    assert kwargs["socket_timeout"] == 7.0
+    assert "response_callbacks" not in kwargs
+
+
+def test_init_pubsub_client_falls_back_to_first_startup_node() -> None:
+    """Before cluster initialization there is no default node; the first
+    startup node is a valid pub/sub target."""
+    cache = _isolated_redis_cache("cluster-pubsub-startup-fallback")
+    cluster = _cluster_for_pubsub(startup_node_host="10.8.8.8")
+    cache.init_async_client = MagicMock(return_value=cluster)
+
+    client = cache.init_pubsub_client()
+
+    assert isinstance(client, Redis)
+    assert client.connection_pool.connection_kwargs["host"] == "10.8.8.8"
+
+
+def test_init_pubsub_client_returns_the_same_cached_client_on_repeat_calls() -> None:
+    cache = _isolated_redis_cache("cluster-pubsub-caching")
+    cluster = _cluster_for_pubsub()
+    cluster.nodes_manager.default_node = ClusterNode(host="10.1.2.3", port=7001)
+    cache.init_async_client = MagicMock(return_value=cluster)
+
+    first = cache.init_pubsub_client()
+    second = cache.init_pubsub_client()
+
+    assert first is second
+
+
+def test_init_pubsub_client_returns_the_shared_async_client_for_standalone() -> None:
+    cache = _isolated_redis_cache("standalone-pubsub")
+    standalone = Redis()
+    cache.init_async_client = MagicMock(return_value=standalone)
+
+    assert cache.init_pubsub_client() is standalone
