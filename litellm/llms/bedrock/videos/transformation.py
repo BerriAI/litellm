@@ -49,7 +49,7 @@ from litellm.types.videos.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from litellm.types.videos.main import VideoObject
+    from litellm.types.videos.main import CharacterObject, VideoObject
 
 _SupportedParams: TypeAlias = list[str]
 _VideoParams: TypeAlias = dict[str, object]
@@ -643,6 +643,81 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         logging_obj: LiteLLMLogging | None,
     ) -> VideoObject:
         raise _unsupported_operation_error("delete")
+
+    def transform_video_create_character_request(
+        self,
+        name: str,
+        video: object,  # base declares Any; never read, this override always raises
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: _VideoHeaders,
+    ) -> tuple[str, list]:
+        raise _unsupported_operation_error("create character")
+
+    def transform_video_create_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLogging | None,
+    ) -> CharacterObject:
+        raise _unsupported_operation_error("create character")
+
+    def transform_video_get_character_request(
+        self,
+        character_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: _VideoHeaders,
+    ) -> tuple[str, _VideoParams]:
+        raise _unsupported_operation_error("get character")
+
+    def transform_video_get_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLogging | None,
+    ) -> CharacterObject:
+        raise _unsupported_operation_error("get character")
+
+    def transform_video_edit_request(
+        self,
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: _VideoHeaders,
+        video_file: FileContent | None = None,
+        extra_body: Mapping[str, object] | None = None,
+        prefetched_source_data: dict[str, object] | None = None,
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
+        raise _unsupported_operation_error("edit")
+
+    def transform_video_edit_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLogging | None,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
+    ) -> VideoObject:
+        raise _unsupported_operation_error("edit")
+
+    def transform_video_extension_request(
+        self,
+        prompt: str,
+        video_id: str,
+        seconds: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: _VideoHeaders,
+        extra_body: Mapping[str, object] | None = None,
+    ) -> tuple[str, _VideoParams]:
+        raise _unsupported_operation_error("extension")
+
+    def transform_video_extension_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLogging | None,
+        custom_llm_provider: str | None = None,
+    ) -> VideoObject:
+        raise _unsupported_operation_error("extension")
 
     @staticmethod
     def extract_invocation_arn(video_id: str) -> str:

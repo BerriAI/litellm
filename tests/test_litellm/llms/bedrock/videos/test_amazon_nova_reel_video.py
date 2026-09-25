@@ -1439,6 +1439,139 @@ def test_unsupported_remix_operation_raises_400_class_bedrock_error():
 
 
 #################################################
+# unsupported character/edit/extension operations raise 400-class errors
+#################################################
+
+
+def test_unsupported_create_character_operation_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_create_character_request(
+            name="hero",
+            video=b"video-bytes",
+            api_base="",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "create character" in str(excinfo.value.message)
+
+
+def test_unsupported_create_character_response_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_create_character_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_unsupported_get_character_operation_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_get_character_request(
+            character_id="char-1",
+            api_base="",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "get character" in str(excinfo.value.message)
+
+
+def test_unsupported_get_character_response_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_get_character_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_unsupported_edit_operation_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_edit_request(
+            prompt="brighter",
+            video_id="vid",
+            api_base="",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "video edit" in str(excinfo.value.message)
+
+
+def test_unsupported_edit_response_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_edit_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_unsupported_extension_operation_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_extension_request(
+            prompt="longer",
+            video_id="vid",
+            seconds="6",
+            api_base="",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "video extension" in str(excinfo.value.message)
+
+
+def test_unsupported_extension_response_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_extension_response(raw_response=Mock(), logging_obj=None)
+    assert excinfo.value.status_code == 400
+
+
+def test_avideo_edit_bedrock_maps_unsupported_operation_to_bad_request(monkeypatch):
+    """Through the litellm video layer, litellm.avideo_edit on bedrock must surface
+    BadRequestError (400-class), never a NotImplementedError-driven 500. get_complete_url
+    is stubbed because it is documented as unused for this config (URLs are built in
+    the handler); the unsupported-operation error comes from the transform."""
+    monkeypatch.setattr(
+        BedrockNovaReelVideoConfig,
+        "get_complete_url",
+        lambda self, model, api_base, litellm_params: "https://example.com/videos/edits",
+    )
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        asyncio.run(
+            litellm.avideo_edit(
+                video_id="some-video-id",
+                prompt="brighter",
+                custom_llm_provider="bedrock",
+            )
+        )
+    # The 400-class mapping is the contract; the generic edit error wrapper reads
+    # .text off the exception (empty for a synthesized BedrockError), so only the
+    # status survives here. The message is asserted in the config-level tests.
+    assert excinfo.value.status_code == 400
+
+
+def test_avideo_create_character_bedrock_maps_unsupported_operation_to_bad_request(monkeypatch):
+    """Through the litellm video layer, litellm.avideo_create_character on bedrock must
+    surface BadRequestError (400-class). get_complete_url is stubbed as above."""
+    monkeypatch.setattr(
+        BedrockNovaReelVideoConfig,
+        "get_complete_url",
+        lambda self, model, api_base, litellm_params: "https://example.com/characters",
+    )
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        asyncio.run(
+            litellm.avideo_create_character(
+                name="hero",
+                video=b"video-bytes",
+                custom_llm_provider="bedrock",
+            )
+        )
+    assert excinfo.value.status_code == 400
+    assert "video create character is not supported" in str(excinfo.value)
+
+
+#################################################
 # text-mode file guard
 #################################################
 
