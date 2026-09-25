@@ -62,6 +62,13 @@ context_window_test_cases = [
         'GeminiException BadRequestError - {\n  "error": {\n    "code": 400,\n    "message": "The input token count (2800010) exceeds the maximum number of tokens allowed (1048575).",\n    "status": "INVALID_ARGUMENT"\n  }\n}\n',
         True,
     ),
+    # OpenAI current context window wording
+    (
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        True,
+    ),
+    # Moonshot token limit format
+    ("Invalid request: Your request exceeded model token limit: 262144", True),
     # Test case insensitivity
     ("ERROR: THIS MODEL'S MAXIMUM CONTEXT LENGTH IS 1024.", True),
     # Cerebras context window error format
