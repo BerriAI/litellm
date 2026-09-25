@@ -77,6 +77,7 @@ from litellm.utils import (
     get_non_default_completion_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
+    get_requester_metadata,
     is_cached_message,
     is_prompt_caching_valid_prompt,
 )
@@ -6343,3 +6344,30 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+def test_get_requester_metadata_prefers_requester_snapshot() -> None:
+    metadata: Final[dict[str, object]] = {
+        "user_api_key_hash": "h",
+        "requester_metadata": {"foo": "bar", "n": 1},
+    }
+    assert get_requester_metadata(metadata) == {"foo": "bar"}
+
+
+def test_get_requester_metadata_empty_snapshot_hides_proxy_bag() -> None:
+    empty_snapshot: Final[dict[str, object]] = {
+        "user_api_key_hash": "h",
+        "litellm_api_version": "1",
+        "requester_metadata": {},
+    }
+    headers_only_snapshot: Final[dict[str, object]] = {
+        "requester_metadata": {"headers": {"a": "b"}},
+        "user_api_key_hash": "h",
+    }
+    assert get_requester_metadata(empty_snapshot) is None
+    assert get_requester_metadata(headers_only_snapshot) is None
+
+
+def test_get_requester_metadata_direct_sdk_fallback() -> None:
+    metadata: Final[dict[str, object]] = {"foo": "bar", "hidden_params": {"x": 1}}
+    assert get_requester_metadata(metadata) == {"foo": "bar"}

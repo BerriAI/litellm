@@ -2243,15 +2243,17 @@ async def add_litellm_data_to_request(
     # strip above prevents those proxy-internal slots — if a caller forged
     # them — from leaking into requester_metadata where guardrails and audit
     # paths may read from it.
-    if "metadata" in data and isinstance(data["metadata"], dict):
-        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
-        if _metadata_variable_name == "litellm_metadata":
-            data[_metadata_variable_name].update(
-                _promoted_trace_control_fields(
-                    requester_metadata=data[_metadata_variable_name]["requester_metadata"],
-                    litellm_metadata=data[_metadata_variable_name],
-                )
+    caller_metadata: Final = data.get("metadata")
+    data[_metadata_variable_name]["requester_metadata"] = (
+        copy.deepcopy(caller_metadata) if isinstance(caller_metadata, dict) else {}
+    )
+    if _metadata_variable_name == "litellm_metadata":
+        data[_metadata_variable_name].update(
+            _promoted_trace_control_fields(
+                requester_metadata=data[_metadata_variable_name]["requester_metadata"],
+                litellm_metadata=data[_metadata_variable_name],
             )
+        )
 
     # Merge litellm_metadata into the metadata variable (preserving existing
     # values). Runs after the user_api_key_* / _pipeline_managed_guardrails

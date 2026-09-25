@@ -10216,21 +10216,15 @@ def add_openai_metadata(
     return visible_metadata.copy()
 
 
-def get_requester_metadata(metadata: Mapping[str, object]):
+def get_requester_metadata(metadata: Mapping[str, object]) -> dict[str, str] | None:
     if not metadata:
         return None
 
     requester_metadata: Final = metadata.get("requester_metadata")
     if isinstance(requester_metadata, dict):
-        cleaned_metadata = add_openai_metadata(requester_metadata)
-        if cleaned_metadata:
-            return cleaned_metadata
+        return add_openai_metadata(requester_metadata) or None
 
-    cleaned_metadata = add_openai_metadata(metadata)
-    if cleaned_metadata:
-        return cleaned_metadata
-
-    return None
+    return add_openai_metadata(metadata) or None
 
 
 def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:

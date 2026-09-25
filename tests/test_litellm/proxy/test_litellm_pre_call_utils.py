@@ -54,6 +54,7 @@ from litellm.constants import (
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
+from litellm.utils import get_requester_metadata
 
 
 def test_check_if_token_is_service_account():
@@ -8470,3 +8471,63 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     for name, value in secrets.items():
         assert updated["secret_fields"]["raw_headers"][name.lower()] == value
         assert request.headers[name] == value
+
+
+_REQUESTER_METADATA_ROUTES: Final = (
+    ("/v1/chat/completions", "metadata"),
+    ("/v1/threads", "litellm_metadata"),
+)
+
+
+def _request_mock_for_path(path: str) -> MagicMock:
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = path
+    request_mock.url.__str__.return_value = f"http://localhost{path}"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.parametrize(("path", "metadata_variable_name"), _REQUESTER_METADATA_ROUTES)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_snapshots_empty_requester_metadata(
+    path: str, metadata_variable_name: str
+):
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=_request_mock_for_path(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", key_alias="alias-1", team_id="team-1"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    requester_metadata: Final = updated[metadata_variable_name].get("requester_metadata")
+    assert isinstance(requester_metadata, dict), "requester_metadata snapshot must always be written"
+    leaked: Final = sorted(
+        k for k in requester_metadata if k.startswith("user_api_key_") or k == "litellm_api_version"
+    )
+    assert leaked == [], f"proxy identity fields leaked into requester_metadata: {leaked}"
+    if metadata_variable_name == "litellm_metadata":
+        assert requester_metadata == {}
+    assert get_requester_metadata(updated[metadata_variable_name]) is None
+
+
+@pytest.mark.parametrize(("path", "metadata_variable_name"), _REQUESTER_METADATA_ROUTES)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_forwards_caller_metadata(path: str, metadata_variable_name: str):
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo", "metadata": {"foo": "bar"}},
+        request=_request_mock_for_path(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", key_alias="alias-1", team_id="team-1"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[metadata_variable_name]["requester_metadata"]["foo"] == "bar"
+    assert get_requester_metadata(updated[metadata_variable_name]) == {"foo": "bar"}

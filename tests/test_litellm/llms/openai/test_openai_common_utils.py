@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, call, patch
 
 import httpx
@@ -413,3 +414,77 @@ def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
 
 
+@pytest.fixture
+def preview_metadata_forwarding(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", True)
+
+
+def _capturing_async_client(captured: list[dict[str, object]]) -> openai.AsyncOpenAI:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    return openai.AsyncOpenAI(
+        api_key="sk-test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        (
+            {
+                "user_api_key_hash": "h",
+                "user_api_key_alias": "a",
+                "litellm_api_version": "1",
+                "requester_metadata": {},
+            },
+            None,
+        ),
+        (
+            {
+                "user_api_key_hash": "h",
+                "user_api_key_alias": "a",
+                "litellm_api_version": "1",
+                "requester_metadata": {"foo": "bar"},
+            },
+            {"foo": "bar"},
+        ),
+        ({"foo": "bar"}, {"foo": "bar"}),
+    ],
+    ids=["empty-requester-snapshot", "caller-requester-metadata", "direct-sdk-metadata"],
+)
+@pytest.mark.asyncio
+async def test_acompletion_forwards_only_requester_metadata_to_openai(
+    preview_metadata_forwarding, metadata: dict[str, object], expected: dict[str, str] | None
+):
+    captured: list[dict[str, object]] = []
+    await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=1,
+        client=_capturing_async_client(captured),
+        metadata=metadata,
+    )
+
+    assert len(captured) == 1, "injected http client must receive the outbound request"
+    if expected is None:
+        assert "metadata" not in captured[0]
+    else:
+        assert captured[0]["metadata"] == expected
