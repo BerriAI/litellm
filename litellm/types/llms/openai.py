@@ -1362,10 +1362,28 @@ class WebSearchToolUsage(BaseModel):
     num_requests: NonNegativeInt
 
 
+class ImageGenTokenDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    image_tokens: NonNegativeInt = 0
+    text_tokens: NonNegativeInt = 0
+
+
+class ImageGenToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: NonNegativeInt = 0
+    output_tokens: NonNegativeInt = 0
+    total_tokens: NonNegativeInt = 0
+    input_tokens_details: ImageGenTokenDetails | None = None
+    output_tokens_details: ImageGenTokenDetails | None = None
+
+
 class ResponsesToolUsage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     web_search: WebSearchToolUsage | None = None
+    image_gen: ImageGenToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
