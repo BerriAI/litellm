@@ -18,7 +18,6 @@ import {
   applyToolPermissionWrite,
   emptyMcpAccessGroups,
   isConventionServer,
-  mcpAllowedToolsFor,
   mcpGrantsAllTools,
   mcpToolState,
   resolveEffectiveMcpServers,
