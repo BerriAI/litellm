@@ -131,6 +131,16 @@ async fn audio_and_transcription_params_reach_the_converse_body(
     );
     let instruction = content[1]["text"].as_str().expect("instruction text");
     assert!(instruction.contains("fr"), "{instruction}");
+    assert!(
+        instruction.contains("Transcribe the audio"),
+        "{instruction}"
+    );
+    // Bedrock Converse rejects audio content combined with a system block, and the
+    // OpenAI transcription API has no system message, so the payload must omit it.
+    assert!(
+        body.get("system").is_none(),
+        "no system block may ride along with audio content"
+    );
     assert_eq!(body["inferenceConfig"]["temperature"], 0.2);
 }
 
