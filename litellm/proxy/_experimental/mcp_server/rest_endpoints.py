@@ -37,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.oauth_utils import _redact_mcp_resource_url
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -1226,7 +1227,7 @@ if MCP_AVAILABLE:
 
                 # Call execute_mcp_tool directly (permission checks already done)
                 _tool_start_time: Final = datetime.now()
-                result: Final = await execute_mcp_tool(
+                executed: Final = await execute_mcp_tool(
                     name=tool_name,
                     arguments=tool_arguments,
                     allowed_mcp_servers=allowed_mcp_servers,
@@ -1241,6 +1242,7 @@ if MCP_AVAILABLE:
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
                 )
+                result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
             except Exception as e:
                 request_data: Final = proxy_base_llm_response_processor.data
                 await _safe_fire_mcp_tool_call_failure_logging(
