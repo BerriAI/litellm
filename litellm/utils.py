@@ -4025,6 +4025,8 @@ def get_optional_params_embeddings(
     elif custom_llm_provider == "ollama":
         if "dimensions" in non_default_params:
             optional_params["dimensions"] = non_default_params.pop("dimensions")
+        if "encoding_format" in non_default_params:
+            optional_params["encoding_format"] = non_default_params.pop("encoding_format")
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True or drop_params is True:  # drop the unsupported non-default values
                 keys = list(non_default_params.keys())
