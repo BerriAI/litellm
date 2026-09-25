@@ -205,6 +205,15 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         translated: Final = apply_service_tier_as_completion_window(
             merged, self._provider, model if isinstance(model, str) else ""
         )
-        return {  # mutable-ok: matches dict-typed base signature
+        stripped: Final = {  # mutable-ok: matches dict-typed base signature
             key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")
         }
+        extra_body: Final = translated.get("extra_body")
+        extra_metadata: Final[object] = extra_body.get("metadata") if isinstance(extra_body, dict) else None
+        if isinstance(extra_metadata, dict):
+            wire_metadata: Final[object] = stripped.get("metadata")
+            return {  # mutable-ok: matches dict-typed base signature
+                **stripped,
+                "metadata": {**(wire_metadata if isinstance(wire_metadata, dict) else {}), **extra_metadata},
+            }
+        return stripped

@@ -392,6 +392,23 @@ class TestSailRequestShape:
 
     @pytest.mark.asyncio
     @pytest.mark.respx()
+    async def test_sail_messages_extra_body_metadata_keys_reach_the_wire(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+            service_tier="flex",
+            extra_body={"metadata": {"trace_id": "t-1"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"trace_id": "t-1", "completion_window": "flex"}
+        assert "extra_body" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
     async def test_sail_messages_default_tier_maps_to_asap(self, respx_mock: respx.Router):
         respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
 
