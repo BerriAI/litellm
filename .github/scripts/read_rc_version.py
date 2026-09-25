@@ -15,7 +15,10 @@ import re
 import sys
 from typing import Final
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 RELEASE_VERSION: Final = re.compile(r"[0-9]+\.[0-9]+\.0")
 
