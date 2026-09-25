@@ -309,7 +309,7 @@ def test_realtime_logging_object_does_not_validate_unknown_event_types():
     assert len(dumped["results"]) == len(results)
 
 
-def test_realtime_transcription_honors_deployment_pricing_override(monkeypatch):
+def test_realtime_transcription_honors_deployment_pricing_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """A deployment's pricing override must reach transcription events too.
 
     Transcription is billed separately from response usage inside the same realtime
@@ -369,7 +369,7 @@ def test_realtime_transcription_honors_deployment_pricing_override(monkeypatch):
     assert with_override == 0.0, "the zero-rated deployment must not be billed for transcription"
 
 
-def test_realtime_transcription_partial_override_keeps_unset_rates(monkeypatch):
+def test_realtime_transcription_partial_override_keeps_unset_rates(monkeypatch: pytest.MonkeyPatch) -> None:
     """An override must not blank the rates it does not set.
 
     A deployment that prices tokens but omits input_cost_per_second would otherwise
@@ -430,7 +430,13 @@ def test_realtime_transcription_partial_override_keeps_unset_rates(monkeypatch):
         ("no override", None, 6e-06, 0.017 / 60),
     ],
 )
-def test_transcription_rate_precedence(monkeypatch, label, override, expected_audio_rate, expected_per_second):
+def test_transcription_rate_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    override: dict[str, float] | None,
+    expected_audio_rate: float,
+    expected_per_second: float,
+) -> None:
     """Rates resolve within one entry before moving to the next, and zero is a real value.
 
     An override that prices only tokens must apply its own token rate to audio rather
@@ -461,7 +467,7 @@ def test_transcription_rate_precedence(monkeypatch, label, override, expected_au
             model_cost={deployment_id: {"litellm_provider": "openai", "mode": "audio_transcription", **override}}
         )
 
-    def cost_for(usage: dict) -> float:
+    def cost_for(usage: dict[str, object]) -> float:
         return handle_realtime_transcription_cost_calculation(
             results=[
                 {"type": "transcription_session.created", "session": {"model": base_model}},
@@ -481,7 +487,9 @@ def test_transcription_rate_precedence(monkeypatch, label, override, expected_au
     )
 
 
-def test_realtime_transcription_per_second_override_keeps_public_token_rates(monkeypatch):
+def test_realtime_transcription_per_second_override_keeps_public_token_rates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A per-second override must not zero the token rates ``get_model_info`` synthesizes.
 
     ``get_model_info`` defaults input_cost_per_token and output_cost_per_token to 0 for entries
@@ -510,7 +518,7 @@ def test_realtime_transcription_per_second_override_keeps_public_token_rates(mon
     public = litellm.model_cost[asr_model]
     session_event = {"type": "transcription_session.created", "session": {"model": asr_model}}
 
-    def cost_for(usage: dict) -> float:
+    def cost_for(usage: dict[str, object]) -> float:
         return handle_realtime_transcription_cost_calculation(
             results=[session_event, {"type": "conversation.item.input_audio_transcription.completed", "usage": usage}],
             custom_llm_provider="openai",
@@ -4864,7 +4872,7 @@ def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_car
     assert info["supports_pdf_input"] is False
 
 
-def test_realtime_honours_deployment_custom_pricing(monkeypatch):
+def test_realtime_honours_deployment_custom_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: a deployment's pricing override never reached realtime costing.
 
     `model_info` overrides are registered under the deployment's own model_id, and
@@ -4930,7 +4938,7 @@ def test_realtime_honours_deployment_custom_pricing(monkeypatch):
     assert zero_rated_cost == 0.0
 
 
-def test_realtime_honours_a_provider_prefixed_zero_rated_deployment(monkeypatch):
+def test_realtime_honours_a_provider_prefixed_zero_rated_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: the override arrived provider-prefixed and was read as pricing nothing.
 
     `_select_model_name_for_cost_calc` hands back `<provider>/<model_id>`, so the name reaching
@@ -4988,7 +4996,9 @@ def test_realtime_honours_a_provider_prefixed_zero_rated_deployment(monkeypatch)
     assert zero_rated_cost == 0.0
 
 
-def test_unpriced_deployment_entry_still_falls_through_to_the_session_model(monkeypatch):
+def test_unpriced_deployment_entry_still_falls_through_to_the_session_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The guard's own purpose must survive: an entry that prices nothing is not an override.
 
     Deployments are auto-registered under their model_id with no rates at all, and those must
@@ -5036,7 +5046,9 @@ def test_unpriced_deployment_entry_still_falls_through_to_the_session_model(monk
     assert with_unpriced_override > 0
 
 
-def test_realtime_audio_only_override_bills_audio_at_the_deployment_rate(monkeypatch):
+def test_realtime_audio_only_override_bills_audio_at_the_deployment_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Regression: an audio-only pricing override was never selected as the pricing key.
 
     The deployment-selection guard recognised only text, per-second, per-query and
@@ -5094,7 +5106,7 @@ def test_realtime_audio_only_override_bills_audio_at_the_deployment_rate(monkeyp
     assert overridden_cost == pytest.approx(0.0)
 
 
-def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch):
+def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: a priced base_model was discarded for realtime sessions.
 
     The resolved base model only reached the realtime cost path when custom pricing
@@ -5152,7 +5164,7 @@ def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch):
     assert aliased_cost > 0
 
 
-def test_base_model_does_not_override_transcription_rates(monkeypatch):
+def test_base_model_does_not_override_transcription_rates(monkeypatch: pytest.MonkeyPatch) -> None:
     """base_model prices the session, never the ASR events inside it.
 
     The deployment's resolved base model reaches realtime costing through the
