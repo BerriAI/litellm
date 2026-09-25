@@ -69,19 +69,14 @@ describe("KeyActivityPanel", () => {
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alicehash-bob");
   });
 
-  it("says how many keys the proxy left out when only the top spenders were loaded", () => {
+  it("counts toward the server-side key total when only the top spenders were loaded", () => {
     render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3000 }} />);
-    expect(screen.getByRole("note")).toHaveTextContent("Only the 2 highest-spend keys of 3,000 are loaded");
+    expect(screen.getByText("Showing 2 of 3,000 keys")).toBeInTheDocument();
   });
 
-  it("shows no truncation note once pagination has loaded every key", () => {
+  it("shows the full server total once every key is loaded", () => {
     render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 2 }} />);
-    expect(screen.queryByRole("note")).not.toBeInTheDocument();
-  });
-
-  it("shows no truncation note when every key is loaded", () => {
-    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
-    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 2 of 2 keys")).toBeInTheDocument();
   });
 
   it("finds keys outside the loaded top-spend subset via server search", async () => {

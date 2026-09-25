@@ -665,7 +665,7 @@ describe("EntityUsage", () => {
     });
 
     // processActivityData is mocked to a single-entry record here, so the loaded count reads 1
-    expect(await screen.findByRole("note")).toHaveTextContent("Only the 1 highest-spend keys of 3,000 are loaded");
+    expect(await screen.findByText("Showing 1 of 3,000 keys")).toBeInTheDocument();
   });
 
   it("loads the next key page through the metadata cursor and clears the button when the cursor runs out", async () => {

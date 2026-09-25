@@ -75,7 +75,9 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
 
   const totalKeys = Object.keys(keyMetrics).length;
   const shownKeys = Object.keys(displayed).length;
-  const totalShown = totalKeys + Object.keys(extraRemoteKeys).length;
+  const loadedPlusRemote = totalKeys + Object.keys(extraRemoteKeys).length;
+  const totalShown =
+    apiKeyTruncation === undefined ? loadedPlusRemote : Math.max(apiKeyTruncation.total, loadedPlusRemote);
   const isFiltering = trimmedQuery !== "";
   const noMatches = isFiltering && !remoteLoading && totalKeys > 0 && shownKeys === 0;
 
@@ -111,12 +113,6 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
         {remoteFailed && (
           <span role="alert" className="text-sm text-muted-foreground">
             Key search failed
-          </span>
-        )}
-        {apiKeyTruncation !== undefined && totalKeys < apiKeyTruncation.total && (
-          <span className="text-sm text-muted-foreground" role="note">
-            Only the {totalKeys.toLocaleString()} highest-spend keys of {apiKeyTruncation.total.toLocaleString()} are
-            loaded
           </span>
         )}
         {loadMoreKeys !== undefined && (
