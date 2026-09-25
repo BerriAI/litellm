@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import io
+import wave
 from datetime import datetime
 import contextlib
 import copy
@@ -4122,3 +4124,39 @@ def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
         )
     assert exc_info.value.status_code == 400
     assert f"tool_choice={tool_choice}" in str(exc_info.value)
+
+
+def _silent_wav_file() -> io.BytesIO:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 80)
+    buffer.seek(0)
+    buffer.name = "silence.wav"
+    return buffer
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_transcription_on_provider_without_transcription_raises_bad_request(respx_mock: respx.MockRouter):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.transcription(model="anthropic/claude-sonnet-4-5", file=_silent_wav_file(), api_key="sk-test")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "anthropic"
+    assert str(exc_info.value) == (
+        "litellm.BadRequestError: anthropic does not support audio transcription. Model: claude-sonnet-4-5"
+    )
+    assert respx_mock.calls.call_count == 0
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.asyncio
+async def test_atranscription_on_provider_without_transcription_raises_bad_request(respx_mock: respx.MockRouter):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.atranscription(model="anthropic/claude-sonnet-4-5", file=_silent_wav_file(), api_key="sk-test")
+
+    assert exc_info.value.status_code == 400
+    assert "anthropic does not support audio transcription. Model: claude-sonnet-4-5" in str(exc_info.value)
+    assert respx_mock.calls.call_count == 0
