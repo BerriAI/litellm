@@ -66,13 +66,16 @@ def error_text_result(exc: Exception) -> CallToolResult:
 
 def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolResult | InputRequiredResult:
     match outcome:
-        case TextResult(text=text):
-            return CallToolResult(content=[TextContent(type="text", text=text)], is_error=False)  # mutable-ok: SDK
-        case JsonResult(value=value, original_text=original_text):
+        case TextResult():
             return CallToolResult(
-                content=[TextContent(type="text", text=original_text)],  # mutable-ok: SDK list field
+                content=[TextContent(type="text", text=outcome.text)], is_error=False
+            )  # mutable-ok: SDK
+        case JsonResult():
+            keep_structured: Final = compat is WireCompat.MODERN or isinstance(outcome.value, dict)
+            return CallToolResult(
+                content=[TextContent(type="text", text=outcome.original_text)],  # mutable-ok: SDK list field
                 is_error=False,
-                structured_content=value if compat is WireCompat.MODERN or isinstance(value, dict) else None,
+                structured_content=outcome.value if keep_structured else None,
             )
         case CallToolResult():
             return _downgrade_structured_content(outcome) if compat is WireCompat.LEGACY else outcome
@@ -86,7 +89,7 @@ def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolRes
         case Exception():
             return error_text_result(outcome)
         case _:
-            assert_never(outcome)
+            return assert_never(outcome)
 
 
 def complete_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolResult:
