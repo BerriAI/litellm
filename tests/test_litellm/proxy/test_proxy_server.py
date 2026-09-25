@@ -11861,6 +11861,23 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.parametrize("worker_value, db_value", [(True, False), (False, True)])
+def test_log_auth_failure_key_identity_follows_db_config_reload(monkeypatch, worker_value, db_value):
+    """A /config/update that flips `log_auth_failure_key_identity` lands on the DB row; every
+    worker must take that value on its next config reload, so turning the PII suffix off stops
+    it without a restart."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "log_auth_failure_key_identity", worker_value)
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values("litellm_settings", {"log_auth_failure_key_identity": db_value})
+    )
+
+    assert litellm.log_auth_failure_key_identity is db_value
+
+
 @pytest.mark.asyncio
 async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
     """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
