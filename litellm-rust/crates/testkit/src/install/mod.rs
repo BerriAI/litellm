@@ -5,16 +5,20 @@ pub(crate) mod release;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use semver::Version;
 use tokio::fs;
 use tokio::process::Command;
 
-use crate::{Agent, Error, Target};
+use crate::{Error, Install, Target};
 use archive::{extract_binary, verify_sha256};
+
+static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Installed {
-    pub version: String,
+    pub version: Version,
     pub binary: PathBuf,
 }
 
@@ -33,12 +37,19 @@ impl<F: Fetch> Installer<F> {
         }
     }
 
-    pub async fn install(&self, agent: &impl Agent, version: &str) -> Result<Installed, Error> {
-        validate_version(version)?;
-        let dir = self.cache_root.join(agent.binary()).join(version);
+    pub async fn install(
+        &self,
+        agent: &impl Install,
+        version: &Version,
+    ) -> Result<Installed, Error> {
+        validate_release(version)?;
+        let dir = self
+            .cache_root
+            .join(agent.binary())
+            .join(version.to_string());
         let binary = dir.join(agent.binary());
         let installed = Installed {
-            version: version.to_owned(),
+            version: version.clone(),
             binary: binary.clone(),
         };
         if fs::try_exists(&binary).await? && probe_version(&binary, version).await.is_ok() {
@@ -51,7 +62,12 @@ impl<F: Fetch> Installer<F> {
         let contents = extract_binary(&release.packaging, &archive)?;
 
         fs::create_dir_all(&dir).await?;
-        let staging = dir.join(format!(".{}.partial", agent.binary()));
+        let staging = dir.join(format!(
+            ".{}.{}.{}.partial",
+            agent.binary(),
+            std::process::id(),
+            STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::write(&staging, contents).await?;
         fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).await?;
         fs::rename(&staging, &binary).await?;
@@ -66,19 +82,14 @@ impl<F: Fetch> Installer<F> {
     }
 }
 
-fn validate_version(version: &str) -> Result<(), Error> {
-    let parts: Vec<&str> = version.split('.').collect();
-    let plain = parts.len() == 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
-    if plain {
+fn validate_release(version: &Version) -> Result<(), Error> {
+    if version.pre.is_empty() && version.build.is_empty() {
         return Ok(());
     }
-    Err(Error::InvalidVersion(version.to_owned()))
+    Err(Error::InvalidVersion(version.to_string()))
 }
 
-async fn probe_version(binary: &Path, expected: &str) -> Result<(), Error> {
+async fn probe_version(binary: &Path, expected: &Version) -> Result<(), Error> {
     let home = std::env::temp_dir();
     let output = Command::new(binary)
         .arg("--version")
@@ -89,12 +100,16 @@ async fn probe_version(binary: &Path, expected: &str) -> Result<(), Error> {
         .output()
         .await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.split_whitespace().any(|token| token == expected) {
+    if stdout
+        .split_whitespace()
+        .filter_map(|token| Version::parse(token).ok())
+        .any(|reported| &reported == expected)
+    {
         return Ok(());
     }
     Err(Error::VersionMismatch {
         binary: binary.to_owned(),
-        expected: expected.to_owned(),
+        expected: expected.to_string(),
         reported: stdout.trim().to_owned(),
     })
 }

@@ -3488,8 +3488,10 @@ name = "litellm-testkit"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "futures-util",
  "reqwest 0.12.28",
  "rstest",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

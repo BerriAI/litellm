@@ -1,26 +1,20 @@
-mod claude_code;
+mod claude;
 mod codex;
+mod configure;
+mod drive;
+mod install;
 mod opencode;
 
-use std::future::Future;
-use std::path::Path;
-
-use crate::install::release::Release;
-use crate::{Error, Fetch, Gateway, LaunchSpec, Target};
-
-pub trait Agent: Sync {
-    fn binary(&self) -> &'static str;
-
-    fn release(
-        &self,
-        fetch: &impl Fetch,
-        version: &str,
-        target: Target,
-    ) -> impl Future<Output = Result<Release, Error>> + Send;
-
-    fn launch_spec(&self, gateway: &Gateway, home: &Path) -> LaunchSpec;
-}
-
-pub use claude_code::ClaudeCode;
+pub use claude::ClaudeCode;
 pub use codex::Codex;
+pub use configure::{Configure, LaunchSpec, Settings, Wire};
+pub use drive::{Drive, Outcome, Prompt, Usage};
+pub use install::Install;
 pub use opencode::Opencode;
+
+pub(crate) use configure::{env, path_string, quoted, v1};
+pub(crate) use drive::json_lines;
+
+pub trait Agent: Install + Configure + Drive {}
+
+impl<T: Install + Configure + Drive> Agent for T {}

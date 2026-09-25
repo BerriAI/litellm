@@ -2,7 +2,7 @@ mod support;
 
 use std::str::FromStr;
 
-use litellm_testkit::{ClaudeCode, Codex, Error, Installer, Opencode, Target};
+use litellm_testkit::{ClaudeCode, Codex, Error, Installer, Opencode, Target, Version};
 use rstest::rstest;
 use serde_json::json;
 use support::{FakeFetch, script_printing, sha256, tar_gz, zip_archive};
@@ -15,7 +15,9 @@ fn target(triple: &str) -> Target {
 fn linux() -> Target {
     target("x86_64-unknown-linux-gnu")
 }
-const VERSION: &str = "9.8.7";
+fn version() -> Version {
+    Version::new(9, 8, 7)
+}
 
 fn github_release(asset: &str, download_url: &str, digest: Option<String>) -> Vec<u8> {
     json!({
@@ -62,7 +64,7 @@ async fn claude_bare_binary_is_installed_and_runnable() {
     let cache = tempfile::tempdir().unwrap();
 
     let installed = Installer::new(&fetch, cache.path(), linux())
-        .install(&ClaudeCode, VERSION)
+        .install(&ClaudeCode, &version())
         .await
         .unwrap();
 
@@ -81,7 +83,7 @@ async fn codex_binary_is_extracted_from_the_tarball_under_its_own_name() {
     let cache = tempfile::tempdir().unwrap();
 
     let installed = Installer::new(&fetch, cache.path(), linux())
-        .install(&Codex, VERSION)
+        .install(&Codex, &version())
         .await
         .unwrap();
 
@@ -108,7 +110,7 @@ async fn opencode_binary_is_extracted_from_the_darwin_zip() {
     let cache = tempfile::tempdir().unwrap();
 
     let installed = Installer::new(&fetch, cache.path(), target("aarch64-apple-darwin"))
-        .install(&Opencode, VERSION)
+        .install(&Opencode, &version())
         .await
         .unwrap();
 
@@ -122,7 +124,7 @@ async fn tampered_download_is_rejected_and_nothing_is_left_behind() {
     let cache = tempfile::tempdir().unwrap();
 
     let result = Installer::new(&fetch, cache.path(), linux())
-        .install(&ClaudeCode, VERSION)
+        .install(&ClaudeCode, &version())
         .await;
 
     assert!(matches!(result, Err(Error::ChecksumMismatch { .. })));
@@ -139,7 +141,7 @@ async fn github_asset_without_a_digest_is_refused() {
     let cache = tempfile::tempdir().unwrap();
 
     let result = Installer::new(&fetch, cache.path(), linux())
-        .install(&Codex, VERSION)
+        .install(&Codex, &version())
         .await;
 
     assert!(matches!(result, Err(Error::MissingChecksum(_))));
@@ -152,7 +154,7 @@ async fn binary_reporting_a_different_version_is_removed() {
     let cache = tempfile::tempdir().unwrap();
 
     let result = Installer::new(&fetch, cache.path(), linux())
-        .install(&ClaudeCode, VERSION)
+        .install(&ClaudeCode, &version())
         .await;
 
     assert!(matches!(result, Err(Error::VersionMismatch { .. })));
@@ -166,9 +168,9 @@ async fn second_install_reuses_the_cached_binary_without_downloading() {
     let cache = tempfile::tempdir().unwrap();
     let installer = Installer::new(&fetch, cache.path(), linux());
 
-    let first = installer.install(&ClaudeCode, VERSION).await.unwrap();
+    let first = installer.install(&ClaudeCode, &version()).await.unwrap();
     let calls_after_first = fetch.calls();
-    let second = installer.install(&ClaudeCode, VERSION).await.unwrap();
+    let second = installer.install(&ClaudeCode, &version()).await.unwrap();
 
     assert_eq!(first, second);
     assert_eq!(fetch.calls(), calls_after_first);
@@ -180,27 +182,24 @@ async fn corrupted_cache_entry_is_replaced_by_a_fresh_download() {
     let fetch = FakeFetch::new(claude_routes(&binary, &sha256(&binary)));
     let cache = tempfile::tempdir().unwrap();
     let installer = Installer::new(&fetch, cache.path(), linux());
-    let installed = installer.install(&ClaudeCode, VERSION).await.unwrap();
+    let installed = installer.install(&ClaudeCode, &version()).await.unwrap();
     std::fs::write(&installed.binary, script_printing("0.0.1")).unwrap();
 
-    installer.install(&ClaudeCode, VERSION).await.unwrap();
+    installer.install(&ClaudeCode, &version()).await.unwrap();
 
     assert_eq!(std::fs::read(&installed.binary).unwrap(), binary);
 }
 
 #[rstest]
-#[case("../9.8.7")]
-#[case("9.8")]
-#[case("9.8.7-beta")]
-#[case("latest")]
-#[case("")]
+#[case("9.8.7-beta.1")]
+#[case("9.8.7+build.5")]
 #[tokio::test]
-async fn non_release_versions_never_reach_the_network_or_the_filesystem(#[case] version: &str) {
+async fn pre_releases_never_reach_the_network_or_the_filesystem(#[case] version: &str) {
     let fetch = FakeFetch::new([]);
     let cache = tempfile::tempdir().unwrap();
 
     let result = Installer::new(&fetch, cache.path(), linux())
-        .install(&ClaudeCode, version)
+        .install(&ClaudeCode, &Version::parse(version).unwrap())
         .await;
 
     assert!(matches!(result, Err(Error::InvalidVersion(_))));
@@ -226,7 +225,7 @@ async fn musl_linux_picks_the_musl_claude_build() {
     let cache = tempfile::tempdir().unwrap();
 
     let installed = Installer::new(&fetch, cache.path(), target("x86_64-unknown-linux-musl"))
-        .install(&ClaudeCode, VERSION)
+        .install(&ClaudeCode, &version())
         .await
         .unwrap();
 
@@ -241,4 +240,23 @@ fn targets_no_agent_ships_for_are_rejected(#[case] triple: &str) {
     let result = Target::try_from(&Triple::from_str(triple).unwrap());
 
     assert!(matches!(result, Err(Error::UnsupportedTarget(_))));
+}
+
+#[tokio::test]
+async fn concurrent_installs_of_the_same_version_both_succeed() {
+    let binary = script_printing("9.8.7 (Claude Code)");
+    let fetch = FakeFetch::new(claude_routes(&binary, &sha256(&binary)));
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(&fetch, cache.path(), linux());
+
+    let wanted = version();
+    let installs =
+        futures_util::future::join_all((0..8).map(|_| installer.install(&ClaudeCode, &wanted)))
+            .await;
+
+    assert!(installs.iter().all(Result::is_ok));
+    assert_eq!(
+        std::fs::read(&installs[0].as_ref().unwrap().binary).unwrap(),
+        binary
+    );
 }

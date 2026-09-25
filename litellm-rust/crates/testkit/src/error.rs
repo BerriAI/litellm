@@ -3,11 +3,13 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::Wire;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("unsupported target {0}")]
     UnsupportedTarget(String),
-    #[error("'{0}' is not a plain x.y.z release version")]
+    #[error("{0} is not a plain x.y.z release version")]
     InvalidVersion(String),
     #[error("request to {url} failed")]
     Request {
@@ -45,6 +47,10 @@ pub enum Error {
         expected: String,
         reported: String,
     },
+    #[error("{agent} cannot talk to the gateway over {wire:?}")]
+    UnsupportedWire { agent: &'static str, wire: Wire },
+    #[error("agent did not finish within {0:?}")]
+    Timeout(std::time::Duration),
     #[error("io failure")]
     Io(#[from] io::Error),
 }

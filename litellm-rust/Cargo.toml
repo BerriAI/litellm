@@ -82,6 +82,7 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
 flate2 = "1"
+semver = "1"
 tar = "0.4"
 target-lexicon = "0.13.5"
 tempfile = "3"

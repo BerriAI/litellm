@@ -1,11 +1,15 @@
 mod agent;
 mod error;
-mod gateway;
 mod install;
+mod session;
 mod target;
 
-pub use agent::{Agent, ClaudeCode, Codex, Opencode};
+pub use agent::{
+    Agent, ClaudeCode, Codex, Configure, Drive, Install, LaunchSpec, Opencode, Outcome, Prompt,
+    Settings, Usage, Wire,
+};
 pub use error::Error;
-pub use gateway::{Gateway, LaunchSpec};
 pub use install::{Fetch, HttpFetch, Installed, Installer, Packaging, Release};
+pub use semver::Version;
+pub use session::Session;
 pub use target::{Arch, Os, Target};
