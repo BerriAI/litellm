@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use super::HostChannel;
-use crate::MachineFault;
 use crate::{host::Reply, protocol::Protocol};
 use litellm_auth::{Error, ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
@@ -25,7 +24,7 @@ impl<R: Protocol> std::fmt::Debug for HostTokenProvider<R> {
 impl<R> HostTokenProvider<R>
 where
     R: TokenProtocol,
-    R::Error: From<MachineFault> + std::fmt::Display,
+    R::Error: std::fmt::Display,
 {
     pub fn handle(channel: HostChannel<R>) -> TokenProviderHandle {
         TokenProviderHandle::new(Arc::new(Self { channel }))
@@ -35,7 +34,7 @@ where
 impl<R> TokenProvider for HostTokenProvider<R>
 where
     R: TokenProtocol,
-    R::Error: From<MachineFault> + std::fmt::Display,
+    R::Error: std::fmt::Display,
 {
     fn acquire(&self) -> TokenFuture<'_> {
         Box::pin(async move {

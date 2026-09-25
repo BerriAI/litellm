@@ -11,6 +11,7 @@ use litellm_core::ocr::{
     types::OcrDocumentInput,
 };
 use litellm_host::{
+    MachineFault,
     event::{CallEvent, WireRequest},
     host::{Host, HostOp},
     machine::{HostFailure, Machine, MachineStep},
@@ -126,7 +127,7 @@ async fn a_hand_driven_machine_performs_the_same_call() {
     assert_eq!(ops, ["Project", "BeforeSend", "response"]);
     assert!(matches!(
         machine.resume().await,
-        Err(Error::InvalidRequest(_))
+        Err(Error::HostFault(MachineFault::Protocol(_)))
     ));
 }
 

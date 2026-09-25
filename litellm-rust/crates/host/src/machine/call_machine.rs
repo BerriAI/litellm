@@ -33,10 +33,7 @@ impl<R: Protocol> Clone for HostChannel<R> {
     }
 }
 
-impl<R: Protocol> HostChannel<R>
-where
-    R::Error: From<MachineFault>,
-{
+impl<R: Protocol> HostChannel<R> {
     async fn yield_<A: Send>(
         &self,
         ask: impl FnOnce(Reply<A>) -> HostOp<R> + Send,
@@ -112,10 +109,7 @@ pub struct CallMachine<R: Protocol> {
     coroutine: CallCoroutine<R>,
 }
 
-impl<R: Protocol> CallMachine<R>
-where
-    R::Error: From<MachineFault>,
-{
+impl<R: Protocol> CallMachine<R> {
     pub fn new(execute: impl FnOnce(HostChannel<R>) -> ExecuteFuture<R> + Send + 'static) -> Self {
         Self {
             coroutine: Coroutine::new(|co| execute(HostChannel { co })),
@@ -123,10 +117,7 @@ where
     }
 }
 
-impl<R: Protocol> Machine for CallMachine<R>
-where
-    R::Error: From<MachineFault>,
-{
+impl<R: Protocol> Machine for CallMachine<R> {
     type Protocol = R;
     type Complete = R::Response;
 

@@ -11,7 +11,6 @@ pub async fn run<M, H>(
 ) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
 where
     M: Machine,
-    <M::Protocol as Protocol>::Error: From<crate::MachineFault>,
     H: Host<M::Protocol>,
 {
     let start_time = epoch_seconds();
@@ -41,10 +40,7 @@ where
     outcome
 }
 
-async fn perform<R: Protocol<Error: From<crate::MachineFault>>, H: Host<R>>(
-    host: &H,
-    op: HostOp<R>,
-) -> Result<(), R::Error> {
+async fn perform<R: Protocol, H: Host<R>>(host: &H, op: HostOp<R>) -> Result<(), R::Error> {
     match op {
         HostOp::Project(reply) => host
             .project()
