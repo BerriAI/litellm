@@ -150,6 +150,8 @@ def _chat_request_from_responses(
     from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
     wire_body: Final = _proxy_wire_body(kwargs)
+    if "messages" in wire_body:
+        return MappingProxyType({**wire_body, "messages": _chat_messages(kwargs)})
     instructions: Final = kwargs.get("instructions") or wire_body.get("instructions")
     responses_request: Final = MappingProxyType(
         dict(

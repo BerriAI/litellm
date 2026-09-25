@@ -405,6 +405,54 @@ class TestSurfaceNormalization:
         assert "stream" not in shadow_call
         assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
+    async def test_responses_arm_preserves_chat_tool_schema_from_bridge_wire_body(self):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        hook_kwargs = _success_kwargs(call_type="aresponses")
+        hook_kwargs["messages"] = [
+            {"role": "user", "content": "look up"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_123", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "42"},
+        ]
+        hook_kwargs["litellm_params"]["proxy_server_request"] = {
+            "body": {
+                "model": "gpt-5.6-sol",
+                "messages": hook_kwargs["messages"],
+                "max_completion_tokens": 128,
+                "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+                "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+            }
+        }
+        response = ResponsesAPIResponse.model_validate(
+            {
+                **RESPONSES_API_RESPONSE,
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "42", "annotations": []}],
+                    }
+                ],
+            }
+        )
+
+        _, router = await self._drive(hook_kwargs, response)
+
+        shadow_call = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["max_completion_tokens"] == 128
+        assert shadow_call["tool_choice"] == {"type": "function", "function": {"name": "lookup"}}
+        assert shadow_call["tools"] == hook_kwargs["litellm_params"]["proxy_server_request"]["body"]["tools"]
+        assert shadow_call["tools"][0]["function"]["name"] == "lookup"
+        assert shadow_call["messages"][1]["tool_calls"][0]["id"] == "call_123"
+        assert shadow_call["messages"][2]["tool_call_id"] == "call_123"
+
     async def test_responses_arm_translates_wire_body_params_and_drops_surface_only_keys(self):
         from litellm.types.llms.openai import ResponsesAPIResponse
 
