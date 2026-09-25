@@ -696,8 +696,13 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
         guardrail_context: Mapping[str, object] | None = None,
+        on_tool_executed: Callable[[], None] | None = None,
     ) -> list[MCPToolResult]:
-        """Execute tool calls and return results."""
+        """Execute tool calls and return results.
+
+        ``on_tool_executed`` runs each time an MCP server returns for a call, so the caller
+        can tell executed calls apart from ones that were rejected before reaching a server.
+        """
         from fastapi import HTTPException
 
         from litellm._uuid import uuid
@@ -861,6 +866,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj=litellm_logging_obj,
                     guardrail_context=guardrail_context,
                 )
+                if on_tool_executed is not None:
+                    on_tool_executed()
 
                 if proxy_logging_obj:
                     result = await proxy_logging_obj.post_mcp_call_hook(

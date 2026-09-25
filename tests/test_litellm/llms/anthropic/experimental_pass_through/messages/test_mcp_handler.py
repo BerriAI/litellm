@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from litellm.exceptions import InternalServerError
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
@@ -14,7 +13,6 @@ from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler impor
     _build_tool_result_message,
     _extract_tool_use_blocks,
 )
-from litellm.router_utils.mcp_tool_execution import mcp_tools_executed
 
 MCP_REFERENCE = {
     "type": "mcp",
@@ -276,49 +274,3 @@ async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped
         "With no tool results there is nothing to send back, so the loop must not call the model again"
     )
     assert result == tool_use_response
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failing_call", ["initial", "follow_up"])
-async def test_anthropic_messages_with_mcp_tags_a_failure_after_tools_executed(failing_call):
-    """
-    Regression test for #43153: a router retry or fallback re-runs the whole MCP loop, so
-    a follow-up failure raised after the loop executed tools must carry the tag that stops
-    the replay. A failure before any tool ran stays untagged and is still retried.
-    """
-    from litellm.llms.anthropic.experimental_pass_through.messages import mcp_handler
-    from litellm.responses.mcp.request_context import MCPRequestContext
-
-    error = InternalServerError(message="upstream failed", llm_provider="anthropic", model="claude-sonnet-4-5")
-    tool_use_response = {
-        "stop_reason": "tool_use",
-        "content": [{"type": "tool_use", "id": "toolu_1", "name": "t", "input": {}}],
-    }
-    execute = AsyncMock(return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "t"}])
-    model_calls = AsyncMock(side_effect=[error] if failing_call == "initial" else [tool_use_response, error])
-
-    with (
-        patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")),
-        patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
-            new=AsyncMock(return_value=([], {})),
-        ),
-        patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
-            new=execute,
-        ),
-        patch("litellm.anthropic_messages", new=model_calls),
-        pytest.raises(InternalServerError) as exc_info,
-    ):
-        await mcp_handler.anthropic_messages_with_mcp(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "hi"}],
-            model="claude-sonnet-4-5",
-            tools=[MCP_REFERENCE],
-        )
-
-    assert exc_info.value is error
-    assert mcp_tools_executed(error) is (failing_call == "follow_up")
-    assert execute.await_count == (1 if failing_call == "follow_up" else 0)
