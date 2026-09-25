@@ -785,6 +785,20 @@ class TestSailWireAndBillingConsistency:
         assert body["metadata"] == {"trace_id": "x", "completion_window": "flex"}
         assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost("_flex"))
 
+    def test_merge_extra_body_keeps_mapped_window_in_caller_metadata(self):
+        config = create_config_class(JSONProviderRegistry.get("sail"))()
+        body = config.transform_request(
+            model="zai-org/GLM-5.3",
+            messages=_MESSAGES,
+            optional_params={"service_tier": "flex"},
+            litellm_params={},
+            headers={},
+        )
+
+        wire = config.merge_extra_body(body, {"metadata": {"trace_id": "t-1"}})
+
+        assert wire["metadata"] == {"completion_window": "flex", "trace_id": "t-1"}
+
     @pytest.mark.asyncio
     @pytest.mark.respx()
     async def test_aresponses_tier_window_survives_extra_body_metadata_merge(self, respx_mock: respx.Router):
@@ -884,6 +898,40 @@ class TestSailWireAndBillingConsistency:
         assert litellm.completion_cost(completion_response=response) == pytest.approx(
             response._hidden_params["response_cost"]
         )
+
+    @pytest.mark.respx()
+    def test_standalone_completion_cost_uses_echoed_tier_on_openai(self, respx_mock: respx.Router):
+        respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+            json={
+                "id": "chatcmpl-openai",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-5",
+                "service_tier": "default",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            }
+        )
+
+        response = litellm.completion(
+            model="openai/gpt-5",
+            messages=[{"role": "user", "content": "hi"}],
+            service_tier="flex",
+            api_key="sk-test",
+        )
+
+        rates = litellm.model_cost["gpt-5"]
+        base_cost = 2 * rates["input_cost_per_token"] + 2 * rates["output_cost_per_token"]
+        flex_cost = 2 * rates["input_cost_per_token_flex"] + 2 * rates["output_cost_per_token_flex"]
+        standalone_cost = litellm.completion_cost(completion_response=response)
+        assert standalone_cost == pytest.approx(base_cost)
+        assert standalone_cost != pytest.approx(flex_cost)
 
     def test_window_override_applies_when_provider_inferred_from_model(self):
         rates = litellm.model_cost[MODEL]
@@ -1191,6 +1239,20 @@ class TestSailUnknownServiceTierRejected:
 
         bodies = [json.loads(call.request.content) for call in respx_mock.calls]
         assert bodies[0] == bodies[1] == {"model": MODEL.split("/", 1)[1], "messages": _MESSAGES}
+
+    @pytest.mark.respx()
+    def test_chat_unknown_tier_dropped_with_global_drop_params(
+        self, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
+    ):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="bogus")
+
+        assert len(respx_mock.calls) == 1
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert "service_tier" not in body
+        assert "metadata" not in body
 
     @pytest.mark.asyncio
     @pytest.mark.respx()
