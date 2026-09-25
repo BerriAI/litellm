@@ -165,13 +165,13 @@ def _non_empty_attributes(pairs: Iterable[tuple[str, object]]) -> Mapping[str, o
     return MappingProxyType({key: value for key, value in pairs if value})
 
 
-def _chunk_result(chunk: VertexSearchChunk, score: float) -> VectorStoreSearchResult:
+def _chunk_result(chunk: VertexSearchChunk, positional_score: float) -> VectorStoreSearchResult:
     metadata: Final = chunk.get("documentMetadata", _EMPTY_CHUNK_DOCUMENT_METADATA)
     uri: Final = metadata.get("uri", "")
     title: Final = metadata.get("title", "")
     document_id: Final = _document_id_from_chunk_name(chunk.get("name", ""))
     return VectorStoreSearchResult(
-        score=score,
+        score=chunk.get("relevanceScore", positional_score),
         content=[VectorStoreResultContent(text=chunk.get("content", ""), type="text")],
         file_id=uri or document_id,
         filename=title or _UNKNOWN_DOCUMENT,

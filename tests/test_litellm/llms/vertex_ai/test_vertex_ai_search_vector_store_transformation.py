@@ -337,7 +337,7 @@ def test_chunk_hit_uses_chunk_content_and_document_metadata():
     assert result["content"] == [
         {"text": "Refunds are available within 14 days.", "type": "text"}
     ]
-    assert result["score"] == 1.0
+    assert result["score"] == 0.91
     assert result["file_id"] == "gs://bucket/policy.pdf"
     assert result["filename"] == "Refund policy"
     assert result["attributes"] == {
@@ -367,6 +367,7 @@ def test_chunk_hit_without_uri_or_title_falls_back_to_document_id():
     result = _search_response(payload)["data"][0]
 
     assert result["content"] == [{"text": "Guest Services Handbook", "type": "text"}]
+    assert result["score"] == 1.0
     assert result["file_id"] == "handbook"
     assert result["filename"] == "Unknown Document"
     assert result["attributes"] == {
