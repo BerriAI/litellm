@@ -6160,18 +6160,18 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
                 cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
                 cache_read_input_token_cost_batches=_model_info.get("cache_read_input_token_cost_batches"),
-                cache_read_input_token_cost_above_272k_tokens_batches=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens_batches"
-                ),
                 cache_read_input_token_cost_above_200k_tokens_batches=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens_batches"
                 ),
-                cache_creation_input_token_cost_batches=_model_info.get("cache_creation_input_token_cost_batches"),
-                cache_creation_input_token_cost_above_272k_tokens_batches=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens_batches"
+                cache_read_input_token_cost_above_272k_tokens_batches=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens_batches"
                 ),
+                cache_creation_input_token_cost_batches=_model_info.get("cache_creation_input_token_cost_batches"),
                 cache_creation_input_token_cost_above_200k_tokens_batches=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens_batches"
+                ),
+                cache_creation_input_token_cost_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_batches"
                 ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
@@ -6203,18 +6203,18 @@ def _get_model_info_helper(
                 input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
                 input_cost_per_token_batches=_model_info.get("input_cost_per_token_batches"),
                 input_cost_per_video_token_batches=_model_info.get("input_cost_per_video_token_batches", None),
-                input_cost_per_token_above_272k_tokens_batches=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens_batches"
-                ),
                 input_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_batches"
                 ),
-                output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
-                output_cost_per_token_above_272k_tokens_batches=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens_batches"
+                input_cost_per_token_above_272k_tokens_batches=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_batches"
                 ),
+                output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
                 output_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_200k_tokens_batches"
+                ),
+                output_cost_per_token_above_272k_tokens_batches=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
@@ -9369,6 +9369,10 @@ class ProviderConfigManager:
             from litellm.llms.mistral.files.transformation import MistralFilesConfig
 
             return MistralFilesConfig()
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.files.transformation import XAIFilesConfig
+
+            return XAIFilesConfig()
         return None
 
     @staticmethod
