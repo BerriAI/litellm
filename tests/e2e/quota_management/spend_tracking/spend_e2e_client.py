@@ -20,6 +20,7 @@ from typing import Final
 
 from e2e_config import unique_marker
 from e2e_http import (
+    AuthHeaders,
     FileUploadForm,
     Headers,
     NoBody,
@@ -63,9 +64,10 @@ METRICS_PATH: Final = "/metrics/"
 
 __all__ = [
     "BatchCreateBody",
+    "BatchObject",
     "CallbackLogMetadata",
     "CallbackLogPayload",
-    "BatchObject",
+    "ClientAttributionHeaders",
     "DailyActivityKeyBreakdown",
     "FileObject",
     "ProbeResult",
@@ -78,6 +80,16 @@ __all__ = [
     "unique_marker",
     "unwrap",
 ]
+
+
+class ClientAttributionHeaders(AuthHeaders):
+    """The attribution headers a coding agent attaches to every call from its own
+    config (Codex CLI's config.toml ``http_headers``, Claude Code's
+    ``ANTHROPIC_CUSTOM_HEADERS``) because it has no body field for the end user."""
+
+    x_litellm_customer_id: str | None = Field(default=None, alias="x-litellm-customer-id")
+    x_litellm_end_user_id: str | None = Field(default=None, alias="x-litellm-end-user-id")
+    x_litellm_tags: str | None = Field(default=None, alias="x-litellm-tags")
 
 
 class GeminiApiKeyHeaders(Headers):
@@ -479,9 +491,12 @@ class SpendClient:
         )
 
     def send_responses(self, key: str, model: str, content: str) -> StreamingResponse:
+        return self.send_responses_with_headers(self.proxy.transport.bearer(key), model, content)
+
+    def send_responses_with_headers(self, headers: AuthHeaders, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/v1/responses",
-            headers=self.proxy.transport.bearer(key),
+            headers=headers,
             json=ResponsesBody(model=model, input=content),
         )
 
