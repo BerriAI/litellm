@@ -2588,6 +2588,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch,
         timezone_offset_minutes=480,
         include_current_utc_day=include_current_utc_day,
         include_entity_breakdown=True,
+        entity_breakdown_api_keys=False,
         resolve_entity_metadata=ANY,
     )
 
@@ -2632,6 +2633,7 @@ async def test_get_user_daily_activity_aggregated_resolves_user_emails(monkeypat
 
     kwargs = mock_get_daily_agg.call_args.kwargs
     assert kwargs["include_entity_breakdown"] is True
+    assert kwargs["entity_breakdown_api_keys"] is False
     resolve = kwargs["resolve_entity_metadata"]
     assert resolve is not None
 

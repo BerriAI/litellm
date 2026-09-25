@@ -3401,4 +3401,41 @@ async def test_get_daily_activity_aggregated_resolves_entity_metadata_for_breakd
     )
 
     assert seen_ids["ids"] == frozenset({"u1"})
-    assert result.results[0].breakdown.entities["u1"].metadata["user_email"] == "u1@example.com"
+    entity: Final = result.results[0].breakdown.entities["u1"]
+    assert entity.metadata["user_email"] == "u1@example.com"
+    # Rolled-only rows (api_key NULL, api_key_rolled 1) fold to metrics with no key fan-out
+    assert entity.api_key_breakdown == {}
+    assert entity.metrics.spend == 10.0
+
+
+def test_entity_rollup_sql_key_free_mode_groups_by_date_and_entity_only():
+    """include_api_keys=False emits the (date, entity) rollup without the per-key level.
+
+    The admin all-users breakdown only sums entity metrics, so a rollup that
+    also fans out per api_key multiplies the row count for no consumer.
+    """
+    keyed_sql, _ = _build_entity_rollup_sql_query(
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+    )
+    key_free_sql, key_free_params = _build_entity_rollup_sql_query(
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+        include_api_keys=False,
+    )
+
+    assert "GROUPING SETS" in keyed_sql
+    assert "GROUPING SETS" not in key_free_sql
+    assert 'GROUP BY date, "user_id"' in key_free_sql
+    assert "NULL::text AS api_key" in key_free_sql
+    assert key_free_params == ["2024-01-01", "2024-01-31"]
