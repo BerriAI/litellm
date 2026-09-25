@@ -317,6 +317,40 @@ class TestGoogleAIStudioTokenCounter:
         assert recorded == []
 
     @pytest.mark.asyncio
+    async def test_count_tokens_without_api_key_returns_provider_error_response(self, monkeypatch):
+        """A deployment with no usable Gemini key still reaches the provider and
+        maps its rejection to an error TokenCountResponse so the proxy falls back."""
+        import httpx
+
+        import litellm
+
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
+        recorded = []
+
+        def _handler(request):
+            recorded.append(request)
+            return httpx.Response(
+                403, json={"error": {"code": 403, "message": "API key not valid", "status": "PERMISSION_DENIED"}}
+            )
+
+        result = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"model": "gemini/gemini-2.5-flash"}},
+            request_model="gemini/gemini-2.5-flash",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 403
+        assert result.total_tokens == 0
+        assert len(recorded) == 1 and "x-goog-api-key" not in recorded[0].headers
+
+    @pytest.mark.asyncio
     async def test_count_tokens_connection_error_returns_error_response(self):
         """A provider APIConnectionError surfaces as an error TokenCountResponse
         so the proxy falls back instead of 500ing."""
