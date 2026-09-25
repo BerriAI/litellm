@@ -6764,6 +6764,16 @@ class MCPServerManager:
                 return server
         return None
 
+    @staticmethod
+    def _is_public_mcp_server(server: MCPServer, public_ids: Container[str]) -> bool:
+        return server.server_id in public_ids or (
+            not litellm.public_mcp_hub_strict_whitelist and server.available_on_public_internet
+        )
+
+    def is_mcp_server_public(self, server_id: str) -> bool:
+        server: Final = self.registry.get(server_id) or self.config_mcp_servers.get(server_id)
+        return server is not None and self._is_public_mcp_server(server, litellm.public_mcp_servers or ())
+
     def get_public_mcp_servers(self) -> list[MCPServer]:
         """
         Return the MCP servers published to the AI Hub via /v1/mcp/make_public.
@@ -6781,18 +6791,8 @@ class MCPServerManager:
         deployments that relied on the OR-with-default semantics; will be
         removed in a future release.
         """
-        if litellm.public_mcp_hub_strict_whitelist:
-            if litellm.public_mcp_servers is None:
-                return []
-            public_ids = set(litellm.public_mcp_servers)
-            return [server for server in self.get_registry().values() if server.server_id in public_ids]
-
-        public_ids = set(litellm.public_mcp_servers or [])
-        return [
-            server
-            for server in self.get_registry().values()
-            if server.available_on_public_internet or server.server_id in public_ids
-        ]
+        public_ids: Final = frozenset(litellm.public_mcp_servers or ())
+        return [server for server in self.get_registry().values() if self._is_public_mcp_server(server, public_ids)]
 
     def expand_permission_list(self, identifiers: list[str]) -> list[str]:
         """

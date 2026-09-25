@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/cva.config";
 import { AUTH_TYPE, type MCPServer } from "@/components/mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { getMaskedAndFullUrl } from "./utils";
+import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 
 interface MCPServerCardProps {
   server: MCPServer;
@@ -69,7 +69,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     server.auth_type === AUTH_TYPE.OAUTH2 && !server.oauth2_flow && !server.delegate_auth_to_upstream;
   const status = server.status || "unknown";
   const healthTone = HEALTH_TONE[status] ?? HEALTH_TONE.unknown;
-  const isPublic = server.available_on_public_internet;
+  const networkAccess = getMCPNetworkAccess(server);
   const accessGroups = (server.mcp_access_groups ?? []).filter((g): g is string => typeof g === "string");
 
   const missing = missingUserFields ?? [];
@@ -235,10 +235,17 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               </TooltipContent>
             </Tooltip>
           )}
-          <Badge variant="outline">
-            <span className={cn("h-1.5 w-1.5 rounded-full", isPublic ? "bg-success" : "bg-warning")} />
-            {isPublic ? "Public" : "Internal"}
-          </Badge>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge variant="outline">
+                  <span className={cn("h-1.5 w-1.5 rounded-full", networkAccess.dotClassName)} />
+                  {networkAccess.label}
+                </Badge>
+              }
+            />
+            <TooltipContent>{networkAccess.description}</TooltipContent>
+          </Tooltip>
           {accessGroups.slice(0, 2).map((g) => (
             <Tooltip key={g}>
               <TooltipTrigger

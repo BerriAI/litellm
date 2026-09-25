@@ -4,6 +4,7 @@ import types
 import json
 import logging
 from contextlib import ExitStack
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, List, Optional, cast
@@ -23,6 +24,7 @@ from litellm.proxy.management_endpoints import (
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
+    MakeMCPServersPublicRequest,
     MCPTransport,
     MCPUserCredentialResponse,
     NewMCPServerRequest,
@@ -141,6 +143,161 @@ def patch_proxy_general_settings(settings: dict):
         sys.modules,
         {"litellm.proxy.proxy_server": fake_proxy_server_module},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("from_db", (False, True))
+@pytest.mark.parametrize(
+    "strict,explicit,expected_public",
+    ((True, True, True), (True, False, False), (False, False, True)),
+)
+async def test_mcp_publication_list_and_detail_derive_current_status(
+    from_db: bool, strict: bool, explicit: bool, expected_public: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="publication-server",
+        name="publication-server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        available_on_public_internet=True,
+        mcp_info={
+            "is_public": not expected_public,
+            "is_public_explicit": not explicit,
+            "description": "Keep this description",
+        },
+    )
+    manager.registry = {server.server_id: server} if from_db else {}
+    manager.config_mcp_servers = {} if from_db else {server.server_id: server}
+    record: Final = manager._build_mcp_server_table(server)
+    original_metadata: Final = dict(server.mcp_info or {})
+    admin: Final = generate_mock_user_api_key_auth()
+
+    with (
+        patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
+        patch("litellm.public_mcp_hub_strict_whitelist", strict),
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()),
+        patch.object(mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=record if from_db else None)),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "view_all"}),
+    ):
+        listing: Final = await mgmt_endpoints.fetch_all_mcp_servers(
+            user_api_key_dict=admin, team_id=None, connected_app_view=False
+        )
+        detail: Final = await mgmt_endpoints.fetch_mcp_server(
+            request=_make_mock_request(), server_id=server.server_id, user_api_key_dict=admin
+        )
+        assert len(listing) == 1
+        for projected in (listing[0], detail):
+            assert projected.mcp_info == {
+                "is_public": expected_public,
+                "is_public_explicit": explicit,
+                "description": "Keep this description",
+            }
+        assert bool(manager.get_public_mcp_servers()) is expected_public
+
+    assert server.mcp_info == original_metadata
+    assert record.mcp_info == original_metadata
+
+
+@pytest.mark.parametrize("approval_status", ("pending_review", "rejected", "draft", "active"))
+@pytest.mark.parametrize("strict", (False, True))
+def test_mcp_publication_projection_excludes_unregistered_lifecycle_records(
+    approval_status: str, strict: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    record: Final = LiteLLM_MCPServerTable(
+        server_id="unregistered-server",
+        transport=MCPTransport.http,
+        approval_status=approval_status,
+        credentials={"auth_value": "test-secret"},
+        available_on_public_internet=True,
+        mcp_info={"is_public": True, "is_public_explicit": True},
+    )
+    original: Final = record.model_dump()
+    with (
+        patch("litellm.public_mcp_servers", [record.server_id]),
+        patch("litellm.public_mcp_hub_strict_whitelist", strict),
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", MCPServerManager()),
+    ):
+        for project in (
+            mgmt_endpoints._redact_mcp_credentials,
+            mgmt_endpoints._sanitize_mcp_server_for_non_admin,
+            mgmt_endpoints._sanitize_mcp_server_for_virtual_key,
+        ):
+            projected: Final = project(record)
+            assert projected.mcp_info == {"is_public": False, "is_public_explicit": False}
+            assert projected.credentials is None
+    assert record.model_dump() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_ids", (None, ["old-server"]))
+@pytest.mark.parametrize(
+    "selected_ids,save_error,role,error_status",
+    (
+        (["new-server"], None, LitellmUserRoles.PROXY_ADMIN, None),
+        ([], None, LitellmUserRoles.PROXY_ADMIN, None),
+        (["new-server"], HTTPException(400, "Owned by config file"), LitellmUserRoles.PROXY_ADMIN, 400),
+        (["new-server"], RuntimeError("Database write failed"), LitellmUserRoles.PROXY_ADMIN, 500),
+        (["missing-server"], None, LitellmUserRoles.PROXY_ADMIN, 404),
+        (["new-server"], None, LitellmUserRoles.INTERNAL_USER, 403),
+    ),
+)
+async def test_mcp_publication_updates_runtime_only_after_successful_save(
+    previous_ids: list[str] | None,
+    selected_ids: list[str],
+    save_error: HTTPException | RuntimeError | None,
+    role: LitellmUserRoles,
+    error_status: int | None,
+) -> None:
+    import litellm
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    server: Final = generate_mock_mcp_server_config_record(server_id="new-server")
+    manager.config_mcp_servers = {server.server_id: server}
+    expected_config: Final = {"litellm_settings": {"drop_params": True, "public_mcp_servers": selected_ids}}
+
+    async def save_config(new_config: Mapping[str, object]) -> None:
+        assert litellm.public_mcp_servers is previous_ids
+        assert new_config == expected_config
+        if save_error is not None:
+            raise save_error
+
+    save: Final = AsyncMock(side_effect=save_config)
+    proxy_config: Final = SimpleNamespace(
+        get_config=AsyncMock(return_value={"litellm_settings": {"drop_params": True}}),
+        save_config=save,
+    )
+    request: Final = MakeMCPServersPublicRequest(mcp_server_ids=selected_ids)
+    caller: Final = generate_mock_user_api_key_auth(user_role=role)
+    with (
+        patch("litellm.public_mcp_servers", previous_ids),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+    ):
+        if error_status is None:
+            response: Final = await mgmt_endpoints.make_mcp_servers_public(request, caller)
+            assert response["public_mcp_servers"] == selected_ids
+            assert litellm.public_mcp_servers == selected_ids
+        else:
+            with pytest.raises(HTTPException) as error:
+                await mgmt_endpoints.make_mcp_servers_public(request, caller)
+            assert error.value.status_code == error_status
+            assert litellm.public_mcp_servers is previous_ids
+
+    if error_status in (403, 404):
+        save.assert_not_awaited()
+    else:
+        save.assert_awaited_once_with(new_config=expected_config)
 
 
 class TestMCPCredentialsTokenExchangeProfile:

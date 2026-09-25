@@ -648,7 +648,16 @@ if MCP_AVAILABLE:
         if hasattr(redacted_server, "credentials"):
             setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
 
-        return redacted_server
+        is_public: Final = global_mcp_server_manager.is_mcp_server_public(redacted_server.server_id)
+        return redacted_server.model_copy(
+            update={
+                "mcp_info": {
+                    **(redacted_server.mcp_info or {}),
+                    "is_public": is_public,
+                    "is_public_explicit": is_public and redacted_server.server_id in (litellm.public_mcp_servers or ()),
+                }
+            }
+        )
 
     def _preserved_admin_config_credentials(
         credentials: "MCPCredentials | str | None",
@@ -830,10 +839,10 @@ if MCP_AVAILABLE:
         sanitized.updated_at = None
 
         # `mcp_info` is arbitrary metadata; keep only an explicit safe subset.
-        is_public = False
-        if isinstance(sanitized.mcp_info, dict):
-            is_public = bool(sanitized.mcp_info.get("is_public"))
-        sanitized.mcp_info = {"is_public": True} if is_public else None
+        sanitized.mcp_info = {
+            "is_public": (sanitized.mcp_info or {}).get("is_public") is True,
+            "is_public_explicit": (sanitized.mcp_info or {}).get("is_public_explicit") is True,
+        }
 
         return sanitized
 
@@ -1257,14 +1266,6 @@ if MCP_AVAILABLE:
             reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)
             for server in redacted_mcp_servers:
                 server.connected_app_reachable = server.server_id in reachable_ids
-
-        # augment the mcp servers with public status
-        if litellm.public_mcp_servers is not None:
-            for server in redacted_mcp_servers:
-                if server.server_id in litellm.public_mcp_servers:
-                    if server.mcp_info is None:
-                        server.mcp_info = {}
-                    server.mcp_info["is_public"] = True
 
         # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
@@ -3026,9 +3027,6 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            if litellm.public_mcp_servers is None:
-                litellm.public_mcp_servers = []
-
             for server_id in request.mcp_server_ids:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
                 if server is None:
@@ -3037,16 +3035,15 @@ if MCP_AVAILABLE:
                         detail=f"MCP Server with ID {server_id} not found",
                     )
 
-            litellm.public_mcp_servers = request.mcp_server_ids
-
             # Update config with new settings
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
+            config["litellm_settings"]["public_mcp_servers"] = request.mcp_server_ids
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)
+            litellm.public_mcp_servers = request.mcp_server_ids
 
             verbose_proxy_logger.debug(
                 "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id

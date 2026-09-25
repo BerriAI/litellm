@@ -112,3 +112,15 @@ describe("MCPServerCard per-user credentials", () => {
     expect(screen.queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
   });
 });
+
+describe("MCPServerCard network access", () => {
+  it("shows effective network access without a hub listing badge", () => {
+    renderCard({
+      available_on_public_internet: false,
+      mcp_info: { server_name: "demo_server", is_public: true, is_public_explicit: true },
+    });
+
+    expect(screen.getByText("All Networks")).toBeInTheDocument();
+    expect(screen.queryByText(/^Hub:/)).not.toBeInTheDocument();
+  });
+});

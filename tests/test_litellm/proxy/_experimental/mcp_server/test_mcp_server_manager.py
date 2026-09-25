@@ -9385,6 +9385,60 @@ class TestGetPublicMCPServers:
             manager.config_mcp_servers[s.server_id] = s
         return manager
 
+    @pytest.mark.parametrize("registered_in", ("config", "database", "both", "neither"))
+    @pytest.mark.parametrize("public_ids", (None, [], ["server-id"], ["server-alias"], ["Server Name"]))
+    @pytest.mark.parametrize(
+        "strict,network_access,implicitly_public",
+        ((True, True, False), (True, False, False), (False, True, True), (False, False, False)),
+    )
+    def test_public_status_agrees_with_hub_membership(
+        self,
+        registered_in: Literal["config", "database", "both", "neither"],
+        public_ids: list[str] | None,
+        strict: bool,
+        network_access: bool,
+        implicitly_public: bool,
+    ) -> None:
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="server-id",
+            name="server-alias",
+            alias="server-alias",
+            server_name="Server Name",
+            transport=MCPTransport.http,
+            available_on_public_internet=network_access,
+            mcp_info={"is_public": True, "description": "Preserve custom metadata"},
+        )
+        config_server: Final = (
+            server.model_copy(update={"available_on_public_internet": not network_access})
+            if registered_in == "both"
+            else server
+        )
+        manager.config_mcp_servers = (
+            {server.server_id: config_server} if registered_in in ("config", "both") else {}
+        )
+        manager.registry = {server.server_id: server} if registered_in in ("database", "both") else {}
+        original_server: Final = server.model_dump()
+        original_config_server: Final = config_server.model_dump()
+        expected_public: Final = registered_in != "neither" and (
+            public_ids == [server.server_id] or implicitly_public
+        )
+
+        with (
+            patch("litellm.public_mcp_servers", public_ids),
+            patch("litellm.public_mcp_hub_strict_whitelist", strict),
+        ):
+            public_servers: Final = manager.get_public_mcp_servers()
+            assert manager.is_mcp_server_public(server.server_id) is expected_public
+            assert [item.server_id for item in public_servers] == (
+                [server.server_id] if expected_public else []
+            )
+            assert manager.is_mcp_server_public("server-alias") is False
+            assert manager.is_mcp_server_public("missing-server") is False
+
+        assert server.model_dump() == original_server
+        assert config_server.model_dump() == original_config_server
+
     @patch("litellm.public_mcp_servers", None)
     def test_returns_empty_when_whitelist_is_none(self):
         """No /make_public call yet → hub returns nothing, regardless of
