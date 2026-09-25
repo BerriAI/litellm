@@ -10539,7 +10539,6 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
-        # the DB sync above may have rebound the global, so the parameter can be stale here
         cleanup_settings: Final = _current_general_settings()
         if (
             cleanup_settings.get("maximum_spend_logs_retention_period") is not None
