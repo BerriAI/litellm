@@ -80,6 +80,52 @@ class _ToolCallingNadir(HTTPHandler):
         return httpx.Response(200, json=_payload(choices=[_TOOL_CALL_CHOICE]), request=httpx.Request("POST", url))
 
 
+def _chunk(delta, finish_reason=None):
+    return {
+        "id": "req-1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "claude-haiku-4-5",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+
+
+# The frames Nadir streams for a tool-calling turn: the call's id and name first, then its arguments in
+# fragments, then a finish frame that ends the turn with "tool_calls".
+_TOOL_CALL_STREAM = (
+    "".join(
+        f"data: {json.dumps(frame)}\n\n"
+        for frame in (
+            _chunk({"role": "assistant", "content": ""}),
+            _chunk(
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": ""},
+                        }
+                    ]
+                }
+            ),
+            _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"city": '}}]}),
+            _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]}),
+            _chunk({}, "tool_calls"),
+        )
+    )
+    + "data: [DONE]\n\n"
+).encode()
+
+
+class _StreamingToolCallingNadir(_ToolCallingNadir):
+    """Injected transport that streams the tool call back as Nadir's SSE frames."""
+
+    def post(self, url: str, headers=None, data=None, **kwargs) -> httpx.Response:
+        self.request_body = json.loads(data)
+        return httpx.Response(200, content=_TOOL_CALL_STREAM, request=httpx.Request("POST", url))
+
+
 def _cost(response, provider):
     return litellm.completion_cost(completion_response=response, custom_llm_provider=provider)
 
@@ -217,6 +263,26 @@ class TestNadirToolCalling:
         assert (body["user"], body["service_tier"]) == ("end-user-7", "flex")
         assert response.choices[0].finish_reason == "tool_calls"
         assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+    def test_streamed_tool_call_round_trip(self):
+        client = _StreamingToolCallingNadir()
+        chunks = list(
+            litellm.completion(
+                model="nadir/auto",
+                messages=[{"role": "user", "content": "Weather in Paris?"}],
+                api_key="sk-test",
+                client=client,
+                stream=True,
+                tools=_TOOLS,
+                tool_choice="auto",
+            )
+        )
+        assert (client.request_body["stream"], client.request_body["tools"]) == (True, _TOOLS)
+        choices = [choice for chunk in chunks for choice in chunk.choices]
+        calls = [call for choice in choices for call in choice.delta.tool_calls or []]
+        assert calls[0].function.name == "get_weather"
+        assert "".join(call.function.arguments or "" for call in calls) == '{"city": "Paris"}'
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["tool_calls"]
 
 
 class TestNadirEnvValidation:
