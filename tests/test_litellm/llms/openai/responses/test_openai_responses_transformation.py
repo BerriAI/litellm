@@ -1593,3 +1593,13 @@ class TestPromptCacheOptionsOnResponsesPath:
             "text": "hi",
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
+
+
+@pytest.mark.parametrize("effort", [None, "low"])
+def test_gpt_6_astra_drops_temperature_on_the_responses_path(effort):
+    mapped = OpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params={"temperature": 0, **({"reasoning": {"effort": effort}} if effort else {})},
+        model="gpt-6-astra",
+        drop_params=True,
+    )
+    assert "temperature" not in mapped
