@@ -7,6 +7,7 @@ import pytest
 
 import litellm
 from litellm.llms.databricks.cost_calculator import cost_per_token
+from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 from litellm.types.utils import ModelInfo, Usage
 
 REPO_ROOT: Final = Path(__file__).parents[4]
@@ -16,7 +17,7 @@ NEW_MODELS: Final = (
     "databricks/databricks-claude-opus-4-7",
     "databricks/databricks-claude-opus-4-8",
     "databricks/databricks-claude-opus-5",
-    "databricks/databricks-claude-sonnet-5",
+    "databricks/system.ai.claude-sonnet-5",
     "databricks/databricks-claude-fable-5",
     "databricks/databricks-claude-fable-5-1",
     "databricks/databricks-gpt-5-6-sol",
@@ -41,7 +42,7 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-claude-opus-4-5": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-1": ("214.286", "1071.429", "267.857", "21.429"),
     "databricks/databricks-claude-opus-4": ("214.286", "1071.429", "267.857", "21.429"),
-    "databricks/databricks-claude-sonnet-5": ("42.857", "214.286", "53.571", "4.286"),
+    "databricks/system.ai.claude-sonnet-5": ("42.857", "214.286", "53.571", "4.286"),
     "databricks/databricks-claude-sonnet-4-6": ("42.857", "214.286", "53.571", "4.286"),
     "databricks/databricks-claude-sonnet-4-5": ("42.857", "214.286", "53.571", "4.286"),
     "databricks/databricks-claude-sonnet-4-1": ("42.857", "214.286", "53.571", "4.286"),
@@ -118,7 +119,7 @@ def _dollars_per_token(dbu_per_million: str) -> float:
     [
         "databricks/databricks-claude-opus-4-8",
         "databricks/databricks-claude-opus-5",
-        "databricks/databricks-claude-sonnet-5",
+        "databricks/system.ai.claude-sonnet-5",
     ],
 )
 def test_cached_tokens_bill_at_cache_rates(local_model_cost_map: None, model: str) -> None:
@@ -143,7 +144,7 @@ def test_cached_tokens_bill_at_cache_rates(local_model_cost_map: None, model: st
 
 
 def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model_cost_map: None) -> None:
-    model: Final = "databricks/databricks-claude-sonnet-5"
+    model: Final = "databricks/system.ai.claude-sonnet-5"
     info: Final = _model_info(model)
     usage: Final = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
 
@@ -151,8 +152,6 @@ def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model
 
     assert prompt_cost == pytest.approx(1000 * info["input_cost_per_token"])
     assert completion_cost == pytest.approx(200 * info["output_cost_per_token"])
-
-
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
@@ -224,8 +223,45 @@ def test_backup_price_map_matches_main(model: str) -> None:
 
 
 def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: None) -> None:
-    sonnet_5: Final = _model_info("databricks/databricks-claude-sonnet-5")
+    sonnet_5: Final = _model_info("databricks/system.ai.claude-sonnet-5")
     sonnet_4_6: Final = _model_info("databricks/databricks-claude-sonnet-4-6")
 
     for field in PRICE_FIELDS:
         assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
+
+
+def test_sonnet_5_system_ai_and_legacy_cost_lookup(local_model_cost_map: None) -> None:
+    system_ai_model: Final = "databricks/system.ai.claude-sonnet-5"
+    legacy_model: Final = "databricks/databricks-claude-sonnet-5"
+    info: Final = _model_info(system_ai_model)
+    input_cost: Final = info["input_cost_per_token"]
+    output_cost: Final = info["output_cost_per_token"]
+    assert input_cost is not None and input_cost > 0
+    assert output_cost is not None and output_cost > 0
+
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=200,
+        total_tokens=1200,
+        cache_creation_input_tokens=100,
+        cache_read_input_tokens=400,
+    )
+    system_cost: Final = cost_per_token(model=system_ai_model, usage=usage)
+    legacy_cost: Final = cost_per_token(model=legacy_model, usage=usage)
+    assert system_cost[0] > 0
+    assert system_cost[1] > 0
+    assert legacy_cost == pytest.approx(system_cost)
+
+
+def test_databricks_provider_models_advertises_unity_catalog_sonnet_5(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fresh_models: Final[set[str]] = set()
+    monkeypatch.setattr(litellm, "databricks_models", fresh_models)
+    monkeypatch.setitem(litellm.models_by_provider, "databricks", fresh_models)
+    litellm._populate_provider_model_sets(litellm.model_cost)
+
+    models: Final = get_known_models_from_wildcard("databricks/*")
+    assert "databricks/system.ai.claude-sonnet-5" in models
+    assert "databricks/databricks-claude-sonnet-5" not in models

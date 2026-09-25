@@ -19201,7 +19201,7 @@
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
-    "databricks/databricks-claude-sonnet-5": {
+    "databricks/system.ai.claude-sonnet-5": {
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.99999e-06,

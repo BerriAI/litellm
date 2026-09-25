@@ -18,6 +18,7 @@ _LEGACY_ENDPOINT_NAMES: Final = MappingProxyType(
         "bge-large-en": "databricks-bge-large-en",
         "gte-large-en": "databricks-gte-large-en",
         "llama-2-70b-chat": "databricks-llama-2-70b-chat",
+        "databricks-claude-sonnet-5": "system.ai.claude-sonnet-5",
     }
 )
 
