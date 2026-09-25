@@ -522,7 +522,19 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"]
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ]
     input_file_id: str
     metadata: dict[str, str] | None
     output_expires_after: FileExpiresAfter
