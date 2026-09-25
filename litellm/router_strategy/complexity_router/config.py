@@ -708,6 +708,22 @@ class JevClassifierConfig(BaseModel):
             "pool with a large capability gap."
         ),
     )
+    confidence_threshold_choice: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Per-type confidence gate for choice-shaped decisions: a question with three or more options. Takes precedence over confidence_threshold for those questions; None falls back to it. Jev clips scores to 0.01-0.99, so a single number gates a wide choice and a binary decision unequally: confidence spreads across every option of a choice but only two of a yes/no."
+        ),
+    )
+    confidence_threshold_yes_no: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Per-type confidence gate for yes/no-shaped decisions: a question with exactly two options, like the built-in tier question on a two-tier custom tier set. Takes precedence over confidence_threshold for those questions; None falls back to it."
+        ),
+    )
     complexity_max: float | None = Field(
         default=None,
         ge=0.0,
@@ -732,6 +748,17 @@ class JevClassifierConfig(BaseModel):
             "route-down is refused. None disables the gate."
         ),
     )
+
+    def confidence_threshold_for(self, choice_count: int) -> float | None:
+        """The confidence gate for a decision question offering choice_count options.
+
+        Per-type thresholds take precedence over the single threshold; an unset per-type value
+        falls back to it, so a config that only sets confidence_threshold keeps gating every
+        shape exactly as before. A question with exactly two options is yes/no-shaped; every
+        other question is choice-shaped.
+        """
+        per_type: Final = self.confidence_threshold_yes_no if choice_count == 2 else self.confidence_threshold_choice
+        return per_type if per_type is not None else self.confidence_threshold
 
     @field_validator("instructions")
     @classmethod
