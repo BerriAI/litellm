@@ -4215,6 +4215,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+        elif result is None:
+            verbose_logger.warning(
+                "LiteLLM: the anthropic_messages stream for %s assembled no response, logging an empty one", self.model
+            )
+            return litellm.ModelResponse(model=self.model)
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
 
