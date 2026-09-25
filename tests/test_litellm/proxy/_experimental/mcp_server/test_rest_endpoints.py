@@ -4649,3 +4649,35 @@ async def test_preview_client_honors_protocol_metadata(revision: MCPUpstreamProt
 
     result: Final = await rest_endpoints._execute_with_mcp_client(payload, inspect_client)
     assert result == {"protocol_version": revision}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+async def test_saved_oauth_preview_honors_edited_protocol_metadata(
+    monkeypatch: pytest.MonkeyPatch, revision: MCPUpstreamProtocol
+) -> None:
+    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    saved: Final = MCPServer(
+        server_id="saved-oauth-preview", name="preview", url="https://example.com/mcp",
+        transport="http", auth_type=MCPAuth.oauth2, protocol_version="2025-11-25",
+        authorization_url="https://example.com/authorize", token_url="https://example.com/token",
+    )
+    manager: Final = MCPServerManager()
+    manager.registry = {saved.server_id: saved}
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    payload: Final = NewMCPServerRequest(
+        server_id=saved.server_id, server_name=saved.name, url=saved.url, transport="http",
+        auth_type=MCPAuth.oauth2, mcp_info={"protocol_version": revision},
+        authorization_url=saved.authorization_url, token_url=saved.token_url,
+    )
+
+    async def inspect_client(client: MCPClient) -> dict[str, str]:
+        return {"protocol_version": client.protocol_version}
+
+    result: Final = await rest_endpoints._execute_with_mcp_client(
+        payload, inspect_client, oauth2_headers={"Authorization": "Bearer preview-token"}
+    )
+    assert result == {"protocol_version": revision}
+    assert saved.protocol_version == "2025-11-25"

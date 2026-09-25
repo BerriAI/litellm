@@ -4153,6 +4153,7 @@ class MCPServerManager:
         cred_provider: UpstreamCredentialProvider | None = None,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        protocol_version_override: MCPUpstreamProtocol | None = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -4176,6 +4177,9 @@ class MCPServerManager:
         """
         record_auth_resolution(server.server_id, AuthResolution.unresolved)
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
+        protocol_version: Final = (
+            protocol_version_override if protocol_version_override is not None else resolved_server.protocol_version
+        )
         transport: Final = resolved_server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(resolved_server)
         provider: Final = cred_provider or self._cred_provider
@@ -4257,7 +4261,7 @@ class MCPServerManager:
             return MCPClient(
                 server_url="",  # Not used for stdio
                 transport_type=transport,
-                protocol_version=resolved_server.protocol_version,
+                protocol_version=protocol_version,
                 auth_type=resolved_server.auth_type,
                 auth_value=auth_value,
                 timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
@@ -4290,7 +4294,7 @@ class MCPServerManager:
                     MCPClient(
                         server_url=server_url,
                         transport_type=transport,
-                        protocol_version=resolved_server.protocol_version,
+                        protocol_version=protocol_version,
                         auth_type=resolved_server.auth_type,
                         timeout=(
                             resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT
@@ -4334,7 +4338,7 @@ class MCPServerManager:
                 MCPClient(
                     server_url=server_url,
                     transport_type=transport,
-                    protocol_version=resolved_server.protocol_version,
+                    protocol_version=protocol_version,
                     auth_type=resolved_server.auth_type,
                     auth_value=auth_value,
                     auth_header_name=auth_header_name,

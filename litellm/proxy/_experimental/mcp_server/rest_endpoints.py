@@ -1512,6 +1512,7 @@ if MCP_AVAILABLE:
                     extra_headers=merged_headers,
                     stdio_env=stdio_env,
                     cred_provider=preview_cred_provider,
+                    protocol_version_override=server_model.protocol_version,
                 )
 
                 return await operation(client)
