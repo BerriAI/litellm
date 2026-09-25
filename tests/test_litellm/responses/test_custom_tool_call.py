@@ -10,7 +10,7 @@ LiteLLM bridge correctly:
 
 import json
 import pytest
-from typing import Dict, Any, List
+from typing import Any, Dict, Final, List
 
 from openai.types.responses import ResponseFunctionToolCall
 
@@ -159,6 +159,65 @@ class TestCustomToolUtilities:
         assert openai_shaped_tool_call_item_id("custom_tool_call", "ctc_already") == "ctc_already"
         assert openai_shaped_tool_call_item_id("function_call", "") == ""
         assert openai_shaped_tool_call_item_id("message", "toolu_01Abc") == "toolu_01Abc"
+
+    def test_openai_shaped_tool_call_item_id_strips_thought_signature(self):
+        """Gemini thought signatures encoded into tool ids (call_xxx__thought__<sig>)
+        must be stripped from the emitted item id (producing fc_call_xxx <= 64 chars)
+        so that subsequent turns / fallbacks to OpenAI do not 400 with 'string too long'."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        long_sig: Final = "a" * 900
+        raw_id: Final = f"call_12345{THOUGHT_SIGNATURE_SEPARATOR}{long_sig}"
+        shaped_fc_id: Final = openai_shaped_tool_call_item_id("function_call", raw_id)
+        assert shaped_fc_id == "fc_call_12345"
+        assert len(shaped_fc_id) <= 64
+
+        shaped_ctc_id: Final = openai_shaped_tool_call_item_id("custom_tool_call", raw_id)
+        assert shaped_ctc_id == "ctc_call_12345"
+        assert len(shaped_ctc_id) <= 64
+
+        already_prefixed: Final = f"fc_call_12345{THOUGHT_SIGNATURE_SEPARATOR}{long_sig}"
+        assert openai_shaped_tool_call_item_id("function_call", already_prefixed) == "fc_call_12345"
+
+        long_provider_id: Final = "a" * 62
+        shaped_long_id: Final = openai_shaped_tool_call_item_id("function_call", long_provider_id)
+        assert len(shaped_long_id) == 64
+        assert shaped_long_id.startswith("fc_")
+
+        only_sig: Final = f"{THOUGHT_SIGNATURE_SEPARATOR}{long_sig}"
+        assert openai_shaped_tool_call_item_id("function_call", only_sig) == only_sig
+
+        shared_prefix_id1: Final = ("x" * 61) + "1"
+        shared_prefix_id2: Final = ("x" * 61) + "2"
+        shortened1: Final = openai_shaped_tool_call_item_id("function_call", shared_prefix_id1)
+        shortened2: Final = openai_shaped_tool_call_item_id("function_call", shared_prefix_id2)
+        assert len(shortened1) == 64
+        assert len(shortened2) == 64
+        assert shortened1.startswith("fc_")
+        assert shortened2.startswith("fc_")
+        assert shortened1 != shortened2
+
+    def test_without_foreign_tool_call_item_id_strips_thought_signature(self):
+        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        long_sig: Final = "a" * 900
+        raw_id: Final = f"call_12345{THOUGHT_SIGNATURE_SEPARATOR}{long_sig}"
+        item: Final = {"type": "function_call", "id": f"fc_{raw_id}", "call_id": raw_id}
+        sanitized: Final = OpenAIResponsesAPIConfig._without_foreign_tool_call_item_id(item)
+        assert sanitized["id"] == "fc_call_12345"
+
+        oversized_item: Final = {"type": "function_call", "id": "fc_" + ("x" * 70), "call_id": "call_123"}
+        dropped: Final = OpenAIResponsesAPIConfig._without_foreign_tool_call_item_id(oversized_item)
+        assert "id" not in dropped
+
+        normal_item: Final = {"type": "function_call", "id": "fc_normal", "call_id": "call_normal"}
+        kept: Final = OpenAIResponsesAPIConfig._without_foreign_tool_call_item_id(normal_item)
+        assert kept["id"] == "fc_normal"
 
     def test_build_tool_call_item_kwargs_normalizes_item_id_keeps_call_id(self):
         """The streaming item id gets the OpenAI shape while call_id stays raw

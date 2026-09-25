@@ -15,6 +15,7 @@ extending this module without touching the streaming iterator or transformation
 logic.
 """
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
@@ -34,9 +35,22 @@ TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE: Final = MappingProxyType({"function_call": "fc
 
 def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:
     prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type)
-    if prefix is None or not tool_id or tool_id.startswith(prefix):
+    if prefix is None or not tool_id:
         return tool_id
-    return f"{prefix}_{tool_id}"
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        THOUGHT_SIGNATURE_SEPARATOR,
+    )
+
+    clean_id: Final = (
+        tool_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in tool_id else tool_id
+    )
+    if not clean_id:
+        return tool_id
+    candidate: Final = clean_id if clean_id.startswith(prefix) else f"{prefix}_{clean_id}"
+    if len(candidate) <= 64:
+        return candidate
+    digest: Final = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:16]
+    return f"{candidate[:47]}_{digest}"
 
 
 class _ToolNameFields(BaseModel):
