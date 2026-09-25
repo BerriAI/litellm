@@ -358,6 +358,7 @@ class _ProxyDBLogger(CustomLogger):
                     team_id=team_id,
                     end_user_id=end_user_id,
                     call_type=call_type,
+                    agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
                 ):
                     ## UPDATE DATABASE
                     charged: Final = await _update_database_and_spend_counters(
@@ -610,6 +611,7 @@ def _should_track_cost_callback(
     team_id: str | None,
     end_user_id: str | None,
     call_type: str | None = None,
+    agent_id: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
@@ -626,7 +628,13 @@ def _should_track_cost_callback(
     if ProxyUpdateSpend.disable_spend_updates() is True:
         return False
 
-    if user_api_key is not None or user_id is not None or team_id is not None or end_user_id is not None:
+    if (
+        agent_id is not None
+        or user_api_key is not None
+        or user_id is not None
+        or team_id is not None
+        or end_user_id is not None
+    ):
         return True
     return call_type in _UNATTRIBUTED_TRACKABLE_CALL_TYPES
 
