@@ -1275,6 +1275,16 @@ class TestObjectPermissionRepository:
             models=["gpt-4"],
         )
         assert perm.mcp_servers == ["server1"]
+        assert perm.mcp_permission_version == 1
+
+    @pytest.mark.asyncio
+    async def test_create_permission_with_tool_overrides(self, repo):
+        perm = await repo.create_permission(
+            mcp_servers=["server1"],
+            mcp_tool_overrides={"server1": {"allow": ["search_notes"], "deny": ["delete_item"]}},
+        )
+        assert perm.mcp_tool_overrides == {"server1": {"allow": ["search_notes"], "deny": ["delete_item"]}}
+        assert perm.mcp_permission_version == 1
 
     @pytest.mark.asyncio
     async def test_create_permission_all_fields(self, repo):
@@ -1304,6 +1314,7 @@ class TestObjectPermissionRepository:
             models=["gpt-4"],
         )
         assert updated.models == ["gpt-4"]
+        assert updated.mcp_permission_version == 1
 
     @pytest.mark.asyncio
     async def test_update_permission_all_fields(self, repo):

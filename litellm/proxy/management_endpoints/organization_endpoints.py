@@ -54,6 +54,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
+    reject_ambiguous_mcp_tool_override_keys,
     reject_ambiguous_mcp_tool_permission_keys,
 )
 from litellm.proxy.management_helpers.utils import (
@@ -649,8 +650,16 @@ async def _set_object_permission(
             existing_mcp_tool_permissions=None,
             prisma_client=prisma_client,
         )
+        await reject_ambiguous_mcp_tool_override_keys(
+            new_mcp_tool_overrides=getattr(data.object_permission, "mcp_tool_overrides", None),
+            existing_mcp_tool_overrides=None,
+            prisma_client=prisma_client,
+        )
         created_object_permission: Final = await _table(ObjectPermissionRepository(prisma_client)).create(
-            data=data.object_permission.model_dump(exclude_none=True),
+            data={
+                **data.object_permission.model_dump(exclude_none=True),
+                "mcp_permission_version": 1,
+            },
         )
         del data.object_permission
         return created_object_permission.object_permission_id

@@ -39,9 +39,7 @@ async def test_set_object_permission():
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "test_perm_id_123"
 
-    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
-        return_value=mock_created_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
     mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     # Test data with object_permission
@@ -58,9 +56,7 @@ async def test_set_object_permission():
     }
 
     # Call the function
-    result = await _set_object_permission(
-        data_json=data_json, prisma_client=mock_prisma_client
-    )
+    result = await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
     # Verify object_permission_id was added to result
     assert result["object_permission_id"] == "test_perm_id_123"
@@ -101,9 +97,7 @@ async def test_set_object_permission_persists_mcp_tool_search_enabled():
     mock_prisma_client = MagicMock()
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "perm_id"
-    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
-        return_value=mock_created_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
 
     data_json = {
         "object_permission": {
@@ -114,11 +108,7 @@ async def test_set_object_permission_persists_mcp_tool_search_enabled():
 
     await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
-    created_data = (
-        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
-            "data"
-        ]
-    )
+    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
     assert created_data["mcp_tool_search_enabled"] is True
 
 
@@ -127,9 +117,7 @@ async def test_set_object_permission_persists_skills():
     mock_prisma_client = MagicMock()
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "perm_id"
-    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
-        return_value=mock_created_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
 
     data_json = {
         "object_permission": LiteLLM_ObjectPermissionBase(skills=["private-skill"]).model_dump(),
@@ -137,11 +125,7 @@ async def test_set_object_permission_persists_skills():
 
     await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
-    created_data = (
-        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
-            "data"
-        ]
-    )
+    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
     assert created_data["skills"] == ["private-skill"]
 
 
@@ -222,11 +206,7 @@ def _make_team_obj(
     mock_team = MagicMock()
     mock_team.team_id = team_id
 
-    if (
-        mcp_servers is not None
-        or mcp_access_groups is not None
-        or mcp_tool_permissions is not None
-    ):
+    if mcp_servers is not None or mcp_access_groups is not None or mcp_tool_permissions is not None:
         mock_team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
         mock_team.object_permission.mcp_servers = mcp_servers or []
         mock_team.object_permission.mcp_access_groups = mcp_access_groups or []
@@ -297,9 +277,7 @@ async def test_validate_no_object_permission(mock_access_groups, mock_allow_all)
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_servers_within_team_scope(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_servers_within_team_scope(mock_access_groups, mock_allow_all):
     """Key requests servers that are in the team's scope — should pass."""
     team_obj = _make_team_obj(mcp_servers=["server-1", "server-2", "server-3"])
     await validate_key_mcp_servers_against_team(
@@ -322,9 +300,7 @@ async def test_validate_key_servers_within_team_scope(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_servers_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_servers_outside_team_scope_raises(mock_access_groups, mock_allow_all):
     """Key requests a server that exists but is NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -350,9 +326,7 @@ async def test_validate_key_servers_outside_team_scope_raises(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_allow_all_keys_servers_always_allowed(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_allow_all_keys_servers_always_allowed(mock_access_groups, mock_allow_all):
     """allow_all_keys servers should be accessible even if not in team scope."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     await validate_key_mcp_servers_against_team(
@@ -397,9 +371,7 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_non_global_server_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_non_global_server_raises(mock_access_groups, mock_allow_all):
     """Key without a team requesting an existing non-global server — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -424,9 +396,7 @@ async def test_validate_no_team_non_global_server_raises(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_proxy_admin_can_assign_private_server(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_proxy_admin_can_assign_private_server(mock_access_groups, mock_allow_all):
     """Proxy admin assigning a non-global server to a teamless key — should pass (LIT-3815)."""
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["private-server"]},
@@ -450,9 +420,7 @@ async def test_validate_no_team_proxy_admin_can_assign_private_server(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_non_admin_private_server_still_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_non_admin_private_server_still_raises(mock_access_groups, mock_allow_all):
     """The teamless override is gated on proxy admin — a non-admin still gets 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -473,9 +441,7 @@ async def test_validate_no_team_non_admin_private_server_still_raises(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_proxy_admin_can_assign_access_group(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_proxy_admin_can_assign_access_group(mock_access_groups, mock_allow_all):
     """Proxy admin assigning an access group to a teamless key — should pass (LIT-3815)."""
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_access_groups": ["group-1"]},
@@ -499,9 +465,7 @@ async def test_validate_no_team_proxy_admin_can_assign_access_group(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_proxy_admin_still_bounded_by_team_scope(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_proxy_admin_still_bounded_by_team_scope(mock_access_groups, mock_allow_all):
     """The override is scoped to teamless keys — an admin assigning beyond a team's scope still raises."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -528,9 +492,7 @@ async def test_validate_proxy_admin_still_bounded_by_team_scope(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_team_no_mcp_config_blocks_all(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_team_no_mcp_config_blocks_all(mock_access_groups, mock_allow_all):
     """Team with no object_permission — key can't use any non-global MCP servers."""
     team_obj = _make_team_obj()  # No object_permission
     with pytest.raises(HTTPException) as exc_info:
@@ -555,9 +517,7 @@ async def test_validate_team_no_mcp_config_blocks_all(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_tool_permissions_validated_against_team(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_tool_permissions_validated_against_team(mock_access_groups, mock_allow_all):
     """Server IDs in mcp_tool_permissions should also be validated when they exist."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -583,9 +543,7 @@ async def test_validate_tool_permissions_validated_against_team(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_mcp_server_ids_are_silently_dropped(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_stale_mcp_server_ids_are_silently_dropped(mock_access_groups, mock_allow_all):
     """
     Stale MCP server IDs (servers deleted and no longer in the registry) must not
     block a key save with a 403. They are silently stripped instead.
@@ -615,9 +573,7 @@ async def test_validate_stale_mcp_server_ids_are_silently_dropped(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(mock_access_groups, mock_allow_all):
     """
     Stale server IDs referenced only as keys in mcp_tool_permissions (not in
     mcp_servers) must also be silently stripped rather than raising a 403.
@@ -645,9 +601,7 @@ async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(mock_access_groups, mock_allow_all):
     team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
     object_permission = {"mcp_servers": ["s1-stale", "s2-stale"]}
     await validate_key_mcp_servers_against_team(
@@ -680,9 +634,7 @@ async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_mcp_server_alias_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_mcp_server_alias_outside_team_scope_raises(mock_access_groups, mock_allow_all):
     team_obj = _make_team_obj(mcp_servers=["team-server"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -775,9 +727,7 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
     mock_db_server.server_id = "private-server-id"
     mock_db_server.alias = "private-alias"
     mock_db_server.server_name = "Private Server"
-    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
-        return_value=[mock_db_server]
-    )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[mock_db_server])
 
     team_obj = _make_team_obj(mcp_servers=[])
     with pytest.raises(HTTPException) as exc_info:
@@ -801,9 +751,7 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_within_team_scope(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_access_groups_within_team_scope(mock_access_groups, mock_allow_all):
     """Key requests access groups that are in the team's scope — should pass."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a", "group-b"])
     await validate_key_mcp_servers_against_team(
@@ -822,9 +770,7 @@ async def test_validate_access_groups_within_team_scope(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_access_groups_outside_team_scope_raises(mock_access_groups, mock_allow_all):
     """Key requests access groups NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a"])
     with pytest.raises(HTTPException) as exc_info:
@@ -846,9 +792,7 @@ async def test_validate_access_groups_outside_team_scope_raises(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_no_team_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_access_groups_no_team_raises(mock_access_groups, mock_allow_all):
     """Key without a team requesting access groups — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -869,9 +813,7 @@ async def test_validate_access_groups_no_team_raises(
     new_callable=AsyncMock,
     return_value=["server-from-group"],
 )
-async def test_validate_team_access_groups_resolve_to_servers(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_team_access_groups_resolve_to_servers(mock_access_groups, mock_allow_all):
     """Team access groups should resolve to server IDs and be included in allowed set."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a"])
     # Key requests a server that comes from the team's access group
@@ -976,9 +918,7 @@ async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_scoped_to_server_added_after_team_all_proxy(mock_access_groups, mock_allow_all):
     """The exact user scenario: a team scoped to the all-proxy sentinel, a server
     (srv-z) registered afterwards, and a key scoped to just srv-z. Because the
     team ceiling resolves to every registered server, the key passes validation
@@ -1007,9 +947,7 @@ async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_scoped_to_server_rejected_when_team_not_all_proxy(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_scoped_to_server_rejected_when_team_not_all_proxy(mock_access_groups, mock_allow_all):
     """Contrast with the sentinel case: a team scoped to a concrete server list
     (srv-x, not the sentinel) does NOT unlock srv-z for a key. It is the sentinel
     specifically, not a blanket allow, that widens the team ceiling."""
@@ -1150,9 +1088,7 @@ async def test_validate_search_tools_raises_when_not_subset():
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_personal_non_admin_cannot_assign_mcp_toolsets(
-    mock_access_groups, mock_allow_all
-):
+async def test_personal_non_admin_cannot_assign_mcp_toolsets(mock_access_groups, mock_allow_all):
     with pytest.raises(HTTPException) as exc:
         await validate_key_mcp_servers_against_team(
             object_permission={"mcp_toolsets": ["ts-private"]},
@@ -1173,9 +1109,7 @@ async def test_personal_non_admin_cannot_assign_mcp_toolsets(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_personal_admin_can_assign_mcp_toolsets(
-    mock_access_groups, mock_allow_all
-):
+async def test_personal_admin_can_assign_mcp_toolsets(mock_access_groups, mock_allow_all):
     await validate_key_mcp_servers_against_team(
         object_permission={"mcp_toolsets": ["ts-private"]},
         team_obj=None,
@@ -1344,9 +1278,7 @@ async def test_validate_key_update_grandfathers_tool_permission_keys(monkeypatch
     (stored as a JSON string) are grandfathered too."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma, existing_row = _make_grandfather_fixtures(
-        mcp_tool_permissions=json.dumps({"server-a": ["tool1"]})
-    )
+    mock_prisma, existing_row = _make_grandfather_fixtures(mcp_tool_permissions=json.dumps({"server-a": ["tool1"]}))
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["server-a"]},
         team_obj=team_obj,
@@ -1504,3 +1436,78 @@ def test_object_permission_dict_mirrors_pydantic_model():
         f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
         f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_set_object_permission_accepts_mcp_tool_overrides_and_marks_converted():
+    """mcp_tool_overrides writes through _set_object_permission, JSON-serialized
+    like mcp_tool_permissions, and every write stamps mcp_permission_version=1."""
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="perm-id")
+    )
+
+    overrides = {"server_a": {"allow": ["search_notes"], "deny": ["delete_item"]}}
+    data_json = {
+        "object_permission": {
+            "mcp_servers": ["server_a"],
+            "mcp_tool_overrides": overrides,
+        },
+    }
+
+    result = await _set_object_permission(data_json=data_json, prisma_client=mock_prisma)
+
+    created_data = mock_prisma.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert json.loads(created_data["mcp_tool_overrides"]) == overrides
+    assert created_data["mcp_permission_version"] == 1
+    assert result["object_permission_id"] == "perm-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["wiki", "github"])
+async def test_set_object_permission_rejects_ambiguous_mcp_tool_override_key(identifier):
+    """An alias or server_name shared by several servers cannot key mcp_tool_overrides
+    on create; the write is rejected with 400 and nothing is persisted."""
+    from litellm.proxy._types import SpecialMCPServerName  # noqa: F401  # keep import parity cheap
+
+    mock_prisma = _make_ambiguity_prisma()
+    data_json = {"object_permission": {"mcp_tool_overrides": {identifier: {"allow": ["t"]}}}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data_json=data_json, prisma_client=mock_prisma)
+
+    assert exc_info.value.status_code == 400
+    assert "mcp_tool_overrides" in str(exc_info.value.detail)
+    mock_prisma.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_marks_converted_and_merges_overrides():
+    """The update seam stamps mcp_permission_version=1 and JSON-serializes the
+    merged mcp_tool_overrides."""
+    mock_prisma = _make_ambiguity_prisma(existing_tool_permissions={"solo-id": ["tool1"]})
+
+    upsert = await prepare_object_permission_upsert(
+        new_object_permission={"mcp_tool_overrides": {"solo-id": {"deny": ["delete_item"]}}},
+        existing_object_permission_id="perm-id",
+        prisma_client=mock_prisma,
+    )
+
+    assert upsert.record["mcp_permission_version"] == 1
+    assert json.loads(upsert.record["mcp_tool_overrides"]) == {"solo-id": {"deny": ["delete_item"]}}
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_rejects_ambiguous_mcp_tool_override_key():
+    mock_prisma = _make_ambiguity_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_object_permission_upsert(
+            new_object_permission={"mcp_tool_overrides": {"wiki": {"deny": ["t"]}}},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "'wiki'" in str(exc_info.value.detail)

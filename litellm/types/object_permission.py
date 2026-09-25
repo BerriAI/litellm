@@ -10,11 +10,14 @@ layering rule.
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.mcp import MCPToolOverrideEntry
+
 
 class ObjectPermissionDict(TypedDict, total=False):
     mcp_servers: list[str] | None
     mcp_access_groups: list[str] | None
     mcp_tool_permissions: dict[str, list[str]] | None
+    mcp_tool_overrides: dict[str, MCPToolOverrideEntry] | None
     mcp_toolsets: list[str] | None
     blocked_tools: list[str] | None
     vector_stores: list[str] | None

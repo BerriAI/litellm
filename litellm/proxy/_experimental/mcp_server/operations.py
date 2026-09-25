@@ -1418,16 +1418,19 @@ async def filter_tools_by_key_team_permissions(
     but tool names from MCP servers are prefixed. We need to strip
     the prefix before comparing.
     """
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+    inventory: Final = {strip_known_server_prefix(t.name, server): t.description for t in tools}
+
     # Filter by key/team tool-level permissions
     allowed_tool_names: Final = await MCPRequestHandler.get_allowed_tools_for_server(
         server_id=server_id,
         user_api_key_auth=user_api_key_auth,
+        inventory=inventory,
     )
 
     # Tools arrive prefixed with the server's own prefix; strip exactly that
     # prefix (resolved from the server) rather than the first separator, so a
     # prefix containing the separator still reduces to the stored bare name.
-    server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
     return [
         t
         for t in tools

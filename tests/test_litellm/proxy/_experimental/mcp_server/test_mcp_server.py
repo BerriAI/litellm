@@ -83,9 +83,6 @@ def cleanup_mcp_global_state():
         yield
 
 
-
-
-
 def _call_tool_params(name, arguments=None):
     from mcp.types import CallToolRequestParams
 
@@ -96,6 +93,7 @@ def _paged_params():
     from mcp.types import PaginatedRequestParams
 
     return PaginatedRequestParams()
+
 
 @pytest.mark.asyncio
 async def test_mcp_server_tool_call_body_contains_request_data(_mcp_request_ctx):
@@ -293,7 +291,9 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
         ):
             with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
                 with patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
-                    result = await mcp_server_tool_call(_mcp_request_ctx(), _call_tool_params("test_tool", {"param": "value"}))
+                    result = await mcp_server_tool_call(
+                        _mcp_request_ctx(), _call_tool_params("test_tool", {"param": "value"})
+                    )
 
     assert result.is_error is True
     # The dedicated MCPUpstreamAuthError branch (not the generic Exception fallthrough) produces this
@@ -1165,20 +1165,32 @@ async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, 
         else BlobResourceContents(uri=uri, blob="aGVsbG8=", mimeType="image/png", meta=metadata)
     )
     with (
-        patch.object(server, "get_or_extract_auth_context", AsyncMock(return_value=(caller, None, ["catalog"], None, None, None, None))),
+        patch.object(
+            server,
+            "get_or_extract_auth_context",
+            AsyncMock(return_value=(caller, None, ["catalog"], None, None, None, None)),
+        ),
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream_server])),
-        patch.object(operations.global_mcp_server_manager, "read_resource_from_server", AsyncMock(return_value=ReadResourceResult(contents=[content]))),
+        patch.object(
+            operations.global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(return_value=ReadResourceResult(contents=[content])),
+        ),
     ):
         result: Final = await server.read_resource(_mcp_request_ctx(), ReadResourceRequestParams(uri=uri))
 
     assert result.model_dump(mode="json", by_alias=True, exclude_none=True) == {
-        "cacheScope": "private", "resultType": "complete", "ttlMs": 0,
-        "contents": [{
-            "uri": uri,
-            "mimeType": "text/plain" if kind == "text" else "image/png",
-            "text" if kind == "text" else "blob": "hello world" if kind == "text" else "aGVsbG8=",
-            **({"_meta": metadata} if metadata is not None else {}),
-        }],
+        "cacheScope": "private",
+        "resultType": "complete",
+        "ttlMs": 0,
+        "contents": [
+            {
+                "uri": uri,
+                "mimeType": "text/plain" if kind == "text" else "image/png",
+                "text" if kind == "text" else "blob": "hello world" if kind == "text" else "aGVsbG8=",
+                **({"_meta": metadata} if metadata is not None else {}),
+            }
+        ],
     }
 
 
@@ -1672,7 +1684,9 @@ async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error(
     with (
         patch(  # test-quality-ok: the protocol handler reads auth from module context; no injection seam
             "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
-            new=AsyncMock(return_value=(None, None, None, None, None, None, None), side_effect=denial if denial_at_auth else None),
+            new=AsyncMock(
+                return_value=(None, None, None, None, None, None, None), side_effect=denial if denial_at_auth else None
+            ),
         ),
         patch(  # test-quality-ok: the listing helper is the handler's only collaborator; the suite's seam
             "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
@@ -1911,8 +1925,8 @@ async def test_streamable_http_session_manager_is_stateless():
         ("DELETE", b"", False),
     ),
 )
-async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(_mcp_request_ctx,
-    debug: bool, method: str, request_body: bytes, stateful: bool
+async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
+    _mcp_request_ctx, debug: bool, method: str, request_body: bytes, stateful: bool
 ) -> None:
     from starlette.requests import Request
     from starlette.types import Message, Receive, Scope, Send
@@ -4054,7 +4068,8 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
     # parsed, with a nested "method" key in the first bytes to trip a flat
     # substring heuristic.
     response_prefix: Final = (
-        '{"jsonrpc":"2.0","id":99,"' + response_field
+        '{"jsonrpc":"2.0","id":99,"'
+        + response_field
         + '":{"code":-32000,"message":"test","data":{"method":"GET","payload":"'
     ).encode()
     response_body: Final = (
@@ -7411,7 +7426,8 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
             return_value=oauth_server,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -7657,7 +7673,8 @@ async def test_execute_mcp_tool_strips_a_prefix_that_contains_the_separator():
             return_value=alias_less_server,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -7932,7 +7949,8 @@ async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_req
             return_value=None,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -8097,7 +8115,8 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
             return_value=None,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -8596,7 +8615,9 @@ class TestMCPMetaTraceCarrier:
 
         assert _mcp_meta_trace_carrier(None) is None
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=None)) is None
-        only_progress = CallToolRequestParams.model_validate({"name": "t", "_meta": {"progressToken": "p1"}}, by_name=False).meta
+        only_progress = CallToolRequestParams.model_validate(
+            {"name": "t", "_meta": {"progressToken": "p1"}}, by_name=False
+        ).meta
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None
 
 
@@ -10117,6 +10138,49 @@ class TestListFiltersHonorThePrefixBoundary:
         assert listed == callable_, f"grants={grants!r} listed={listed} callable={callable_}"
         assert listed is expected, f"grants={grants!r} expected={expected} got={listed}"
 
+    @pytest.mark.asyncio
+    async def test_key_team_listing_passes_fetched_tools_as_inventory(self):
+        """The listing path must hand the just-fetched tools (bare names plus
+        descriptions) to the evaluator as its inventory, so convention
+        semantics classify exactly the tools the server advertised."""
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id=self.SERVER_ID,
+            name=self.SERVER_ID,
+            url="http://127.0.0.1:5115/mcp",
+            transport=MCPTransport.http,
+        )
+        published = MCPTool(
+            name=f"{self.SERVER_ID}-read_wiki_contents",
+            description="reads a wiki page",
+            inputSchema={"type": "object"},
+        )
+        auth = UserAPIKeyAuth(api_key="sk-test")
+        captured: dict = {}
+
+        async def _capture(server_id, user_api_key_auth, *, keyless_source=False, inventory=None):
+            captured["inventory"] = inventory
+            return ["read_wiki_contents"]
+
+        with (
+            patch.object(MCPRequestHandler, "get_allowed_tools_for_server", AsyncMock(side_effect=_capture)),
+            patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager") as mock_manager,
+        ):
+            mock_manager.get_mcp_server_by_id.return_value = server
+            listed = await filter_tools_by_key_team_permissions([published], self.SERVER_ID, auth)
+
+        assert listed == [published]
+        assert captured["inventory"] == {"read_wiki_contents": "reads a wiki page"}
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -10247,7 +10311,9 @@ async def test_mcp_origin_admission_precedes_authentication(
         patch("litellm.proxy.proxy_server.origins", allowed_origins),
         patch.object(server, "extract_mcp_auth_context", authenticate),
     ):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://gateway") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://gateway"
+        ) as client:
             response: Final = await client.request(method, path, headers=(*session_headers, *origin_headers))
 
     assert response.status_code == expected_status
@@ -10329,12 +10395,15 @@ async def test_streamable_http_rejects_modern_protocol_version(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("handler_name,field", [
-    ("handle_list_tools", "tools"),
-    ("list_prompts", "prompts"),
-    ("list_resources", "resources"),
-    ("list_resource_templates", "resource_templates"),
-])
+@pytest.mark.parametrize(
+    "handler_name,field",
+    [
+        ("handle_list_tools", "tools"),
+        ("list_prompts", "prompts"),
+        ("list_resources", "resources"),
+        ("list_resource_templates", "resource_templates"),
+    ],
+)
 async def test_native_listing_preserves_empty_result_on_auth_failure(_mcp_request_ctx, handler_name, field):
     from litellm.proxy._experimental.mcp_server import server
 
@@ -10352,7 +10421,9 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
     auth = UserAPIKeyAuth(user_id="denied-caller")
     denial = HTTPException(status_code=403, detail="scope denied")
     logger = MagicMock()
-    logger.post_call_failure_hook = AsyncMock(side_effect=RuntimeError("log unavailable") if failure_hook_raises else None)
+    logger.post_call_failure_hook = AsyncMock(
+        side_effect=RuntimeError("log unavailable") if failure_hook_raises else None
+    )
     upstream = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(side_effect=denial)),
@@ -10361,7 +10432,9 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
         patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
     ):
         with pytest.raises(HTTPException) as rejected:
-            await operations._get_tools_from_mcp_servers(user_api_key_auth=auth, mcp_auth_header=None, mcp_servers=["catalog"], log_list_tools_to_spendlogs=True)
+            await operations._get_tools_from_mcp_servers(
+                user_api_key_auth=auth, mcp_auth_header=None, mcp_servers=["catalog"], log_list_tools_to_spendlogs=True
+            )
     assert rejected.value is denial
     upstream.assert_not_awaited()
     logger.post_call_failure_hook.assert_awaited_once()
@@ -10460,7 +10533,16 @@ async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str)
                     patch.object(
                         mcp_server,
                         "extract_mcp_auth_context",
-                        AsyncMock(return_value=(post_auth, None, [marker], {marker: {"Authorization": marker}}, {"Authorization": marker}, {"x-request-marker": marker})),
+                        AsyncMock(
+                            return_value=(
+                                post_auth,
+                                None,
+                                [marker],
+                                {marker: {"Authorization": marker}},
+                                {"Authorization": marker},
+                                {"x-request-marker": marker},
+                            )
+                        ),
                     ),
                     patch.object(mcp_server.operations, "_get_tools_from_mcp_servers", listing),
                 ):

@@ -282,6 +282,9 @@ model LiteLLM_ObjectPermissionTable {
   mcp_servers           String[]       @default([])
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
+  mcp_tool_overrides    Json?          // Per-server tool allow/deny overrides. Format: {"server_id": {"allow": ["t1"], "deny": ["t2"]}}
+  mcp_permission_version Int           @default(0) // 0 = pre-overrides row (legacy evaluation), 1 = written after overrides shipped
+  mcp_tool_permissions_archive Json?   // Backfill's snapshot of the pre-conversion mcp_tool_permissions, recovery only
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])

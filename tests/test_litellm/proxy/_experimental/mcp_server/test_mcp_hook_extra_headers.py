@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -1073,7 +1073,16 @@ class TestOpenApiByokCallTool:
             spec_path="https://example.com/openapi.json",
             is_byok=True,
         )
-        user_auth = UserAPIKeyAuth(user_id="default_user_id", api_key="sk-dashboard")
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        user_auth = UserAPIKeyAuth(
+            user_id="default_user_id",
+            api_key="sk-dashboard",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-unconverted",
+                mcp_permission_version=0,
+            ),
+        )
         captured_auth: dict[str, Optional[str]] = {}
 
         async def fake_openapi_handler(_server, _name, _arguments):
@@ -1313,7 +1322,14 @@ class TestOpenApiResolvedUpstreamAuth:
 
         manager = MCPServerManager()
         server = self._oauth_server()
-        user_auth = UserAPIKeyAuth(user_id="alice", api_key="sk-user")
+        user_auth = UserAPIKeyAuth(
+            user_id="alice",
+            api_key="sk-user",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-unconverted",
+                mcp_permission_version=0,
+            ),
+        )
         captured: Dict[str, Any] = {}
 
         async def fake_openapi_handler(_server, _name, _arguments):
@@ -1361,7 +1377,14 @@ class TestOpenApiResolvedUpstreamAuth:
                         server_name=server.server_name,
                         name="get_values",
                         arguments={},
-                        user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key="sk-user"),
+                        user_api_key_auth=UserAPIKeyAuth(
+                            user_id="alice",
+                            api_key="sk-user",
+                            object_permission=LiteLLM_ObjectPermissionTable(
+                                object_permission_id="perm-unconverted",
+                                mcp_permission_version=0,
+                            ),
+                        ),
                     )
 
         called.assert_not_awaited()

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
@@ -491,3 +491,12 @@ class MCPGatewaySessionsTerminateResponse(BaseModel):
     worker_pid: int
     terminated_sessions: int
     sessions: list[MCPGatewaySession] = Field(default_factory=list)
+
+
+class MCPToolOverrideEntry(TypedDict, total=False):
+    """Per-server tool overrides stored on an object permission row's
+    ``mcp_tool_overrides``: ``allow`` re-arms names the convention denies,
+    ``deny`` disables names the convention or an allowlist would permit."""
+
+    allow: ReadOnly[list[str]]
+    deny: ReadOnly[list[str]]

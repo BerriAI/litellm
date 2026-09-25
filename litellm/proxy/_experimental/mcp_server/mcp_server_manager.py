@@ -185,6 +185,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPStdioConfig,
     MCPTokenEndpointAuthMethod,
+    MCPToolOverrideEntry,
     has_header,
     without_header,
 )
@@ -1921,6 +1922,10 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        # Bare tool name -> description per server_id, replaced wholesale each
+        # time _create_prefixed_tools runs for that server. Feeds the
+        # tool-permission convention (allow non-deletes, deny deletes).
+        self.discovered_tool_inventory: dict[str, dict[str, str | None]] = {}
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -2821,6 +2826,8 @@ class MCPServerManager:
         )
 
         self._invalidate_discovery_lists(server.server_id)
+        if server.server_id:
+            self.discovered_tool_inventory.pop(server.server_id, None)
         prefix_root: Final = normalize_server_name(get_server_prefix(server))
         if server.spec_path and prefix_root:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
@@ -5378,7 +5385,14 @@ class MCPServerManager:
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
+        if server.server_id:
+            self.discovered_tool_inventory[server.server_id] = {tool.name: tool.description for tool in tools}
         return prefixed_tools
+
+    def discovered_inventory(self, server_id: str) -> Mapping[str, str | None]:
+        """The last tool catalog discovered for ``server_id``, bare names to
+        descriptions; empty when the server is unknown or never listed."""
+        return self.discovered_tool_inventory.get(server_id, {})
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
@@ -6828,6 +6842,30 @@ class MCPServerManager:
             for server_id in self.expand_permission_list([key]):
                 result.setdefault(server_id, []).extend(tools or [])
         return result
+
+    def expand_tool_overrides(
+        self,
+        tool_overrides: dict[str, MCPToolOverrideEntry] | None,
+    ) -> dict[str, MCPToolOverrideEntry]:
+        """
+        Rewrite an ``mcp_tool_overrides`` dict keyed by id/name/alias so every
+        key is a concrete server_id, same expansion as
+        ``expand_tool_permissions``. Entries resolving to the same server
+        merge their allow/deny lists (deny still wins at evaluation time).
+        """
+        if not tool_overrides:
+            return {}
+        grouped: Final[dict[str, list[MCPToolOverrideEntry | None]]] = {}
+        for key, entry in tool_overrides.items():
+            for server_id in self.expand_permission_list([key]):
+                grouped.setdefault(server_id, []).append(entry)
+        return {
+            server_id: {
+                "allow": [tool for entry in entries if entry for tool in (entry.get("allow") or [])],
+                "deny": [tool for entry in entries if entry for tool in (entry.get("deny") or [])],
+            }
+            for server_id, entries in grouped.items()
+        }
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         """
