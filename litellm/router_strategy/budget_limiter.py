@@ -21,9 +21,10 @@ anthropic:
 import asyncio
 import builtins
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
+from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
@@ -92,6 +93,14 @@ class _LiteLLMParamsDictView:
 
     def model_dump(self) -> builtins.dict[str, object]:
         return dict(self._params)
+
+
+def _sum_increments_by_key(operations: Sequence[RedisPipelineIncrementOperation]) -> Mapping[str, float]:
+    by_key: Final = groupby(
+        sorted(operations, key=lambda operation: operation["key"]),
+        key=lambda operation: operation["key"],
+    )
+    return MappingProxyType({key: sum(operation["increment_value"] for operation in group) for key, group in by_key})
 
 
 class RouterBudgetLimiting(CustomLogger):
@@ -677,15 +686,13 @@ class RouterBudgetLimiting(CustomLogger):
         if not isinstance(redis_values, dict):
             return
         async with self._get_redis_increment_queue_lock():
-            for key, value in redis_values.items():
-                if value is None:
-                    continue
-                pending_spend = sum(
-                    operation["increment_value"]
-                    for operation in self.redis_increment_operation_queue
-                    if operation["key"] == key
-                )
-                updated_spend = float(value) + pending_spend
+            pending_spend_by_key: Final = _sum_increments_by_key(self.redis_increment_operation_queue)
+            updated_spend_by_key: Final = tuple(
+                (key, float(value) + pending_spend_by_key.get(key, 0.0))
+                for key, value in redis_values.items()
+                if value is not None
+            )
+            for key, updated_spend in updated_spend_by_key:
                 await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=updated_spend)
                 verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, updated_spend)
 
