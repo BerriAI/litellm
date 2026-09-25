@@ -107,6 +107,8 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
+from litellm.types import utils as types_utils
+from litellm.types.litellm_params import ProxyRequestState, wire_names
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -135,6 +137,9 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
+
+_METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
+_KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -581,21 +586,21 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         """
         Filter out litellm params from the request body
         """
-        from litellm.types.utils import all_litellm_params
-
         _parsed_body = _parsed_body or {}
 
-        litellm_params_in_body: Final = {}
-        for k in all_litellm_params:
-            if k in _parsed_body:
-                litellm_params_in_body[k] = _parsed_body.pop(k, None)
+        litellm_keys_in_body: Final = MappingProxyType(
+            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
+        )
+        litellm_params_in_body: Final = MappingProxyType(
+            {k: v for k, v in litellm_keys_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
+        )
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
 
-        litellm_metadata: Final = litellm_params_in_body.pop("litellm_metadata", None)
-        metadata: Final = litellm_params_in_body.pop("metadata", None)
+        litellm_metadata: Final = litellm_keys_in_body.get("litellm_metadata")
+        metadata: Final = litellm_keys_in_body.get("metadata")
         if litellm_metadata:
             _metadata.update(litellm_metadata)
         if metadata:
@@ -610,7 +615,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # body that mirrors them cannot clobber the authenticated key, the real
         # parent span, or the proxy's own session-id decision.
         _metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
-        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
