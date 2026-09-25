@@ -8,7 +8,7 @@ import sys
 import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Final, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing_extensions import ReadOnly
@@ -21,6 +21,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.bug_report_config import build_proxy_environment_report
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
 
 router: Final = APIRouter()
 
@@ -482,7 +485,7 @@ def _get_uncollectable_objects_info() -> Mapping[str, object]:
 
 
 def _get_cache_memory_stats(
-    user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache
+    user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache: "RedisCache | None"
 ) -> Mapping[str, object]:
     """Calculate memory usage for all caches."""
     cache_stats: Final[dict[str, object]] = {}
@@ -529,22 +532,8 @@ def _get_cache_memory_stats(
             cache_stats["redis_usage_cache"] = {
                 "enabled": True,
                 "cache_type": type(redis_usage_cache).__name__,
+                "connection_pool": redis_usage_cache.connection_pool_status(),
             }
-            # Try to get Redis connection pool info if available
-            try:
-                if hasattr(redis_usage_cache, "redis_client") and redis_usage_cache.redis_client:
-                    if hasattr(redis_usage_cache.redis_client, "connection_pool"):
-                        pool_info: Final = redis_usage_cache.redis_client.connection_pool
-                        cache_stats["redis_usage_cache"]["connection_pool"] = {
-                            "max_connections": (
-                                pool_info.max_connections if hasattr(pool_info, "max_connections") else None
-                            ),
-                            "connection_class": (
-                                pool_info.connection_class.__name__ if hasattr(pool_info, "connection_class") else None
-                            ),
-                        }
-            except Exception as e:
-                verbose_proxy_logger.debug("Error getting Redis pool info: %s", e)
         else:
             cache_stats["redis_usage_cache"] = {"enabled": False}
 

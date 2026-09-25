@@ -146,3 +146,28 @@ def test_debug_report_returns_what_the_bug_report_link_carries_and_nothing_from_
         "model_list[*].provider = [azure]",
     ]
     assert not any(hostile in response.text for hostile in HOSTILE_STRINGS), response.text
+
+
+def test_cache_stats_report_the_redis_pool_through_the_cache_object() -> None:
+    from types import SimpleNamespace
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.debug_utils import _get_cache_memory_stats
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _PooledRedisCache:
+        def connection_pool_status(self) -> Mapping[str, object]:
+            return {"max_connections": 7, "connection_class": "Connection"}
+
+    stats = _get_cache_memory_stats(
+        user_api_key_cache=UserApiKeyCache(),
+        llm_router=None,
+        proxy_logging_obj=SimpleNamespace(internal_usage_cache=SimpleNamespace(dual_cache=DualCache())),
+        redis_usage_cache=_PooledRedisCache(),
+    )
+
+    assert stats["redis_usage_cache"] == {
+        "enabled": True,
+        "cache_type": "_PooledRedisCache",
+        "connection_pool": {"max_connections": 7, "connection_class": "Connection"},
+    }

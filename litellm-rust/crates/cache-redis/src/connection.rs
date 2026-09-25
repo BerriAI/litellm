@@ -21,7 +21,10 @@ const REDIS_POOL_SIZE: u32 = 16;
 
 #[allow(private_interfaces)]
 pub enum Connections<C> {
-    Pool(r2d2::Pool<ConnectionManager>),
+    Pool {
+        pool: r2d2::Pool<ConnectionManager>,
+        client: Box<redis::Client>,
+    },
     Cluster(r2d2::Pool<ClusterConnectionManager>),
     Fixed(Mutex<C>),
 }
@@ -35,7 +38,7 @@ where
         operation: impl FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error>,
     ) -> Result<T, Error> {
         match self {
-            Self::Pool(pool) => {
+            Self::Pool { pool, .. } => {
                 let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
                 let result = operation(&mut ConnectionRef::Node(&mut pooled.connection));
                 pooled.failed = matches!(result, Err(Error::Unavailable));
@@ -70,7 +73,13 @@ where
 
     pub fn open(url: &str, topology: &RedisTopology) -> Result<Self, Error> {
         match topology {
-            RedisTopology::Standalone => Ok(Self::Pool(pool(ConnectionManager::open(url)?)?)),
+            RedisTopology::Standalone => {
+                let client = redis::Client::open(url).map_err(|_| Error::Unavailable)?;
+                Ok(Self::Pool {
+                    pool: pool(ConnectionManager(client.clone()))?,
+                    client: Box::new(client),
+                })
+            }
             RedisTopology::Cluster { startup_nodes } => Ok(Self::Cluster(pool(
                 ClusterConnectionManager::open(url, startup_nodes)?,
             )?)),
@@ -81,9 +90,18 @@ where
     /// checked out right now return to the pool, and a caller-owned connection stays open.
     pub fn disconnect(&self) {
         match self {
-            Self::Pool(pool) => close_idle(pool),
+            Self::Pool { pool, .. } => close_idle(pool),
             Self::Cluster(pool) => close_idle(pool),
             Self::Fixed(_) => {}
+        }
+    }
+
+    /// A connection outside the pool for a subscription to take over; a subscribed RESP2
+    /// connection accepts nothing else, so it can never go back to the pool.
+    pub(crate) fn subscription_connection(&self) -> Result<redis::Connection, Error> {
+        match self {
+            Self::Pool { client, .. } => client.get_connection().map_err(|_| Error::Unavailable),
+            Self::Cluster(_) | Self::Fixed(_) => Err(Error::UnsupportedOperation),
         }
     }
 }
@@ -118,14 +136,6 @@ pub(crate) struct PooledConnection<C> {
 /// A timed-out command leaves its reply on the socket while redis still reports the connection
 /// open, so any connection whose operation failed is discarded instead of being reused.
 pub(crate) struct ConnectionManager(redis::Client);
-
-impl ConnectionManager {
-    fn open(url: &str) -> Result<Self, Error> {
-        redis::Client::open(url)
-            .map(Self)
-            .map_err(|_| Error::Unavailable)
-    }
-}
 
 impl r2d2::ManageConnection for ConnectionManager {
     type Connection = PooledConnection<redis::Connection>;

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod server;
+
 use std::{
     collections::BTreeMap,
     time::{Duration, SystemTime, UNIX_EPOCH},
