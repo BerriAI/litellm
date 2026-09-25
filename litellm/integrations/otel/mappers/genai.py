@@ -43,6 +43,7 @@ class GenAIMapper:
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
         GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
+        GenAI.CONVERSATION_ID: lambda d: d.session_id,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,
@@ -89,6 +90,7 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
         f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
+        LiteLLM.REQUEST_ROUTE: lambda d: d.request_route,
     }
 
     _TOOL_ATTRS: dict[str, Callable[[ToolDefinition], AttrValue | None]] = {

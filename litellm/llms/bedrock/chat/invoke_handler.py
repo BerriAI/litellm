@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -42,6 +43,7 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from ..common_utils import (
     BedrockError,
     build_bedrock_stream_error,
+    error_response_text,
     get_bedrock_response_stream_shape,
     get_bedrock_tool_name,
 )
@@ -50,6 +52,15 @@ bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_mem
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
 converse_config: Final = AmazonConverseConfig()
+NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
+    "messageStart",
+    "contentBlockStart",
+    "contentBlockDelta",
+    "contentBlockStop",
+    "messageStop",
+    "metadata",
+)
+NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
 
 
 class AmazonCohereChatConfig:
@@ -163,7 +174,7 @@ async def make_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
             client = get_async_httpx_client(
@@ -184,7 +195,12 @@ async def make_call(
         )
 
         if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=response.text)
+            raise BedrockError(
+                status_code=response.status_code,
+                message=error_response_text(response),
+                headers=response.headers,
+                response=response,
+            )
 
         if fake_stream:
             model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -199,7 +215,9 @@ async def make_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict] = (
+                MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            )
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
@@ -209,6 +227,12 @@ async def make_call(
             completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
+                model=model,
+                sync_stream=False,
+            )
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
+        elif bedrock_invoke_provider == "moonshot":
+            decoder = AmazonOpenAICompatibleStreamDecoder(
                 model=model,
                 sync_stream=False,
             )
@@ -226,9 +250,16 @@ async def make_call(
         )
 
         return completion_stream, response.headers
+    except BedrockError:
+        raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
-        raise BedrockError(status_code=error_code, message=err.response.text)
+        raise BedrockError(
+            status_code=error_code,
+            message=error_response_text(err.response),
+            headers=err.response.headers,
+            response=err.response,
+        )
     except httpx.TimeoutException:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
     except Exception as e:
@@ -248,7 +279,7 @@ def make_sync_call(
     json_mode: bool | None = False,
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
             client = _get_httpx_client(
@@ -268,7 +299,12 @@ def make_sync_call(
         )
 
         if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=response.text)
+            raise BedrockError(
+                status_code=response.status_code,
+                message=error_response_text(response),
+                headers=response.headers,
+                response=response,
+            )
 
         if fake_stream:
             model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -283,7 +319,9 @@ def make_sync_call(
                 messages=messages,
                 encoding=litellm.encoding,
             )
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict] = (
+                MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            )
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
@@ -293,6 +331,12 @@ def make_sync_call(
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
+                model=model,
+                sync_stream=True,
+            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        elif bedrock_invoke_provider == "moonshot":
+            decoder = AmazonOpenAICompatibleStreamDecoder(
                 model=model,
                 sync_stream=True,
             )
@@ -310,9 +354,16 @@ def make_sync_call(
         )
 
         return completion_stream, response.headers
+    except BedrockError:
+        raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
-        raise BedrockError(status_code=error_code, message=err.response.text)
+        raise BedrockError(
+            status_code=error_code,
+            message=error_response_text(err.response),
+            headers=err.response.headers,
+            response=err.response,
+        )
     except httpx.TimeoutException:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
     except Exception as e:
@@ -461,10 +512,10 @@ class AWSEventStreamDecoder:
         reasoning_content: str | None = None
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
-        self.content_blocks.append(delta_obj)
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
+            self.content_blocks.append(delta_obj)
             # When json_mode is True and this is the internal json_tool_call,
             # convert tool input to text content instead of tool call arguments
             if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:
@@ -572,14 +623,12 @@ class AWSEventStreamDecoder:
             if thinking_blocks:
                 self._thinking_ran = True
 
-            carries_message_content: Final = any(
-                key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason", "trace")
+            trace: Final = chunk_data.get("trace")
+            carries_message_content: Final = bool(trace) or any(
+                key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason")
             )
 
-            model_response_provider_specific_fields: Final = {}
-            if "trace" in chunk_data:
-                trace: Final = chunk_data.get("trace")
-                model_response_provider_specific_fields["trace"] = trace
+            model_response_provider_specific_fields: Final = {"trace": trace} if trace else {}
             response: Final = ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -625,10 +674,10 @@ class AWSEventStreamDecoder:
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######### /bedrock/invoke nova mappings ###############
-        elif "contentBlockDelta" in chunk_data:
-            # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
-            _chunk_data: Final = chunk_data.get("contentBlockDelta", {})
-            return self.converse_chunk_parser(chunk_data=_chunk_data)
+        elif nova_event_type := next((key for key in NOVA_INVOKE_STREAM_EVENT_TYPES if key in chunk_data), None):
+            return self.converse_chunk_parser(
+                chunk_data=NOVA_INVOKE_STREAM_EVENT_PAYLOAD.validate_python(chunk_data[nova_event_type])
+            )
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
             if len(chunk_data["outputs"]) == 1 and chunk_data["outputs"][0].get("text", None) is not None:
@@ -756,6 +805,24 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
+
+
+class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+    ) -> None:
+        super().__init__(model=model)
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+
+        self.openai_model_response_iterator = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None,
+            sync_stream=sync_stream,
+        )
+
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
+        return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses

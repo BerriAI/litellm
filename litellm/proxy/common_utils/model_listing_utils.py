@@ -10,12 +10,29 @@ legacy internal names with `general_settings.use_team_public_model_name: false`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
+import litellm
+
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.types.proxy.model_listing import ModelInfoResponse
+
+CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
+GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CLAUDE_CODE_CLIENT: Final = "claude-code"
+_CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
+_ONE_MILLION_SUFFIX: Final = "[1m]"
+_ONE_MILLION_TOKENS: Final = 1_000_000
+_ALIAS_ENTRIES: Final = TypeAdapter(Mapping[object, object])
+_NO_ALIASES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def configured_display_names(
@@ -38,6 +55,186 @@ def configured_display_names(
     return MappingProxyType(
         {response_id: display_name for response_id, display_name in resolved if display_name is not None}
     )
+
+
+def _unmarked(name: str) -> str:
+    return name[: -len(_ONE_MILLION_SUFFIX)] if name.lower().endswith(_ONE_MILLION_SUFFIX) else name
+
+
+def _compatibility_id(model_id: str) -> str:
+    return f"{_CLAUDE_CODE_ALIAS_PREFIX}{model_id.encode().hex()}"
+
+
+def _decoded_compatibility_id(view_id: str) -> str | None:
+    encoded: Final = _unmarked(view_id).removeprefix(_CLAUDE_CODE_ALIAS_PREFIX)
+    if encoded == _unmarked(view_id):
+        return None
+    try:
+        model_id: Final = bytes.fromhex(encoded).decode()
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return model_id if _compatibility_id(model_id) == _unmarked(view_id) else None
+
+
+def claude_code_model_id(
+    model_id: str,
+    max_input_tokens: float | None,
+    routing_names: Container[str],
+) -> str:
+    """The collision-free id Claude Code's picker lists a model under."""
+    if "*" in model_id:
+        return model_id
+    shaped: Final = model_id if CLAUDE_CODE_PICKER_PATTERN.search(model_id) else _compatibility_id(model_id)
+    one_million: Final = max_input_tokens is not None and max_input_tokens >= _ONE_MILLION_TOKENS
+    marked: Final = (
+        f"{shaped}{_ONE_MILLION_SUFFIX}" if one_million and not shaped.lower().endswith(_ONE_MILLION_SUFFIX) else shaped
+    )
+    return next(
+        (
+            name
+            for name in (marked, shaped)
+            if name == model_id or claude_code_group_name(name, routing_names) == model_id
+        ),
+        model_id,
+    )
+
+
+def claude_code_group_name(view_id: str, routing_names: Container[str]) -> str | None:
+    """Decode a canonical compatibility id only when no configured route claims it."""
+    if view_id in routing_names:
+        return None
+    unmarked: Final = _unmarked(view_id)
+    if unmarked != view_id and unmarked in routing_names:
+        return unmarked
+    model_id: Final = _decoded_compatibility_id(view_id)
+    return model_id if model_id and model_id in routing_names else None
+
+
+def is_claude_code_client(headers: Mapping[str, str]) -> bool:
+    """Claude Code itself, or a client asking for its view of the listing the way Ramp Router's does"""
+    from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
+
+    return (
+        is_claude_code_user_agent(headers.get("user-agent", ""))
+        or headers.get(GATEWAY_CLIENT_HEADER, "").lower() == CLAUDE_CODE_CLIENT
+    )
+
+
+def claude_code_view_ids(
+    rows: Sequence[ModelInfoResponse],
+    headers: Mapping[str, str],
+    routing_names: Container[str],
+) -> Mapping[str, str]:
+    """served id -> Claude Code id for the requested listing view"""
+    if not is_claude_code_client(headers):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {row["id"]: claude_code_model_id(row["id"], row.get("max_input_tokens"), routing_names) for row in rows}
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeCodeRoutingNames:
+    """Existing routes always own their names, including aliases and wildcard routes."""
+
+    llm_router: Router | None
+    team_id: str | None = None
+    alias_maps: tuple[object, ...] = ()
+
+    def __contains__(self, name: object) -> bool:
+        if not isinstance(name, str):
+            return False
+        if name in litellm.model_alias_map or any(
+            isinstance(aliases, Mapping) and name in aliases for aliases in self.alias_maps
+        ):
+            return True
+        if self.llm_router is None:
+            return False
+        return (
+            name in self.llm_router.model_group_alias
+            or self.llm_router.has_model_id(name)
+            or bool(self.llm_router.get_candidate_model_ids_for_route(name, self.team_id))
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CallerAliases:
+    """`own` are the caller's key and team alias maps, the names `/v1/models` lists for it.
+    `rewrite` are the maps `/chat/completions` rewrites its model through, in the order it
+    applies them: the team's, the key's in `add_litellm_data_to_request`, then the global
+    `model_alias_map` and the key's again in `common_processing_pre_call_logic`."""
+
+    own: tuple[object, ...]
+    rewrite: tuple[object, ...]
+
+
+def caller_alias_maps(
+    key_aliases: object,
+    team_aliases: object,
+    key_team_id: str | None,
+    listed_team_id: str | None,
+) -> CallerAliases:
+    """Team aliases count only when listing the team the key authenticated as."""
+    if listed_team_id is not None and listed_team_id != key_team_id:
+        return CallerAliases((key_aliases,), (key_aliases, litellm.model_alias_map, key_aliases))
+    return CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, litellm.model_alias_map, key_aliases))
+
+
+def alias_map(aliases: object) -> Mapping[str, str]:
+    try:
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+    except ValidationError:
+        return _NO_ALIASES
+    return MappingProxyType(
+        {alias: target for alias, target in entries.items() if isinstance(alias, str) and isinstance(target, str)}
+    )
+
+
+def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(alias for aliases in alias_maps for alias in aliases))
+
+
+def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | None:
+    target: Final = reduce(lambda name, aliases: aliases.get(name, name), alias_maps, model_id)
+    return None if target == model_id else target
+
+
+def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] = frozenset()) -> str | None:
+    """The model group `/chat/completions` rewrites `model_id` to, else None. A `model_id`
+    already `listed` keeps its own row, so it is never rewritten."""
+    if model_id in listed:
+        return None
+    return _rewrite(model_id, tuple(alias_map(raw) for raw in aliases.rewrite))
+
+
+def alias_listing_entries(
+    entries: Sequence[tuple[str, str]],
+    aliases: CallerAliases,
+) -> tuple[tuple[str, str], ...]:
+    """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
+    listed. An alias colliding with a listed id keeps the listed entry."""
+    maps: Final = tuple(alias_map(raw) for raw in aliases.rewrite)
+    own: Final = tuple(alias_map(raw) for raw in aliases.own)
+    lookup_by_response: Final = MappingProxyType(dict(entries))
+    lookup_ids: Final = frozenset(lookup_by_response.values())
+    targets: Final = MappingProxyType(
+        {alias: _rewrite(alias, maps) for alias in _alias_names(own) if alias not in lookup_by_response}
+    )
+    added: Final = tuple(
+        (alias, lookup_by_response.get(target, target))
+        for alias, target in targets.items()
+        if target is not None and (target in lookup_by_response or target in lookup_ids)
+    )
+    return (*entries, *added)
+
+
+def claude_code_requested_group(
+    requested: str,
+    llm_router: Router,
+    team_id: str | None,
+    alias_maps: tuple[object, ...] = (),
+) -> str | None:
+    return claude_code_group_name(requested, ClaudeCodeRoutingNames(llm_router, team_id, alias_maps))
 
 
 class TeamModelNameTranslator:
@@ -97,7 +294,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def _response_to_lookup_map(
-        model_names: list[str],
+        model_names: Sequence[str],
         internal_to_public: dict[str, str],
     ) -> dict[str, str]:
         """Map each public response id to the first internal lookup id seen in
@@ -114,7 +311,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def listing_entries(
-        model_names: list[str],
+        model_names: Sequence[str],
         llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[tuple[str, str]]:

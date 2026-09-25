@@ -103,9 +103,12 @@ resource "litellm_key" "example_key" {
   permissions          = {
     can_create_keys = "true"
   }
-  model_max_budget     = {
-    "gpt-4" = 50.0
-  }
+  model_max_budget     = jsonencode({
+    "gpt-4" = {
+      budget_limit = 50.0
+      time_period  = "30d"
+    }
+  })
   model_rpm_limit      = {
     "claude-3.5-sonnet" = 30
   }

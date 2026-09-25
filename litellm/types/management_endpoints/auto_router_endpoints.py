@@ -44,6 +44,25 @@ class ComplexityRouterConfigValidationResponse(BaseModel):
     error: str | None = None
 
 
+class AutoRouterAvailabilityRequest(BaseModel):
+    team_id: str | None = None
+    saved_model_id: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
+
+
+class AutoRouterAllowance(BaseModel):
+    key: str
+    limit: int | None
+    remaining: int | None
+    used_by_this_router: bool = False
+    available: bool = True
+
+
+class AutoRouterAvailabilityResponse(BaseModel):
+    allowances: tuple[AutoRouterAllowance, ...]
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single request to classify against a complexity-router config that need not be saved yet.
 
@@ -71,6 +90,11 @@ class AutoRouterRoutingTestRequest(BaseModel):
     )
     complexity_router_config: RequestComplexityRouterConfig = Field(
         description="The complexity router config to route against, in the shape /model/new accepts",
+    )
+    saved_model_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Test this saved deployment's server-side configuration instead of the supplied config and default model",
     )
     default_model: str | None = Field(
         default=None,
@@ -132,7 +156,7 @@ class AutoRouterRoutingTestRequest(BaseModel):
         the serving path.
         """
         return MappingProxyType(
-            {  # mutable-ok: MappingProxyType needs a dict to wrap
+            {
                 key: value
                 for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
                 if value is not None
@@ -195,13 +219,24 @@ class AutoRouterBenchmarkTotals(BaseModel):
     avg_session_seconds: float
     avg_tokens_per_session: float
     spend: float = Field(description="What the routed traffic actually cost")
-    saved_spend: float = Field(
-        description="Signed dollars saved versus each router's savings baseline (derived from its hardest "
-        "tier, or the configured override), from the same per-request savings record the usage tab reads"
+    classifier_cost: float | None = Field(
+        description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
+        "subtotal recording, and zero for an empty window"
     )
-    baseline_spend: float = Field(description="spend plus saved_spend: the estimated single-model cost")
-    saved_pct: float = Field(description="saved_spend over baseline_spend, as a percentage")
-    saved_per_session: float
+    savings_estimated_turns: int = Field(
+        description="Turns covered by the current savings estimator; legacy estimates are excluded"
+    )
+    savings_estimated_actual_spend: float = Field(
+        description="Actual spend, including classifier cost, for covered turns only"
+    )
+    saved_spend: float | None = Field(
+        description="Signed savings for covered turns only; null when traffic has no current estimates"
+    )
+    baseline_spend: float | None = Field(description="Estimated single-model cost for covered turns only")
+    saved_pct: float | None = Field(description="Covered savings over covered baseline spend, as a percentage")
+    saved_per_session: float | None = Field(
+        description="Average session savings; unavailable unless every turn is covered"
+    )
     cache: AutoRouterCacheStats
 
 
@@ -219,6 +254,41 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
         "'REASONING', a quality router reports its numeric quality tier, and an adaptive router "
         "records no tier at all. Turns no tier served (the classifier fell back to default_model) "
         "are absent rather than pooled under a sentinel key, so the values may sum to less than turns",
+    )
+
+
+class AutoRouterSessionResponse(BaseModel):
+    """One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
+    against the router's savings baseline (the priciest model in its hardest tier)."""
+
+    session_id: str
+    router_name: str = Field(description="The auto-router alias the session's requests were sent to")
+    router_type: str = Field(description="complexity, adaptive or quality")
+    turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
+    last_model: str = Field(description="The deployment model the most recent turn was routed to")
+    spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
+    savings_estimated_turns: int = Field(
+        description="Turns covered by the current savings estimator; legacy estimates are excluded"
+    )
+    savings_estimated_actual_spend: float = Field(
+        description="Actual spend, including classifier cost, for covered turns only"
+    )
+    saved_spend: float | None = Field(description="Estimated savings for covered turns only, net of classifier cost")
+    baseline_spend: float | None = Field(
+        description="Estimated single-model cost; unavailable unless every turn is covered"
+    )
+    savings_estimated_baseline_spend: float | None = Field(
+        description="Estimated single-model cost for covered turns only"
+    )
+    baseline_model: str | None = Field(
+        description="The savings baseline most covered turns were priced against, recorded turn by "
+        "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
+        "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
+        "which derive no baseline and so report no savings"
+    )
+    baseline_models: Mapping[str, int] = Field(
+        description="Covered turns priced against each baseline model; more than one entry means the router's "
+        "baseline changed mid-session and baseline_spend mixes both"
     )
 
 
@@ -290,6 +360,18 @@ class StartShadowEvalRequest(BaseModel):
         description=(
             "Users whose traffic will be shadowed, matched on the user every authenticated request resolves "
             "to across all their teams: JWT requests carrying their subject claim and virtual keys they own"
+        ),
+    )
+    models: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+        description=(
+            "Model groups to narrow the sampled traffic to, matched on the group the caller "
+            "requested and resolved through model_group_alias, so an alias and its target are one "
+            "name. Empty samples every model the targets use. This ANDs with the targets: a job "
+            "over a user and one model samples that user's requests on that model across every key "
+            "they own, and none of their other traffic. Forward jobs only: a reverse job samples "
+            "exactly the traffic its own router served, which no other model group can name"
         ),
     )
     router_name: str | None = Field(
@@ -372,11 +454,19 @@ class StartShadowEvalRequest(BaseModel):
     def _round_percentage(cls, value: float) -> float:
         return round(value, 2)
 
-    @field_validator("api_key_ids", "team_ids", "user_ids")
+    @field_validator("api_key_ids", "team_ids", "user_ids", "models")
     @classmethod
     def _dedupe_targets(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """A target named twice would collide with itself on the one-active-per-(target, direction) index."""
+        """A target named twice would collide with itself on the one-active-per-(target, direction)
+        index; a model named twice is one scope entry."""
         return tuple(dict.fromkeys(value))
+
+    @field_validator("models")
+    @classmethod
+    def _models_are_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not all(name.strip() for name in value):
+            raise ValueError("models must be non-empty model group names")
+        return value
 
     @model_validator(mode="after")
     def _at_least_one_target_at_most_hundred(self) -> "StartShadowEvalRequest":
@@ -385,6 +475,18 @@ class StartShadowEvalRequest(BaseModel):
             raise ValueError("at least one target is required: pass api_key_ids, team_ids, or user_ids")
         if total > 100:
             raise ValueError("at most 100 targets per job across api_key_ids, team_ids, and user_ids")
+        return self
+
+    @model_validator(mode="after")
+    def _model_scope_is_forward_only(self) -> "StartShadowEvalRequest":
+        """A reverse job admits exactly the requests its own router served, so every one of
+        them names that router and nothing else; any other scope would sample nothing and
+        the router itself is a no-op. Both readings are rejected rather than shipped as a
+        job that silently never samples."""
+        if self.models and self.direction == "reverse":
+            raise ValueError(
+                "models is only meaningful for a forward job; a reverse job samples its own router's traffic"
+            )
         return self
 
     @model_validator(mode="after")
@@ -598,6 +700,10 @@ class ShadowEvalJobResponse(BaseModel):
             "Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of "
             "traffic and judge every arm against the same real responses"
         ),
+    )
+    models: tuple[str, ...] = Field(
+        default=(),
+        description="Model groups the sampled traffic is narrowed to; empty means every model the targets use",
     )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None

@@ -26,8 +26,8 @@ Five leak sites are gated in `litellm/router.py`:
 1. Deployment timeout debug after `litellm.Timeout`
 2. ContextWindowExceededError fallback hint
 3. ContentPolicyViolationError fallback hint
-4. "No fallback model group found for..." when fallbacks dict misses
-5. "Received Model Group=...\\nAvailable Model Group Fallbacks=..."
+4. "no fallback model group was found" when fallbacks dict misses
+5. "model group '...' failed with the error above" plus the fallback outcome
    (always fires on terminal raise from the fallback orchestrator)
 
 Site 5 is the broadest — it fires for every failing call that goes
@@ -42,8 +42,9 @@ import pytest
 import litellm
 from litellm import Router
 
-_RECEIVED_MODEL_GROUP_PHRASE = "Received Model Group="
-_AVAILABLE_FALLBACKS_PHRASE = "Available Model Group Fallbacks="
+_RECEIVED_MODEL_GROUP_PHRASE = "failed with the error above"
+_AVAILABLE_FALLBACKS_PHRASE = "No fallback was attempted"
+_NO_FALLBACK_GROUP_PHRASE = "no fallback model group was found"
 _CONTEXT_WINDOW_HINT_PHRASE = "context_window_fallbacks="
 _INTERNAL_MODEL_GROUP_NAME = "all-anthropic/claude-secret-internal"
 _FALLBACK_CREDENTIAL = "sk-INLINEFALLBACKSECRET1234567890"
@@ -124,7 +125,7 @@ def test_flag_defaults_on():
     assert litellm.expose_router_debug_in_errors is True
 
 
-# --- Site 5: "Received Model Group=..." on terminal raise --------------------
+# --- Site 5: fallback outcome on terminal raise --------------------
 
 
 @pytest.mark.asyncio
@@ -192,7 +193,7 @@ async def test_flag_on_shows_context_window_fallback_hint(monkeypatch: pytest.Mo
     assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
 
 
-# --- Site 4: "No fallback model group found..." when fallbacks miss ---------
+# --- Site 4: "no fallback model group was found" when fallbacks miss ---------
 
 
 @pytest.mark.asyncio
@@ -221,7 +222,7 @@ async def test_flag_off_does_not_leak_when_no_fallback_group_found(monkeypatch: 
             messages=[{"role": "user", "content": "hi"}],
         )
     msg = excinfo.value.message
-    assert "No fallback model group found" not in msg, msg
+    assert _NO_FALLBACK_GROUP_PHRASE not in msg, msg
     assert "some-other-group" not in msg, msg
     assert _INTERNAL_MODEL_GROUP_NAME not in msg, msg
 
@@ -250,8 +251,12 @@ async def test_flag_on_shows_when_no_fallback_group_found(monkeypatch: pytest.Mo
             messages=[{"role": "user", "content": "hi"}],
         )
     msg = excinfo.value.message
-    assert "No fallback model group found" in msg, msg
-    assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
+    assert _NO_FALLBACK_GROUP_PHRASE in msg, msg
+    assert f"model group '{_INTERNAL_MODEL_GROUP_NAME}' failed with the error above" in msg, msg
+    assert "Fallbacks are configured for: some-other-group" in msg, msg
+    assert "not retried on another model" in msg, msg
+    assert _AVAILABLE_FALLBACKS_PHRASE not in msg, msg
+    assert msg.count("failed with the error above") == 1, msg
 
 
 # --- Site 1: Deployment timeout debug on litellm.Timeout --------------------
@@ -349,6 +354,30 @@ async def test_flag_on_shows_content_policy_fallback_hint(monkeypatch: pytest.Mo
     assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
 
 
+@pytest.mark.asyncio
+async def test_flag_on_explains_failed_content_policy_fallback(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router = Router(
+        model_list=[
+            {"model_name": _INTERNAL_MODEL_GROUP_NAME, "litellm_params": {"model": "gpt-4o", "api_key": "key"}},
+            {"model_name": "policy-safe-group", "litellm_params": {"model": "gpt-4o", "api_key": "key"}},
+        ],
+        content_policy_fallbacks=[{_INTERNAL_MODEL_GROUP_NAME: ["policy-safe-group"]}],
+        num_retries=0,
+    )
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_content_policy_error(),
+        )
+    msg = excinfo.value.message
+    assert f"model group '{_INTERNAL_MODEL_GROUP_NAME}' failed with the error above" in msg, msg
+    assert "Fallback to policy-safe-group also failed: " in msg, msg
+    assert _AVAILABLE_FALLBACKS_PHRASE not in msg, msg
+    assert msg.count("failed with the error above") == 1, msg
+
+
 # --- Credential masking: raw provider keys never leak, either flag state ----
 
 
@@ -387,7 +416,7 @@ async def test_flag_on_masks_fallback_credentials(monkeypatch: pytest.MonkeyPatc
 async def test_flag_on_scrubs_credential_from_inner_fallback_exception_string(monkeypatch: pytest.MonkeyPatch):
     """If the fallback attempt itself raises an exception whose message embeds a
     raw provider credential (e.g. a provider SDK echoing back the api_key it was
-    called with), that string is re-embedded via `Error doing the fallback: ...`
+    called with), that string is re-embedded via `Fallback to ... also failed: ...`
     on the terminal raise. The router must scrub known secret patterns from it.
     The primary fails with a benign rate-limit; the fallback deployment fails
     with an exception whose text contains the secret."""
@@ -423,6 +452,9 @@ async def test_flag_on_scrubs_credential_from_inner_fallback_exception_string(mo
             messages=[{"role": "user", "content": "hi"}],
         )
     msg = excinfo.value.message
-    assert "Error doing the fallback:" in msg, msg
+    assert f"model group '{_INTERNAL_MODEL_GROUP_NAME}' failed with the error above" in msg, msg
+    assert "Fallback to fallback-group also failed: " in msg, msg
+    assert "content_filter_policy" in msg, msg
+    assert msg.count("failed with the error above") == 1, msg
     assert inner_secret not in msg, msg
     assert "REDACTED" in msg, msg

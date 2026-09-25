@@ -61,6 +61,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -90,6 +91,8 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
 )
 
+from .base import CachedTokensDetails
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -107,12 +110,33 @@ FileTypes = (
 EmbeddingInput = str | list[str]
 
 
+class BinaryResponseSummary(TypedDict):
+    """What logging keeps of a binary response (speech audio, file content): size and media type, never the bytes."""
+
+    object: ReadOnly[Literal["binary"]]
+    content_type: ReadOnly[str | None]
+    num_bytes: ReadOnly[int]
+
+
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
 
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
         self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+
+    def logging_summary(self) -> BinaryResponseSummary:
+        return {
+            "object": "binary",
+            "content_type": self.response.headers.get("content-type"),
+            "num_bytes": self._num_bytes(),
+        }
+
+    def _num_bytes(self) -> int:
+        try:
+            return len(self.response.content)
+        except httpx.ResponseNotRead:
+            return self.response.num_bytes_downloaded
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -498,7 +522,7 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"]
     input_file_id: str
     metadata: dict[str, str] | None
     output_expires_after: FileExpiresAfter
@@ -509,6 +533,7 @@ class CreateBatchRequest(TypedDict, total=False):
 
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
+    disable_fallbacks: ReadOnly[bool]
 
 
 class RetrieveBatchRequest(TypedDict, total=False):
@@ -632,7 +657,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
@@ -989,6 +1014,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     description: str
     parameters: dict
     strict: bool
+    eager_input_streaming: ReadOnly[bool]
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -999,6 +1025,7 @@ class OpenAIChatCompletionToolParam(TypedDict):
 class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
+    eager_input_streaming: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
@@ -1157,6 +1184,10 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "width",
+    "height",
+    "guidance",
+    "steps",
     "imageConfig",
 ]
 
@@ -1270,8 +1301,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     """TypedDict for request parameters supported by the responses API."""
 
-    input: str | ResponseInputParam
-    model: str
+    input: Required[ReadOnly[str | ResponseInputParam]]
+    model: Required[ReadOnly[str]]
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -1287,7 +1318,10 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
+    image_tokens: int | None = None
     text_tokens: int | None = None
+    video_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 
@@ -1358,6 +1392,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | OutputFunctionToolCall
             | OutputImageGenerationCall
             | ResponseFunctionToolCall
+            | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
         ]
     )
@@ -1562,6 +1597,9 @@ class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
 class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
     response: ResponsesAPIResponse
+
+
+ResponsesTerminalEvent: TypeAlias = ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent
 
 
 class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -2185,6 +2223,53 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeErrorDetail(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+class OpenAIRealtimeErrorEvent(TypedDict):
+    type: ReadOnly[Literal["error"]]
+    error: ReadOnly[OpenAIRealtimeErrorDetail]
+
+
+class OpenAIRealtimeTranscriptionAudioFormat(TypedDict):
+    type: ReadOnly[Literal["audio/pcm"]]
+    rate: ReadOnly[int]
+
+
+class OpenAIRealtimeTranscriptionSettings(TypedDict):
+    model: ReadOnly[str]
+    language: NotRequired[ReadOnly[str]]
+
+
+class OpenAIRealtimeServerVadTurnDetection(TypedDict):
+    type: ReadOnly[Literal["server_vad"]]
+
+
+class OpenAIRealtimeTranscriptionAudioInput(TypedDict):
+    format: ReadOnly[OpenAIRealtimeTranscriptionAudioFormat]
+    transcription: ReadOnly[OpenAIRealtimeTranscriptionSettings]
+    turn_detection: ReadOnly[OpenAIRealtimeServerVadTurnDetection | None]
+
+
+class OpenAIRealtimeTranscriptionAudio(TypedDict):
+    input: ReadOnly[OpenAIRealtimeTranscriptionAudioInput]
+
+
+class OpenAIRealtimeTranscriptionSession(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[Literal["realtime.transcription_session"]]
+    type: ReadOnly[Literal["transcription"]]
+    audio: ReadOnly[OpenAIRealtimeTranscriptionAudio]
+
+
+class OpenAIRealtimeTranscriptionSessionCreated(TypedDict):
+    type: ReadOnly[Literal["session.created"]]
+    event_id: ReadOnly[str]
+    session: ReadOnly[OpenAIRealtimeTranscriptionSession]
+
+
 class OpenAIRealtimeInputAudioTranscriptionDelta(TypedDict):
     type: ReadOnly[Literal["conversation.item.input_audio_transcription.delta"]]
     event_id: ReadOnly[str]
@@ -2199,12 +2284,20 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     item_id: ReadOnly[str]
     content_index: ReadOnly[int]
     transcript: ReadOnly[str]
+    usage: NotRequired[ReadOnly[Mapping[str, object]]]
+
+
+class OpenAIRealtimeCachedTokensDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
 
 
 class OpenAIRealtimeUsageTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
     text_tokens: ReadOnly[int]
     cached_tokens: NotRequired[ReadOnly[int]]
+    cached_tokens_details: NotRequired[ReadOnly[OpenAIRealtimeCachedTokensDetails]]
 
 
 class OpenAIRealtimeResponseUsage(TypedDict):
@@ -2255,6 +2348,8 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioBufferSpeechEvent
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
+    | OpenAIRealtimeTranscriptionSessionCreated
+    | OpenAIRealtimeErrorEvent
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]

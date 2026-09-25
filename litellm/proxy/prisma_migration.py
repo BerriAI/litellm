@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.abspath("./"))
 
 from typing import Final
 
+from litellm_proxy_extras.prisma_toolchain import resolve_prisma_argv
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_cli import run_server
 from litellm.secret_managers.main import str_to_bool
@@ -29,7 +31,7 @@ def main() -> int:
     run_server(run_server_args, standalone_mode=False)
 
     verbose_proxy_logger.info("Running 'prisma generate'...")
-    result: Final = subprocess.run(("prisma", "generate"), capture_output=True, text=True)
+    result: Final = subprocess.run(resolve_prisma_argv(("prisma", "generate")), capture_output=True, text=True)
     verbose_proxy_logger.info("'prisma generate' stdout: %s", result.stdout)
 
     if result.returncode != 0:

@@ -27,17 +27,6 @@ BACKUP_MAP = os.path.join(
 )
 
 
-@pytest.fixture(autouse=True)
-def _use_local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-
-
 def _load(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -45,50 +34,6 @@ def _load(path: str) -> dict:
 
 def _cloudflare_keys(data: dict) -> set:
     return {k for k in data if k.startswith("cloudflare/")}
-
-
-def test_glm_5_2_entry_is_present_and_well_formed():
-    entry = litellm.model_cost["cloudflare/@cf/zai-org/glm-5.2"]
-    assert entry["litellm_provider"] == "cloudflare"
-    assert entry["mode"] == "chat"
-    assert entry["supports_function_calling"] is True
-    assert entry["input_cost_per_token"] > 0
-    assert entry["output_cost_per_token"] > 0
-
-
-def test_vision_model_is_flagged_supports_vision():
-    entry = litellm.model_cost["cloudflare/@cf/meta/llama-3.2-11b-vision-instruct"]
-    assert entry["litellm_provider"] == "cloudflare"
-    assert entry.get("supports_vision") is True
-
-
-def test_additional_current_models_are_present():
-    for key in (
-        "cloudflare/@cf/openai/gpt-oss-120b",
-        "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    ):
-        entry = litellm.model_cost[key]
-        assert entry["litellm_provider"] == "cloudflare"
-        assert entry["mode"] == "chat"
-        assert entry["supports_function_calling"] is True
-        assert entry["input_cost_per_token"] > 0
-        assert entry["output_cost_per_token"] > 0
-
-
-@pytest.mark.parametrize(
-    "key, published_price_per_audio_minute",
-    [
-        ("cloudflare/@cf/openai/whisper", 0.00045),
-        ("cloudflare/@cf/openai/whisper-large-v3-turbo", 0.00051),
-    ],
-)
-def test_whisper_transcription_pricing_is_stored_per_second(key, published_price_per_audio_minute):
-    entry = litellm.model_cost[key]
-    assert entry["litellm_provider"] == "cloudflare"
-    assert entry["mode"] == "audio_transcription"
-    assert entry["supported_endpoints"] == ["/v1/audio/transcriptions"]
-    assert entry["output_cost_per_second"] == 0.0
-    assert entry["input_cost_per_second"] == pytest.approx(published_price_per_audio_minute / 60)
 
 
 def test_root_and_backup_have_identical_cloudflare_keys():

@@ -14,6 +14,8 @@ export interface SpendMetrics {
   prompt_caching_savings_spend?: number;
   gateway_injected_caching_savings_spend?: number;
   autorouter_savings_spend?: number;
+  total_response_time_ms?: number;
+  timed_requests?: number;
 }
 
 export type DailyData = {
@@ -46,6 +48,9 @@ export interface KeyMetricWithMetadata {
 export interface KeyMetadata {
   key_alias: string | null;
   team_id: string | null;
+  user_id?: string | null;
+  user_email?: string | null;
+  key_exists?: boolean | null;
   tags?: { tag: string; usage: number }[];
 }
 
@@ -69,6 +74,7 @@ export interface TopModelData {
 
 export interface ModelActivityData {
   label: string;
+  key_metadata?: KeyMetadata;
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;
@@ -78,6 +84,8 @@ export interface ModelActivityData {
   prompt_tokens: number;
   completion_tokens: number;
   total_spend: number;
+  total_response_time_ms?: number;
+  total_timed_requests?: number;
   top_api_keys: TopApiKeyData[];
   top_models: TopModelData[];
   daily_data: {
@@ -92,6 +100,7 @@ export interface ModelActivityData {
       failed_requests: number;
       cache_read_input_tokens: number;
       cache_creation_input_tokens: number;
+      avg_response_time_ms?: number | null;
     };
   }[];
 }

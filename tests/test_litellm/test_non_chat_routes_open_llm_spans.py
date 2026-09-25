@@ -46,9 +46,9 @@ class _FakeSpeech:
         )()
 
 
-class _FakeImages:
+class _FakeRawImages:
     async def generate(self, **kwargs: Any) -> Any:
-        return type(
+        parsed: Final = type(
             "_Images",
             (),
             {
@@ -58,6 +58,16 @@ class _FakeImages:
                 }
             },
         )()
+        return type(
+            "_RawImages",
+            (),
+            {"parse": lambda self: parsed, "headers": httpx.Headers({"x-request-id": "req-image"})},
+        )()
+
+
+class _FakeImages:
+    def __init__(self) -> None:
+        self.with_raw_response = _FakeRawImages()
 
 
 class _FakeModerations:

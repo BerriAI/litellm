@@ -4,13 +4,10 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
   push:
     branches:
       - main
-      - litellm_internal_staging
 
 permissions:
   contents: read
@@ -22,6 +19,12 @@ concurrency:
 # Semantic matrix: each shard groups tests by concern (auth, server, logging, …)
 # rather than alphabetical letter ranges. Adding a new test file means adding it
 # to whichever group it belongs to, not reshuffling slices.
+#
+# `.circleci/tests.yml` runs each group's files on same-repo events under the
+# `proxy-db-<group>` Codecov flag; `.circleci/scripts/unit_selection.sh` holds
+# the file lists. CircleCI does not build pull requests from forks, so `fork-flag`
+# makes the shard run that list there. `test-path` keeps the files that still
+# reach real providers and never left tests/proxy_unit_tests.
 #
 # Design targets:
 #   * Every shard runs in <= 7 minutes of wall-clock on the default runner.
@@ -61,7 +64,7 @@ jobs:
   proxy-db:
     needs: assert-shard-coverage
     # Display only the semantic shard name in the checks UI instead of GHA's
-    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, 20)"
+    # default "proxy-db (key-generation, tests/unit/proxy/…, 0, loadscope, 20)"
     # which includes every matrix field and gets truncated past the test-path.
     name: ${{ matrix.test-group }}
     permissions:
@@ -74,137 +77,93 @@ jobs:
         include:
           # Must run serially — event-loop conflict with the logging worker.
           - test-group: key-generation
-            test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
+            test-path: ""
+            fork-flag: proxy-db-key-generation
             workers: 0
             dist: loadscope
             timeout: 20
 
           # ---- auth: split into 2 shards ----
           - test-group: auth-checks
-            test-path: >-
-              tests/proxy_unit_tests/test_auth_checks.py
-              tests/proxy_unit_tests/test_user_api_key_auth.py
-              tests/proxy_unit_tests/test_deprecated_key_grace_period.py
+            test-path: ""
+            fork-flag: proxy-db-auth-checks
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: jwt-and-keys
-            test-path: >-
-              tests/proxy_unit_tests/test_jwt.py
-              tests/proxy_unit_tests/test_jwt_key_mapping.py
-              tests/proxy_unit_tests/test_proxy_custom_auth.py
-              tests/proxy_unit_tests/test_key_generate_dynamodb.py
-              tests/proxy_unit_tests/test_deployed_proxy_keygen.py
+            test-path: ""
+            fork-flag: proxy-db-jwt-and-keys
             workers: 4
             dist: loadscope
             timeout: 15
 
           # ---- test_proxy_utils.py, single shard, worksteal distribution ----
           - test-group: proxy-utils
-            test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
+            test-path: ""
+            fork-flag: proxy-db-proxy-utils
             workers: 4
             dist: worksteal
             timeout: 15
 
           # ---- proxy server: split into 2 shards ----
           - test-group: proxy-server-core
-            test-path: >-
-              tests/proxy_unit_tests/test_proxy_server.py
-              tests/proxy_unit_tests/test_proxy_server_keys.py
-              tests/proxy_unit_tests/test_proxy_server_spend.py
-              tests/proxy_unit_tests/test_aproxy_startup.py
+            test-path: "tests/proxy_unit_tests/test_proxy_server_gemini_pass_through.py"
+            fork-flag: proxy-db-proxy-server-core
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: proxy-runtime
-            test-path: >-
-              tests/proxy_unit_tests/test_proxy_config_unit_test.py
-              tests/proxy_unit_tests/test_proxy_routes.py
-              tests/proxy_unit_tests/test_proxy_gunicorn.py
-              tests/proxy_unit_tests/test_server_root_path.py
-              tests/proxy_unit_tests/test_proxy_pass_user_config.py
-              tests/proxy_unit_tests/test_proxy_token_counter.py
-              tests/proxy_unit_tests/test_request_size_limit_middleware.py
-              tests/proxy_unit_tests/test_multipart_bypass_repro.py
+            test-path: ""
+            fork-flag: proxy-db-proxy-runtime
             workers: 4
             dist: loadscope
             timeout: 15
 
           # ---- logging: split into 2 shards ----
           - test-group: custom-logging
-            test-path: >-
-              tests/proxy_unit_tests/test_custom_callback_input.py
-              tests/proxy_unit_tests/test_custom_logger_s3_gcs.py
-              tests/proxy_unit_tests/test_proxy_custom_logger.py
+            test-path: "tests/proxy_unit_tests/test_proxy_custom_logger.py"
+            fork-flag: proxy-db-custom-logging
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: logging-misc
-            test-path: >-
-              tests/proxy_unit_tests/test_proxy_reject_logging.py
-              tests/proxy_unit_tests/test_audit_logs_proxy.py
-              tests/proxy_unit_tests/test_search_api_logging.py
+            test-path: ""
+            fork-flag: proxy-db-logging-misc
             workers: 4
             dist: loadscope
             timeout: 15
 
           - test-group: db-and-spend
-            test-path: >-
-              tests/proxy_unit_tests/test_prisma_client_backoff_retry.py
-              tests/proxy_unit_tests/test_db_schema_changes.py
-              tests/proxy_unit_tests/test_e2e_pod_lock_manager.py
-              tests/proxy_unit_tests/test_skills_db.py
-              tests/proxy_unit_tests/test_update_daily_tag_spend.py
-              tests/proxy_unit_tests/test_update_spend.py
-              tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
+            test-path: ""
+            fork-flag: proxy-db-db-and-spend
             workers: 4
             dist: loadscope
             timeout: 15
 
           # ---- guardrails + budget + hooks: split into 2 ----
           - test-group: guardrails-hooks
-            test-path: >-
-              tests/proxy_unit_tests/test_proxy_setting_guardrails.py
-              tests/proxy_unit_tests/test_banned_keyword_list.py
-              tests/proxy_unit_tests/test_unit_test_proxy_hooks.py
+            test-path: ""
+            fork-flag: proxy-db-guardrails-hooks
             workers: 4
             dist: loadscope
             timeout: 15
           - test-group: budgets
-            test-path: >-
-              tests/proxy_unit_tests/test_default_end_user_budget_simple.py
-              tests/proxy_unit_tests/test_unit_test_max_model_budget_limiter.py
-              tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
+            test-path: ""
+            fork-flag: proxy-db-budgets
             workers: 4
             dist: loadscope
             timeout: 15
 
           - test-group: endpoints-and-responses
-            test-path: >-
-              tests/proxy_unit_tests/test_blog_posts_endpoint.py
-              tests/proxy_unit_tests/test_models_fallback_endpoint.py
-              tests/proxy_unit_tests/test_google_endpoint_routing.py
-              tests/proxy_unit_tests/test_google_gemini_proxy_request.py
-              tests/proxy_unit_tests/test_gemini_agents_endpoints.py
-              tests/proxy_unit_tests/test_get_favicon.py
-              tests/proxy_unit_tests/test_get_image.py
-              tests/proxy_unit_tests/test_reducto_ocr_route.py
-              tests/proxy_unit_tests/test_ui_path_detection.py
-              tests/proxy_unit_tests/test_prompt_test_endpoint.py
-              tests/proxy_unit_tests/test_check_batch_cost.py
-              tests/proxy_unit_tests/test_check_responses_cost.py
-              tests/proxy_unit_tests/test_response_polling_handler.py
-              tests/proxy_unit_tests/test_response_polling_pre_call_checks.py
-              tests/proxy_unit_tests/test_realtime_cache.py
-              tests/proxy_unit_tests/test_proxy_exception_mapping.py
-              tests/proxy_unit_tests/test_custom_tokenizer_bug.py
-              tests/proxy_unit_tests/test_model_response_typing
+            test-path: "tests/proxy_unit_tests/test_proxy_exception_mapping.py"
+            fork-flag: proxy-db-endpoints-and-responses
             workers: 4
             dist: loadscope
             timeout: 15
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
+      fork-flag: ${{ matrix.fork-flag }}
       workers: ${{ matrix.workers }}
       reruns: 2
       timeout-minutes: ${{ matrix.timeout }}

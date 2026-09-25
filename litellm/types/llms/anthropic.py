@@ -56,6 +56,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     defer_loading: bool
     allowed_callers: list[str] | None
     input_examples: list[dict[str, Any]] | None
+    eager_input_streaming: ReadOnly[bool]
 
 
 class AnthropicComputerTool(TypedDict, total=False):
@@ -215,11 +216,20 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     caller: ToolCaller | None
 
 
+class CompactionBlock(TypedDict, total=False):
+    """Native compaction block, signed for on-demand compaction."""
+
+    type: Required[ReadOnly[Literal["compaction"]]]
+    content: ReadOnly[str | None]
+    signature: ReadOnly[str]
+
+
 AnthropicMessagesAssistantMessageValues = (
     AnthropicMessagesTextParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock
     | ChatCompletionRedactedThinkingBlock
+    | CompactionBlock
 )
 
 
@@ -383,10 +393,16 @@ class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
 
 AllAnthropicMessageValues = AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam
 
-# System is not a native Anthropic message role; only pass-through adapters use this union.
+# role=system inside messages is accepted after a user turn on models flagged
+# supports_mid_conversation_system; pass-through adapters and the chat translator both emit it.
 AllAnthropicPassThroughMessageValues: TypeAlias = (
     AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam | AnthropicMessagesSystemMessageParam
 )
+
+
+class AnthropicCompaction(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["summarize"]]]
+    instructions: ReadOnly[str]
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
@@ -404,12 +420,14 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: float | None
     mcp_servers: list[AnthropicMcpServerTool] | None
     context_management: dict[str, Any] | None
+    compaction: ReadOnly[AnthropicCompaction | None]
     container: dict[str, Any] | None  # Container config with skills for code execution
     output_format: AnthropicOutputSchema | None  # Structured outputs support
     speed: str | None  # Fast mode support for Opus models
     output_config: AnthropicOutputConfig | None  # Configuration for Claude's output behavior
     cache_control: dict[str, Any] | None  # Automatic prompt caching
     reasoning_effort: str | None
+    safeguards: ReadOnly[list[dict[str, object]] | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -520,8 +538,16 @@ ContentBlockContentBlockDict = ToolUseBlock | TextBlock | ChatCompletionThinking
 ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 
 
+class AnthropicStopDetails(TypedDict, total=False):
+    type: ReadOnly[Literal["refusal"]]
+    category: ReadOnly[str | None]
+    explanation: ReadOnly[str | None]
+
+
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
+    stop_details: ReadOnly[AnthropicStopDetails]
+    safeguard_results: ReadOnly[list[dict[str, object]]]
 
 
 class ServerToolUsage(TypedDict, total=False):
@@ -556,13 +582,6 @@ class ContextManagementResponse(TypedDict, total=False):
     applied_edits: list[AppliedEdit]
 
 
-class CompactionBlock(TypedDict, total=False):
-    """Synthesized ``compaction`` content block (compact_20260112)."""
-
-    type: Required[Literal["compaction"]]
-    content: str | None
-
-
 class UsageIteration(TypedDict, total=False):
     """One sampling iteration's token usage (compact_20260112)."""
 
@@ -579,7 +598,7 @@ class MessageBlockDelta(TypedDict):
 
     type: Literal["message_delta"]
     delta: MessageDelta
-    usage: UsageDelta
+    usage: NotRequired[ReadOnly[UsageDelta]]
     context_management: NotRequired[ContextManagementResponse]
 
 
@@ -592,6 +611,7 @@ class MessageChunk(TypedDict, total=False):
     stop_reason: str | None
     stop_sequence: str | None
     usage: UsageDelta
+    safeguard_results: ReadOnly[list[dict[str, object]]]
 
 
 class MessageStartBlock(TypedDict):
@@ -658,7 +678,7 @@ class AnthropicOutputTokensDetails(BaseModel):
     thinking_tokens: int | None = None
 
 
-AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
+AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"]
 
 
 class AnthropicResponse(BaseModel):
@@ -735,17 +755,26 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     COMPACT_2026_01_12 = "compact-2026-01-12"
+    COMPACT_2026_09_04 = "compact-2026-09-04"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
+    PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
+    DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
 ANTHROPIC_TOOL_SEARCH_BETA_HEADER: Final = "advanced-tool-use-2025-11-20"
 
+ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
+    {"tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"}
+)
+
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
+
+ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: Final = "fine-grained-tool-streaming-2025-05-14"
 
 # OAuth constants
 ANTHROPIC_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat"

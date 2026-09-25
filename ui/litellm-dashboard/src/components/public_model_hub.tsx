@@ -554,6 +554,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                     <DataTable
                       data={filteredAgentData}
+                      paginationMode="client"
                       columns={agentColumns}
                       getRowId={(agent, index) => agent.name || String(index)}
                       sortingMode="client"
@@ -620,6 +621,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                     <DataTable
                       data={filteredMcpData}
+                      paginationMode="client"
                       columns={mcpColumns}
                       getRowId={(server, index) => server.server_id || String(index)}
                       sortingMode="client"
@@ -1273,7 +1275,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }
@@ -1313,7 +1315,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }

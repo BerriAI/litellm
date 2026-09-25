@@ -118,6 +118,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         base_openai_params: Final = [
             "logit_bias",
             "logprobs",
+            "max_completion_tokens",
             "max_tokens",
             "n",
             "parallel_tool_calls",
@@ -204,7 +205,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "XAIChatCompletionStreamingHandler":
         return XAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -219,13 +220,19 @@ class XAIChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Handle https://github.com/BerriAI/litellm/issues/9720
+        """Handle https://github.com/BerriAI/litellm/issues/9720"""
+        if "web_search_options" in optional_params:
+            verbose_logger.warning(
+                "XAI no longer supports web search on /chat/completions (Live Search is deprecated). "
+                "Dropping 'web_search_options'. Use the Responses API for XAI web search."
+            )
 
-        Filter out 'name' from messages
-        """
-        messages = strip_name_from_messages(messages)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        chat_params: Final = {  # mutable-ok: base transform_request takes a plain dict of optional params
+            key: value for key, value in optional_params.items() if key != "web_search_options"
+        }
+        return super().transform_request(
+            model, strip_name_from_messages(messages), chat_params, litellm_params, headers
+        )
 
     @staticmethod
     def _fix_choice_finish_reason_for_tool_calls(choice: Choices) -> None:
