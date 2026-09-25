@@ -5166,43 +5166,104 @@ def completion(
 ) -> ModelResponse | CustomStreamWrapper:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
-    Parameters:
-        model (str): The name of the language model to use for text completion. see all supported LLMs: https://docs.litellm.ai/docs/providers/
-        messages (List): A list of message objects representing the conversation context (default is an empty list).
 
-        OPTIONAL PARAMS
-        functions (List, optional): A list of functions to apply to the conversation messages (default is an empty list).
-        function_call (str, optional): The name of the function to call within the conversation (default is an empty string).
-        temperature (float, optional): The temperature parameter for controlling the randomness of the output (default is 1.0).
-        top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
-        n (int, optional): The number of completions to generate (default is 1).
-        stream (bool, optional): If True, return a streaming response (default is False).
-        stream_options (dict, optional): A dictionary containing options for the streaming response. Only set this when you set stream: true.
-        stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
-        max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
-        max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
-        modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request.. You can use `["text", "audio"]`
-        prediction (ChatCompletionPredictionContentParam, optional): Configuration for a Predicted Output, which can greatly improve response times when large parts of the model response are known ahead of time. This is most common when you are regenerating a file with only minor changes to most of the content.
-        audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
-        presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
-        frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
-        logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
-        user (str, optional):  A unique identifier representing your end-user. This can help the LLM provider to monitor and detect abuse.
-        logprobs (bool, optional): Whether to return log probabilities of the output tokens or not. If true, returns the log probabilities of each output token returned in the content of message
-        top_logprobs (int, optional): An integer between 0 and 5 specifying the number of most likely tokens to return at each token position, each with an associated log probability. logprobs must be set to true if this parameter is used.
-        metadata (dict, optional): Pass in additional metadata to tag your completion calls - eg. prompt version, details, etc.
-        api_base (str, optional): Base URL for the API (default is None).
-        api_version (str, optional): API version (default is None).
-        api_key (str, optional): API key (default is None).
-        model_list (list, optional): List of api base, version, keys
-        extra_headers (dict, optional): Additional headers to include in the request.
+    Args:
+        model (str): The name of the language model to use for text completion. See all supported LLMs:
+            https://docs.litellm.ai/docs/providers/
+        messages (list, optional): A list of message objects representing the conversation context. Defaults to [].
+        timeout (float | str | httpx.Timeout | None, optional): The maximum execution time in seconds for the
+            completion request. Defaults to None.
+        temperature (float | None, optional): The temperature parameter for controlling the randomness of the output.
+            Defaults to None.
+        top_p (float | None, optional): The top-p parameter for nucleus sampling. Defaults to None.
+        n (int | None, optional): The number of completions to generate. Defaults to None.
+        stream (bool | None, optional): If True, return a streaming response. Defaults to None.
+        stream_options (dict | None, optional): A dictionary containing options for the streaming response (e.g.
+            {"include_usage": bool}). Only set this when stream is True. Defaults to None.
+        stop (str | list[str] | None, optional): Up to 4 sequences where the LLM API will stop generating further
+            tokens. Defaults to None.
+        max_completion_tokens (int | None, optional): An upper bound for the number of tokens that can be generated
+            for a completion, including visible output tokens and reasoning tokens. Defaults to None.
+        max_tokens (int | None, optional): The maximum number of tokens in the generated completion. Defaults to None.
+        modalities (list[ChatCompletionModality] | None, optional): Output types that you would like the model to
+            generate for this request (e.g. ["text", "audio"]). Defaults to None.
+        prediction (ChatCompletionPredictionContentParam | None, optional): Configuration for a Predicted Output,
+            which can greatly improve response times when large parts of the model response are known ahead of time.
+            Defaults to None.
+        audio (ChatCompletionAudioParam | None, optional): Parameters for audio output. Required when audio output is
+            requested with modalities: ["audio"]. Defaults to None.
+        presence_penalty (float | None, optional): Penalizes new tokens based on their presence in the text so far.
+            Defaults to None.
+        frequency_penalty (float | None, optional): Penalizes new tokens based on their frequency in the text so far.
+            Defaults to None.
+        logit_bias (dict | None, optional): Modifies the probability of specific tokens appearing in the completion.
+            Defaults to None.
+        user (str | None, optional): A unique identifier representing your end-user to monitor and detect abuse.
+            Defaults to None.
+        reasoning_effort (str | None, optional): Constrains effort on reasoning for supported reasoning models (e.g.,
+            o1, o3-mini). Accepted values: "none", "minimal", "low", "medium", "high", "xhigh", "max", "default".
+            Defaults to None.
+        verbosity (str | None, optional): Verbosity level for reasoning or output tokens ("low", "medium", "high").
+            Defaults to None.
+        response_format (dict | type[BaseModel] | None, optional): Configuration for structured outputs or JSON mode.
+            Can be a dictionary (e.g. {"type": "json_object"} or {"type": "json_schema", ...}) or a Pydantic
+            BaseModel class. Defaults to None.
+        seed (int | None, optional): Seed for deterministic sampling. Repeated requests with the same seed and
+            parameters aim to return the same result if supported. Defaults to None.
+        tools (list | None, optional): A list of tools the model may call. Defined in the provider schema (e.g.,
+            [{"type": "function", "function": {...}}]). Defaults to None.
+        tool_choice (str | dict | None, optional): Controls which tool is called by the model ("none", "auto",
+            "required", or a specific function schema). Defaults to None.
+        logprobs (bool | None, optional): Whether to return log probabilities of the output tokens. Defaults to None.
+        top_logprobs (int | None, optional): An integer between 0 and 5 specifying the number of most likely tokens
+            to return at each token position, each with an associated log probability. Requires logprobs=True.
+            Defaults to None.
+        parallel_tool_calls (bool | None, optional): Whether to enable parallel function/tool calling during tool use.
+            Defaults to None.
+        web_search_options (OpenAIWebSearchOptions | None, optional): Configuration options for web search grounding.
+            Defaults to None.
+        include_server_side_tool_invocations (bool | None, optional): Whether to include server-side tool
+            invocations in the response. Defaults to None.
+        deployment_id (str | None, optional): Provider deployment identifier (e.g. Azure deployment). Defaults to None.
+        extra_headers (dict | None, optional): Additional HTTP headers to include in the request. Defaults to None.
+        safety_identifier (str | None, optional): Identifier used for provider safety evaluations. Defaults to None.
+        service_tier (str | None, optional): Specifies the service latency tier (e.g., "auto", "default").
+            Defaults to None.
+        store (bool | None, optional): Whether to store the output of this request for model distillation or evals.
+            Defaults to None.
+        prompt_cache_key (str | None, optional): Key identifier for prompt caching. Defaults to None.
+        functions (list | None, optional): Deprecated OpenAI function definitions. Use tools instead. Defaults to None.
+        function_call (str | None, optional): Deprecated OpenAI function call control. Use tool_choice instead.
+            Defaults to None.
+        base_url (str | None, optional): Base URL for the API endpoint (alias for api_base). Defaults to None.
+        api_base (str | None, optional): Base URL for the API. Defaults to None.
+        api_version (str | None, optional): API version for requests. Defaults to None.
+        api_key (str | None, optional): API key for authentication. Defaults to None.
+        model_list (list | None, optional): List of API bases, versions, and keys for load balancing/fallbacks.
+            Defaults to None.
+        thinking (AnthropicThinkingParam | None, optional): Configuration for thinking budget for models supporting
+            extended thinking (e.g., Anthropic Claude). Defaults to None.
+        shared_session (Optional[ClientSession], optional): Optional aiohttp ClientSession to reuse across requests.
+            Defaults to None.
+        enable_json_schema_validation (bool | None, optional): Per-request toggle to validate structured
+            output schemas. Defaults to None.
+        drop_params (bool | None, optional): If True, silently drop parameters unsupported by the target provider
+            instead of raising an error. Defaults to None.
+        additional_drop_params (list[str] | None, optional): List of additional parameter names to drop, including
+            parameters supported by the target provider. Defaults to None.
+        mock_response (MOCK_RESPONSE_TYPE | None, optional): If provided, return a mock completion response for testing
+            or debugging. Defaults to None.
+        custom_llm_provider (str | None, optional): Explicit provider override for non-OpenAI LLMs (e.g., "bedrock",
+            "vertex_ai"). Defaults to None.
+        max_retries (int | None, optional): Number of retries to attempt on failure. Defaults to None.
+        fallbacks (list | None, optional): List of fallback models to try if the primary model call fails.
+            Defaults to None.
+        metadata (dict | None, optional): Additional metadata dictionary to tag completion calls. Defaults to None.
+        **kwargs: Additional provider-specific keyword arguments passed to the underlying LLM call.
 
-        LITELLM Specific Params
-        mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
-        custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
-        max_retries (int, optional): The number of retries to attempt (default is 0).
     Returns:
-        ModelResponse: A response object containing the generated completion and associated metadata.
+        ModelResponse | CustomStreamWrapper: A response object containing the generated completion and associated
+            metadata, or a streaming generator if stream=True.
 
     Note:
         - This function is used to perform completions() using the specified language model.
