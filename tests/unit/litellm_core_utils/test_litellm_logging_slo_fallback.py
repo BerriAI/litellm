@@ -132,3 +132,50 @@ async def test_streaming_slo_double_build_failure_is_logged(monkeypatch, caplog)
     assert logging_obj.model_call_details["standard_logging_object"] is None
     assert build_calls == [result, {}]
     assert "rebuild failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_streaming_slo_rebuild_raising_does_not_block_callbacks(monkeypatch, caplog):
+    """The rebuild is wrapped for the same reason main wraps the primary build:
+    a payload build must never stop the later callbacks from running. If the
+    empty-response retry raises, the success callback still fires."""
+    logging_obj = Logging(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-32019-raise",
+        function_id="test-32019-raise",
+    )
+    build_calls = []
+
+    def fake_build(self, init_response_obj, start_time, end_time):
+        build_calls.append(init_response_obj)
+        if init_response_obj == {}:
+            raise RuntimeError("rebuild blew up")
+        return None
+
+    called_back = []
+
+    async def async_success_callback(kwargs, completion_response, start_time, end_time):
+        called_back.append(completion_response)
+
+    monkeypatch.setattr(Logging, "_build_standard_logging_payload", fake_build)
+    monkeypatch.setattr(litellm, "_async_success_callback", [async_success_callback])
+    monkeypatch.setattr(litellm, "success_callback", [])
+
+    result = ModelResponse(model="claude-3-5-sonnet-20240620")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await logging_obj.async_success_handler(
+            result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+        )
+
+    assert build_calls == [result, {}]
+    assert logging_obj.model_call_details["standard_logging_object"] is None
+    assert "Exception rebuilding the degraded standard logging payload" in caplog.text
+    assert len(called_back) == 1
