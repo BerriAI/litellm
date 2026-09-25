@@ -208,7 +208,7 @@ _JSON_DECODER: Final = json.JSONDecoder()
 def _complete_json_object_at(content: str, start: int) -> str | None:
     try:
         _, end = _JSON_DECODER.raw_decode(content, start)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return None
     return content[start:end]
 

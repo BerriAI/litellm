@@ -517,6 +517,47 @@ async def test_unparseable_reply_is_logged_with_its_text_unless_message_logging_
     assert (reply in caplog.text) is not message_logging_off
 
 
+_MESSAGE_LOGGING_OPT_OUTS: Final = (
+    pytest.param({"turn_off_message_logging": "True"}, False, id="key-logging-settings-string"),
+    pytest.param({"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}, False, id="redaction-header"),
+    pytest.param({}, True, id="global-setting"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("request_kwargs", "global_off"), _MESSAGE_LOGGING_OPT_OUTS)
+async def test_unparseable_reply_text_is_withheld_under_every_message_logging_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    request_kwargs: dict[str, object],
+    global_off: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", global_off)
+    reply: Final = "I cannot forecast this one, the task text is too {vague} to score."
+    router, _ = _router(reply)
+    outcome: Final = await router.aclassify("hi", request_kwargs=request_kwargs)
+    assert outcome.cause == "llm_v2_fallback"
+    assert "raw reply withheld" in caplog.text
+    assert reply not in caplog.text
+
+
+_REPLIES_THE_JSON_SCANNER_CANNOT_DECODE: Final = (
+    pytest.param('{"a":' * 3000, id="deeply-nested"),
+    pytest.param('{"capability_p": ' + "9" * 5000 + "}", id="integer-over-the-digit-limit"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", _REPLIES_THE_JSON_SCANNER_CANNOT_DECODE)
+async def test_undecodable_reply_is_rejected_as_an_invalid_forecast(
+    caplog: pytest.LogCaptureFixture, reply: str
+) -> None:
+    router, _ = _router(reply)
+    outcome: Final = await router.aclassify("hi", request_kwargs={})
+    assert outcome.cause == "llm_v2_fallback"
+    assert "Invalid LLM V2 forecast" in caplog.text
+
+
 def test_response_schema_requires_both_model_forecasts() -> None:
     with pytest.raises(ValidationError):
         LLMV2Verdict.model_validate(

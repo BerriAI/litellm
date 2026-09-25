@@ -428,6 +428,21 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | N
     )
 
 
+def _classifier_reply_is_private(request_kwargs: Mapping[str, object] | None) -> bool:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    kwargs: Final = dict(request_kwargs) if request_kwargs else {}
+    return should_redact_message_logging(
+        {
+            "litellm_params": kwargs,
+            "standard_callback_dynamic_params": initialize_standard_callback_dynamic_params(kwargs),
+        }
+    )
+
+
 def _validation_problem(detail: ErrorDetails) -> str:
     location: Final = ".".join(str(part) for part in detail["loc"])
     return f"{location}: {detail['msg']}" if location else detail["msg"]
@@ -438,8 +453,8 @@ def _log_rejected_classifier_verdict(
 ) -> None:
     problems: Final = "; ".join(_validation_problem(detail) for detail in error.errors())
     reply: Final = (
-        "raw reply withheld (turn_off_message_logging)"
-        if _effective_turn_off_message_logging(request_kwargs) is True
+        "raw reply withheld (message logging is off)"
+        if _classifier_reply_is_private(request_kwargs)
         else f"raw reply: {content!r}"
     )
     verbose_router_logger.warning("ComplexityRouter: classifier verdict rejected (%s); %s", problems, reply)
