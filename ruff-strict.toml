@@ -65,7 +65,5 @@ max-args = 5
 "litellm.responses.main.aresponses".msg = "Import litellm.responses.dispatch.aresponses so the call routes through dispatch."
 "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages".msg = "Import litellm.messages.anthropic_messages so the call routes through dispatch."
 "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler".msg = "Import litellm.messages.anthropic_messages_handler so the call routes through dispatch."
-"litellm.ocr.main.ocr".msg = "Import litellm.ocr.dispatch.ocr so the call routes through dispatch."
-"litellm.ocr.main.aocr".msg = "Import litellm.ocr.dispatch.aocr so the call routes through dispatch."
 "litellm.main.completion".msg = "Import litellm.completion so the call routes through dispatch."
 "litellm.main.acompletion".msg = "Import litellm.acompletion so the call routes through dispatch."
