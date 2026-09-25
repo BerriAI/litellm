@@ -6209,6 +6209,27 @@ def test_get_model_info_gemini(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "model, expects_native_config",
+    [
+        ("gemini-2.5-flash", True),
+        ("xai/grok-4.6", False),
+        ("claude-haiku-4-5@20251001", False),
+        ("openai/gpt-oss-120b-maas", False),
+    ],
+)
+def test_vertex_generate_content_config_follows_model_route(model: str, expects_native_config: bool):
+    from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+
+    config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+        model=model, provider=litellm.LlmProviders.VERTEX_AI
+    )
+    if expects_native_config:
+        assert isinstance(config, VertexAIGoogleGenAIConfig)
+    else:
+        assert config is None
+
+
+@pytest.mark.parametrize(
     ("max_parallel_requests", "rpm", "tpm", "default_max_parallel_requests", "expected"),
     [
         (3, 100, 100_000, 7, 3),

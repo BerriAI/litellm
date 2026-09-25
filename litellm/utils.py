@@ -9928,19 +9928,18 @@ class ProviderConfigManager:
 
             return GoogleGenAIConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.common_utils import (
+                VertexAIModelRoute,
+                get_vertex_ai_model_route,
+            )
             from litellm.llms.vertex_ai.google_genai.transformation import (
                 VertexAIGoogleGenAIConfig,
             )
-            from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
-                VertexAIPartnerModels,
-            )
 
-            #########################################################
-            # If Vertex Partner models like Anthropic, Mistral, etc. are used,
-            # return None as we want this to go through the litellm.completion() adapter
-            # and not the Google Gen AI adapter
-            #########################################################
-            if VertexAIPartnerModels.is_vertex_partner_model(model):
+            if get_vertex_ai_model_route(model) in (
+                VertexAIModelRoute.PARTNER_MODELS,
+                VertexAIModelRoute.MODEL_GARDEN,
+            ):
                 return None
 
             #########################################################
