@@ -4498,12 +4498,14 @@ async def _check_agent_caller_model_access(
     if caller_auth is None:
         return
     caller_team: Final = await load_team(valid_token)
+    caller_key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
     if caller_team is not None:
         await can_team_access_model(
             model=model,
             team_object=caller_team,
             llm_router=llm_router,
             prisma_client=prisma_client,
+            key_model_aliases=caller_key_model_aliases,
         )
         await _check_team_member_model_access(
             model=model,
@@ -4513,7 +4515,7 @@ async def _check_agent_caller_model_access(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            key_model_aliases=caller_key_model_aliases,
         )
         return
     caller_user: Final = await load_user(valid_token)
@@ -4523,7 +4525,7 @@ async def _check_agent_caller_model_access(
         model=model,
         llm_router=llm_router,
         user_object=caller_user,
-        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+        key_model_aliases=caller_key_model_aliases,
     )
 
 

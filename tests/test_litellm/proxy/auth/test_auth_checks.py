@@ -9768,6 +9768,18 @@ async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_mode
 
 
 @pytest.mark.asyncio
+async def test_agent_key_alias_resolves_against_the_echoed_teams_models():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    agent_key.aliases = {"foo": "bar"}
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=["bar"]), None)
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=None)
+
+    await _check_caller_models(agent_key, "foo", load_team, load_user, cache)
+
+    assert asked == ["team:team-a"]
+
+
+@pytest.mark.asyncio
 async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
     load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=[]), None)
