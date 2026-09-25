@@ -65,11 +65,9 @@ pub trait PythonLifecycle: Send + Sync {
         started_at: f64,
     ) -> PyResult<LifecycleStep>;
 
-    fn pre_request(
-        &mut self,
-        _py: Python<'_>,
-        request: Box<PublicRequest>,
-    ) -> PyResult<LifecycleStep> {
+    /// The projected request before the provider transform, answered with the params
+    /// the route shapes.
+    fn pre_request(&mut self, _py: Python<'_>, request: PublicRequest) -> PyResult<LifecycleStep> {
         Ok(LifecycleStep::Params(request.params))
     }
 

@@ -49,11 +49,28 @@ enum Stage {
 enum Expect {
     Started,
     Arguments,
+    Answer(Answer),
+    Response,
+    Terminal,
+}
+
+/// A machine op the adapter answers, with the reply its answer goes through.
+enum Answer {
     Params(Reply<serde_json::Map<String, serde_json::Value>>),
     Wire(Reply<WireRequest>),
     Emitted(Reply<()>),
-    Response,
-    Terminal,
+}
+
+impl Answer {
+    fn send(self, step: LifecycleStep) -> PyResult<()> {
+        match (self, step) {
+            (Self::Params(reply), LifecycleStep::Params(params)) => reply.send(params),
+            (Self::Wire(reply), LifecycleStep::Wire(wire)) => reply.send(*wire),
+            (Self::Emitted(reply), LifecycleStep::Done) => reply.send(()),
+            _ => return Err(missing_state()),
+        }
+        Ok(())
+    }
 }
 
 enum Pending {
@@ -226,16 +243,8 @@ where
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
-            (Expect::Params(reply), LifecycleStep::Params(params)) => {
-                reply.send(params);
-                self.resume_machine(py, None)
-            }
-            (Expect::Wire(reply), LifecycleStep::Wire(wire)) => {
-                reply.send(*wire);
-                self.resume_machine(py, None)
-            }
-            (Expect::Emitted(reply), LifecycleStep::Done) => {
-                reply.send(());
+            (Expect::Answer(answer), step) => {
+                answer.send(step)?;
                 self.resume_machine(py, None)
             }
             (Expect::Response, LifecycleStep::Response(response)) => self.succeeded(py, response),
@@ -309,18 +318,10 @@ where
                 answered(projected.map(|projection| reply.send(projection)))
             }
             HostOp::Custom(op) => answered(self.host.invoke(py, op)),
-            HostOp::PreRequest { request, reply } => match self.adapter.pre_request(py, request) {
-                Ok(LifecycleStep::Params(params)) => {
-                    reply.send(params);
-                    Ok(Ok(()))
-                }
-                Ok(LifecycleStep::Await(awaitable)) => {
-                    self.pending = Some(Pending::Adapter(Expect::Params(reply)));
-                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                }
-                Ok(_) => return Err(missing_state()),
-                Err(error) => Err(error),
-            },
+            HostOp::PreRequest { request, reply } => {
+                let step = self.adapter.pre_request(py, *request);
+                return self.asked(py, step, Answer::Params(reply));
+            }
             HostOp::AfterResponse { response, reply } => {
                 reply.send(Verdict::Return(*response));
                 Ok(Ok(()))
@@ -329,35 +330,17 @@ where
                 wire,
                 context,
                 reply,
-            } => match self.adapter.before_send(py, wire, &context) {
-                Ok(LifecycleStep::Wire(wire)) => {
-                    reply.send(*wire);
-                    Ok(Ok(()))
-                }
-                Ok(LifecycleStep::Await(awaitable)) => {
-                    self.pending = Some(Pending::Adapter(Expect::Wire(reply)));
-                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                }
-                Ok(_) => return Err(missing_state()),
-                Err(error) => Err(error),
-            },
+            } => {
+                let step = self.adapter.before_send(py, wire, &context);
+                return self.asked(py, step, Answer::Wire(reply));
+            }
             HostOp::Open(head, reply) => return self.opened(py, head, reply).map(Next::Return),
             HostOp::Deliver(chunk, reply) => {
                 return self.delivered(py, chunk, reply).map(Next::Return);
             }
             HostOp::Emit(event, reply) => {
-                match self.adapter.emit(py, LifecycleEvent::Machine(&event)) {
-                    Ok(LifecycleStep::Done) => {
-                        reply.send(());
-                        Ok(Ok(()))
-                    }
-                    Ok(LifecycleStep::Await(awaitable)) => {
-                        self.pending = Some(Pending::Adapter(Expect::Emitted(reply)));
-                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                    }
-                    Ok(_) => return Err(missing_state()),
-                    Err(error) => Err(error),
-                }
+                let step = self.adapter.emit(py, LifecycleEvent::Machine(&event));
+                return self.asked(py, step, Answer::Emitted(reply));
             }
         };
         match answered {
@@ -365,6 +348,27 @@ where
             Ok(Err(native)) => self
                 .resume_core(py, Some(HostFailure::Error(native)))
                 .map(Next::Continue),
+            Err(error) => self.interrupt(py, error).map(Next::Return),
+        }
+    }
+
+    /// Settles a machine op the adapter was asked: sends its answer and continues the
+    /// machine, suspends on the awaitable it returned, or interrupts with what it raised.
+    fn asked(
+        &mut self,
+        py: Python<'_>,
+        step: PyResult<LifecycleStep>,
+        answer: Answer,
+    ) -> PyResult<Next<H>> {
+        match step {
+            Ok(LifecycleStep::Await(awaitable)) => {
+                self.pending = Some(Pending::Adapter(Expect::Answer(answer)));
+                Ok(Next::Return(ExecutionStep::Await(awaitable)))
+            }
+            Ok(step) => {
+                answer.send(step)?;
+                self.resume_core(py, None).map(Next::Continue)
+            }
             Err(error) => self.interrupt(py, error).map(Next::Return),
         }
     }
@@ -817,11 +821,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             Ok(LifecycleStep::Arguments(arguments))
         }
 
-        fn pre_request(
-            &mut self,
-            py: Python<'_>,
-            _: Box<PublicRequest>,
-        ) -> PyResult<LifecycleStep> {
+        fn pre_request(&mut self, py: Python<'_>, _: PublicRequest) -> PyResult<LifecycleStep> {
             self.log.push("pre_request");
             match self.script {
                 AdapterScript::AwaitPreRequest => {

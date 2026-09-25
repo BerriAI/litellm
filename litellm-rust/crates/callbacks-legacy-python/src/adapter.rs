@@ -310,11 +310,7 @@ impl PythonLifecycle for LegacyLogging {
         self.prepare(py)
     }
 
-    fn pre_request(
-        &mut self,
-        py: Python<'_>,
-        request: Box<PublicRequest>,
-    ) -> PyResult<LifecycleStep> {
+    fn pre_request(&mut self, py: Python<'_>, request: PublicRequest) -> PyResult<LifecycleStep> {
         if !self.asynchronous {
             return Ok(LifecycleStep::Params(request.params));
         }
@@ -336,7 +332,7 @@ impl PythonLifecycle for LegacyLogging {
         let awaitable = crate::python::DeploymentHooks::PreRequest
             .call(py, (&request.model, messages, kwargs))?
             .unbind();
-        self.pending = Some(Pending::PreRequest(request));
+        self.pending = Some(Pending::PreRequest(Box::new(request)));
         Ok(LifecycleStep::Await(awaitable))
     }
 
@@ -1770,8 +1766,8 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
         map
     }
 
-    fn request() -> Box<PublicRequest> {
-        Box::new(PublicRequest {
+    fn request() -> PublicRequest {
+        PublicRequest {
             model: "claude".into(),
             custom_llm_provider: "anthropic".into(),
             messages: json!([{"role": "user", "content": "hi"}]),
@@ -1780,7 +1776,7 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
                 "max_tokens": 16,
             })),
             fields: &["tools", "stream", "tool_choice", "max_tokens"],
-        })
+        }
     }
 
     /// A call past `begin` and its deployment hook, where the route projects it.
