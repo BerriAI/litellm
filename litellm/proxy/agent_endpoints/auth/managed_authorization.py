@@ -11,6 +11,7 @@ from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failur
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 
+_MANAGED_REALTIME_ROUTES: Final = frozenset(("/realtime", "/v1/realtime", "/openai/v1/realtime"))
 _MANAGED_MODEL_ROUTES: Final = frozenset(
     f"{prefix}/{operation}"
     for prefix, operation in product(
@@ -66,7 +67,7 @@ def managed_agent_route_allowed(route: str, method: str | None) -> bool:
 
     if route in ("/agents", "/v1/agents"):
         return method in (None, "GET", "HEAD")
-    if route in ("/realtime", "/v1/realtime", "/openai/v1/realtime"):
+    if route in _MANAGED_REALTIME_ROUTES:
         return method in (None, "GET")
     if route in _MANAGED_MODEL_ROUTES or RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
         return method in (None, "POST")
@@ -85,6 +86,13 @@ def managed_inference_request(
 ) -> dict[str, object]:
     from litellm.proxy.auth.route_checks import RouteChecks
 
+    if route in _MANAGED_REALTIME_ROUTES:
+        model: Final = query_model or body.get("model")
+        if not isinstance(model, str) or not model:
+            raise_identity_failure(
+                AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
+            )
+        return {**body, "model": model}
     if route not in _MANAGED_MODEL_ROUTES and not RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
         return dict(body)
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
@@ -171,11 +179,7 @@ def actor_admission_failure(
     ):
         return AgentIdentityFailure(message="Agent execution is disabled")
     if context is None:
-        if agent.identity.provisioning_source_id is not None:
-            return AgentIdentityFailure(message="Provisioned agent-users require their Entra token")
-        if agent.execution_mode == "delegated":
-            return AgentIdentityFailure(message="This agent requires a verified delegated user token")
-        return None
+        return AgentIdentityFailure(message="This agent requires its bound identity provider token")
     if context.agent_id != agent.agent_id or context.binding_revision != agent.identity.revision:
         return AgentIdentityFailure(message="Agent identity changed during authentication; retry")
     if agent.execution_mode not in (context.mode, "both"):

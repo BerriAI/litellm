@@ -795,7 +795,7 @@ def get_logging_payload(
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
-            billing_agent_id=clean_metadata.get("billing_agent_id") or agent_id,
+            billing_agent_id=clean_metadata.get("billing_agent_id"),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
