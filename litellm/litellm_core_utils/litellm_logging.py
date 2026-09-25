@@ -43,8 +43,6 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
     PROVIDER_REQUEST_ID_HEADERS,
-    SENTRY_DENYLIST,
-    SENTRY_PII_DENYLIST,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
@@ -4471,21 +4469,10 @@ def set_callbacks(callback_list, function_id=None):
                     print_verbose("Package 'sentry_sdk' is missing. Installing it...")
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
                     import sentry_sdk
-                from sentry_sdk.scrubber import EventScrubber
+                from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
 
                 sentry_sdk_instance = sentry_sdk
-                sentry_trace_rate = os.environ.get("SENTRY_API_TRACE_RATE", "1.0")
-                sentry_sample_rate = (
-                    os.environ.get("SENTRY_API_SAMPLE_RATE") if "SENTRY_API_SAMPLE_RATE" in os.environ else "1.0"
-                )
-                sentry_sdk_instance.init(
-                    dsn=os.environ.get("SENTRY_DSN"),
-                    traces_sample_rate=float(sentry_trace_rate),
-                    sample_rate=float(sentry_sample_rate if sentry_sample_rate else 1.0),
-                    send_default_pii=False,  # Prevent sending Personal Identifiable Information
-                    event_scrubber=EventScrubber(denylist=SENTRY_DENYLIST, pii_denylist=SENTRY_PII_DENYLIST),
-                    environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
-                )
+                sentry_sdk_instance.init(**build_sentry_init_options(os.environ))
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
             elif callback == "slack":

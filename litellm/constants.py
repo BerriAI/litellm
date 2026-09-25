@@ -1967,6 +1967,12 @@ SENTRY_DENYLIST: Final = [
 ]
 SENTRY_PII_DENYLIST: Final = [
     "user_id",
+    "user_email",
+    "end_user_id",
+    "user_api_key_hash",
+    "user_api_key_user_id",
+    "user_api_key_user_email",
+    "user_api_key_end_user_id",
     "email",
     "phone",
     "address",
