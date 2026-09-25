@@ -6,6 +6,7 @@ import pathlib
 import struct
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -562,6 +563,52 @@ async def test_flux2_router_image_edit_bills_the_deployment_rates(monkeypatch: p
     assert response._hidden_params["response_cost"] == pytest.approx(
         generated_rate * 2 * 1024 * 1024 + reference_rate * 2 * 1024 * 1024
     )
+
+
+@pytest.mark.parametrize(
+    ("deployment_prices", "expected_cost"),
+    (
+        ({"output_cost_per_image": 0.5}, 0.5),
+        (
+            {"input_cost_per_pixel": 1e-07, "input_cost_per_reference_pixel": 2e-07},
+            1e-07 * 2 * 1024 * 1024 + 2e-07 * 2 * 1024 * 1024,
+        ),
+    ),
+    ids=("flat", "per-pixel"),
+)
+async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_built_before_routing(
+    monkeypatch: pytest.MonkeyPatch, deployment_prices: Mapping[str, float], expected_cost: float
+):
+    mock_client: Final = AsyncHTTPHandler()
+    mock_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_edit_ok))
+    monkeypatch.setattr(llm_http_handler_module, "get_async_httpx_client", lambda **_kwargs: mock_client)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux2-pro-deployment",
+                "litellm_params": {
+                    "model": "azure_ai/flux.2-pro",
+                    "api_base": "https://example.services.ai.azure.com",
+                    "api_key": "test-key",
+                    **deployment_prices,
+                },
+            }
+        ]
+    )
+    request: Final = {
+        "model": "flux2-pro-deployment",
+        "prompt": "Make it a watercolor",
+        "image": [_png(1024, 1280)],
+        "size": "1024x1280",
+        "litellm_call_id": "proxy-call-id",
+    }
+    logging_obj, routed_request = litellm.utils.function_setup(
+        original_function="aimage_edit", rules_obj=litellm.utils.Rules(), start_time=datetime.now(), **request
+    )
+
+    response: Final = await router.aimage_edit(**routed_request, litellm_logging_obj=logging_obj)
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
 def _edit_returning(image: bytes) -> Callable[[httpx.Request], httpx.Response]:
