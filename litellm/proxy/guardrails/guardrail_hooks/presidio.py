@@ -1752,7 +1752,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _get_tool_call_arguments(tool_call: Any) -> str | None:
+    def _get_tool_call_arguments(tool_call: object) -> str | None:
         """Return the JSON arguments string of a dict-shaped tool call, if present."""
         if not isinstance(tool_call, dict):
             return None
@@ -1763,9 +1763,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return arguments if isinstance(arguments, str) else None
 
     @staticmethod
-    def _with_tool_call_arguments(tool_call: Any, arguments: str) -> dict[str, Any]:
-        """Return a copy of a dict-shaped tool call with its arguments replaced."""
-        return {**tool_call, "function": {**tool_call["function"], "arguments": arguments}}
+    def _with_tool_call_arguments(tool_call: object, arguments: str) -> object:
+        """Return a copy of a dict-shaped tool call with its arguments replaced.
+
+        Anything else is handed back untouched: the same shape check that
+        _get_tool_call_arguments ran is repeated here so this helper never
+        depends on the caller having narrowed the type.
+        """
+        if not isinstance(tool_call, dict):
+            return tool_call
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            return tool_call
+        return {**tool_call, "function": {**function, "arguments": arguments}}
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
