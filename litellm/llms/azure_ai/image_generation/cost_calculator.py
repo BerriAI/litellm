@@ -9,6 +9,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.types.utils import ImageResponse, ModelInfo
 
+_BILLED_PIXELS_PER_INPUT_IMAGE: Final = 1024 * 1024
+
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:
     deployment_price: Final = _get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
@@ -63,13 +65,15 @@ def cost_calculator(
                 if type(width) is int and type(height) is int and width > 0 and height > 0
                 else size or image_response.size
             )
-            return default_image_cost_calculator(
+            output_cost: Final = default_image_cost_calculator(
                 model=_model_info.get("key", model),
                 custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
                 size=pixel_size,
                 n=num_images,
                 model_info=model_info,
             )
+            input_image_pixels: Final = image_response.input_image_count * _BILLED_PIXELS_PER_INPUT_IMAGE
+            return output_cost + _input_cost_per_pixel(_model_info) * input_image_pixels
         return 0.0
 
     raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")

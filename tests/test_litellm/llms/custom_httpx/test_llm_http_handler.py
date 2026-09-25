@@ -4249,6 +4249,28 @@ async def test_async_image_edit_handler_records_upstream_response_headers():
     _assert_upstream_headers_recorded(response)
 
 
+def test_image_edit_handler_records_input_image_count():
+    client = HTTPHandler(client=httpx.Client(transport=_json_with_upstream_headers({"transformed_by": "sync"})))
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        client=client, **{**_image_edit_call_kwargs(), "image": [b"one", b"two", b"three"]}
+    )
+
+    assert response.input_image_count == 3
+
+
+@pytest.mark.asyncio
+async def test_async_image_edit_handler_records_input_image_count():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_json_with_upstream_headers({"transformed_by": "async"}))
+
+    response = await BaseLLMHTTPHandler().async_image_edit_handler(
+        client=client, **{**_image_edit_call_kwargs(), "image": [b"one", b"two"]}
+    )
+
+    assert response.input_image_count == 2
+
+
 class _HeaderImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(self, model):
         return []

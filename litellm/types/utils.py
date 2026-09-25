@@ -2578,6 +2578,14 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    _input_image_count: int = 0
+
+    @property
+    def input_image_count(self) -> int:
+        return self._input_image_count
+
+    def set_input_image_count(self, count: int) -> None:
+        self._input_image_count = count
 
     usage: ImageUsage | None = None
     """

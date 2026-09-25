@@ -28,6 +28,10 @@ def use_local_model_cost_map(monkeypatch):
     _invalidate_model_cost_lowercase_map()
 
 
+def _flex_rate() -> float:
+    return litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"]
+
+
 @pytest.mark.parametrize(
     ("model", "provider_path"),
     [
@@ -127,7 +131,8 @@ def test_flux2_flex_model_info():
     assert model_info["max_input_tokens"] == 32000
     assert model_info["max_tokens"] == 32000
     assert model_info["supported_endpoints"] == ["/v1/images/generations", "/v1/images/edits"]
-    assert catalog_info["input_cost_per_pixel"] == 5e-08
+    # Azure Retail Prices API "Flex Megapixel" is $0.05, and Cost Management metered a 1024x1024 image as 1.0 MP (2026-09-22)
+    assert catalog_info["input_cost_per_pixel"] * 1024 * 1024 == pytest.approx(0.05)
     assert catalog_info["supported_modalities"] == ["text", "image"]
     assert catalog_info["supported_output_modalities"] == ["image"]
 
@@ -148,7 +153,7 @@ def test_flux2_flex_cost_uses_generated_megapixels():
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    assert cost == pytest.approx(_flex_rate() * 2048 * 1024 * 2)
 
 
 @pytest.mark.parametrize("model", ("FLUX-1.1-pro", "FLUX.1-Kontext-pro"))
@@ -189,7 +194,7 @@ def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensi
         completion_response=response,
         optional_params=params,
         call_type="image_generation",
-    ) == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    ) == pytest.approx(_flex_rate() * 2048 * 1024 * 2)
 
 
 def test_flux2_flex_cost_accepts_lowercase_model_spelling():
@@ -202,7 +207,7 @@ def test_flux2_flex_cost_accepts_lowercase_model_spelling():
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(5e-08 * 1536 * 1024 * 2)
+    assert cost == pytest.approx(_flex_rate() * 1536 * 1024 * 2)
 
 
 def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
