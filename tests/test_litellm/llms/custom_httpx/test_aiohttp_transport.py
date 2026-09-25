@@ -1,8 +1,10 @@
 import asyncio
 import concurrent.futures
+import gc
+import queue
 import socket
 import sys
-from typing import Final
+from typing import Final, cast
 
 import aiohttp
 import aiohttp.abc
@@ -38,6 +40,22 @@ async def test_aclose_closes_owned_session():
     transport = LiteLLMAiohttpTransport(client=session, owns_session=True)
     await transport.aclose()
     assert session.closed, "Owned session should be closed by transport"
+
+
+@pytest.mark.asyncio
+async def test_finalizer_does_not_close_shared_session():
+    """Finalization must preserve a session owned by the caller."""
+    session: Final = aiohttp.ClientSession()
+    transport: Final = LiteLLMAiohttpTransport(client=session, owns_session=False)
+
+    del transport
+    gc.collect()
+    await asyncio.sleep(0)
+
+    try:
+        assert not session.closed, "Finalizer must not close a shared session"
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio
@@ -876,6 +894,90 @@ def _make_session_on_dead_loop() -> aiohttp.ClientSession:
     return result["session"]
 
 
+def test_finalizer_closes_owned_session_after_loop_closes():
+    """Finalization must synchronously dispose a session whose loop is already closed."""
+    session: Final = _make_session_on_dead_loop()
+    transport: Final = LiteLLMAiohttpTransport(client=session)
+
+    try:
+        del transport
+        gc.collect()
+        assert session.closed, "finalizer must dispose sessions bound to closed loops"
+    finally:
+        if not session.closed:
+            session._connector._close()
+
+
+def test_finalizer_close_failure_falls_back_to_sync_teardown():
+    """A failed foreign-loop close future must still dispose the session connector."""
+    session: Final = _make_session_on_dead_loop()
+    future: Final[concurrent.futures.Future[None]] = concurrent.futures.Future()
+    future.set_exception(RuntimeError("simulated close failure"))
+
+    try:
+        LiteLLMAiohttpTransport._on_finalizer_session_close_done(session, object(), future)
+        assert session.closed
+    finally:
+        if not session.closed:
+            session._connector._close()
+
+
+def test_finalizer_watcher_handles_loop_inspection_failure():
+    """A loop inspection error must not strand a finalizer session."""
+    from unittest.mock import Mock
+
+    session: Final = _make_session_on_dead_loop()
+    future: Final[concurrent.futures.Future[None]] = concurrent.futures.Future()
+    broken_loop: Final = cast(asyncio.AbstractEventLoop, Mock())
+    broken_loop.is_running.side_effect = RuntimeError("simulated loop inspection failure")
+
+    try:
+        LiteLLMAiohttpTransport._watch_finalizer_session_close(session, broken_loop, future)
+        assert future.cancelled()
+        assert session.closed
+    finally:
+        if not session.closed:
+            session._connector._close()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_handoff_failure_closes_session_synchronously():
+    """A foreign-loop handoff race must close the session when scheduling fails."""
+    from unittest.mock import Mock, patch
+
+    session: Final = aiohttp.ClientSession()
+    original_loop: Final = session._loop
+    foreign_loop: Final = cast(asyncio.AbstractEventLoop, Mock())
+    foreign_loop.is_running.return_value = True
+    session._loop = foreign_loop
+    transport: Final = LiteLLMAiohttpTransport(client=session)
+
+    try:
+        with patch(  # test-quality-ok: inject handoff failure to verify finalizer fallback
+            "litellm.llms.custom_httpx.aiohttp_transport.asyncio.run_coroutine_threadsafe",
+            side_effect=RuntimeError("simulated loop shutdown"),
+        ):
+            transport._close_finalized_session(session)
+        assert session.closed
+    finally:
+        session._loop = original_loop
+        if not session.closed:
+            await session.close()
+
+
+def test_connector_close_failure_is_suppressed():
+    """Synchronous connector teardown must remain best effort in a finalizer."""
+    from unittest.mock import Mock
+
+    connector: Final = Mock()
+    connector._close.side_effect = RuntimeError("simulated connector failure")
+    session: Final = Mock()
+    session._connector = connector
+
+    LiteLLMAiohttpTransport._mark_connector_closed(cast(aiohttp.ClientSession, session))
+    connector._close.assert_called_once_with()
+
+
 def _flaky_get_running_loop_factory():
     """get_running_loop stand-in that fails once, then delegates.
 
@@ -1048,6 +1150,62 @@ async def test_session_from_other_running_loop_closed_threadsafe():
         holder["loop"].call_soon_threadsafe(holder["loop"].stop)
         thread.join(5)
         await new_session.close()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_closes_session_on_foreign_running_loop():
+    """Finalization must fall back when a foreign loop stops before close runs."""
+    import threading
+    import time
+
+    ready: Final = threading.Event()
+    blocked: Final = threading.Event()
+    release: Final = threading.Event()
+    state: Final[queue.Queue[tuple[asyncio.AbstractEventLoop, aiohttp.ClientSession]]] = queue.Queue()
+
+    def worker() -> None:
+        loop: Final = asyncio.new_event_loop()
+
+        async def make() -> None:
+            state.put((loop, aiohttp.ClientSession()))
+
+        def block_loop() -> None:
+            blocked.set()
+            release.wait(5)
+
+        loop.run_until_complete(make())
+        loop.call_soon(block_loop)
+        ready.set()
+        loop.run_forever()
+        loop.close()
+
+    thread: Final = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    assert ready.wait(5), "worker loop failed to start"
+
+    loop, session = state.get(timeout=5)
+    assert blocked.wait(5), "worker loop failed to enter its blocking callback"
+    transport: Final = LiteLLMAiohttpTransport(client=session)
+
+    try:
+        transport.__del__()
+        loop.call_soon_threadsafe(loop.stop)
+        release.set()
+        deadline: Final = time.monotonic() + 5
+        while (
+            (not session.closed or LiteLLMAiohttpTransport._finalizer_sessions)
+            and time.monotonic() < deadline
+        ):
+            await asyncio.sleep(0.01)
+        assert session.closed, "foreign-loop session was never closed by finalization"
+        assert not LiteLLMAiohttpTransport._finalizer_sessions
+    finally:
+        release.set()
+        if loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        thread.join(5)
+        if not session.closed:
+            session._connector._close()
 
 
 def test_threadsafe_close_done_callback_tolerates_cancelled_future():
