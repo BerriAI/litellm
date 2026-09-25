@@ -244,7 +244,9 @@ class TestGeminiImageEditTransformation:
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         optional_params = {}
 
-        with pytest.raises(ValueError, match='Gemini image edit requires at least one image\\.'):
+        with pytest.raises(
+            litellm.BadRequestError, match='Gemini image edit requires at least one image\\.'
+        ) as exc_info:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
@@ -253,6 +255,8 @@ class TestGeminiImageEditTransformation:
                 litellm_params=MagicMock(),
                 headers={},
             )
+
+        assert exc_info.value.status_code == 400
 
     def test_use_multipart_form_data_returns_false(self) -> None:
         """

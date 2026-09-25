@@ -713,6 +713,13 @@ def image_variation(
     return response
 
 
+def _as_image_list(image: FileTypes | list[FileTypes] | None) -> list[FileTypes]:
+    """A missing image stays an empty list so each provider config can reject it on its own terms."""
+    if isinstance(image, list):
+        return image
+    return [] if image is None else [image]
+
+
 @client
 def image_edit(
     image: FileTypes | list[FileTypes] | None = None,
@@ -769,7 +776,7 @@ def image_edit(
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # add images / or return a single image
-        images: Final = image if isinstance(image, list) else ([image] if image is not None else [])
+        images: Final = _as_image_list(image)
 
         headers_from_kwargs: Final = kwargs.get("headers")
         merged_extra_headers: Final[dict[str, object]] = {}
@@ -971,9 +978,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
-    model: str,
-    prompt: str,
+    image: FileTypes | list[FileTypes] | None = None,
+    model: str | None = None,
+    prompt: str | None = None,
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
@@ -1005,13 +1012,20 @@ async def aimage_edit(
         loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
+        if model is None:
+            raise litellm.BadRequestError(
+                message="model is required for image edits",
+                model="",
+                llm_provider=custom_llm_provider or "",
+            )
+
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
-        images: Final = image if isinstance(image, list) else [image]
+        images: Final = _as_image_list(image)
 
         func: Final = partial(
             image_edit,

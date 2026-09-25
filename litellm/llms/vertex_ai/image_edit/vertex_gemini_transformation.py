@@ -166,7 +166,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
-            raise ValueError("Vertex AI Gemini image edit requires at least one image.")
+            raise litellm.BadRequestError(
+                message="Vertex AI Gemini image edit requires at least one image.",
+                model=model,
+                llm_provider="vertex_ai",
+            )
 
         # Build parts list with image and prompt (if provided)
         text_parts: Final[list[HttpxPartType]] = [{"text": prompt}] if prompt is not None and prompt != "" else []
