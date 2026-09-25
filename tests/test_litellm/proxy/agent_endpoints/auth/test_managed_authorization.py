@@ -277,7 +277,8 @@ def test_native_directory_agent_cannot_authenticate_with_a_virtual_key() -> None
     )
     failure: Final = actor_admission_failure(policy, None)
     assert isinstance(failure, AgentIdentityFailure)
-    assert "require their Entra token" in failure.message
+    assert failure.code == "identity_denied"
+    assert "bound identity provider token" in failure.message
 
 
 @pytest.mark.asyncio

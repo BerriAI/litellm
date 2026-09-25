@@ -732,6 +732,7 @@ async def test_scoped_human_routes_preserve_reserved_identity_and_use_human_prov
     reserved: Final = row.model_copy(update={"document": human.model_dump(mode="json"), "local_id": "human"})
     tx.litellm_scimresource.find_unique.return_value = reserved
     tx.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="human"))
+    tx.litellm_usertable.find_many = AsyncMock(return_value=[])
     tx.litellm_agentstable.create = AsyncMock()
     updated: Final = AsyncMock(return_value=human.model_copy(update={"id": "human"}))
     monkeypatch.setattr(scim_v2, "update_user", updated)

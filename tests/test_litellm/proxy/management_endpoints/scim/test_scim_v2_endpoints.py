@@ -1326,6 +1326,7 @@ async def test_update_user_put_with_valueless_entitlements_deactivates_user(scim
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db.litellm_scimresource.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
 
