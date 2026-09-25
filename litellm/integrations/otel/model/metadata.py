@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
@@ -226,6 +226,7 @@ class LLMCallEvent:
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
     trace: TraceControls
+    session_id: str | None
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
@@ -233,6 +234,7 @@ class LLMCallEvent:
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
         model: Final = as_str(kwargs.get("model")) or ""
+        trace: Final = caller_trace_controls(kwargs)
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
@@ -242,8 +244,38 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
-            trace=caller_trace_controls(kwargs),
+            trace=trace,
+            session_id=caller_session_id(kwargs, trace),
         )
+
+
+def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str | None:
+    """The conversation id the caller sent (``litellm_session_id``, else the
+    ``session_id`` trace control); ``None`` when the request carried none.
+
+    ``get_litellm_params`` back-fills ``litellm_session_id`` from ``metadata.trace_id``
+    (which the proxy stamps with the OTel trace id) and ``missing_session_id: generate``
+    mints one into the body; neither is a caller conversation, so both are ignored,
+    while a ``langfuse_session_id`` header still counts under the generate policy.
+    ``StandardLoggingPayload.session_id`` is never read: the payload drops the
+    generated marker, so a replayed minted id would pass for a caller's."""
+    params: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+    bodies: Final = tuple(
+        metadata
+        for key in ("metadata", "litellm_metadata")
+        if (metadata := as_str_mapping(params.get(key))) is not None
+    )
+    from_body: Final = tuple(session for body in bodies if (session := as_str(body.get("session_id"))))
+    minted: Final = frozenset(
+        session
+        for body in bodies
+        if body.get(SESSION_ID_GENERATED_METADATA_KEY) and (session := as_str(body.get("session_id")))
+    )
+    if minted:
+        return next((session for session in (trace.session_id, *from_body) if session and session not in minted), None)
+    explicit: Final = as_str(params.get("litellm_session_id"))
+    echoes_trace_id: Final = explicit is not None and any(as_str(body.get("trace_id")) == explicit for body in bodies)
+    return (None if echoes_trace_id else explicit) or trace.session_id or None
 
 
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:

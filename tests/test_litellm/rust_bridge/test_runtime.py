@@ -12,6 +12,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.lifecycle import Complete, Open, Stream, SyncStream, Yield
 
 
 class RustBridgeDeclined(Exception):
@@ -264,6 +265,61 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(shap
     }
 
 
+class ScriptedStreamExecution:
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._steps: Final = iter((*(Yield(chunk) for chunk in chunks), Complete(None)))
+        self.closed = False
+
+    def start(self) -> Open:
+        return Open(None)
+
+    def resume_value(self, value: object) -> Yield | Complete:
+        return next(self._steps)
+
+    def resume_error(self, error: BaseException) -> Complete:
+        return Complete(None)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming_the_stream(
+    asynchronous: bool,
+) -> None:
+    chunks: Final = (b"event: message_start\n\n", b"event: message_stop\n\n")
+    execution: Final = ScriptedStreamExecution(chunks)
+    stream: Final[Stream | SyncStream] = Stream(execution) if asynchronous else SyncStream(execution)
+    bound: Final[bindings.NativeBinding[Callable[[], object]]] = bindings.NativeBinding(
+        "messages", validate=lambda _: None
+    )
+    bound.override(lambda: stream)
+
+    def python() -> object:
+        pytest.fail("native success must not fall back")
+
+    async def anative(fn: Callable[[], object]) -> object:
+        return fn()
+
+    async def apython() -> object:
+        return python()
+
+    result: Final = (
+        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
+        if asynchronous
+        else runtime.run(
+            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
+        )
+    )
+    assert result is stream
+    assert get_hidden_params_dict(result) == {"additional_headers": {"x-litellm-rust": "true"}}
+    assert not execution.closed
+    delivered: Final = tuple([chunk async for chunk in result]) if isinstance(result, Stream) else tuple(result)
+    assert delivered == chunks
+    assert execution.closed
+
+
 def test_upstream_error_maps_to_api_error_without_fallback() -> None:
     calls: Final = recorder(RustUpstreamError(429, "rate limited"))
 
@@ -371,3 +427,80 @@ async def test_arun_upstream_error_maps_to_api_error_without_fallback() -> None:
 
     assert caught.value.status_code == 503
     assert calls.calls == (RUST,)
+
+
+async def run_without_python(
+    rollout: Rollout,
+    calls: Recorder,
+    *,
+    asynchronous: bool,
+    native_missing: bool = False,
+    context: RouteContext = CONTEXT,
+) -> str:
+    bound: Final = binding(None if native_missing else calls.rust)
+    if not asynchronous:
+        return runtime.run(
+            context, binding=bound, native=lambda fn: fn(), python=runtime.NO_PYTHON, rules=rules(rollout)
+        )
+
+    async def native(fn: NativeFn) -> str:
+        return fn()
+
+    return await runtime.arun(context, binding=bound, native=native, python=runtime.NO_PYTHON, rules=rules(rollout))
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("switch", (None, False, True))
+async def test_route_without_python_runs_native_whatever_the_rust_switch(
+    asynchronous: bool, switch: bool | None
+) -> None:
+    calls: Final = recorder()
+    if switch is not None:
+        configuration.rust(switch)
+
+    assert await run_without_python(Rollout.RUST_REQUIRED, calls, asynchronous=asynchronous) == RUST
+    assert calls.calls == (RUST,)
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize(
+    ("native_missing", "effect", "message"),
+    (
+        (True, None, "Rust messages bridge is unavailable"),
+        (False, RustBridgeDeclined("unsupported"), "Rust messages bridge declined the request: unsupported"),
+    ),
+)
+async def test_route_without_python_raises_when_native_cannot_serve_the_call(
+    asynchronous: bool, native_missing: bool, effect: BaseException | None, message: str
+) -> None:
+    calls: Final = recorder(effect)
+
+    with pytest.raises(RuntimeError, match=message) as raised:
+        await run_without_python(Rollout.RUST_REQUIRED, calls, asynchronous=asynchronous, native_missing=native_missing)
+
+    assert not isinstance(raised.value, runtime.NoPythonImplementationError)
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("switch", (None, False, True))
+@pytest.mark.parametrize(
+    ("rollout", "context"),
+    (
+        (Rollout.PYTHON_ONLY, CONTEXT),
+        (Rollout.RUST_OPT_IN, CONTEXT),
+        (Rollout.RUST_OPT_OUT, CONTEXT),
+        (Rollout.RUST_REQUIRED, RouteContext(Route.MESSAGES, provider="unmatched", model="model")),
+    ),
+    ids=("python-only", "opt-in", "opt-out", "no-matching-rule"),
+)
+async def test_route_without_python_rejects_rules_that_could_select_python(
+    asynchronous: bool, switch: bool | None, rollout: Rollout, context: RouteContext
+) -> None:
+    calls: Final = recorder()
+    if switch is not None:
+        configuration.rust(switch)
+
+    with pytest.raises(runtime.NoPythonImplementationError, match="messages has no Python implementation"):
+        await run_without_python(rollout, calls, asynchronous=asynchronous, context=context)
+
+    assert calls.calls == ()

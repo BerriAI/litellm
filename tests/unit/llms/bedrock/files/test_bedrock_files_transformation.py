@@ -16,6 +16,7 @@ from botocore.auth import S3SigV4Auth, SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
+from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 
 
@@ -1672,6 +1673,49 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "input" not in model_input
         assert "max_output_tokens" not in model_input
 
+    def test_anthropic_responses_record_accepts_a_function_tool_without_strict(self):
+        """Clients omit the SDK's required `strict`; the record is forwarded like real time, not validated."""
+        parameters = {"type": "object", "properties": {"city": {"type": "string"}}}
+        model_input = self._transform(
+            {
+                "custom_id": "4a",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": self.ANTHROPIC_MODEL,
+                    "input": "Weather in Paris?",
+                    "tools": [{"type": "function", "name": "get_weather", "parameters": parameters}],
+                },
+            }
+        )
+
+        assert model_input["messages"][0]["content"] == [{"type": "text", "text": "Weather in Paris?"}]
+        tool = model_input["tools"][0]
+        function = tool.get("function", tool)
+        assert (function["name"], function.get("parameters", function.get("input_schema"))) == ("get_weather", parameters)
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            (
+                "/v1/responses",
+                {"input": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}]},
+            ),
+            (
+                "/v1/chat/completions",
+                {"messages": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}]},
+            ),
+        ],
+        ids=["responses", "chat"],
+    )
+    def test_anthropic_developer_role_becomes_the_system_prompt_like_real_time(self, url, body):
+        model_input = self._transform(
+            {"custom_id": "4c", "method": "POST", "url": url, "body": {"model": self.ANTHROPIC_MODEL, **body}}
+        )
+
+        assert model_input["system"] == [{"type": "text", "text": "be terse"}]
+        assert [message["role"] for message in model_input["messages"]] == ["user"]
+
     def test_responses_record_keeps_metadata(self):
         """`metadata` reaches the bridge, which reads it as its own kwarg."""
         model_input = self._transform(
@@ -1856,6 +1900,177 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert model_input["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "from messages"}]}
         ]
+
+
+class TestBedrockBatchAnthropicRowParams:
+    """Anthropic batch rows get the OpenAI-to-Anthropic param mapping a real-time request gets.
+
+    Bedrock batch `modelInput` is the InvokeModel body, so a row's OpenAI params
+    (`tools`, `reasoning_effort`, `max_tokens`, ...) have to be mapped the way
+    `get_optional_params` maps them for `bedrock/invoke/...` at request time.
+    Before that, the Anthropic branch wrote the row params into the body as
+    sent, and Bedrock failed every record carrying a function tool
+    (`tool type 'function' is not supported`) or a reasoning tier
+    (`reasoning_effort: Extra inputs are not permitted`).
+    """
+
+    MODEL = "bedrock/us.anthropic.claude-sonnet-4-6"
+    PARAMETERS = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+    def _transform(self, url: str, body: dict, model: str = MODEL, target_model: str = "") -> dict:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        record = {"custom_id": "row-1", "method": "POST", "url": url, "body": {"model": model, **body}}
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [record], target_model=target_model
+        )
+        assert len(result) == 1
+        return result[0]["modelInput"]
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            (
+                "/v1/chat/completions",
+                {
+                    "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                    "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": PARAMETERS}}],
+                },
+            ),
+            (
+                "/v1/responses",
+                {
+                    "input": "Weather in Paris?",
+                    "tools": [{"type": "function", "name": "get_weather", "parameters": PARAMETERS}],
+                },
+            ),
+        ],
+        ids=["chat", "responses"],
+    )
+    def test_function_tools_become_anthropic_tools(self, url, body):
+        model_input = self._transform(url, body)
+
+        (tool,) = model_input["tools"]
+        assert (tool["name"], tool["input_schema"]) == ("get_weather", self.PARAMETERS)
+        assert "function" not in tool
+        assert tool.get("type") != "function"
+
+    @pytest.mark.parametrize("route_prefix", ["converse/", "invoke/"])
+    @pytest.mark.parametrize(
+        "deployment_model",
+        ["bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock/us.anthropic.claude-sonnet-4-6"],
+        ids=["budget", "adaptive"],
+    )
+    def test_route_prefixed_deployment_maps_like_the_plain_one(self, route_prefix, deployment_model):
+        body = {
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": self.PARAMETERS}}],
+            "reasoning_effort": "low",
+            "max_tokens": 2048,
+        }
+        prefixed_model = deployment_model.replace("bedrock/", f"bedrock/{route_prefix}", 1)
+
+        plain = self._transform("/v1/chat/completions", body, model="claude-batch", target_model=deployment_model)
+        prefixed = self._transform("/v1/chat/completions", body, model="claude-batch", target_model=prefixed_model)
+
+        assert prefixed == plain
+        assert "input_schema" in prefixed["tools"][0]
+        assert "reasoning_effort" not in prefixed
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            ("/v1/chat/completions", {"messages": [{"role": "user", "content": "17 * 23?"}], "reasoning_effort": "low"}),
+            ("/v1/responses", {"input": "17 * 23?", "reasoning": {"effort": "low"}}),
+        ],
+        ids=["chat", "responses"],
+    )
+    @pytest.mark.parametrize(
+        ("model", "expected_tier"),
+        [
+            (
+                "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                {"thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}},
+            ),
+            ("bedrock/us.anthropic.claude-sonnet-4-6", {"output_config": {"effort": "low"}}),
+        ],
+        ids=["budget", "adaptive"],
+    )
+    def test_reasoning_effort_becomes_thinking(self, model, expected_tier, url, body):
+        from litellm.utils import get_optional_params
+
+        model_input = self._transform(url, body, model=model)
+        real_time = get_optional_params(
+            model=model.removeprefix("bedrock/"),
+            custom_llm_provider="bedrock",
+            messages=[{"role": "user", "content": "17 * 23?"}],
+            reasoning_effort="low",
+        )
+
+        assert "reasoning_effort" not in model_input
+        assert {k: model_input[k] for k in expected_tier} == expected_tier
+        assert (model_input["thinking"], model_input.get("output_config")) == (
+            real_time["thinking"],
+            real_time.get("output_config"),
+        )
+
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "json_object"},
+            {"type": "json_schema", "json_schema": {"name": "weather", "schema": PARAMETERS}},
+        ],
+        ids=["json_object", "json_schema"],
+    )
+    def test_response_format_rows_keep_json_mode_out_of_the_body(self, response_format):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "Weather in Paris?"}], "response_format": response_format},
+        )
+
+        assert "json_mode" not in model_input
+        assert "response_format" not in model_input
+        assert ("output_config" in model_input) == (response_format["type"] == "json_schema")
+
+    def test_provider_native_params_still_pass_through(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 20, "top_k": 5},
+        )
+
+        assert (model_input["top_k"], model_input["max_tokens"]) == (5, 20)
+
+    def test_unsupported_openai_param_fails_the_row_like_real_time(self):
+        from litellm.exceptions import UnsupportedParamsError
+
+        with pytest.raises(UnsupportedParamsError, match="logprobs"):
+            self._transform("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}], "logprobs": True})
+
+    def test_row_level_drop_params_drops_the_unsupported_param(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "logprobs": True, "drop_params": True},
+        )
+
+        assert "logprobs" not in model_input
+        assert "drop_params" not in model_input
+
+    def test_row_level_allowed_openai_params_keeps_the_param(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "logprobs": True, "allowed_openai_params": ["logprobs"]},
+        )
+
+        assert model_input["logprobs"] is True
+        assert "allowed_openai_params" not in model_input
+
+    def test_chat_record_metadata_stays_out_of_the_body(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "metadata": {"tenant": "acct-1"}},
+        )
+
+        assert "metadata" not in model_input
 
 
 class TestBedrockFileDeletion:

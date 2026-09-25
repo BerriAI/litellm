@@ -526,6 +526,7 @@ class TestVertexAILyriaTextToSpeechConfig:
     ):
         mock_response = Mock(spec=httpx.Response)
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = response_json
         with (
             patch.object(  # test-quality-ok: litellm.speech has no seam for Vertex token minting

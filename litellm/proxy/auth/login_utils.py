@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 BREACH_RECHECK_INTERVAL: Final = timedelta(hours=24)
-PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change",)
+PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change", "/session/logout")
 PASSWORD_SESSION_METADATA: Final = MappingProxyType({"login_method": "username_password"})
 
 

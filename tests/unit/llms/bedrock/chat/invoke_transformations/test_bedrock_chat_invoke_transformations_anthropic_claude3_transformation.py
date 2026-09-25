@@ -542,26 +542,48 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
     assert json.loads(last_content[-1]["text"]) == schema
 
 
-def test_output_config_format_forwarded_for_bedrock_chat_invoke_request():
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-8"])
+def test_output_config_format_inlined_for_bedrock_chat_invoke_opus_4_7_and_4_8(local_model_cost_map, model):
+    """Bedrock rejects ``output_config.format`` on Claude Opus 4.7 and 4.8, so the
+    Invoke chat path inlines the schema into the last user message and keeps effort,
+    driven by the cost map alone (no capability stub)."""
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"effort": "xhigh", "format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
+    assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
+def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
-    for models with native structured-output support (Claude Opus 4.7)."""
+    for models with native structured-output support (Claude Sonnet 4.6)."""
     schema_format = {
         "type": "json_schema",
         "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
-        model="anthropic.claude-opus-4-7",
+        model="us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "test"}],
         optional_params={
             "max_tokens": 100,
-            "output_config": {"effort": "xhigh", "format": schema_format},
+            "output_config": {"effort": "max", "format": schema_format},
         },
         litellm_params={},
         headers={},
     )
 
-    assert result.get("output_config") == {"effort": "xhigh", "format": schema_format}
+    assert result.get("output_config") == {"effort": "max", "format": schema_format}
     assert "answer" not in json.dumps(result["messages"])
 
 

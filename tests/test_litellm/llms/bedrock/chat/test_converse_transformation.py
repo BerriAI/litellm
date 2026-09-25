@@ -803,13 +803,13 @@ def test_output_config_format_translated_to_native_output_config_converse():
     }
 
     result = config._transform_request(
-        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hi"}],
         optional_params={
             "maxTokens": 256,
             "thinking": {"type": "adaptive"},
             "output_config": {
-                "effort": "xhigh",
+                "effort": "max",
                 "format": {"type": "json_schema", "schema": schema},
             },
         },
@@ -818,7 +818,7 @@ def test_output_config_format_translated_to_native_output_config_converse():
     )
 
     additional = result.get("additionalModelRequestFields", {})
-    assert additional.get("output_config") == {"effort": "xhigh"}
+    assert additional.get("output_config") == {"effort": "max"}
     assert "format" not in additional["output_config"]
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
     parsed_schema = json.loads(
@@ -4293,6 +4293,84 @@ def test_translate_response_format_native_output_config(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
+BEDROCK_OPUS_4_7_AND_4_8_MODELS: Final = (
+    "anthropic.claude-opus-4-7",
+    "global.anthropic.claude-opus-4-7",
+    "us.anthropic.claude-opus-4-7",
+    "eu.anthropic.claude-opus-4-7",
+    "au.anthropic.claude-opus-4-7",
+    "jp.anthropic.claude-opus-4-7",
+    "anthropic.claude-opus-4-8",
+    "global.anthropic.claude-opus-4-8",
+    "us.anthropic.claude-opus-4-8",
+    "eu.anthropic.claude-opus-4-8",
+    "au.anthropic.claude-opus-4-8",
+    "jp.anthropic.claude-opus-4-8",
+    "us-gov.anthropic.claude-opus-4-8",
+    "us-gov-west-1/anthropic.claude-opus-4-8",
+    "us-gov-east-1/anthropic.claude-opus-4-8",
+)
+
+CAPITAL_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "capital",
+        "schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+            "required": ["city", "country"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _converse_request_for_json_schema(model: str, stream: bool) -> tuple[dict, dict]:
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, "stream": stream},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    return optional_params, request
+
+
+@pytest.mark.parametrize("model", BEDROCK_OPUS_4_7_AND_4_8_MODELS)
+@pytest.mark.parametrize("stream", [False, True])
+def test_opus_4_7_and_4_8_json_schema_sent_as_forced_tool_not_output_config(monkeypatch, model, stream):
+    """Regression for issue #27846: Bedrock rejects outputConfig on Opus 4.7 and 4.8
+    (``output_config.format: Extra inputs are not permitted``), so json_schema has to
+    go out as the forced json_tool_call tool, streamed through fake_stream."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    optional_params, request = _converse_request_for_json_schema(model=model, stream=stream)
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
+    assert optional_params.get("fake_stream", False) is stream
+
+
+def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    optional_params, request = _converse_request_for_json_schema(model="us.anthropic.claude-sonnet-4-6", stream=True)
+
+    assert request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "capital"
+    assert "toolConfig" not in request
+    assert "fake_stream" not in optional_params
+
+
 def test_translate_response_format_fallback_tool_call():
     """For unsupported models, should fall back to tool-call approach."""
     config = AmazonConverseConfig()
@@ -5418,9 +5496,14 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    cost_map = dict(litellm.get_model_cost_map(url=""))
+    cost_map["jp.anthropic.claude-opus-4-7"] = {
+        k: v
+        for k, v in cost_map["jp.anthropic.claude-opus-4-7"].items()
+        if k != "cache_creation_input_token_cost_above_1hr"
+    }
+    litellm.model_cost = cost_map
     try:
-        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
         assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
         config = AmazonConverseConfig()
         messages = [

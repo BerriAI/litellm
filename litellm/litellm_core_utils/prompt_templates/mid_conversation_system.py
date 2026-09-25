@@ -30,7 +30,7 @@ Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
 from collections.abc import Iterator, Mapping, Sequence
-from itertools import groupby
+from itertools import chain, groupby
 from typing import Final, Literal, TypeAlias
 
 from litellm.types.llms.anthropic import AnthropicMessagesSystemMessageParam, AnthropicSystemMessageContent
@@ -129,13 +129,14 @@ def _text_parts(message: object) -> tuple[_TextPart, ...]:
     content: Final = message_field(message, "content")
     if isinstance(content, str):
         return ((content, _cache_control(message)),) if content else ()
-    return tuple(
-        (text, _cache_control(part))
-        for part in parts_of(content)
-        if message_field(part, "type") == "text"
-        for text in (message_field(part, "text"),)
-        if isinstance(text, str) and text
-    )
+    return tuple(part for part in map(_text_part, parts_of(content)) if part is not None)
+
+
+def _text_part(part: object) -> _TextPart | None:
+    if message_field(part, "type") != "text":
+        return None
+    text: Final = message_field(part, "text")
+    return (text, _cache_control(part)) if isinstance(text, str) and text else None
 
 
 def _openai_text_block(part: _TextPart) -> ChatCompletionTextObject:
@@ -180,7 +181,7 @@ def system_message_as_user(message: object) -> ChatCompletionUserMessage:
 
 
 def _merged_system_message(run: Sequence[object]) -> tuple[ChatCompletionSystemMessage, ...]:
-    parts: Final = tuple(part for message in run for part in _text_parts(message))
+    parts: Final = tuple(chain.from_iterable(_text_parts(message) for message in run))
     if not parts:
         return ()
     content: Final[list[ChatCompletionTextObject]] = [  # mutable-ok: anthropic_messages_pt only recognises list content
@@ -215,7 +216,7 @@ def _converted_for_unflagged_model(messages: Sequence[AllMessageValues]) -> tupl
             return (*run, *_converted_user_turns(runs[index - 1][1]))
         return run
 
-    return tuple(message for index in range(len(runs)) for message in emit(index))
+    return tuple(chain.from_iterable(emit(index) for index in range(len(runs))))
 
 
 def _user_type_blocks(messages: Sequence[AllMessageValues]) -> tuple[tuple[bool, tuple[int, ...]], ...]:
@@ -371,16 +372,16 @@ def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[All
     blocks: Final = _user_type_blocks(messages)
     anchors: Final = tuple((run, _anchor_block(run, messages, blocks)) for run in _system_runs(messages))
 
+    def messages_of(run: tuple[int, ...]) -> tuple[AllMessageValues, ...]:
+        return tuple(messages[index] for index in run)
+
     def anchored_to(block_index: int) -> tuple[AllMessageValues, ...]:
-        return tuple(messages[index] for run, anchor in anchors if anchor == block_index for index in run)
+        anchored_runs: Final = tuple(run for run, anchor in anchors if anchor == block_index)
+        return tuple(chain.from_iterable(map(messages_of, anchored_runs)))
 
     def converted_after(message_index: int) -> tuple[ChatCompletionUserMessage, ...]:
-        return tuple(
-            turn
-            for run, anchor in anchors
-            if anchor is None and run[0] == message_index + 1
-            for turn in _converted_user_turns(tuple(messages[index] for index in run))
-        )
+        following_runs: Final = tuple(run for run, anchor in anchors if anchor is None and run[0] == message_index + 1)
+        return tuple(chain.from_iterable(_converted_user_turns(messages_of(run)) for run in following_runs))
 
     def emit(block_index: int) -> Iterator[AllMessageValues]:
         is_user, indices = blocks[block_index]
@@ -390,7 +391,7 @@ def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[All
         if is_user:
             yield from _merged_system_message(anchored_to(block_index))
 
-    return tuple(message for block_index in range(len(blocks)) for message in emit(block_index))
+    return tuple(chain.from_iterable(emit(block_index) for block_index in range(len(blocks))))
 
 
 def place_mid_conversation_system(

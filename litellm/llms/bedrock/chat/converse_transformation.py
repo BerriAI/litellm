@@ -8,6 +8,7 @@ import re
 import time
 import types
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -1433,10 +1434,10 @@ class AmazonConverseConfig(BaseConfig):
         if not text_blocks:
             return None
         note: Final = ChatCompletionTextObject(type="text", text=CONVERTED_SYSTEM_NOTE)
-        body: Final = [
+        body: Final = [  # mutable-ok: _bedrock_converse_messages_pt narrows content with isinstance(list)
             note,
             *text_blocks,
-        ]  # mutable-ok: _bedrock_converse_messages_pt narrows content with isinstance(list)
+        ]
         return ChatCompletionUserMessage(role="user", content=body)
 
     def _converted_or_kept(self, message: AllMessageValues) -> AllMessageValues | None:
@@ -1495,9 +1496,9 @@ class AmazonConverseConfig(BaseConfig):
                         if cache_block:
                             system_content_blocks.append(cache_block)
         reordered: Final = tuple(
-            message
-            for index in range(len(remaining))
-            for message in self._reordered_around_tool_results(remaining, index)
+            chain.from_iterable(
+                self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
+            )
         )
         converted: Final = tuple(self._converted_or_kept(message) for message in reordered)
         kept: Final = [message for message in converted if message is not None]  # mutable-ok: converse pt takes a list

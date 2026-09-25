@@ -13,7 +13,6 @@ use litellm_http::{
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::base_llm::inference::secrets::SecretSource;
 use crate::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
@@ -22,6 +21,7 @@ use crate::base_llm::ocr::{
         PreparedOcrRequest, decode_request_value, decode_response,
     },
 };
+use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
@@ -95,7 +95,7 @@ impl OcrClient {
             document_fetcher: MediaFetcher::for_test(document_http),
             vertex_auth: VertexAuth::default(),
             settings: OcrSettings::default(),
-            secrets: Arc::new(crate::base_llm::inference::secrets::EnvironmentSecrets),
+            secrets: Arc::new(litellm_secrets::source::EnvironmentSecrets::default()),
         }
     }
 

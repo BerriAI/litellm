@@ -246,6 +246,7 @@ class ModelInfo(MirroredPricingParams):
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
+    discoverable: bool | None = None
 
     access_windows: tuple[ModelAccessWindow, ...] | None = None
 
