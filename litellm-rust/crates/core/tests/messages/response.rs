@@ -5,11 +5,14 @@ use rstest::rstest;
 use super::*;
 
 #[rstest]
+#[case::anthropic("anthropic")]
+#[case::azure_ai("azure_ai")]
 #[tokio::test]
-async fn the_provider_message_is_returned(call: MessagesCall) {
+async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
 
     let message = run_message(MessagesCall {
+        custom_llm_provider: Some(provider.into()),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         ..call
@@ -19,6 +22,88 @@ async fn the_provider_message_is_returned(call: MessagesCall) {
     assert_eq!(message.id, "msg_1");
     assert_eq!(message.content, [json!({"type": "text", "text": "hi"})]);
     assert_eq!(message.stop_reason.as_deref(), Some("end_turn"));
+}
+
+/// A refusal and fields the route does not model come back exactly as the provider sent
+/// them, since the Python side returns the raw message and the router decides what to do.
+#[rstest]
+#[tokio::test]
+async fn the_message_passes_through_losslessly(call: MessagesCall) {
+    let upstream_body = json!({
+        "id": "msg_2",
+        "type": "message",
+        "role": "assistant",
+        "model": MODEL,
+        "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "q"}},
+            {"type": "text", "text": "no", "citations": [{"type": "web_search_result_location", "url": "https://e.x"}]}
+        ],
+        "stop_reason": "refusal",
+        "stop_sequence": null,
+        "stop_details": {"type": "safeguard", "safeguard_types": ["dangerous_tool_use"]},
+        "container": {"id": "container_1", "expires_at": "2026-01-01T00:00:00Z"},
+        "context_management": {"applied_edits": []},
+        "usage": {"input_tokens": 1, "output_tokens": 2, "server_tool_use": {"web_search_requests": 1}},
+        "unknown_future_field": {"nested": true}
+    });
+    let upstream = upstream([json_response(upstream_body.clone())]).await;
+
+    let message = run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await;
+
+    assert_eq!(message.stop_reason.as_deref(), Some("refusal"));
+    assert_eq!(serde_json::to_value(&message).unwrap(), upstream_body);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
+    let envelope =
+        json!({"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}});
+    let upstream = upstream([status_response(400, envelope.clone())]).await;
+
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .err()
+    .expect("upstream error propagates");
+
+    let Error::Transport(TransportError::Http { status, body }) = error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(status, 400);
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), envelope);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall) {
+    let long = "x".repeat(600);
+    let upstream = upstream([ResponseTemplate::new(500).set_body_string(long.clone())]).await;
+
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .err()
+    .expect("upstream error propagates");
+
+    assert_eq!(
+        error,
+        Error::Transport(TransportError::Http {
+            status: 500,
+            body: format!("{}... (truncated)", &long[..256])
+        })
+    );
 }
 
 #[rstest]
