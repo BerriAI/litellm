@@ -827,6 +827,25 @@ def _torn_prefix(data: bytes) -> bytes:
     return data[: start + (end - start) // 2]
 
 
+class _DataLineTearer:
+    __slots__ = ("_unfinished_line",)
+
+    _unfinished_line: bytes
+
+    def __init__(self) -> None:
+        self._unfinished_line = b""
+
+    def observe(self, data: bytes) -> None:
+        self._unfinished_line = (self._unfinished_line + data).rsplit(b"\n", 1)[-1]
+
+    def tear(self, data: bytes) -> bytes | None:
+        buffered: Final = self._unfinished_line + data
+        if _data_line_start(buffered) < 0:
+            self.observe(data)
+            return None
+        return _torn_prefix(buffered)[len(self._unfinished_line):]
+
+
 def _is_content_delta(value: JsonValue | None) -> bool:
     return isinstance(value, dict) and value.get("type") == "content_block_delta"
 
@@ -881,11 +900,13 @@ def _cut_steps(
     steps: Generator[StreamStep, None, None], cut: StreamCut, carries_content: Callable[[bytes], bool]
 ) -> Generator[StreamStep, None, None]:
     with closing(steps) as source:
+        tearer: Final = _DataLineTearer()
         if cut.after_content:
             for step in source:
                 yield step
                 if isinstance(step, StreamTruncation):
                     return
+                tearer.observe(step.data)
                 if carries_content(step.data):
                     break
             else:
@@ -895,10 +916,11 @@ def _cut_steps(
                 if isinstance(step, StreamTruncation):
                     yield step
                     return
-                if _data_line_start(step.data) < 0:
+                if (torn := tearer.tear(step.data)) is None:
                     yield step
                     continue
-                yield StreamChunk(data=_torn_prefix(step.data))
+                if torn:
+                    yield StreamChunk(data=torn)
                 break
             else:
                 return
