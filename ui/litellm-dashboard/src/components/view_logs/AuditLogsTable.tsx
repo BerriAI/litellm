@@ -19,6 +19,7 @@ interface AuditLogsTableProps {
   data: AuditLogEntry[];
   rowCount: number;
   isLoading: boolean;
+  isError?: boolean;
   isRefreshing: boolean;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
@@ -101,6 +102,7 @@ export function AuditLogsTable({
   data,
   rowCount,
   isLoading,
+  isError,
   isRefreshing,
   pagination,
   onPaginationChange,
@@ -128,6 +130,7 @@ export function AuditLogsTable({
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading audit logs…"
       noDataMessage={<AuditLogsEmptyState filtered={columnFilters.length > 0 || hasActiveSearch} />}
       size="compact"

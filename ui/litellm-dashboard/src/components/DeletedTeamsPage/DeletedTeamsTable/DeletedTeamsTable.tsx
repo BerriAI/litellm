@@ -2,7 +2,7 @@
 
 import { OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { DataTable } from "@/components/shared/DataTable";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -12,12 +12,13 @@ import { getDeletedTeamsTableColumns } from "./DeletedTeamsTableColumns";
 interface DeletedTeamsTableProps {
   teams: DeletedTeam[];
   isLoading: boolean;
+  isError?: boolean;
+  sorting: SortingState;
+  onSortingChange: OnChangeFn<SortingState>;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
   rowCount: number;
 }
-
-const DEFAULT_SORTING: SortingState = [{ id: "deleted_at", desc: true }];
 
 function EmptyState() {
   return (
@@ -34,12 +35,13 @@ function EmptyState() {
 export function DeletedTeamsTable({
   teams,
   isLoading,
+  isError,
+  sorting,
+  onSortingChange,
   pagination,
   onPaginationChange,
   rowCount,
 }: DeletedTeamsTableProps) {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-
   const columns = useMemo(() => getDeletedTeamsTableColumns(), []);
 
   return (
@@ -49,12 +51,13 @@ export function DeletedTeamsTable({
       getRowId={(team, index) => team.team_id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={rowCount}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading deleted teams…"
       noDataMessage={<EmptyState />}
       size="compact"

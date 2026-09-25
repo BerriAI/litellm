@@ -1,20 +1,33 @@
 "use client";
-import { PaginationState } from "@tanstack/react-table";
+import { useCallback } from "react";
+import { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
-import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
+import { DEFAULT_PAGE_SIZE_OPTIONS, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { useDeletedTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DeletedTeamsTable } from "./DeletedTeamsTable/DeletedTeamsTable";
+import { DELETED_TEAMS_SORT_FIELDS } from "./DeletedTeamsTable/DeletedTeamsTableColumns";
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: DELETED_TEAMS_SORT_FIELDS,
+  defaultSort: { id: "deleted_at", desc: true },
+  defaultPageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
+  filterColumns: [],
+  keyPrefix: "deleted_teams_",
+};
 
 export default function DeletedTeamsPage() {
   const { premiumUser } = useAuthorized();
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
-  });
-  const { data: teamsData, isLoading } = useDeletedTeams(pagination.pageIndex + 1, pagination.pageSize);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const sortLoadedPage = useCallback<OnChangeFn<SortingState>>(
+    (updater) => {
+      onSortingChange(updater);
+      onPaginationChange(pagination);
+    },
+    [onSortingChange, onPaginationChange, pagination],
+  );
+  const { data: teamsData, isLoading, isError } = useDeletedTeams(pagination.pageIndex + 1, pagination.pageSize);
 
   return (
     <div className="flex flex-col gap-4">
@@ -30,8 +43,11 @@ export default function DeletedTeamsPage() {
       <DeletedTeamsTable
         teams={teamsData?.teams ?? []}
         isLoading={isLoading}
+        isError={isError}
+        sorting={sorting}
+        onSortingChange={sortLoadedPage}
         pagination={pagination}
-        onPaginationChange={setPagination}
+        onPaginationChange={onPaginationChange}
         rowCount={teamsData?.total ?? 0}
       />
     </div>

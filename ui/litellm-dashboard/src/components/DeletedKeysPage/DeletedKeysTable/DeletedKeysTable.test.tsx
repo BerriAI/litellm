@@ -1,3 +1,4 @@
+import { functionalUpdate, type SortingState, type Updater } from "@tanstack/react-table";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach } from "vitest";
@@ -29,10 +30,14 @@ const makeDeletedKey = (overrides: Partial<DeletedKeyResponse> = {}): DeletedKey
     ...overrides,
   }) as DeletedKeyResponse;
 
+const DELETED_AT_DESC: SortingState = [{ id: "deleted_at", desc: true }];
+
 const defaultProps = {
   keys: [makeDeletedKey()],
   totalCount: 1,
   isLoading: false,
+  sorting: DELETED_AT_DESC,
+  onSortingChange: vi.fn(),
   pagination: { pageIndex: 0, pageSize: 50 },
   onPaginationChange: vi.fn(),
 };
@@ -65,7 +70,7 @@ it("should propagate pagination changes when the next page button is clicked", a
   expect(defaultProps.onPaginationChange).toHaveBeenCalled();
 });
 
-it("should sort the current page by deleted_at descending by default", () => {
+it("sorts the current page by the deleted_at descending sorting it is given", () => {
   const keys = [
     makeDeletedKey({ token: "sk-older", key_alias: "older-key", deleted_at: "2024-01-01T10:00:00Z" }),
     makeDeletedKey({ token: "sk-newer", key_alias: "newer-key", deleted_at: "2024-06-01T10:00:00Z" }),
@@ -103,4 +108,32 @@ it("leaves the default_user_id placeholder unlinked", () => {
 
   expect(screen.getAllByText("default_user_id")).toHaveLength(2);
   expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
+});
+
+it("sorts by the controlled sorting prop and reports header clicks through onSortingChange", async () => {
+  const user = userEvent.setup();
+  const onSortingChange = vi.fn<(updater: Updater<SortingState>) => void>();
+  const keys = [
+    makeDeletedKey({ token: "sk-cheap", key_alias: "cheap-key", spend: 1 }),
+    makeDeletedKey({ token: "sk-pricey", key_alias: "pricey-key", spend: 9 }),
+  ];
+  renderWithProviders(
+    <DeletedKeysTable
+      {...defaultProps}
+      keys={keys}
+      totalCount={2}
+      sorting={[{ id: "spend", desc: true }]}
+      onSortingChange={onSortingChange}
+    />,
+  );
+
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("pricey-key")).toBeInTheDocument();
+  expect(within(rows[1]).getByText("cheap-key")).toBeInTheDocument();
+
+  await user.click(screen.getByTestId("sort-header-deleted_at"));
+
+  expect(onSortingChange).toHaveBeenCalledTimes(1);
+  const [next] = functionalUpdate(onSortingChange.mock.calls[0][0], [{ id: "spend", desc: true }]);
+  expect(next?.id).toBe("deleted_at");
 });
