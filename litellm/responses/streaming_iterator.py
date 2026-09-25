@@ -170,7 +170,7 @@ def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) 
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
-    {  # mutable-ok: immediately frozen by MappingProxyType
+    {
         "server_error": 500,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
@@ -1360,7 +1360,7 @@ def _billed_terminal_response(
         return None
     usage: Final[object] = response_obj.get("usage")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a model_constructed terminal event leaves response as an untyped dict
     return ResponsesAPIResponse.model_construct(
-        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # same untyped dict spread
+        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportArgumentType]  # same untyped dict spread
     )
 
 
@@ -1633,9 +1633,7 @@ def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple
     params: Final[Mapping[str, object]] = (
         nested
         if _is_json_object(nested) and nested
-        else MappingProxyType(  # mutable-ok: immediately frozen filtered frame
-            {k: v for k, v in msg_obj.items() if k != "type"}
-        )
+        else MappingProxyType({k: v for k, v in msg_obj.items() if k != "type"})
     )
     text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
     pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
@@ -2297,7 +2295,7 @@ class ResponsesWebSocketStreaming:
         except RateLimitError as e:
             try:
                 await self.websocket.send_text(
-                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
+                    json.dumps(
                         {  # mutable-ok: WebSocket wire payload requires JSON objects
                             "type": "error",
                             "error": {  # mutable-ok: nested WebSocket error object
@@ -2627,7 +2625,7 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: _MutableJsonObject) -> dict[str, Any]:
+    def _build_base_call_kwargs(msg_obj: _MutableJsonObject) -> dict[str, object]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
@@ -2743,9 +2741,7 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on
         every chunk.  Returns the completed event dict, or ``None``.
         """
-        completed_event: _MutableJsonObject | None = (
-            None  # rebind-ok: captures the completed event once the stream yields it
-        )
+        completed_event: _MutableJsonObject | None = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:
             if chunk is None:

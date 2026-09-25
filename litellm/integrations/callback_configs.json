@@ -259,6 +259,13 @@
         "ui_name": "Tracing Environment",
         "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
         "required": false
+      },
+      "langfuse_span_scope": {
+        "type": "select",
+        "ui_name": "Span Scope",
+        "description": "full sends the whole request trace, llm_only sends just the model-call spans",
+        "options": ["full", "llm_only"],
+        "required": false
       }
     },
     "description": "Langfuse v3 OTEL Logging Integration"

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import click
 import httpx
+from click.core import ParameterSource
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
@@ -32,21 +33,20 @@ else:
     FastAPI = Any
 
 
-def _deprioritize_script_dir_in_sys_path() -> None:
+def _drop_script_dir_from_sys_path() -> None:
     """Stop ``litellm/proxy`` modules from shadowing installed packages.
 
     Running this file as a script puts its own directory at ``sys.path[0]``, so
     ``import a2a`` resolves to ``litellm/proxy/a2a`` instead of the ``a2a`` SDK
-    and A2A agent calls fail. The entry is moved to the end rather than dropped,
-    because the sibling-import fallbacks in this module (``from proxy_server
-    import ...``) still need it. No-op under the ``litellm`` console script.
+    and ``proxy_server`` resolves to a second copy of
+    ``litellm.proxy.proxy_server``. No-op under the ``litellm`` console script.
     """
     script_dir: Final = os.path.dirname(os.path.abspath(__file__))
     if sys.path and os.path.abspath(sys.path[0]) == script_dir:
-        sys.path.append(sys.path.pop(0))
+        sys.path.pop(0)
 
 
-_deprioritize_script_dir_in_sys_path()
+_drop_script_dir_from_sys_path()
 sys.path.append(os.getcwd())
 
 config_filename: Final = "litellm.secrets"
@@ -55,8 +55,6 @@ litellm_mode: Final = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
 from enum import Enum
-
-telemetry: Final = None
 
 
 class LiteLLMDatabaseConnectionPool(Enum):
@@ -183,6 +181,23 @@ def append_query_params(url: str | None, params: dict) -> str:
     return modified_url
 
 
+def resolve_v2_migration_resolver(*, use_legacy_flag: bool, env_value: str | None) -> bool:
+    from litellm_proxy_extras.utils import str_to_bool
+
+    if use_legacy_flag:
+        return False
+    if env_value is None:
+        return True
+    return bool(str_to_bool(env_value))
+
+
+def deprecated_v2_flag_passed_on_cli() -> bool:
+    ctx: Final = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source("use_v2_migration_resolver") is ParameterSource.COMMANDLINE
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
@@ -194,6 +209,25 @@ class ProxyInitializationHelpers:
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
+
+    @staticmethod
+    def _run_config_validation(config: str | None) -> None:
+        if config is None:
+            raise click.UsageError("--validate_config requires --config <path>")
+        import asyncio
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        async def _load() -> int:
+            _, model_list, _ = await ProxyConfig().load_config(router=None, config_file_path=config)
+            return len(model_list)
+
+        try:
+            model_count: Final = asyncio.run(_load())
+        except Exception as error:
+            click.echo(f"LiteLLM: config validation failed: {error}", err=True)
+            raise click.exceptions.Exit(1) from error
+        click.echo(f"LiteLLM: config OK ({model_count} models)")
 
     @staticmethod
     def _run_test_chat_completion(
@@ -589,6 +623,11 @@ class ProxyInitializationHelpers:
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 
+        # The master preloads the app and then forks every worker, so native routes are
+        # forbidden in it: their runtime threads would not survive the fork.
+        from litellm.rust_bridge.fork_guard import reserve_process_for_forking
+
+        reserve_process_for_forking("the gunicorn master")
         start_query_engine_reaper()
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
@@ -753,9 +792,11 @@ class ProxyInitializationHelpers:
 )
 @click.option(
     "--telemetry",
-    default=True,
+    default=None,
     type=bool,
-    help="Helps us know if people are using this feature. Turn this off by doing `--telemetry False`",
+    hidden=True,
+    expose_value=False,
+    help="Deprecated no-op kept so existing start commands still parse",
 )
 @click.option(
     "--log_config",
@@ -858,12 +899,18 @@ class ProxyInitializationHelpers:
     default=False,
     help="Use prisma db push instead of prisma migrate for database schema updates",
 )
-@click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option("--local", is_flag=True, default=False, help="no-op, kept for backwards compatibility")
 @click.option(
     "--skip_server_startup",
     is_flag=True,
     default=False,
     help="Skip starting the server after setup (useful for migrations only)",
+)
+@click.option(
+    "--validate_config",
+    is_flag=True,
+    default=False,
+    help="Load and validate the config file (including mcp_servers) without starting the server, then exit. Exit code 1 on any config error.",
 )
 @click.option(
     "--keepalive_timeout",
@@ -927,11 +974,23 @@ class ProxyInitializationHelpers:
     is_flag=True,
     default=False,
     help=(
-        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
-        "path that can cause schema thrashing during rolling deploys where two "
-        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+        "Deprecated and ignored: the v2 migration resolver is now the default, "
+        "so this flag has no effect. It is still accepted so existing commands "
+        "keep working. Pass --use_legacy_migration_resolver, or set "
+        "USE_V2_MIGRATION_RESOLVER=false, to opt back into v1."
     ),
     envvar="USE_V2_MIGRATION_RESOLVER",
+)
+@click.option(
+    "--use_legacy_migration_resolver",
+    is_flag=True,
+    default=False,
+    help=(
+        "Fall back to the legacy v1 migration resolver. By default the proxy "
+        "uses the v2 resolver, which avoids the diff-and-force recovery path "
+        "that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB."
+    ),
 )
 @click.option(
     "--reload",
@@ -972,7 +1031,6 @@ def run_server(
     add_function_to_prompt,
     config,
     max_budget,
-    telemetry,
     test,
     local,
     num_workers,
@@ -994,6 +1052,7 @@ def run_server(
     log_config,
     use_prisma_db_push: bool,
     skip_server_startup,
+    validate_config: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
@@ -1001,6 +1060,7 @@ def run_server(
     limit_concurrency: int | None,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
+    use_legacy_migration_resolver: bool,
     reload: bool,
     prometheus_metrics_port: int | None,
 ):
@@ -1023,37 +1083,20 @@ def run_server(
         return
 
     args: Final = locals()
-    if local:
-        from proxy_server import (
+    try:
+        from litellm.proxy.proxy_server import (
             KeyManagementSettings,
             ProxyConfig,
             app,
             save_worker_config,
         )
-    else:
-        try:
-            from .proxy_server import (
-                KeyManagementSettings,
-                ProxyConfig,
-                app,
-                save_worker_config,
-            )
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
-        except ImportError as e:
-            if "litellm[proxy]" in str(e):
-                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
-                raise e
-            else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
-                    KeyManagementSettings,
-                    ProxyConfig,
-                    app,
-                    save_worker_config,
-                )
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`") from e
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
+        return
+    if validate_config is True:
+        ProxyInitializationHelpers._run_config_validation(config)
         return
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers._run_ollama_serve()
@@ -1077,7 +1120,6 @@ def run_server(
             max_tokens=max_tokens,
             request_timeout=request_timeout,
             max_budget=max_budget,
-            telemetry=telemetry,
             drop_params=drop_params,
             add_function_to_prompt=add_function_to_prompt,
             headers=headers,
@@ -1249,6 +1291,7 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
+                DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
                 reader_shareable_params,
@@ -1271,12 +1314,16 @@ def run_server(
                     sys.exit(1)
             from litellm.secret_managers.main import get_secret
 
+            env_disable_prepared_statements: Final = token_auth_flag_enabled(
+                os.getenv(DISABLE_PREPARED_STATEMENTS_ENV_VAR), env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+            )
+            disable_prepared_statements: Final = db_disable_prepared_statements or env_disable_prepared_statements
             connection_url_params: Final = _build_db_connection_url_params(
                 connection_limit=db_connection_pool_limit,
                 pool_timeout=db_connection_timeout,
                 connect_timeout=db_connect_timeout,
                 socket_timeout=db_socket_timeout,
-                disable_prepared_statements=db_disable_prepared_statements,
+                disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
@@ -1343,17 +1390,29 @@ def run_server(
                 if should_update_prisma_schema(general_settings.get("disable_prisma_schema_update")) is False:
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not use_v2_migration_resolver:
+                    use_v2_resolver: Final = resolve_v2_migration_resolver(
+                        use_legacy_flag=use_legacy_migration_resolver,
+                        env_value=os.getenv("USE_V2_MIGRATION_RESOLVER"),
+                    )
+                    if deprecated_v2_flag_passed_on_cli() and use_v2_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
-                            "If your deployment has seen schema thrashing during rolling "
-                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
-                            "diff-and-force recovery that caused the thrash).\033[0m"
+                            "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is "
+                            "deprecated and has no effect, because the v2 migration "
+                            "resolver is now the default. You can safely remove it. To "
+                            "opt back into the legacy v1 resolver, pass "
+                            "--use_legacy_migration_resolver.\033[0m"
+                        )
+                    if not use_v2_resolver:
+                        print(
+                            "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration "
+                            "resolver. It performs the diff-and-force recovery that can "
+                            "cause schema thrashing during rolling deploys where two "
+                            "LiteLLM versions contend for the same DB.\033[0m"
                         )
                     try:
                         setup_ok: Final = PrismaManager.setup_database(
                             use_migrate=not use_prisma_db_push,
-                            use_v2_resolver=use_v2_migration_resolver,
+                            use_v2_resolver=use_v2_resolver,
                         )
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2

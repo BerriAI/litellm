@@ -15,6 +15,7 @@ from litellm.llms.fal_ai.image_generation import (
     get_fal_ai_image_generation_config,
 )
 from litellm.types.utils import ImageObject, ImageResponse
+from litellm.utils import get_optional_params_image_gen
 
 
 @pytest.mark.parametrize(
@@ -23,6 +24,8 @@ from litellm.types.utils import ImageObject, ImageResponse
         "fal-ai/nano-banana",
         "nano-banana",
         "fal-ai/gemini-25-flash-image",
+        "fal-ai/nano-banana-2",
+        "fal-ai/nano-banana-pro",
     ],
 )
 def test_nano_banana_config_selected(model):
@@ -145,3 +148,21 @@ def test_transform_request_includes_prompt_and_mapped_params():
     }
 
 
+@pytest.mark.parametrize("model", ["fal-ai/nano-banana-2", "fal-ai/nano-banana-pro"])
+def test_resolution_extra_param_is_forwarded_to_fal(model):
+    optional_params = get_optional_params_image_gen(
+        model=model,
+        n=1,
+        size="1024x1024",
+        custom_llm_provider="fal_ai",
+        provider_config=FalAINanoBananaConfig(),
+        resolution="4K",
+    )
+    request = FalAINanoBananaConfig().transform_image_generation_request(
+        model=model,
+        prompt="a cat",
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert request == {"prompt": "a cat", "num_images": 1, "aspect_ratio": "1:1", "resolution": "4K"}

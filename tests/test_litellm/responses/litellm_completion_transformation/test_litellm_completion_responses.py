@@ -1248,6 +1248,16 @@ class TestFunctionCallTransformation:
         assert "tool_choice" not in result
         assert "tools" not in result
 
+    def test_safety_identifier_forwarded_to_chat_completion_request(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/global.openai.gpt-5.6-luna",
+            input="hi",
+            responses_api_request={"safety_identifier": "user-7f3a"},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result["safety_identifier"] == "user-7f3a"
+
     def test_parallel_tool_calls_dropped_when_no_chat_tools_remain(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
         codex_tool_search: Final = {

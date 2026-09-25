@@ -10,6 +10,7 @@ Routes covered:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from .conftest import normalize
@@ -510,6 +511,8 @@ def _db_user(monkeypatch, email: str):
     user.user_email = email
     user.user_role = "internal_user"
     user.password = "scrypt:stored"
+    user.password_reset_required = None
+    user.last_breach_check_at = datetime.now(timezone.utc)
     repo = MagicMock()
     repo.return_value.table.find_first = AsyncMock(return_value=user)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())

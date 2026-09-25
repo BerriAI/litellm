@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
+use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{
     call_arguments::CallArguments,
     serde_compat::{FiniteF64, LaxI64},
@@ -139,6 +139,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some(AZURE_DI_API_KEY_ENV)
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        [
+            [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV].as_slice(),
+            AZURE_AUTH_SECRET_NAMES,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
     }
 
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
@@ -550,6 +561,14 @@ async fn poll_operation(
 }
 
 impl AzureDocumentIntelligenceOcrConfig {
+    pub fn analyze_path(model: &str) -> Result<[String; 3], Error> {
+        Ok([
+            "documentintelligence".into(),
+            "documentModels".into(),
+            format!("{}:analyze", model_id(model)?),
+        ])
+    }
+
     fn build_ocr_url(
         &self,
         endpoint: &str,
@@ -557,9 +576,9 @@ impl AzureDocumentIntelligenceOcrConfig {
         params: &DocumentIntelligenceParams,
         api_version: &str,
     ) -> Result<String, Error> {
-        let model = format!("{}:analyze", model_id(model)?);
+        let path = Self::analyze_path(model)?;
         ApiUrl::parse(endpoint)
-            .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
+            .and_then(|url| url.complete_path(&path.each_ref().map(String::as_str)))
             .map(|url| {
                 url.append_query_pairs(
                     [("api-version", api_version)]

@@ -14,9 +14,8 @@ from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -290,7 +289,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

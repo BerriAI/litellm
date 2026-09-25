@@ -242,7 +242,6 @@ email: Optional[str] = (
 token: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
@@ -384,6 +383,7 @@ enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )
+key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
@@ -403,6 +403,7 @@ default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
+budget_exceeded_status_code: int = 422  # set to 429 to restore the pre-422 budget_exceeded response code
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
@@ -659,6 +660,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
+nadir_models: Set = set()  # mutable-ok: provider registry, filled from model_cost at import like every sibling provider
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -692,6 +694,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
+edenai_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -766,6 +769,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             openrouter_models.add(key)
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             vercel_ai_gateway_models.add(key)
+        elif value.get("litellm_provider") == "edenai":
+            edenai_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -892,6 +897,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.add(key)
+        elif value.get("litellm_provider") == "nadir":
+            nadir_models.add(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.add(key)
         elif value.get("litellm_provider") == "nvidia_nim":
@@ -1082,6 +1089,7 @@ model_list = list(
     | azure_anthropic_models
     | anyscale_models
     | cerebras_models
+    | nadir_models
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
@@ -1114,6 +1122,7 @@ model_list = list(
     | oci_models
     | heroku_models
     | vercel_ai_gateway_models
+    | edenai_models
     | volcengine_models
     | wandb_models
     | ovhcloud_models
@@ -1142,6 +1151,7 @@ def _build_models_by_provider() -> dict:
         "baseten": baseten_models,
         "openrouter": openrouter_models,
         "vercel_ai_gateway": vercel_ai_gateway_models,
+        "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
         | vertex_text_models
@@ -1188,6 +1198,7 @@ def _build_models_by_provider() -> dict:
         "azure_text": azure_text_models,
         "anyscale": anyscale_models,
         "cerebras": cerebras_models,
+        "nadir": nadir_models,
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
@@ -1399,6 +1410,7 @@ from .exceptions import (
     JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
     MockException,
+    ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
@@ -1454,6 +1466,7 @@ from .skills.main import (
 from .containers.main import *
 from .ocr.dispatch import *
 from .chat_completions.dispatch import *
+from .embeddings.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
@@ -1687,6 +1700,9 @@ if TYPE_CHECKING:
     from .llms.bedrock.messages.mantle_transformation import (
         AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
     )
+    from .llms.bedrock_mantle.messages.transformation import (
+        BedrockMantleAnthropicMessagesConfig as BedrockMantleAnthropicMessagesConfig,
+    )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
     from .llms.together_ai.chat.transformation import (
         TogetherAIChatConfig as TogetherAIChatConfig,
@@ -1864,6 +1880,9 @@ if TYPE_CHECKING:
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,
     )
+    from .llms.bedrock.responses.transformation import (
+        BedrockOpenAIResponsesConfig as BedrockOpenAIResponsesConfig,
+    )
     from .llms.bedrock_mantle.responses.transformation import (
         BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
     )
@@ -1983,6 +2002,7 @@ if TYPE_CHECKING:
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
+    from .llms.nadir.chat.transformation import NadirConfig as NadirConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
     from .llms.sambanova.chat import SambanovaConfig as SambanovaConfig
     from .llms.sambanova.embedding.transformation import (
@@ -2116,6 +2136,34 @@ if TYPE_CHECKING:
     )
     from .llms.vercel_ai_gateway.chat.transformation import (
         VercelAIGatewayConfig as VercelAIGatewayConfig,
+    )
+    from .llms.edenai.chat.transformation import (
+        EdenAIChatConfig as EdenAIChatConfig,
+    )
+    from .llms.edenai.responses.transformation import (
+        EdenAIResponsesAPIConfig as EdenAIResponsesAPIConfig,
+    )
+    from .llms.edenai.messages.transformation import (
+        EdenAIAnthropicMessagesConfig as EdenAIAnthropicMessagesConfig,
+    )
+    from .llms.edenai.embedding.transformation import (
+        EdenAIEmbeddingConfig as EdenAIEmbeddingConfig,
+    )
+    from .llms.edenai.audio_transcription.transformation import (
+        EdenAIAudioTranscriptionConfig as EdenAIAudioTranscriptionConfig,
+    )
+    from .llms.edenai.text_to_speech.transformation import (
+        EdenAITextToSpeechConfig as EdenAITextToSpeechConfig,
+    )
+    from .llms.edenai.image_generation.transformation import (
+        EdenAIImageGenerationConfig as EdenAIImageGenerationConfig,
+    )
+    from .llms.edenai.videos.transformation import (
+        EdenAIVideoConfig as EdenAIVideoConfig,
+    )
+    from .llms.fal_ai.chat.transformation import (
+        FalAIChatConfig as FalAIChatConfig,
+        FalAIError as FalAIError,
     )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,

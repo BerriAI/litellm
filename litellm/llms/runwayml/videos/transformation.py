@@ -616,6 +616,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         """
         Transform the RunwayML video status retrieve response.

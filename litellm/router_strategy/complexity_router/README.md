@@ -191,6 +191,7 @@ model_list:
       model: auto_router/complexity_router
       complexity_router_config:
         classifier_type: heuristic_v2
+        heuristic_v2_success_threshold: 0.9
         tiers:
           SIMPLE: luna
           MEDIUM: terra
@@ -201,9 +202,18 @@ model_list:
 No classifier model call or per-model training data is required. The classifier
 uses global tier quality, request-type quality, and similar-request cohorts from
 the bundled UltraFeedback artifact. It estimates success at every tier, enforces
-monotonic probabilities, and returns the first tier meeting the trained 0.75
-threshold. The existing complexity-router tier pool then selects and dispatches
-a model from that tier
+monotonic probabilities, and returns the first tier meeting the success threshold,
+or REASONING if no tier meets it. The existing complexity-router tier pool then
+selects and dispatches a model from that tier
+
+Set `heuristic_v2_success_threshold` to a value from 0 to 1 to override the
+artifact's threshold. For example, `0.9` requires a predicted success probability
+of at least 90%. Higher thresholds favor more capable tiers. Omit the setting or
+set it to `null` to use the artifact's `routing_threshold`, which is `0.75` for
+the bundled artifact. The override leaves the predicted probabilities unchanged
+
+In the dashboard, select Heuristic v2 under Advanced: Classification Method and
+set Success threshold. Clear the field to restore the artifact's default
 
 Spend logs record `routing_decision.cause: heuristic_v2`, the detected request
 type, and all four predicted probabilities. Existing `classifier_type: heuristic`

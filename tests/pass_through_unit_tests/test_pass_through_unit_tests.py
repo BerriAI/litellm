@@ -413,6 +413,7 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
     "/comprehendmedical/{operation}": {"POST"},
     "/transcribe": {"POST"},
     "/transcribe/{operation}": {"POST"},
+    "/tinyfish/{endpoint:path}": {"GET", "POST"},
 }
 
 

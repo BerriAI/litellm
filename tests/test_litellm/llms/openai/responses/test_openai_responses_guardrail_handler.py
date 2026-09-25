@@ -1610,13 +1610,14 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         events = self._ended_custom_tool_call_stream_events()
         events[5]["response"]["output"] = [{**events[5]["response"]["output"][0], "call_id": "call_999"}]
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite) as undeliverable:
             await handler.process_output_streaming_response(
                 responses_so_far=events,
                 guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+        assert undeliverable.value.reason == "no stream event carries the rewritten call_id call_999"
 
     @staticmethod
     def _bridged_function_call_stream_events() -> List[dict]:
@@ -1688,8 +1689,21 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[1]["item"] == {"type": "reasoning", "id": "rs_1", "summary": []}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("mismatch", ["orphan_call_id", "duplicate_call_id"])
-    async def test_deliver_ended_stream_function_call_rewrite_without_matching_events_fails_closed(self, mismatch):
+    @pytest.mark.parametrize(
+        ("mismatch", "expected_reason"),
+        [
+            ("orphan_call_id", "no stream event carries the rewritten call_id call_999"),
+            ("duplicate_call_id", "the stream's tool call items repeat a call_id"),
+            ("missing_call_id", "1 of the stream's 1 tool call items carry no call_id"),
+            (
+                "unknown_argument_item_id",
+                "a tool call argument event names an item_id that no output_item event introduced",
+            ),
+        ],
+    )
+    async def test_deliver_ended_stream_function_call_rewrite_without_matching_events_fails_closed(
+        self, mismatch, expected_reason
+    ):
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         handler = OpenAIResponsesHandler()
@@ -1697,16 +1711,22 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         envelope_item = events[5]["response"]["output"][0]
         if mismatch == "orphan_call_id":
             events[5]["response"]["output"] = [{**envelope_item, "call_id": "call_999"}]
-        else:
+        elif mismatch == "duplicate_call_id":
             events[5]["response"]["output"] = [dict(envelope_item), dict(envelope_item)]
+        elif mismatch == "missing_call_id":
+            events[5]["response"]["output"] = [{key: value for key, value in envelope_item.items() if key != "call_id"}]
+        else:
+            events[1]["item_id"] = "fc_unknown"
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite) as undeliverable:
             await handler.process_output_streaming_response(
                 responses_so_far=events,
                 guardrail_to_apply=self._argument_masking_guardrail(),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+        assert undeliverable.value.reason == expected_reason
+        assert str(undeliverable.value).endswith(f"cannot be written back to the stream: {expected_reason}")
 
     @pytest.mark.asyncio
     async def test_ended_stream_function_call_rewrite_leaves_events_untouched_by_default(self):
@@ -2276,6 +2296,56 @@ class TestStructuredMessagesWriteBack:
             "output": COMPRESSED_MARKER,
         }
         assert result["input"][3] == {"role": "user", "content": "What is the codename?"}
+
+    @pytest.mark.asyncio
+    async def test_codex_custom_tool_items_survive_tool_output_compression(self):
+        handler = OpenAIResponsesHandler()
+        additional_tools_item = {
+            "type": "additional_tools",
+            "tools": [{"type": "custom", "name": "exec", "description": "Run a JavaScript snippet"}],
+        }
+        reasoning_item = {
+            "id": "rs_456",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAA-signed-reasoning",
+        }
+        custom_tool_call_item = {
+            "id": "ctc_456",
+            "type": "custom_tool_call",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": 'const r = await tools.exec_command({"cmd": "cat memo.txt"});\ntext(r.output);',
+            "status": "completed",
+        }
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                additional_tools_item,
+                {"role": "user", "content": "What is the codename?"},
+                reasoning_item,
+                custom_tool_call_item,
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_exec",
+                    "output": [
+                        {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                        {"type": "input_text", "text": "memo " * 400},
+                    ],
+                },
+            ],
+        }
+
+        result = await handler.process_input_messages(data, ToolOutputRewriteGuardrail())
+
+        assert result["input"][0] is additional_tools_item
+        assert result["input"][1] == {"role": "user", "content": "What is the codename?"}
+        assert result["input"][2] is reasoning_item
+        assert result["input"][3] is custom_tool_call_item
+        assert result["input"][4]["type"] == "custom_tool_call_output"
+        assert result["input"][4]["call_id"] == "call_exec"
+        assert COMPRESSED_MARKER in str(result["input"][4]["output"])
+        assert len(result["input"]) == 5
 
     @pytest.mark.asyncio
     async def test_web_search_call_item_preserved_verbatim(self):

@@ -85,7 +85,7 @@ def safe_json_structure(
 
 
 def safe_dumps(
-    data: Any,
+    data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
 ) -> str:

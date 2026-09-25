@@ -8,7 +8,6 @@ from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
-from functools import cache
 from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias, TypedDict
@@ -17,7 +16,7 @@ from urllib.parse import quote, unquote, urlencode
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -41,7 +40,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -56,14 +57,16 @@ from litellm.types.llms.openai import (
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
-    ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
-from litellm.utils import get_llm_provider
+from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums, all_litellm_params
+from litellm.utils import get_llm_provider, get_optional_params
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
+from ..common_utils import (
+    BedrockError,
+    merge_bedrock_aws_request_params,
+    resolve_s3_encryption_key_id,
+)
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
 
@@ -83,6 +86,14 @@ UPLOAD_CONTENT_LENGTH_PARAM: Final = "_s3_upload_content_length"
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
+
+
+_LITELLM_PARAMS_THE_MAPPER_TAKES: Final = frozenset({"allowed_openai_params"})
+_MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS: Final = frozenset({"json_mode"})
+
+
+def _invoke_route_model(model: str) -> str:
+    return f"invoke/{_strip_llm_routing_prefix(model).removeprefix('invoke/')}"
 
 
 def _strip_llm_routing_prefix(model: str) -> str:
@@ -126,28 +137,14 @@ class _S3UploadResponse(TypedDict, total=False):
     ContentLength: ReadOnly[int]
 
 
-# JSONL batch records are untyped json, so the `/v1/responses` fields are
-# validated into their concrete Responses API types before being handed to the
-# Responses-to-Chat bridge. Both adapters drop keys the Responses API doesn't
-# define, which is what the bridge would ignore anyway. Built on first use
-# rather than at import: `ResponseInputParam` is a deep union and only batch
-# files carrying `/v1/responses` records need it.
-@cache
-def _responses_input_adapter() -> TypeAdapter[str | ResponseInputParam]:
-    return TypeAdapter(str | ResponseInputParam)
-
-
-@cache
-def _responses_request_adapter() -> TypeAdapter[ResponsesAPIOptionalRequestParams]:
-    return TypeAdapter(ResponsesAPIOptionalRequestParams)
-
-
 class _BedrockS3RequestParams(AwsAuthParams):
     """Typed view of the credential/region params the S3 GetObject path reads."""
 
     aws_region_name: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,7 +372,7 @@ def _listed_managed_file(
     )
 
 
-def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Response) -> int:
+def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers: Mapping[str, str]) -> int:
     """
     S3 answers PutObject with an empty body, so the stored object size comes from the
     signed request recorded by `transform_create_file_request`, not the response headers.
@@ -383,7 +380,7 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Re
     uploaded_size: Final = litellm_params.get(UPLOAD_CONTENT_LENGTH_PARAM)
     if isinstance(uploaded_size, int):
         return uploaded_size
-    response_content_length: Final = raw_response.headers.get("Content-Length", "0")
+    response_content_length: Final = response_headers.get("Content-Length", "0")
     return int(response_content_length) if response_content_length.isdigit() else 0
 
 
@@ -853,33 +850,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         Delegates to the same Responses-to-Chat bridge the real-time path uses
         for providers without a native Responses API (which is every Bedrock
         model), so `input`, `instructions`, `max_output_tokens` and the tool
-        params translate identically in batch and real time. The bridge always
-        emits a `tools` key; an empty one is dropped rather than shipped as an
-        empty array inside `modelInput`.
+        params translate identically in batch and real time.
         """
-        from litellm.responses.litellm_completion_transformation.transformation import (
-            LiteLLMCompletionResponsesConfig,
-        )
-
-        responses_input: Final = openai_request_body.get("input")
-        if responses_input is None:
-            raise ValueError(
-                "Batch record for /v1/responses is missing required `input` field: "
-                f"model={openai_request_body.get('model', '')}"
-            )
-        chat_body: Final[Mapping[str, object]] = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-                model=openai_request_body.get("model", ""),
-                input=_responses_input_adapter().validate_python(responses_input),
-                responses_api_request=_responses_request_adapter().validate_python(
-                    _frozen_mapping(
-                        (key, value) for key, value in openai_request_body.items() if key not in ("model", "input")
-                    )
-                ),
-                metadata=openai_request_body.get("metadata"),
-            )
-        )
-        return _frozen_mapping((key, value) for key, value in chat_body.items() if key != "tools" or value)
+        return responses_batch_body_to_chat_body(openai_request_body)
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
@@ -916,7 +889,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = openai_request_body.get("messages", [])
+        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
@@ -926,16 +899,24 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
-            mapped_params = config.map_openai_params(
-                non_default_params={},
-                optional_params=optional_params,
-                model=model,
-                drop_params=False,
+            mapped_params = get_optional_params(
+                model=_invoke_route_model(model),
+                custom_llm_provider="bedrock",
+                messages=messages,
+                **MappingProxyType(
+                    {
+                        k: v
+                        for k, v in optional_params.items()
+                        if k not in all_litellm_params or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
+                    }
+                ),
             )
             return config.transform_request(
                 model=model,
                 messages=messages,
-                optional_params=mapped_params,
+                optional_params={
+                    k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
+                },
                 litellm_params={},
                 headers={},
             )
@@ -1147,7 +1128,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self.resolve_credentials(AwsAuthParams.model_validate(optional_params), aws_region_name)
+        credentials: Final = self.resolve_s3_credentials(optional_params, aws_region_name)
 
         # Calculate SHA256 hash of the content (REQUIRED for S3)
         content_hash: Final = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -1277,7 +1258,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             filename=filename,
             created_at=int(time.time()),  # Current timestamp
             status="uploaded",
-            bytes=_uploaded_object_size(litellm_params=litellm_params, raw_response=raw_response),
+            bytes=_uploaded_object_size(litellm_params=litellm_params, response_headers=raw_response.headers),
             object="file",
         )
 
@@ -1494,7 +1475,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        credentials: Final = self.resolve_credentials(request_params, aws_region_name)
+        credentials: Final = self.resolve_s3_credentials(request_params.model_dump(exclude_none=True), aws_region_name)
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped

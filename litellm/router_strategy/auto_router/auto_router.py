@@ -3,7 +3,7 @@ Auto-Routing Strategy that works with a Semantic Router Config
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -158,7 +158,7 @@ class AutoRouter(CustomLogger):
         return await asyncio.shield(build_task)
 
     @staticmethod
-    def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
+    def _extract_text_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
         """
         Extract text content from the last user message for routing.
 

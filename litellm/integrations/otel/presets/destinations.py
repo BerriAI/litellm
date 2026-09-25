@@ -15,7 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
 
 #: An endpoint plus the OTLP transport to reach it with, or ``None`` when the backend
 #: names no destination. The transport is ``None`` where the backend has only one.
@@ -111,6 +111,12 @@ _REQUIRED_HEADERS_BY_CALLBACK: Final[Mapping[str, frozenset[str]]] = MappingProx
 _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
+def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
+    if callback_name != "langfuse_otel":
+        return "full"
+    return params.get("langfuse_span_scope") or "full"
+
+
 def destination_capable_backends() -> frozenset[str]:
     """Backends a key or team can point at its own account."""
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
@@ -145,8 +151,9 @@ def destination_for(
     endpoint, protocol = resolved
     return OtelDestination(
         endpoint=endpoint,
-        headers=MappingProxyType(dict(headers)),  # mutable-ok: MappingProxyType needs a concrete mapping to wrap
+        headers=MappingProxyType(dict(headers)),
         resource_attributes=MappingProxyType({"service.name": service_name}) if service_name else _NO_ATTRS,
         callback_name=callback_name,
         protocol=protocol,
+        span_scope=_span_scope(callback_name, params),
     )

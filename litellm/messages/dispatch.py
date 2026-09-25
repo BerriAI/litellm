@@ -3,8 +3,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
-from litellm.rust_bridge.catalog import Context, Delivery, Route
+from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
@@ -71,10 +73,17 @@ def _public_request(
     )
 
 
-def _context(request: LiteLLMMessagesRequest) -> Context:
-    return Context(
+def _resolved_provider(request: LiteLLMMessagesRequest) -> str | None:
+    try:
+        return get_llm_provider(request.model, request.custom_llm_provider)[1]
+    except BadRequestError:
+        return request.custom_llm_provider
+
+
+def _context(request: LiteLLMMessagesRequest) -> RouteContext:
+    return RouteContext(
         Route.MESSAGES,
-        provider=request.custom_llm_provider,
+        provider=_resolved_provider(request),
         model=request.model,
         delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
     )

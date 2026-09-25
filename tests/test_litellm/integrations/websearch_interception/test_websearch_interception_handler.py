@@ -231,6 +231,39 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_execute_search_attributes_cli_session_spend_to_the_per_user_alias_not_the_login_token(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "perplexity-sonar-pro",
+            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        user_id="alice",
+        key_alias="cli-session-alice",
+        is_session_token=True,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": session}}},
+    )
+
+    forwarded_metadata = mock_asearch.await_args.kwargs["litellm_metadata"]
+    assert forwarded_metadata["user_api_key"] == "cli-session-alice"
+    assert forwarded_metadata["user_api_key_hash"] == "cli-session-alice"
+
+
+@pytest.mark.asyncio
 async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
     """An intercepted search is billed and logged against the key that made the LLM request.
 
@@ -285,6 +318,162 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
         )
         is True
     )
+
+
+def _perplexity_router() -> MagicMock:
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "perplexity-sonar-pro",
+            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+        }
+    ]
+    return router
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_kwargs",
+    [
+        pytest.param(
+            {
+                "litellm_call_id": "parent-call-1",
+                "litellm_trace_id": "trace-abc",
+                "litellm_session_id": "session-abc",
+                "metadata": {
+                    "user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-1234"),
+                    "session_id": "session-abc",
+                },
+            },
+            id="chat-completions-call-kwargs",
+        ),
+        pytest.param(
+            {
+                "litellm_call_id": "parent-call-1",
+                "litellm_metadata": {
+                    "user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-1234"),
+                    "session_id": "session-abc",
+                    "trace_id": "trace-abc",
+                },
+            },
+            id="anthropic-messages-litellm-metadata",
+        ),
+        pytest.param(
+            {
+                "litellm_params": {
+                    "litellm_call_id": "parent-call-1",
+                    "litellm_trace_id": "trace-abc",
+                    "metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-1234")},
+                    "litellm_metadata": {"session_id": "session-abc"},
+                }
+            },
+            id="logging-payload-with-both-metadata-keys",
+        ),
+    ],
+)
+async def test_execute_search_inherits_parent_request_session_and_trace(
+    monkeypatch: pytest.MonkeyPatch, parent_kwargs: dict[str, object]
+):
+    """The intercepted asearch is billed as its own call but must land in the parent request's
+    session and trace, otherwise every search shows up as a separate one-call session in SpendLogs."""
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search("what is litellm", kwargs=parent_kwargs)
+
+    forwarded = mock_asearch.await_args.kwargs
+    assert forwarded["litellm_session_id"] == "session-abc"
+    assert forwarded["litellm_trace_id"] == "trace-abc"
+    assert forwarded["litellm_metadata"]["session_id"] == "session-abc"
+    assert forwarded["litellm_metadata"]["trace_id"] == "trace-abc"
+    assert forwarded["litellm_metadata"]["parent_request_id"] == "parent-call-1"
+    assert forwarded["litellm_metadata"]["user_api_key"] == "hashed-sk-1234"
+    assert forwarded["litellm_metadata"]["model_group"] == "perplexity-sonar-pro"
+    assert "litellm_call_id" not in forwarded
+    assert (
+        _get_session_id_for_spend_log(
+            kwargs={"litellm_trace_id": forwarded["litellm_trace_id"]},
+            metadata=forwarded["litellm_metadata"],
+            standard_logging_payload=None,
+            omit_when_missing=True,
+        )
+        == "session-abc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_forwards_parent_otel_span_from_key_auth(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    parent_span = object()
+
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="sk", parent_otel_span=parent_span)}},
+    )
+
+    assert mock_asearch.await_args.kwargs["litellm_metadata"]["litellm_parent_otel_span"] is parent_span
+
+
+@pytest.mark.asyncio
+async def test_execute_search_without_parent_session_does_not_invent_one(monkeypatch: pytest.MonkeyPatch):
+    """A parent request with no session/trace must not stamp empty correlation keys on the search."""
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="sk"), "prompt": "x"}}},
+    )
+
+    forwarded = mock_asearch.await_args.kwargs
+    assert "litellm_session_id" not in forwarded
+    assert "litellm_trace_id" not in forwarded
+    assert not {"session_id", "trace_id", "parent_request_id", "prompt"} & forwarded["litellm_metadata"].keys()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_searches_keep_their_own_parent_session(monkeypatch: pytest.MonkeyPatch):
+    import asyncio
+
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await asyncio.gather(
+        *(
+            logger._execute_search(
+                f"query {i}",
+                kwargs={"metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="sk"), "session_id": f"session-{i}"}},
+            )
+            for i in range(5)
+        )
+    )
+
+    seen = {
+        call.kwargs["query"]: call.kwargs["litellm_metadata"]["session_id"] for call in mock_asearch.await_args_list
+    }
+    assert seen == {f"query {i}": f"session-{i}" for i in range(5)}
 
 
 @pytest.mark.asyncio

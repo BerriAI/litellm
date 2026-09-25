@@ -66,7 +66,7 @@ def map_v3_rate_limit_type(
     return None
 
 
-def _coerce_message(detail: Any) -> str:
+def _coerce_message(detail: object) -> str:
     """Best-effort, JSON-friendly stringification of an HTTPException-style detail."""
     if detail is None:
         return ""
@@ -144,7 +144,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
     def __init__(
         self,
         detail: Any,
-        headers: Mapping[str, Any] | None = None,
+        headers: Mapping[str, object] | None = None,
         category: str | RateLimitErrorCategory = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         rate_limit_type: str | RateLimitType | None = None,
         model: str | None = None,

@@ -1,33 +1,96 @@
-use serde::{Deserialize, Deserializer, de::Error};
-use serde_json::Value;
+use serde::{
+    Deserializer,
+    de::{Error, Visitor},
+};
 use serde_with::DeserializeAs;
 
 pub struct LaxI64;
 pub struct FiniteF64;
 
+pub fn parse_str_bool(value: &str) -> Option<bool> {
+    let token = value.trim_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '\u{1c}'..='\u{1f}')
+    });
+    if token.eq_ignore_ascii_case("true") {
+        return Some(true);
+    }
+    token.eq_ignore_ascii_case("false").then_some(false)
+}
+
+/// `redis-py` string Booleans: only `1`, `true`, and `yes` (case-insensitive) are true.
+pub fn parse_redis_bool(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
+}
+
 impl<'de> DeserializeAs<'de, i64> for LaxI64 {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
-        match Value::deserialize(deserializer)? {
-            Value::Number(number) if number.is_f64() => number.as_f64().and_then(integral_float),
-            Value::Number(number) => number.as_i64(),
-            Value::String(value) => integer_string(value.trim()),
-            Value::Bool(value) => Some(i64::from(value)),
-            _ => None,
-        }
-        .ok_or_else(|| D::Error::custom("expected an integer in the i64 range"))
+        deserializer.deserialize_any(Self)
+    }
+}
+
+impl<'de> Visitor<'de> for LaxI64 {
+    type Value = i64;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an integer in the i64 range")
+    }
+
+    fn visit_i64<E: Error>(self, value: i64) -> Result<i64, E> {
+        Ok(value)
+    }
+
+    fn visit_u64<E: Error>(self, value: u64) -> Result<i64, E> {
+        i64::try_from(value).map_err(E::custom)
+    }
+
+    fn visit_f64<E: Error>(self, value: f64) -> Result<i64, E> {
+        integral_float(value).ok_or_else(|| E::custom("expected an integer in the i64 range"))
+    }
+
+    fn visit_str<E: Error>(self, value: &str) -> Result<i64, E> {
+        integer_string(value.trim())
+            .ok_or_else(|| E::custom("expected an integer in the i64 range"))
+    }
+
+    fn visit_bool<E: Error>(self, value: bool) -> Result<i64, E> {
+        Ok(i64::from(value))
     }
 }
 
 impl<'de> DeserializeAs<'de, f64> for FiniteF64 {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
-        match Value::deserialize(deserializer)? {
-            Value::Number(number) => number.as_f64(),
-            Value::String(value) => value.trim().parse::<f64>().ok(),
-            Value::Bool(value) => Some(f64::from(value)),
-            _ => None,
-        }
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| D::Error::custom("expected a finite number"))
+        deserializer.deserialize_any(Self)
+    }
+}
+
+impl<'de> Visitor<'de> for FiniteF64 {
+    type Value = f64;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a finite number")
+    }
+
+    fn visit_i64<E: Error>(self, value: i64) -> Result<f64, E> {
+        Ok(value as f64)
+    }
+
+    fn visit_u64<E: Error>(self, value: u64) -> Result<f64, E> {
+        Ok(value as f64)
+    }
+
+    fn visit_f64<E: Error>(self, value: f64) -> Result<f64, E> {
+        value
+            .is_finite()
+            .then_some(value)
+            .ok_or_else(|| E::custom("expected a finite number"))
+    }
+
+    fn visit_str<E: Error>(self, value: &str) -> Result<f64, E> {
+        self.visit_f64(value.trim().parse::<f64>().map_err(E::custom)?)
+    }
+
+    fn visit_bool<E: Error>(self, value: bool) -> Result<f64, E> {
+        Ok(f64::from(value))
     }
 }
 
@@ -66,7 +129,7 @@ fn integral_float(value: f64) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
     use serde_with::serde_as;
 
@@ -79,6 +142,22 @@ mod tests {
         integers: Option<Vec<i64>>,
         #[serde_as(deserialize_as = "Option<FiniteF64>")]
         float: Option<f64>,
+    }
+
+    #[test]
+    fn boolean_tokens_follow_python_string_trimming_without_redis_tokens() {
+        for (input, expected) in [
+            (" True ", Some(true)),
+            ("\u{1c}TRUE\u{1f}", Some(true)),
+            ("\u{a0}False\u{2003}", Some(false)),
+            ("true\u{200b}", None),
+            ("yes", None),
+            ("1", None),
+            ("", None),
+            ("unknown", None),
+        ] {
+            assert_eq!(parse_str_bool(input), expected, "{input:?}");
+        }
     }
 
     #[test]

@@ -335,6 +335,129 @@ class TestAzureToolSchemaCombinatorFlattening:
         assert request["temperature"] == 0.2
 
 
+@pytest.mark.parametrize("tool_choice", ["none", "auto"])
+def test_azure_drops_tool_choice_without_tools_or_functions(tool_choice: str) -> None:
+    optional_params = {"tool_choice": tool_choice, "temperature": 0.2}
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert "tool_choice" not in request
+    assert request["temperature"] == 0.2
+    assert optional_params["tool_choice"] == tool_choice
+
+
+def test_azure_tools_empty_drops_tool_choice() -> None:
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tools": [], "tool_choice": "auto"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["tools"] == []
+    assert "tool_choice" not in request
+
+
+def test_azure_functions_empty_drops_tool_choice() -> None:
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"functions": [], "tool_choice": "none"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["functions"] == []
+    assert "tool_choice" not in request
+
+
+def test_azure_preserves_tool_choice_with_tools() -> None:
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tools": tools, "tool_choice": "auto"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["tools"] == tools
+    assert request["tool_choice"] == "auto"
+
+
+def test_azure_preserves_tool_choice_with_legacy_functions() -> None:
+    functions = [{"name": "get_weather", "parameters": {}}]
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"functions": functions, "tool_choice": "auto"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["functions"] == functions
+    assert request["tool_choice"] == "auto"
+
+
+def test_azure_preserves_function_call_without_tools() -> None:
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"function_call": "none", "tool_choice": "auto"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["function_call"] == "none"
+    assert "tool_choice" not in request
+
+
+def test_azure_gpt5_drops_tool_choice_without_tools() -> None:
+    request = AzureOpenAIGPT5Config().transform_request(
+        model="gpt5_series/gpt-5.6-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tool_choice": "none"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["model"] == "gpt-5.6-sol"
+    assert "tool_choice" not in request
+
+
+@pytest.mark.asyncio
+async def test_azure_async_transform_drops_tool_choice_without_tools() -> None:
+    request = await AzureOpenAIConfig().async_transform_request(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tool_choice": "none"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert "tool_choice" not in request
+
+
+@pytest.mark.asyncio
+async def test_azure_gpt5_async_transform_drops_tool_choice_without_tools() -> None:
+    request = await AzureOpenAIGPT5Config().async_transform_request(
+        model="gpt5_series/gpt-5.6-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tool_choice": "auto"},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert request["model"] == "gpt-5.6-sol"
+    assert "tool_choice" not in request
+
+
 def test_transform_request_strips_litellm_format_from_managed_file_id():
     import base64
 
