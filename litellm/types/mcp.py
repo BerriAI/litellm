@@ -4,7 +4,7 @@ import enum
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -34,6 +34,8 @@ class MCPSpecVersion(str, enum.Enum):
     nov_2024 = "2024-11-05"
     mar_2025 = "2025-03-26"
     jun_2025 = "2025-06-18"
+    nov_2025 = "2025-11-25"
+    jul_2026 = "2026-07-28"
 
 
 class MCPAuth(str, enum.Enum):
@@ -59,7 +61,17 @@ DEFAULT_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:access_tok
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
+MCPLegacyVersion = Literal["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
+MCP_LEGACY_VERSIONS: Final[tuple[MCPLegacyVersion, ...]] = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
+MCPUpstreamProtocol = MCPLegacyVersion | Literal["auto"]
+MCPAdvertisedVersions = Annotated[tuple[MCPLegacyVersion, ...], Field(min_length=1)]
+MCPSpecVersionType = Literal[
+    MCPSpecVersion.nov_2024,
+    MCPSpecVersion.mar_2025,
+    MCPSpecVersion.jun_2025,
+    MCPSpecVersion.nov_2025,
+    MCPSpecVersion.jul_2026,
+]
 MCPAuthType = (
     Literal[
         MCPAuth.none,
