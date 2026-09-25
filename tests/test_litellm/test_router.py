@@ -25,6 +25,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -14424,13 +14425,12 @@ def _mid_stream_opt_out_trigger(primary_error: Exception) -> MidStreamFallbackEr
     )
 
 
-class _MidStreamOptOutChatStream:
-    def __init__(self, error: Exception) -> None:
+class _MidStreamOptOutChatStream(CustomStreamWrapper):
+    """A chat deployment stream, as the router sees one, that dies before its first chunk."""
+
+    def __init__(self, error: Exception, model: str = "primary") -> None:
+        super().__init__(completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock())
         self._error: Final = error
-        self.model = "primary"
-        self.custom_llm_provider = "openai"
-        self.logging_obj = MagicMock()
-        self.chunks = []
 
     def __aiter__(self):
         return self
@@ -14539,6 +14539,46 @@ async def test_anthropic_messages_streaming_iterator_honors_disable_fallbacks(op
 
     assert raised.value is primary_error
     fallback_attempt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_disable_fallbacks_reaches_the_mid_stream_hop():
+    """`disable_fallbacks=True` sent to the public entrypoint survives the fallback wrapper's handoff
+    into the stream: the primary's own error surfaces and no fallback deployment is ever called."""
+    router = _mid_stream_opt_out_router()
+    primary_error = _mid_stream_opt_out_primary_error()
+
+    async def primary_stream(**kwargs):
+        return _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error), model=kwargs["model"])
+
+    with patch("litellm.acompletion", side_effect=primary_stream) as provider_calls:
+        response = await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
+        )
+        with pytest.raises(litellm.InternalServerError) as raised:
+            [chunk async for chunk in response]
+
+    assert raised.value is primary_error
+    assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == ["primary"]
+
+
+def test_completion_disable_fallbacks_reaches_the_mid_stream_hop():
+    """Sync counterpart of test_acompletion_disable_fallbacks_reaches_the_mid_stream_hop."""
+    router = _mid_stream_opt_out_router()
+    primary_error = _mid_stream_opt_out_primary_error()
+
+    def primary_stream(**kwargs):
+        return _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error), model=kwargs["model"])
+
+    with patch("litellm.completion", side_effect=primary_stream) as provider_calls:
+        response = router.completion(
+            model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
+        )
+        with pytest.raises(litellm.InternalServerError) as raised:
+            list(response)
+
+    assert raised.value is primary_error
+    assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == ["primary"]
 
 
 @pytest.mark.asyncio
