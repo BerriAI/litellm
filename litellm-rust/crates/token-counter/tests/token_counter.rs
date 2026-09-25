@@ -262,6 +262,18 @@ mod json {
 #[rstest]
 #[case::not_json(b"not json" as &[u8])]
 #[case::messages_not_a_list(br#"{"model":"m","messages":"hi"}"#)]
+#[case::tool_calls_not_a_list(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":"nope"}]}"#
+)]
+#[case::tool_call_without_function(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function"}]}]}"#
+)]
+#[case::tool_call_arguments_is_a_number(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":42}}]}]}"#
+)]
+#[case::tool_call_arguments_is_an_object(
+    br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":{"city":"Tokyo"}}}]}]}"#
+)]
 #[case::dict_content(
     br#"{"model":"m","messages":[{"role":"user","content":{"type":"text","text":"x"}}]}"#
 )]

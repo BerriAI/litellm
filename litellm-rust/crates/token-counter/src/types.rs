@@ -139,9 +139,15 @@ impl<'de> Visitor<'de> for TextValueVisitor {
 
 /// The parts of an assistant tool call Python counts: only the `arguments`
 /// string contributes (`_count_function_call_tokens` in
-/// `litellm_core_utils/token_counter.py`). Absent arguments count as the empty
-/// string; a non-string `arguments` declines so Python handles the fallback
-/// instead of miscounting.
+/// `litellm_core_utils/token_counter.py`). An absent arguments key counts as the
+/// empty string, while an explicit null counts as the string "None" the way
+/// Python's `str(None)` does; any other non-string `arguments` declines so
+/// Python handles the fallback instead of miscounting.
+///
+/// `deny_unknown_fields` is deliberately absent from this shape, and from
+/// `ToolCallFunction` and `LegacyFunctionCall`: Python reads only
+/// `function.arguments` off a tool call, so the extra `id`, `type` and `name`
+/// keys the OpenAI shape carries are ignored rather than declined.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(crate) struct ToolCall {
     pub(crate) function: ToolCallFunction,
