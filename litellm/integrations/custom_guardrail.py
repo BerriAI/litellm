@@ -146,7 +146,6 @@ class CustomGuardrail(CustomLogger):
     # If True, every proxy lifecycle event runs this guardrail's own hooks, not apply_guardrail.
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
-    # If True, attachment parts (images, files) are extracted into the apply_guardrail inputs.
     scans_attachments: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
