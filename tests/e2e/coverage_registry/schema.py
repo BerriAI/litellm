@@ -74,6 +74,7 @@ LlmCapability = Literal[
     "long_context_1m",
     "mid_conversation_system",
     "multi_turn",
+    "native_extensions",
     "native_passthrough",
     "pdf_input",
     "prompt_cache_1h",
