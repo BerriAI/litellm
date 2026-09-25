@@ -1,16 +1,15 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import ModelResponse
 
 
@@ -25,9 +24,7 @@ class TestAzureAnthropicChatCompletion:
 
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_uses_azure_anthropic_config(
-        self, mock_azure_config, mock_provider_manager
-    ):
+    def test_completion_uses_azure_anthropic_config(self, mock_azure_config, mock_provider_manager):
         """Test that completion method uses AzureAnthropicConfig"""
         handler = AzureAnthropicChatCompletion()
         mock_config = MagicMock()
@@ -64,7 +61,10 @@ class TestAzureAnthropicChatCompletion:
         headers = {}
 
         with patch.object(
-            handler, "acompletion_function", return_value=ModelResponse()
+            handler,
+            "acompletion_function",
+            new_callable=MagicMock,
+            return_value=ModelResponse(),
         ) as mock_acompletion:
             handler.completion(
                 model=model,
@@ -87,13 +87,12 @@ class TestAzureAnthropicChatCompletion:
             # Verify AzureAnthropicConfig was used
             mock_azure_config.assert_called_once()
             mock_config_instance.validate_environment.assert_called_once()
+            mock_acompletion.assert_called_once()
 
     @patch("litellm.llms.anthropic.chat.handler.make_sync_call")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_make_sync_call
-    ):
+    def test_completion_streaming(self, mock_azure_config, mock_provider_manager, mock_make_sync_call):
         # Note: decorators are applied in reverse order
         """Test completion with streaming"""
         handler = AzureAnthropicChatCompletion()
@@ -158,12 +157,59 @@ class TestAzureAnthropicChatCompletion:
         mock_make_sync_call.assert_called_once()
         assert result is not None
 
+    @pytest.mark.asyncio
+    @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
+    async def test_completion_async_streaming_preserves_provider(self, mock_azure_config):
+        handler = AzureAnthropicChatCompletion()
+        mock_config = MagicMock()
+        mock_config.validate_environment.return_value = {
+            "api-key": "test-api-key",
+            "anthropic-version": "2023-06-01",
+        }
+        mock_config.transform_request.return_value = {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+            "stream": True,
+        }
+        mock_azure_config.return_value = mock_config
+
+        response = MagicMock()
+        response.headers = {}
+        response.aiter_lines.return_value = iter(())
+        client = MagicMock(spec=AsyncHTTPHandler)
+        client.post = AsyncMock(return_value=response)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "custom_llm_provider": "azure_ai",
+            "litellm_params": {},
+        }
+
+        completion = handler.completion(
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_base="https://test.services.ai.azure.com/anthropic/v1/messages",
+            custom_llm_provider="azure_ai",
+            custom_prompt_dict={},
+            model_response=ModelResponse(),
+            print_verbose=MagicMock(),
+            encoding=None,
+            api_key="test-api-key",
+            logging_obj=logging_obj,
+            optional_params={"stream": True},
+            timeout=60.0,
+            litellm_params={"api_key": "test-api-key"},
+            acompletion=True,
+            client=client,
+        )
+        result = await completion
+
+        client.post.assert_awaited_once()
+        assert result.custom_llm_provider == "azure_ai"
+
     @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_non_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_get_client
-    ):
+    def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
         handler = AzureAnthropicChatCompletion()
