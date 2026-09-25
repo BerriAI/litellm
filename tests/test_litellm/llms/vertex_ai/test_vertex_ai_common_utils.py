@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -6,6 +7,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
 from litellm.llms.vertex_ai.common_utils import (
+    _build_vertex_schema,
     _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
@@ -1754,4 +1756,33 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
 
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
+class TestBuildVertexSchemaTranslatesJsonSchemaConst:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/41913.
 
+    Gemini's Schema whitelist has no ``const`` field; a string ``const`` must be
+    forwarded as a single-entry ``enum`` instead of being silently dropped.
+    """
+
+    def test_string_const_is_forwarded_as_single_entry_enum(self):
+        out = _build_vertex_schema(
+            {
+                "type": "object",
+                "properties": {"amount": {"type": "number"}, "currency": {"const": "USD"}},
+                "required": ["currency", "amount"],
+            }
+        )
+        assert out["properties"]["currency"] == {"type": "string", "enum": ["USD"]}
+
+    def test_const_with_explicit_string_type_keeps_type(self):
+        out = _build_vertex_schema({"type": "object", "properties": {"value": {"type": "string", "const": "fixed"}}})
+        assert out["properties"]["value"] == {"type": "string", "enum": ["fixed"]}
+
+    def test_existing_enum_is_not_overwritten_by_const(self):
+        out = _build_vertex_schema({"type": "object", "properties": {"value": {"enum": ["a", "b"], "const": "a"}}})
+        assert out["properties"]["value"]["enum"] == ["a", "b"]
+
+    def test_non_string_const_is_dropped_with_a_warning(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            out = _build_vertex_schema({"type": "object", "properties": {"count": {"const": 5}}})
+        assert out["properties"]["count"] == {"type": "object"}
+        assert any("const=5" in record.message for record in caplog.records)

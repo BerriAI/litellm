@@ -683,6 +683,36 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
+def _translate_json_schema_const(schema, depth=0) -> None:
+    """Translate JSON Schema ``const`` so the pinned value survives the Vertex ``Schema`` whitelist.
+
+    ``_build_vertex_schema`` filters fields down to the Vertex ``Schema`` TypedDict keys, which has no
+    ``const``, so a pinned value used to be silently dropped and became unconstrained (#41913). Gemini
+    only supports ``enum`` on string-typed fields, so a string ``const`` becomes ``type: string`` plus a
+    single-entry ``enum``; any other ``const`` value is surfaced with a warning because Gemini cannot
+    express it.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+
+    if isinstance(schema, dict):
+        if "const" in schema:
+            value: Final = schema.pop("const")
+            if isinstance(value, str):
+                schema.setdefault("type", "string")
+                schema.setdefault("enum", [value])
+            else:
+                verbose_logger.warning(
+                    "litellm: Gemini's schema model has no way to express a non-string JSON Schema "
+                    f"const={value!r}; the constraint is dropped for this request (#41913)."
+                )
+        for value in schema.values():
+            _translate_json_schema_const(value, depth=depth + 1)
+    elif isinstance(schema, list):
+        for item in schema:
+            _translate_json_schema_const(item, depth=depth + 1)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -713,6 +743,8 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     convert_anyof_null_to_nullable(parameters)
 
     _convert_schema_types(parameters)
+
+    _translate_json_schema_const(parameters)
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
     _fix_enum_empty_strings(parameters)
