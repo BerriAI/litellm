@@ -38,9 +38,10 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import ModifyResponseException
@@ -58,6 +59,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
+def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
+    bucket: Final = request_data.get(key)
+    return bucket if isinstance(bucket, Mapping) else {}
+
+
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
@@ -72,6 +78,10 @@ class CustomCodeCompilationError(CustomCodeGuardrailError):
 
 class CustomCodeExecutionError(CustomCodeGuardrailError):
     """Raised when custom code fails during execution."""
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
 class CustomCodeGuardrailConfigModel(GuardrailConfigModel):
@@ -109,7 +119,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         self,
         custom_code: str,
         guardrail_name: str | None = "custom_code",
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         """
         Initialize the custom code guardrail.
@@ -280,12 +290,16 @@ class CustomCodeGuardrail(CustomGuardrail):
         Returns:
             Safe subset of request data
         """
+        metadata: Final = {
+            **_metadata_bucket(request_data, "metadata"),
+            **_metadata_bucket(request_data, "litellm_metadata"),
+        }
         return {
             "model": request_data.get("model"),
-            "user_id": request_data.get("user_api_key_user_id"),
-            "team_id": request_data.get("user_api_key_team_id"),
-            "end_user_id": request_data.get("user_api_key_end_user_id"),
-            "metadata": request_data.get("metadata", {}),
+            "user_id": metadata.get("user_api_key_user_id"),
+            "team_id": metadata.get("user_api_key_team_id"),
+            "end_user_id": metadata.get("user_api_key_end_user_id"),
+            "metadata": metadata,
         }
 
     def _process_result(

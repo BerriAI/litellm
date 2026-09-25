@@ -58,12 +58,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
-        # if "responses/" is in the model name, remove it
-        if "responses/" in model:
-            model = model.replace("responses/", "")
-        if "o_series" in model:
-            model = model.replace("o_series/", "")
-        return model
+        return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
     def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
         """

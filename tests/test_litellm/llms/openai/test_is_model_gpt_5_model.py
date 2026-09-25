@@ -159,6 +159,58 @@ class TestOpenAIGPT5ConfigIsModelGpt54PlusModel:
         ), f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
 
 
+GPT5_6_PLUS_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.10-preview",
+]
+
+GPT5_PRE_5_6_MODELS = [
+    "gpt-5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-4o",
+]
+
+GPT6_PLUS_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
+    "gpt-6",
+    "gpt-6.1-preview",
+]
+
+GPT_PRE_6_MODELS = [
+    "gpt-5.6-sol",
+    "gpt-5.5",
+    "gpt-5",
+    "gpt-4o",
+]
+
+
+class TestOpenAIGPT5ConfigSeriesBoundaries:
+
+    @pytest.mark.parametrize("model", GPT5_6_PLUS_MODELS)
+    def test_gpt5_6_plus_models_are_classified_as_5_6_plus(self, model: str):
+        assert OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT5_PRE_5_6_MODELS)
+    def test_pre_5_6_models_are_not_classified_as_5_6_plus(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT6_PLUS_MODELS)
+    def test_gpt6_plus_models_are_classified_as_6_plus(self, model: str):
+        assert OpenAIGPT5Config.is_model_gpt_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT_PRE_6_MODELS)
+    def test_pre_6_models_are_not_classified_as_6_plus(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_6_plus_model(model)
+
+
 # ---------------------------------------------------------------------------
 # AzureOpenAIGPT5Config
 # ---------------------------------------------------------------------------

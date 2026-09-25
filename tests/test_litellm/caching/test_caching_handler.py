@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES, LLMCachingHandler
 
 
 @pytest.mark.asyncio
@@ -591,6 +591,48 @@ async def test_embedding_cache_hit_sets_custom_llm_provider_on_logging_obj():
     assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
 
 
+def test_sync_stream_responses_cache_hit_sets_custom_llm_provider_on_logging_obj(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {"model": "azure/gpt-5.4-mini", "input": "hello", "stream": True}
+    cached_response = {
+        "id": "resp_sync_stream",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-5.4-mini",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_sync_stream",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+    }
+    litellm.cache.add_cache(json.dumps(cached_response), **kwargs)
+    handler = LLMCachingHandler(original_function=litellm.responses, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.responses.value, stream=True)
+
+    hit = handler._sync_get_cache(
+        model="azure/gpt-5.4-mini",
+        original_function=litellm.responses,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.responses.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit.cached_result is not None
+    assert logging_obj.model_call_details["custom_llm_provider"] == "azure"
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == "azure"
+
+
 def test_request_kwargs_does_not_retain_logging_obj():
     """
     The caching handler lives on logging_obj._llm_caching_handler, so keeping
@@ -693,3 +735,133 @@ async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monke
     assert handler.preset_cache_key is not None
     assert logging_obj.litellm_params["preset_cache_key"] == handler.preset_cache_key
     assert hit.cached_result._hidden_params["cache_key"] == handler.preset_cache_key
+
+
+@pytest.mark.asyncio
+async def test_converted_stream_cache_hit_replayed_as_plain_object_logs_at_hit_time(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def aanthropic_messages(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 16,
+        "caching": True,
+        "stream": False,
+        "_websearch_interception_converted_stream": True,
+    }
+    cached_message = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+    }
+    await litellm.cache.async_add_cache(cached_message, **kwargs)
+    handler = LLMCachingHandler(original_function=aanthropic_messages, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.aanthropic_messages.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    hit = await handler._async_get_cache(
+        model="claude-sonnet-5",
+        original_function=aanthropic_messages,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.aanthropic_messages.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit is not None and hit.cached_result == cached_message
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_followup_cache_hit_with_converted_stream_marker_replays_as_plain_object(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def acompletion(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "run the code"}],
+        "caching": True,
+        "stream": False,
+        "_code_interpreter_interception_converted_stream": True,
+        "_agentic_loop_depth": 1,
+    }
+    await litellm.cache.async_add_cache(
+        litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "done"}}]), **kwargs
+    )
+    handler = LLMCachingHandler(original_function=acompletion, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    hit = await handler._async_get_cache(
+        model="gpt-5.6",
+        original_function=acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit is not None and isinstance(hit.cached_result, litellm.ModelResponse)
+    assert hit.cached_result.choices[0].message.content == "done"
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_order(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    class RecordingEmbedder(CustomLLM):
+        provider_inputs: tuple[tuple[str, ...], ...] = ()
+
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            self.provider_inputs = (*self.provider_inputs, tuple(input))
+            return EmbeddingResponse(
+                model=model,
+                data=[
+                    Embedding(embedding=[float(len(text))], index=idx, object="embedding")
+                    for idx, text in enumerate(input)
+                ],
+            )
+
+    embedder = RecordingEmbedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+
+    await litellm.aembedding(model="recording-embedder/m", input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    mixed_input = ["c", "aa", "ddd", "bbbb", "eeeee"]
+    response = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert embedder.provider_inputs == (("aa", "bbbb"), ("c", "ddd", "eeeee")), embedder.provider_inputs
+    assert [item["index"] for item in response.data] == [0, 1, 2, 3, 4]
+    assert [item["embedding"] for item in response.data] == [[float(len(text))] for text in mixed_input]
+    assert response._hidden_params["cache_hit"] is True, "a partial hit must still be reported as a cache hit"
+
+    repeat = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
+
+    assert len(embedder.provider_inputs) == 2, embedder.provider_inputs
+    assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]

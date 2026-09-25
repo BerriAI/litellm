@@ -4,7 +4,6 @@ import json
 import os
 import sys
 from typing import Final
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -20,9 +19,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
+    merge_consecutive_system_messages,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
+    system_messages_first,
     update_messages_with_model_file_ids,
 )
 
@@ -352,6 +353,20 @@ def test_get_file_ids_from_messages_file_field_not_dict():
     ]
 
     assert get_file_ids_from_messages(messages) == []
+
+
+def test_get_file_ids_from_messages_skips_bare_string_content_items():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                "what type of file is this?",
+                {"type": "file", "file": {"file_id": "file-abc"}},
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == ["file-abc"]
 
 
 def test_update_messages_with_model_file_ids_skips_non_openai_file_blocks():
@@ -1107,6 +1122,38 @@ def test_drop_tool_reference_parts_leaves_non_tool_messages_alone():
     assert result[2]["content"] == ""
 
 
+class TestSystemMessagesFirst:
+    def test_stable_partition_keeps_order_within_each_group(self):
+        messages = [
+            {"role": "user", "content": "u1"},
+            {"role": "system", "content": "s1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "developer", "content": "d1"},
+            {"role": "tool", "tool_call_id": "c1", "content": "t1"},
+            {"role": "system", "content": "s2"},
+        ]
+
+        result = system_messages_first(messages)
+
+        assert [m["content"] for m in result] == ["s1", "d1", "s2", "u1", "a1", "t1"]
+        assert [m["content"] for m in messages] == ["u1", "s1", "a1", "d1", "t1", "s2"]
+        assert all(
+            result_message is original for result_message, original in zip(result[3:], messages[::2], strict=True)
+        )
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [],
+            [{"role": "user", "content": "u1"}, {"role": "assistant", "content": "a1"}],
+            [{"role": "system", "content": "s1"}, {"role": "user", "content": "u1"}],
+            [{"role": "system", "content": "s1"}, {"role": "system", "content": "s2"}],
+        ],
+    )
+    def test_already_ordered_messages_come_back_unchanged(self, messages):
+        assert system_messages_first(messages) == messages
+
+
 class TestFlattenTopLevelSchemaCombinators:
     def _customer_anyof_schema(self):
         return {
@@ -1813,3 +1860,95 @@ class TestEncryptedReasoningReplay:
         strip_encrypted_reasoning_from_messages(messages)
 
         assert messages == before
+
+
+class TestMergeConsecutiveSystemMessages:
+    def test_merges_each_run_of_string_system_messages_with_a_blank_line(self):
+        messages = [
+            {"role": "system", "content": "You are terse.", "cache_control": {"type": "ephemeral"}},
+            {"role": "system", "content": "Skills: none."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "system", "content": "Reminder A"},
+            {"role": "system", "content": "Reminder B"},
+            {"role": "user", "content": "Bye"},
+        ]
+
+        merged = merge_consecutive_system_messages(messages)
+
+        assert merged == [
+            {"role": "system", "content": "You are terse.\n\nSkills: none.", "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "system", "content": "Reminder A\n\nReminder B"},
+            {"role": "user", "content": "Bye"},
+        ]
+
+    def test_merges_into_text_parts_when_any_system_content_is_a_list(self):
+        cached_part = {"type": "text", "text": "Skills: none.", "cache_control": {"type": "ephemeral"}}
+        messages = [
+            {"role": "system", "content": "You are terse."},
+            {"role": "system", "content": [cached_part, {"type": "text", "text": "Be brief."}]},
+            {"role": "system", "content": "Answer in English."},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        merged = merge_consecutive_system_messages(messages)
+
+        assert merged == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse."},
+                    cached_part,
+                    {"type": "text", "text": "Be brief."},
+                    {"type": "text", "text": "Answer in English."},
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        assert merged[0]["content"][1] is cached_part
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "Hello"}],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}],
+            [
+                {"role": "system", "content": "You are terse."},
+                {"role": "user", "content": "Hello"},
+                {"role": "system", "content": "Reminder"},
+            ],
+            [],
+        ],
+        ids=["single-system", "no-system", "separated-systems", "empty"],
+    )
+    def test_leaves_messages_without_consecutive_system_messages_untouched(self, messages):
+        before = copy.deepcopy(messages)
+
+        merged = merge_consecutive_system_messages(messages)
+
+        assert merged == before
+        assert [message is original for message, original in zip(merged, messages)] == [True] * len(messages)
+
+    @pytest.mark.parametrize(
+        ("messages", "expected_content"),
+        [
+            ([{"role": "system"}, {"role": "system", "content": "Skills: none."}], "Skills: none."),
+            ([{"role": "system", "content": "You are terse."}, {"role": "system"}], "You are terse."),
+            (
+                [{"role": "system"}, {"role": "system", "content": [{"type": "text", "text": "Be brief."}]}],
+                [{"type": "text", "text": "Be brief."}],
+            ),
+        ],
+        ids=["missing-then-str", "str-then-missing", "missing-then-list"],
+    )
+    def test_skips_system_messages_without_content_when_merging(self, messages, expected_content):
+        merged = merge_consecutive_system_messages([*messages, {"role": "user", "content": "Hello"}])
+
+        assert merged == [{"role": "system", "content": expected_content}, {"role": "user", "content": "Hello"}]
+
+    def test_keeps_the_first_message_when_no_system_message_in_the_run_has_content(self):
+        merged = merge_consecutive_system_messages([{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}])
+
+        assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]

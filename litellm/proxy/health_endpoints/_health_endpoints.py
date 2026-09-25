@@ -16,7 +16,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.integrations.SlackAlerting.ms_teams import (
     MS_TEAMS_ALERT_HEADERS,
     build_ms_teams_payload,
@@ -44,8 +44,12 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.db.health_check_latest import (
+    LatestHealthCheckRow,
+    query_latest_health_checks,
+)
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
@@ -391,7 +395,9 @@ async def health_services_endpoint(
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger: Final = LangFuseLogger()
-            langfuse_logger.Langfuse.auth_check()
+            auth_failure: Final = langfuse_logger.api_client.auth_check()
+            if auth_failure is not None:
+                raise ValueError(f"langfuse auth_check failed: {auth_failure.reason}")
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -876,7 +882,7 @@ async def _save_background_health_checks_to_db(
         )
 
         # Step 3: Get latest health checks for all models in one query to compare status
-        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        latest_checks: Final = await query_latest_health_checks(prisma_client)
         latest_checks_map: Final = {}
         for check in latest_checks:
             # Use model_id as primary key, fallback to model_name
@@ -1720,7 +1726,7 @@ async def _get_health_readiness_details(
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
-            db_health_status: Final = await _db_health_readiness_check()
+            db_status: Final = _readiness_db_status(await _db_health_readiness_check())
             # A configured DB that is not reachable means the worker cannot
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
@@ -1730,13 +1736,13 @@ async def _get_health_readiness_details(
             # report the DB state through the body instead.
             if (
                 response is not None
-                and db_health_status["status"] != "connected"
+                and db_status != "connected"
                 and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
             ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
-                "db": db_health_status["status"],
+                "db": db_status,
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
@@ -1813,24 +1819,32 @@ def _authorize_drain_request(request: Request) -> None:
         )
 
 
+def _readiness_db_status(db_health_status: DBHealthCache) -> str:
+    """A pod whose pre-request lookups hit their deadline inside the stall window
+    reports "stalled" even though the ping succeeds: the ping is a fresh
+    connection, the stalled lookups are the ones requests actually wait on."""
+    if db_health_status["status"] != "connected":
+        return db_health_status["status"]
+    if db_lookup_stall_tracker.stalled_within(PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS):
+        return "stalled"
+    return "connected"
+
+
 async def _resolve_public_readiness_db(response: Response) -> str:
     """
     Return the db status string for the public probe and flip the response to
-    503 when a configured DB is unreachable. Mirrors the legacy values:
-    "Not connected" (no DB configured), "connected", "disconnected".
+    503 when a configured DB is unreachable or stalled. Mirrors the legacy values:
+    "Not connected" (no DB configured), "connected", "disconnected", plus "stalled".
     """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         return "Not connected"
 
-    db_health_status: Final = await _db_health_readiness_check()
-    if (
-        db_health_status["status"] != "connected"
-        and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-    ):
+    db_status: Final = _readiness_db_status(await _db_health_readiness_check())
+    if db_status != "connected" and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return db_health_status["status"]
+    return db_status
 
 
 @router.get(

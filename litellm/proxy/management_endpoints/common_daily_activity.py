@@ -1,4 +1,6 @@
 import asyncio
+import dataclasses
+import itertools
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
@@ -9,15 +11,18 @@ from fastapi import HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.spend_tracking.daily_global_spend_rollup import GLOBAL_SPEND_TABLE_NAME, reconciled_through
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
-    attach_user_emails,
+    attach_user_details,
+    recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -32,6 +37,10 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     MetricWithMetadata,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
+)
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    TeamDailyActivityExportRow,
+    TeamDailyActivityExportType,
 )
 
 if TYPE_CHECKING:
@@ -114,12 +123,19 @@ class DailySpendRecord(Protocol):
     @property
     def failed_requests(self) -> int: ...
 
+    @property
+    def total_response_time_ms(self) -> int: ...
+
+    @property
+    def timed_requests(self) -> int: ...
+
 
 class _KeyMetadataDict(TypedDict, total=False):
     key_alias: ReadOnly[str | None]
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    key_exists: ReadOnly[bool]
 
 
 def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
@@ -129,6 +145,7 @@ def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str
         team_id=meta.get("team_id"),
         user_id=meta.get("user_id"),
         user_email=meta.get("user_email"),
+        key_exists=meta.get("key_exists", False),
     )
 
 
@@ -140,15 +157,9 @@ class _AggregatedSpendData(TypedDict):
     totals: SpendMetrics
 
 
-class _GroupingSetsRow(SimpleNamespace):
+class _RollupMetricsRow(SimpleNamespace):
     date: str
     api_key: str | None
-    model: str | None
-    model_group: str | None
-    custom_llm_provider: str | None
-    mcp_namespaced_tool_name: str | None
-    endpoint: str | None
-    group_level: int
     spend: float | None
     prompt_tokens: int | None
     completion_tokens: int | None
@@ -162,14 +173,50 @@ class _GroupingSetsRow(SimpleNamespace):
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
+    total_response_time_ms: int | None
+    timed_requests: int | None
 
 
-class _EntityRollupRow(_GroupingSetsRow):
+class _GroupingSetsRow(_RollupMetricsRow):
+    model: str | None
+    model_group: str | None
+    custom_llm_provider: str | None
+    mcp_namespaced_tool_name: str | None
+    endpoint: str | None
+    group_level: int
+    distinct_api_keys: int | None
+
+
+class _EntityRollupRow(_RollupMetricsRow):
     entity_id: str | None
     api_key_rolled: int
 
 
-def _reported_flat_cost(record: DailySpendRecord | _GroupingSetsRow) -> float:
+class _AggregatedQueryKwargs(TypedDict):
+    table_name: ReadOnly[str]
+    entity_id_field: ReadOnly[str]
+    entity_id: ReadOnly[str | list[str] | None]
+    start_date: ReadOnly[str]
+    end_date: ReadOnly[str]
+    model: ReadOnly[str | None]
+    api_key: ReadOnly[str | list[str] | None]
+    exclude_entity_ids: ReadOnly[list[str] | None]
+    timezone_offset_minutes: ReadOnly[int | None]
+    include_current_utc_day: ReadOnly[bool]
+
+
+_SqlQuery = tuple[str, Sequence[str]]
+
+
+async def _query_raw_optional(
+    prisma_client: PrismaClient, query: _SqlQuery | None
+) -> list[dict[str, object]] | None:  # mutable-ok: prisma query_raw return shape
+    if query is None:
+        return None
+    return await prisma_client.db.query_raw(query[0], *query[1])
+
+
+def _reported_flat_cost(record: DailySpendRecord | _RollupMetricsRow) -> float:
     """Flat cost a daily row reports, which is zero unless PTU cost attribution is enabled.
 
     Both read paths funnel through here: the paginated path reads the ``ptu_flat_cost``
@@ -217,6 +264,8 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
+    existing_metrics.total_response_time_ms += record.total_response_time_ms or 0
+    existing_metrics.timed_requests += record.timed_requests or 0
     return existing_metrics
 
 
@@ -473,6 +522,7 @@ async def get_api_key_metadata(
             "key_alias": k.key_alias,
             "team_id": k.team_id,
             "user_id": getattr(k, "user_id", None),
+            "key_exists": True,
         }
         for k in key_records
     }
@@ -502,11 +552,12 @@ async def get_api_key_metadata(
                 e,
             )
 
-    still_missing: Final = api_keys - frozenset(result)
+    from_session_keys: Final = await recover_cli_session_key_metadata(prisma_client, api_keys - frozenset(result))
+    still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
     from_reverse_hash: Final = (
         await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA
     )
-    after_token_recovery: Final = MappingProxyType({**result, **from_reverse_hash})
+    after_token_recovery: Final = MappingProxyType({**result, **from_session_keys, **from_reverse_hash})
     unresolved: Final = api_keys - frozenset(after_token_recovery)
     from_spend_logs: Final = (
         await recover_key_metadata_from_spend_logs(prisma_client, unresolved, spend_logs_window)
@@ -514,7 +565,7 @@ async def get_api_key_metadata(
         else _EMPTY_KEY_METADATA
     )
     combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
-    return await attach_user_emails(prisma_client, combined)
+    return await attach_user_details(prisma_client, combined)
 
 
 def _adjust_dates_for_timezone(
@@ -689,71 +740,8 @@ def _ptu_flat_cost_select(table_name: str) -> str:
     return "0::float AS ptu_flat_cost"
 
 
-def _build_aggregated_sql_query(
-    *,
-    table_name: str,
-    entity_id_field: str,
-    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
-    start_date: str,
-    end_date: str,
-    model: str | None,
-    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
-    exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
-    timezone_offset_minutes: int | None = None,
-    include_current_utc_day: bool = False,
-) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
-    """Build a parameterized SQL GROUP BY query for aggregated daily activity.
-
-    Groups by (date, api_key, model, model_group, custom_llm_provider,
-    mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
-    The entity_id column is intentionally omitted from GROUP BY to collapse
-    rows across entities — this is where the biggest row reduction comes from.
-
-    Returns:
-        Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
-    """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
-    if pg_table is None:
-        raise ValueError(f"Unknown table name: {table_name}")
-
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
-        start_date, end_date, timezone_offset_minutes, include_current_utc_day
-    )
-
-    where_clause, sql_params = _build_aggregated_where_clause(
-        entity_id_field=entity_id_field,
-        entity_id=entity_id,
-        adjusted_start=adjusted_start,
-        adjusted_end=adjusted_end,
-        model=model,
-        api_key=api_key,
-        exclude_entity_ids=exclude_entity_ids,
-    )
-
-    # Postgres computes every rollup level the response needs — per-date
-    # totals, per-(date, model), per-(date, model, api_key), per-provider,
-    # etc. — in a single pass via GROUPING SETS. The GROUPING() bitmask
-    # encodes which level a row belongs to so Python can dispatch rows
-    # straight into their buckets without re-summing. The leaf grouping
-    # is omitted on purpose: nothing in the response shape needs it once
-    # all the rollups are present.
-    #
-    # TODO: drop the successful_requests/failed_requests aggregates (and the
-    # total_successful_requests metadata they feed) once the admin UI reads SGR
-    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
-    # api_requests rollups are still served from here.
-    sql_query: Final = f"""
-        SELECT
-            date,
-            api_key,
-            model,
-            COALESCE(NULLIF(model_group, ''), model) AS model_group,
-            custom_llm_provider,
-            mcp_namespaced_tool_name,
-            endpoint,
-            GROUPING(date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
-                     custom_llm_provider, mcp_namespaced_tool_name,
-                     endpoint) AS group_level,
+def _rollup_metric_select(table_name: str) -> str:
+    return f"""
             SUM(spend)::float AS spend,
             {_ptu_flat_cost_select(table_name)},
             SUM(prompt_tokens)::bigint AS prompt_tokens,
@@ -767,27 +755,177 @@ def _build_aggregated_sql_query(
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
-        FROM "{pg_table}"
-        WHERE {where_clause}
+            SUM(failed_requests)::bigint AS failed_requests,
+            SUM(total_response_time_ms)::bigint AS total_response_time_ms,
+            SUM(timed_requests)::bigint AS timed_requests"""
+
+
+_MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
+
+
+_KEY_FREE_SOURCE_COLUMNS: Final = (
+    "date",
+    "model",
+    "model_group",
+    "custom_llm_provider",
+    "mcp_namespaced_tool_name",
+    "endpoint",
+    "spend",
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "compression_saved_tokens",
+    "compression_savings_spend",
+    "prompt_caching_savings_spend",
+    "gateway_injected_caching_savings_spend",
+    "autorouter_savings_spend",
+    "api_requests",
+    "successful_requests",
+    "failed_requests",
+    "total_response_time_ms",
+    "timed_requests",
+)
+
+
+async def global_rollup_reconciled_through(prisma_client: PrismaClient, query: _AggregatedQueryKwargs) -> str | None:
+    """The last day ``LiteLLM_DailyGlobalSpend`` can answer the key-free arm for, or None to
+    read it all from the per-key table.
+
+    Only an unfiltered read of the user table sums to the same rows as the global table. The
+    marker read is served from the config cache, so this is not a database round trip per request.
+    """
+    if query["table_name"] != "litellm_dailyuserspend":
+        return None
+    if query["entity_id"] is not None or query["api_key"] is not None or query["exclude_entity_ids"]:
+        return None
+    try:
+        return await reconciled_through(prisma_client)
+    except Exception as exc:  # noqa: BLE001  # the per-key table is always a correct answer, so never fail the read
+        verbose_proxy_logger.warning("Could not read the daily global spend marker, using the per-key table: %s", exc)
+        return None
+
+
+def _key_free_source(pg_table: str, where_clause: str, marker_param: str | None) -> str:
+    """The relation the key-free arm aggregates: the per-key table alone, or the global rollup
+    for days through the marker plus the per-key table for the days still open after it."""
+    if marker_param is None:
+        return f'"{pg_table}"\n        WHERE {where_clause}'
+    columns: Final = ", ".join(_KEY_FREE_SOURCE_COLUMNS)
+    return f"""(
+            SELECT {columns}
+            FROM "{GLOBAL_SPEND_TABLE_NAME}"
+            WHERE {where_clause} AND date <= {marker_param}
+            UNION ALL
+            SELECT {columns}
+            FROM "{pg_table}"
+            WHERE {where_clause} AND date > {marker_param}
+        ) AS key_free_source"""
+
+
+def _build_aggregated_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    model: str | None,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    global_rollup_through: str | None = None,
+) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
+    """Build the GROUPING SETS query for aggregated daily activity.
+
+    Returns:
+        Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
+    """
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
+
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=model,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+    )
+    sentinel_param: Final = f"${len(where_params) + 1}"
+    marker_param: Final = None if global_rollup_through is None else f"${len(where_params) + 2}"
+    metric_select: Final = _rollup_metric_select(table_name)
+
+    # TODO: drop the successful_requests/failed_requests aggregates (and the
+    # total_successful_requests metadata they feed) once the admin UI reads SGR
+    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
+    # api_requests rollups are still served from here.
+    sql_query: Final = f"""
+        (SELECT
+            date,
+            NULL::text AS api_key,
+            model,
+            {_MODEL_GROUP_EXPR} AS model_group,
+            custom_llm_provider,
+            mcp_namespaced_tool_name,
+            endpoint,
+            (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
+                | GROUPING(model, {_MODEL_GROUP_EXPR},
+                           custom_llm_provider, mcp_namespaced_tool_name,
+                           endpoint) AS group_level,
+            NULL::bigint AS distinct_api_keys,{metric_select}
+        FROM {_key_free_source(pg_table, where_clause, marker_param)}
         GROUP BY GROUPING SETS (
             (date),
-            (date, api_key),
             (date, model),
-            (date, model, api_key),
-            (date, COALESCE(NULLIF(model_group, ''), model)),
-            (date, COALESCE(NULLIF(model_group, ''), model), api_key),
+            (date, {_MODEL_GROUP_EXPR}),
             (date, custom_llm_provider),
-            (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name),
-            (date, mcp_namespaced_tool_name, api_key),
             (date, endpoint),
-            (date, endpoint, api_key),
             ()
+        ))
+        UNION ALL
+        (WITH top_api_keys AS (
+            SELECT api_key, COUNT(*) OVER () AS distinct_api_keys
+            FROM "{pg_table}"
+            WHERE {where_clause} AND api_key <> {sentinel_param}
+            GROUP BY api_key
+            ORDER BY SUM(spend) DESC, api_key
+            LIMIT {USAGE_TOP_API_KEYS_LIMIT}
         )
+        SELECT
+            date,
+            api_key,
+            model,
+            {_MODEL_GROUP_EXPR} AS model_group,
+            custom_llm_provider,
+            mcp_namespaced_tool_name,
+            endpoint,
+            GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
+                     custom_llm_provider, mcp_namespaced_tool_name,
+                     endpoint) AS group_level,
+            MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
+        FROM "{pg_table}" JOIN top_api_keys USING (api_key)
+        WHERE {where_clause}
+        GROUP BY GROUPING SETS (
+            (date, api_key),
+            (date, model, api_key),
+            (date, {_MODEL_GROUP_EXPR}, api_key),
+            (date, custom_llm_provider, api_key),
+            (date, mcp_namespaced_tool_name, api_key),
+            (date, endpoint, api_key)
+        ))
     """
 
-    return sql_query, sql_params
+    marker_params: Final = () if global_rollup_through is None else (global_rollup_through,)
+    return sql_query, [*where_params, PTU_SENTINEL_API_KEY, *marker_params]
 
 
 def _build_entity_rollup_sql_query(
@@ -832,21 +970,7 @@ def _build_entity_rollup_sql_query(
             "{entity_id_field}" AS entity_id,
             date,
             api_key,
-            GROUPING(api_key) AS api_key_rolled,
-            SUM(spend)::float AS spend,
-            {_ptu_flat_cost_select(table_name)},
-            SUM(prompt_tokens)::bigint AS prompt_tokens,
-            SUM(completion_tokens)::bigint AS completion_tokens,
-            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
-            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
-            SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
-            SUM(compression_savings_spend)::float AS compression_savings_spend,
-            SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
-            SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
-            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
-            SUM(api_requests)::bigint AS api_requests,
-            SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
+            GROUPING(api_key) AS api_key_rolled,{_rollup_metric_select(table_name)}
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -856,6 +980,291 @@ def _build_entity_rollup_sql_query(
     """
 
     return sql_query, sql_params
+
+
+def _build_export_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None,
+    export_type: TeamDailyActivityExportType,
+) -> tuple[str, tuple[str, ...]]:
+    """One unbounded rollup for the export route, on the aggregated path's WHERE clause.
+
+    No LIMIT anywhere: the export exists so a caller can reach keys past
+    USAGE_TOP_API_KEYS_LIMIT. PTU sentinel rows stay in `daily` so per-team
+    totals match breakdown.entities, and are excluded from the key, user and
+    model exports where the flat-cost row has no meaning.
+    """
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=None,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+    )
+
+    keyed: Final = export_type in ("daily_with_keys", "daily_with_users")
+    by_model: Final = export_type == "daily_with_models"
+    group_extras: Final = tuple(field for field in ("api_key" if keyed else "", "model" if by_model else "") if field)
+    group_by: Final = f'date, "{entity_id_field}"' + "".join(f", {field}" for field in group_extras)
+    sentinel_clause: Final = f" AND api_key <> ${len(where_params) + 1}" if (keyed or by_model) else ""
+    sentinel_params: Final = (PTU_SENTINEL_API_KEY,) if (keyed or by_model) else ()
+
+    sql_query: Final = f"""
+        SELECT
+            date,
+            "{entity_id_field}" AS entity_id,
+            {"api_key" if keyed else "NULL::text AS api_key"},
+            {"model" if by_model else "NULL::text AS model"},{_rollup_metric_select(table_name)}
+        FROM "{pg_table}"
+        WHERE {where_clause}{sentinel_clause}
+        GROUP BY {group_by}
+        ORDER BY {group_by}
+    """
+
+    return sql_query, (*where_params, *sentinel_params)
+
+
+class _ExportRow(_RollupMetricsRow):
+    entity_id: str | None
+    model: str | None
+
+
+def _export_team_alias(entity_metadata_field: Mapping[str, dict[str, object]] | None, entity_id: str) -> str | None:
+    alias: Final = _entity_metadata(entity_metadata_field, entity_id).get("team_alias")
+    return alias if isinstance(alias, str) else None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ExportMetrics:
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+    @classmethod
+    def from_record(cls, record: _RollupMetricsRow) -> "_ExportMetrics":
+        prompt_tokens: Final = record.prompt_tokens or 0
+        completion_tokens: Final = record.completion_tokens or 0
+        return cls(
+            spend=record.spend or 0.0,
+            api_requests=record.api_requests or 0,
+            successful_requests=record.successful_requests or 0,
+            failed_requests=record.failed_requests or 0,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_read_input_tokens=record.cache_read_input_tokens or 0,
+            cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        )
+
+    @classmethod
+    def zero(cls) -> "_ExportMetrics":
+        return cls(
+            spend=0.0,
+            api_requests=0,
+            successful_requests=0,
+            failed_requests=0,
+            total_tokens=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+
+    def __add__(self, other: "_ExportMetrics") -> "_ExportMetrics":
+        return _ExportMetrics(
+            spend=self.spend + other.spend,
+            api_requests=self.api_requests + other.api_requests,
+            successful_requests=self.successful_requests + other.successful_requests,
+            failed_requests=self.failed_requests + other.failed_requests,
+            total_tokens=self.total_tokens + other.total_tokens,
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
+        )
+
+
+def _export_base_row(
+    record: _ExportRow,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+) -> TeamDailyActivityExportRow:
+    entity_id: Final = record.entity_id or "Unassigned"
+    metrics: Final = _ExportMetrics.from_record(record)
+    return TeamDailyActivityExportRow(
+        date=record.date,
+        team_id=entity_id,
+        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        model=record.model,
+        spend=metrics.spend,
+        flat_cost=_reported_flat_cost(record),
+        api_requests=metrics.api_requests,
+        successful_requests=metrics.successful_requests,
+        failed_requests=metrics.failed_requests,
+        total_tokens=metrics.total_tokens,
+        prompt_tokens=metrics.prompt_tokens,
+        completion_tokens=metrics.completion_tokens,
+        cache_read_input_tokens=metrics.cache_read_input_tokens,
+        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+    )
+
+
+def _export_key_row(
+    record: _ExportRow,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    api_key_metadata: Mapping[str, _KeyMetadataDict],
+) -> TeamDailyActivityExportRow:
+    entity_id: Final = record.entity_id or "Unassigned"
+    metadata: Final = _key_metadata(api_key_metadata, record.api_key or "")
+    metrics: Final = _ExportMetrics.from_record(record)
+    return TeamDailyActivityExportRow(
+        date=record.date,
+        team_id=entity_id,
+        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        api_key=record.api_key,
+        key_alias=metadata.key_alias,
+        user_id=metadata.user_id,
+        user_email=metadata.user_email,
+        spend=metrics.spend,
+        api_requests=metrics.api_requests,
+        successful_requests=metrics.successful_requests,
+        failed_requests=metrics.failed_requests,
+        total_tokens=metrics.total_tokens,
+        prompt_tokens=metrics.prompt_tokens,
+        completion_tokens=metrics.completion_tokens,
+        cache_read_input_tokens=metrics.cache_read_input_tokens,
+        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+    )
+
+
+def _fold_export_users(
+    records: Sequence[_ExportRow],
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    api_key_metadata: Mapping[str, _KeyMetadataDict],
+) -> tuple[TeamDailyActivityExportRow, ...]:
+    """Fold (date, team, api_key) rows into (date, team, user) rows."""
+
+    def bucket_of(record: _ExportRow) -> tuple[str, str, str]:
+        return (
+            record.date,
+            record.entity_id or "Unassigned",
+            _key_metadata(api_key_metadata, record.api_key or "").user_id or "Unassigned",
+        )
+
+    key_sets: Final = MappingProxyType(
+        {
+            bucket: frozenset(record.api_key or "" for record in group)
+            for bucket, group in itertools.groupby(sorted(records, key=bucket_of), key=bucket_of)
+        }
+    )
+    sums: Final[dict[tuple[str, str, str], _ExportMetrics]] = {}  # mutable-ok: local fold accumulator
+    emails: Final[dict[tuple[str, str, str], str | None]] = {}  # mutable-ok: local fold accumulator
+    for record in records:
+        metadata = _key_metadata(api_key_metadata, record.api_key or "")
+        bucket_key = bucket_of(record)
+        sums[bucket_key] = sums.get(bucket_key, _ExportMetrics.zero()) + _ExportMetrics.from_record(record)
+        emails.setdefault(bucket_key, metadata.user_email)
+        if emails[bucket_key] is None and metadata.user_email is not None:
+            emails[bucket_key] = metadata.user_email
+    return tuple(
+        _export_folded_user_row(
+            bucket_key, sums[bucket_key], emails[bucket_key], len(key_sets[bucket_key]), entity_metadata_field
+        )
+        for bucket_key in sorted(sums)
+    )
+
+
+def _export_folded_user_row(
+    bucket_key: tuple[str, str, str],
+    metrics: _ExportMetrics,
+    user_email: str | None,
+    keys: int,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+) -> TeamDailyActivityExportRow:
+    date, entity_id, user_id = bucket_key
+    return TeamDailyActivityExportRow(
+        date=date,
+        team_id=entity_id,
+        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        user_id=user_id if user_id != "Unassigned" else None,
+        user_email=user_email,
+        keys=keys,
+        spend=metrics.spend,
+        api_requests=metrics.api_requests,
+        successful_requests=metrics.successful_requests,
+        failed_requests=metrics.failed_requests,
+        total_tokens=metrics.total_tokens,
+        prompt_tokens=metrics.prompt_tokens,
+        completion_tokens=metrics.completion_tokens,
+        cache_read_input_tokens=metrics.cache_read_input_tokens,
+        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+    )
+
+
+async def get_daily_activity_export_rows(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    start_date: str,
+    end_date: str,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None,
+    export_type: TeamDailyActivityExportType,
+) -> tuple[TeamDailyActivityExportRow, ...]:
+    """Every (date, entity[, api_key|model]) rollup row in the range, uncapped."""
+    sql_query, sql_params = _build_export_sql_query(
+        table_name=table_name,
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        start_date=start_date,
+        end_date=end_date,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+        timezone_offset_minutes=timezone_offset_minutes,
+        export_type=export_type,
+    )
+    raw_rows: Final = await _query_raw_optional(prisma_client, (sql_query, sql_params))
+    records: Final = tuple(_ExportRow(**row) for row in (raw_rows or ()))
+
+    if export_type in ("daily", "daily_with_models"):
+        return await asyncio.to_thread(
+            lambda: tuple(_export_base_row(record, entity_metadata_field) for record in records)
+        )
+
+    api_keys: Final = frozenset(record.api_key for record in records if record.api_key)
+    api_key_metadata: Final = (
+        await get_api_key_metadata(prisma_client, api_keys, _spend_logs_window(frozenset(r.date for r in records)))
+        if api_keys
+        else _EMPTY_KEY_METADATA
+    )
+    if export_type == "daily_with_keys":
+        return await asyncio.to_thread(
+            lambda: tuple(_export_key_row(record, entity_metadata_field, api_key_metadata) for record in records)
+        )
+    return await asyncio.to_thread(_fold_export_users, records, entity_metadata_field, api_key_metadata)
 
 
 def _aggregate_spend_records_sync(
@@ -948,6 +1357,7 @@ async def _aggregate_spend_records(
 # current grouping set's key), 0 when the column is part of the key.
 _GROUP_GRAND_TOTAL: Final = 127  # 0b1111111 — all rolled up
 _GROUP_DATE: Final = 63  # 0b0111111 — only date kept
+_API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000
 _GROUP_DATE_API_KEY: Final = 31  # 0b0011111
 _GROUP_DATE_MODEL: Final = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY: Final = 15  # 0b0001111
@@ -961,7 +1371,7 @@ _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
 
-def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
+def _record_to_spend_metrics(record: _RollupMetricsRow) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row.
 
     SUM() over zero rows is SQL NULL, so rollup rows (notably the grand-total
@@ -985,6 +1395,8 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
+        total_response_time_ms=record.total_response_time_ms or 0,
+        timed_requests=record.timed_requests or 0,
     )
 
 
@@ -1187,8 +1599,10 @@ async def get_daily_activity(
             include_current_utc_day=include_current_utc_day,
         )
 
+        spend_table: Final[TableActions[DailySpendRecord]] = getattr(prisma_client.db, table_name)
+
         # Get total count for pagination
-        total_count: Final[int] = await getattr(prisma_client.db, table_name).count(where=where_conditions)
+        total_count: Final[int] = await spend_table.count(where=where_conditions)
 
         # Fetch paginated results.
         # ``date`` alone is not a unique sort key -- a busy tenant has many
@@ -1200,7 +1614,7 @@ async def get_daily_activity(
         # total. Adding ``id`` (the row's UUID primary key, present on both
         # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
         # gives every page a stable cursor (#30164).
-        daily_spend_data: Final[Sequence[DailySpendRecord]] = await getattr(prisma_client.db, table_name).find_many(
+        daily_spend_data: Final[Sequence[DailySpendRecord]] = await spend_table.find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},
@@ -1246,6 +1660,8 @@ async def get_daily_activity(
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
                 total_gateway_injected_caching_savings_spend=metadata_metrics.gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
+                total_response_time_ms=metadata_metrics.total_response_time_ms,
+                total_timed_requests=metadata_metrics.timed_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -1311,10 +1727,6 @@ async def get_daily_activity_aggregated(
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
-    Uses SQL GROUP BY to aggregate rows in the database rather than fetching
-    all individual rows into Python. This collapses rows across entities
-    (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
-
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
 
@@ -1333,7 +1745,7 @@ async def get_daily_activity_aggregated(
         )
 
     try:
-        sql_query, sql_params = _build_aggregated_sql_query(
+        query_kwargs: Final = _AggregatedQueryKwargs(
             table_name=table_name,
             entity_id_field=entity_id_field,
             entity_id=entity_id,
@@ -1345,36 +1757,19 @@ async def get_daily_activity_aggregated(
             timezone_offset_minutes=timezone_offset_minutes,
             include_current_utc_day=include_current_utc_day,
         )
+        sql_query, sql_params = _build_aggregated_sql_query(
+            **query_kwargs,
+            global_rollup_through=await global_rollup_reconciled_through(prisma_client, query_kwargs),
+        )
+        entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
 
-        entity_query: Final = (
-            _build_entity_rollup_sql_query(
-                table_name=table_name,
-                entity_id_field=entity_id_field,
-                entity_id=entity_id,
-                start_date=start_date,
-                end_date=end_date,
-                model=model,
-                api_key=api_key,
-                exclude_entity_ids=exclude_entity_ids,
-                timezone_offset_minutes=timezone_offset_minutes,
-                include_current_utc_day=include_current_utc_day,
-            )
-            if include_entity_breakdown
-            else None
+        raw_rows, raw_entity_rows = await asyncio.gather(
+            prisma_client.db.query_raw(sql_query, *sql_params),
+            _query_raw_optional(prisma_client, entity_query),
         )
 
-        # Execute the GROUPING SETS query (one row per rollup level), alongside
-        # the per-entity companion rollup when the caller wants entities.
-        raw_rows, raw_entity_rows = (
-            await asyncio.gather(
-                prisma_client.db.query_raw(sql_query, *sql_params),
-                prisma_client.db.query_raw(entity_query[0], *entity_query[1]),
-            )
-            if entity_query is not None
-            else (await prisma_client.db.query_raw(sql_query, *sql_params), None)
-        )
-
-        records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or [])]
+        records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or ())]
+        total_api_keys: Final = next((r.distinct_api_keys for r in records if r.distinct_api_keys is not None), 0)
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
@@ -1423,9 +1818,13 @@ async def get_daily_activity_aggregated(
                     "totals"
                 ].gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
+                total_response_time_ms=aggregated["totals"].total_response_time_ms,
+                total_timed_requests=aggregated["totals"].timed_requests,
                 page=1,
                 total_pages=1,
                 has_more=False,
+                api_key_limit=USAGE_TOP_API_KEYS_LIMIT,
+                total_api_keys=total_api_keys,
             ),
         )
 

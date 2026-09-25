@@ -34,11 +34,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-try:
-    from fastapi.exceptions import HTTPException
-except ImportError:
-    HTTPException = None
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -106,9 +101,9 @@ def is_guardrail_intervention(e: Exception) -> bool:
         ),
     ):
         return True
-    if HTTPException is not None and isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES:
-        return True
-    return False
+    from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception
+
+    return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
 
 
 def _strict_guardrail_modes_enabled() -> bool:
@@ -155,7 +150,7 @@ class CustomGuardrail(CustomLogger):
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
-        own_apply_guardrail: Final = cls.__dict__.get("apply_guardrail")
+        own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
         if own_apply_guardrail is None or LOGS_GUARDRAIL_INFORMATION_MARKER in vars(own_apply_guardrail):
             return
         cls.apply_guardrail = log_guardrail_information(own_apply_guardrail)
@@ -884,7 +879,9 @@ class CustomGuardrail(CustomLogger):
         """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
         from litellm.llms import get_guardrail_translation_mapping
 
-        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+        if not self.uses_apply_guardrail_interface():
+            return kwargs, result
+        if not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
             return kwargs, result
         try:
             translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
@@ -901,8 +898,18 @@ class CustomGuardrail(CustomLogger):
             for key, value in (litellm_params.get("metadata") or {}).items()
             if key != "standard_logging_guardrail_information"
         }
+        response: Final = (
+            kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
+        )
+        from litellm.types.utils import ModelResponse
+
+        output_translation: Final = (
+            get_guardrail_translation_mapping(CallTypes.acompletion)()
+            if isinstance(response, ModelResponse)
+            else translation
+        )
         try:
-            await self._scan_logged_call(kwargs, result, translation, scratch_metadata)
+            await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
         recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
@@ -919,8 +926,9 @@ class CustomGuardrail(CustomLogger):
     async def _scan_logged_call(
         self,
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
-        result: object,
+        response: object | None,
         translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         optional_params: Final = kwargs.get("optional_params") or {}
@@ -934,8 +942,10 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        await translation.process_output_response(
-            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        if response is None:
+            return
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
 
     def supports_scan_only_tool_results(self) -> bool:
@@ -1364,8 +1374,9 @@ class CustomGuardrail(CustomLogger):
         raise e
 
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
-        """True when any key of either mapping differs between them (mask), False otherwise (allow)."""
-        return any(original_inputs.get(key) != response.get(key) for key in original_inputs.keys() | response.keys())
+        """True when any content key of either mapping differs between them (mask), False otherwise (allow)."""
+        compared_keys: Final = (original_inputs.keys() | response.keys()) - _STREAM_CONTROL_KEYS
+        return any(original_inputs.get(key) != response.get(key) for key in compared_keys)
 
     def mask_content_in_string(
         self,
@@ -1475,6 +1486,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
 _PRE_CALL_CONTENT_KEYS: Final = frozenset(
     {"messages", "input", "prompt", "system", "instructions", "tools", "functions", "function_call", "tool_choice"}
 )
+_STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
 def _original_inputs_for(
@@ -1629,5 +1641,5 @@ def log_guardrail_information(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 
-    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the wrapper this call just built
+    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return wrapper

@@ -1,9 +1,10 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import json
 from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from pydantic import AnyUrl
 
 import litellm
@@ -27,12 +28,12 @@ def proxy_mode():
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_mode")
 async def test_proxy_call_rejects_non_proxy_tool_names() -> None:
-    result = await server._dispatch_virtual_mcp_tool(
-        name="math_stdio-add", arguments={"a": 1, "b": 2}, user_api_key_auth=AUTH, client_ip=None
+    result = await mcp_operations._dispatch_virtual_mcp_tool(
+        name="math_stdio-add", arguments={"a": 1, "b": 2}, user_api_key_auth=AUTH, client_ip=None, mcp_proxy_mode=True
     )
 
     assert result is not None
-    assert result.isError is True
+    assert result.is_error is True
     assert "unavailable on /mcp/proxy" in result.content[0].text
 
 
@@ -44,16 +45,28 @@ async def test_proxy_rejects_non_tool_protocol_operations() -> None:
     assert options.capabilities.resources is None
     assert options.capabilities.tools is not None
 
-    with pytest.raises(McpError):
-        await server.list_prompts()
-    with pytest.raises(McpError):
-        await server.get_prompt("prompt", {})
-    with pytest.raises(McpError):
-        await server.list_resources()
-    with pytest.raises(McpError):
-        await server.list_resource_templates()
-    with pytest.raises(McpError):
-        await server.read_resource(AnyUrl("https://example.com/resource"))
+    from types import SimpleNamespace
+
+    from mcp.server.context import ServerRequestContext
+    from mcp.types import GetPromptRequestParams, PaginatedRequestParams, ReadResourceRequestParams
+
+    ctx = ServerRequestContext(
+        session=SimpleNamespace(),
+        lifespan_context={},
+        protocol_version="2025-06-18",
+        method="",
+    )
+
+    with pytest.raises(MCPError):
+        await server.list_prompts(ctx, PaginatedRequestParams())
+    with pytest.raises(MCPError):
+        await server.get_prompt(ctx, GetPromptRequestParams(name="prompt", arguments={}))
+    with pytest.raises(MCPError):
+        await server.list_resources(ctx, PaginatedRequestParams())
+    with pytest.raises(MCPError):
+        await server.list_resource_templates(ctx, PaginatedRequestParams())
+    with pytest.raises(MCPError):
+        await server.read_resource(ctx, ReadResourceRequestParams(uri="https://example.com/resource"))
 
 
 class FailureRecorder(CustomLogger):
@@ -93,12 +106,13 @@ async def test_proxy_scope_exception_emits_failure_log(monkeypatch: pytest.Monke
     arguments = {"tool_id": "denied-scope", "arguments": {}}
 
     with pytest.raises(HTTPException) as denied:
-        await server._dispatch_virtual_mcp_tool(
+        await mcp_operations._dispatch_virtual_mcp_tool(
             name="call_tool",
             arguments=arguments,
             user_api_key_auth=auth,
             client_ip=None,
             mcp_servers=["ungranted"],
+            mcp_proxy_mode=True,
             raw_headers={"authorization": "Bearer raw-scope-secret", "x-litellm-call-id": "scope-denial"},
         )
 

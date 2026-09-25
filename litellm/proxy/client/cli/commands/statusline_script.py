@@ -1,25 +1,23 @@
 """Claude Code status line and Codex Stop hook for auto-routed sessions.
 
-`lite` copies this file verbatim to ~/.litellm/statusline.py and registers it as Claude
-Code's `statusLine` command and as Codex's `[[hooks.Stop]]` command, so it must stay
+`lite` copies this file to ~/.litellm/statusline.py with a CLI version header when known and registers
+it as Claude Code's `statusLine` command and as Codex's `[[hooks.Stop]]` command, so it must stay
 standard-library only and must never import litellm. Claude Code re-runs it on every
 status refresh (about every 300ms while typing), so the proxy is asked at most once per
 TTL per session and every other refresh is served from a small on-disk cache that holds
 only the proxy's answer, never the key.
 
-Claude Code pipes a JSON payload on stdin (session_id, transcript_path, model); the routed
-model is the `message.model` of the latest foreground assistant line in the transcript,
-which is the proxy's response `model` field. That only names the tier model when the
-auto-router deployment sets `return_raw_model_name: true`; otherwise it is the alias the
-client requested. Codex pipes its Stop event instead (hook_event_name, session_id) and has
-no transcript to read, so the routed model comes from the proxy's session record and the
-result is printed as a `systemMessage` for the transcript. The proxy key is read from the
-agent's own environment (the static token `lite configure claude` writes); nothing here
-spawns a credential helper.
+Claude Code pipes a JSON payload on stdin (session_id, transcript_path, model). After the
+first foreground assistant response, the routed model comes from the proxy's session
+record, falling back to the latest foreground assistant `message.model` in the transcript
+when no record is available. Codex pipes its Stop event instead (hook_event_name, session_id)
+and prints the session record as a `systemMessage` for the transcript. The proxy key is read
+from the agent's own environment (the static token `lite configure claude` writes); nothing
+here spawns a credential helper.
 
-Cost figures come from GET /auto_router/session on the proxy, which reads the per-session
-rollup written by the spend flush. That flush is asynchronous, so a turn's cost lands a
-second or two after the turn; the cache TTL absorbs it.
+The routed model and cost figures come from GET /auto_router/session on the proxy, which
+reads the per-session rollup written by the asynchronous spend flush. The record and cache
+can briefly lag a completed turn.
 """
 
 from __future__ import annotations
@@ -30,9 +28,11 @@ import os
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from math import isfinite
 from pathlib import Path
 from types import MappingProxyType
 from typing import IO, Final, NamedTuple, Protocol
@@ -52,7 +52,6 @@ CODEX_BASE_URL_ENV_KEYS: Final = ("OPENAI_BASE_URL",)
 CODEX_API_KEY_ENV_KEYS: Final = ("OPENAI_API_KEY",)
 CODEX_STOP_EVENT: Final = "Stop"
 SYNTHETIC_MODEL: Final = "<synthetic>"
-LITELLM_LABEL: Final = "LiteLLM"
 RESET: Final = "\033[0m"
 BOLD: Final = "\033[1m"
 DIM: Final = "\033[90m"
@@ -66,8 +65,11 @@ class Session(NamedTuple):
     router_name: str
     last_model: str
     spend: float
-    baseline_spend: float
+    baseline_spend: float | None
     baseline_model: str | None
+    turns: int | None = None
+    savings_estimated_turns: int | None = None
+    savings_estimated_actual_spend: float | None = None
 
 
 class Credentials(NamedTuple):
@@ -208,17 +210,38 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
     router_name: Final = printable(payload.get("router_name"))
     last_model: Final = printable(payload.get("last_model"))
     spend: Final = payload.get("spend")
-    baseline_spend: Final = payload.get("baseline_spend")
+    baseline_spend: Final = payload.get("savings_estimated_baseline_spend", payload.get("baseline_spend"))
+    turns: Final = payload.get("turns")
+    estimated_turns: Final = payload.get("savings_estimated_turns")
+    estimated_actual: Final = payload.get("savings_estimated_actual_spend")
     if not router_name or not last_model:
         return None
-    if not isinstance(spend, (int, float)) or not isinstance(baseline_spend, (int, float)):
+    if not isinstance(spend, (int, float)) or isinstance(spend, bool) or not isfinite(spend):
+        return None
+    if baseline_spend is not None and (
+        not isinstance(baseline_spend, (int, float)) or isinstance(baseline_spend, bool) or not isfinite(baseline_spend)
+    ):
         return None
     return Session(
         router_name=router_name,
         last_model=last_model,
         spend=float(spend),
-        baseline_spend=float(baseline_spend),
+        baseline_spend=float(baseline_spend) if baseline_spend is not None else None,
         baseline_model=printable(payload.get("baseline_model")) or None,
+        turns=turns if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0 else None,
+        savings_estimated_turns=(
+            estimated_turns
+            if isinstance(estimated_turns, int) and not isinstance(estimated_turns, bool) and estimated_turns >= 0
+            else (0 if estimated_turns is not None else None)
+        ),
+        savings_estimated_actual_spend=(
+            float(estimated_actual)
+            if isinstance(estimated_actual, (int, float))
+            and not isinstance(estimated_actual, bool)
+            and isfinite(estimated_actual)
+            and estimated_actual >= 0
+            else None
+        ),
     )
 
 
@@ -304,6 +327,14 @@ def _bar(fraction: float, color: str, width: int, use_color: bool) -> str:
     return f"{color}{BAR_FULL * filled}{DIM}{BAR_EMPTY * (width - filled)}{RESET}"
 
 
+def _display_width(label: str) -> int:
+    return sum(
+        2 if unicodedata.east_asian_width(character) in ("W", "F") else 1
+        for character in label
+        if unicodedata.category(character) not in ("Mn", "Me")
+    )
+
+
 def render(model: str, session: Session | None, config_dir: Path, use_color: bool, bar_width: int = BAR_WIDTH) -> str:
     def paint(code: str, text: str) -> str:
         return f"{code}{text}{RESET}" if use_color else text
@@ -311,24 +342,43 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
     routed: Final = paint(BOLD, f"Routed to: {model}")
     if session is None:
         return routed
-    header: Final = f"{session.router_name}{SEPARATOR}{routed}"
+    if session.savings_estimated_turns == 0 or session.baseline_spend is None:
+        return f"{routed}{SEPARATOR}Savings unavailable"
     if session.baseline_model is None or session.baseline_spend <= 0:
-        return header
+        return routed
+    if session.savings_estimated_turns is not None and (
+        session.savings_estimated_actual_spend is None
+        or session.turns is None
+        or session.savings_estimated_turns > session.turns
+    ):
+        return f"{routed}{SEPARATOR}Savings unavailable"
+    compared_spend: Final = (
+        session.savings_estimated_actual_spend
+        if session.savings_estimated_turns is not None and session.savings_estimated_actual_spend is not None
+        else session.spend
+    )
+    coverage: Final = (
+        f"{SEPARATOR}{session.savings_estimated_turns} of {session.turns} turns estimated"
+        if session.savings_estimated_turns is not None
+        else ""
+    )
     reference: Final = baseline_label(session.baseline_model, config_dir)
-    pct: Final = (session.baseline_spend - session.spend) / session.baseline_spend * 100
-    delta: Final = paint(LITELLM_COLOR, f"{'-' if pct >= 0 else '+'}{abs(round(pct))}% vs {reference}")
-    peak: Final = max(session.spend, session.baseline_spend)
-    label_width: Final = max(len(LITELLM_LABEL), len(reference))
+    pct: Final = round((session.baseline_spend - compared_spend) / session.baseline_spend * 100)
+    sign: Final = "-" if pct > 0 else "+" if pct < 0 else ""
+    delta: Final = paint(LITELLM_COLOR, f"{sign}{abs(pct)}% vs {reference}")
+    peak: Final = max(compared_spend, session.baseline_spend)
+    label_width: Final = max(_display_width(session.router_name), _display_width(reference))
     rows: Final = (
-        (LITELLM_LABEL, session.spend, LITELLM_COLOR),
+        (session.router_name, compared_spend, LITELLM_COLOR),
         (reference, session.baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
-        f"{paint(DIM, label.ljust(label_width))} {_bar(amount / peak, color, bar_width, use_color)} "
+        f"{paint(DIM, label + ' ' * (label_width - _display_width(label)))} "
+        f"{_bar(amount / peak, color, bar_width, use_color)} "
         f"{paint(DIM, f'${amount:.2f}')}"
         for label, amount, color in rows
     )
-    return "\n".join((f"{header}  {delta}", *lines))
+    return "\n".join((f"{routed}  {delta}{coverage}", *lines))
 
 
 def color_enabled(env: Mapping[str, str]) -> bool:
@@ -348,7 +398,8 @@ def status_line(
     if not session_id or not credentials.usable:
         return render(label, None, config_dir, color_enabled(env))
     session: Final = load_session(credentials, session_id, cache_dir, fetch)
-    return render(label, session, config_dir, color_enabled(env))
+    routed_label: Final = model_label(session.last_model, config_dir) if session is not None else label
+    return render(routed_label, session, config_dir, color_enabled(env))
 
 
 def codex_stop_message(

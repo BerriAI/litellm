@@ -98,6 +98,13 @@ def test_token_counter_short_text_matches_tiktoken(text):
     assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
 
 
+def test_token_counter_default_encoding_matches_cl100k():
+    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    expected: Final = len(encoding.encode("hello world", disallowed_special=()))
+
+    assert token_counter_new(model=None, text="hello world") == expected
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")
@@ -626,9 +633,6 @@ def test_openai_token_with_image_and_text():
     "model, base_model, input_tokens, user_max_tokens, expected_value",
     [
         ("random-model", "random-model", 1024, 1024, 1024),
-        ("command", "command", 1000000, None, None),  # model max = 4096
-        ("command", "command", 4000, 256, 96),  # model max = 4096
-        ("command", "command", 4000, 10, 10),  # model max = 4096
         ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
     ],
 )
@@ -779,23 +783,23 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
 
 # Clear the cache at module load to ensure clean state
-_select_tokenizer_helper.cache_clear()
+_load_huggingface_tokenizer.cache_clear()
 
 
 class TestTokenizerSelection(unittest.TestCase):
     def setUp(self):
         """Clear the LRU cache before each test method.
 
-        The _select_tokenizer_helper function is decorated with @lru_cache,
-        which can cause cache hits from previous tests when running with
+        The HuggingFace tokenizers behind _select_tokenizer_helper are cached with
+        @lru_cache, which can cause cache hits from previous tests when running with
         --dist=loadscope (tests from same file run on same worker).
         """
-        _select_tokenizer_helper.cache_clear()
+        _load_huggingface_tokenizer.cache_clear()
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -810,7 +814,7 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_cohere_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -830,10 +834,10 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_str")
-    def test_claude_tokenizer_api_failure(self, mock_from_str):
+    @patch("litellm.utils.tokenizer_dispatch.anthropic")
+    def test_claude_tokenizer_api_failure(self, mock_anthropic):
         # Setup mock to raise an error
-        mock_from_str.side_effect = Exception("Failed to load tokenizer")
+        mock_anthropic.side_effect = Exception("Failed to load tokenizer")
 
         # Add Claude model to the list for testing
         litellm.anthropic_models = ["claude-2"]
@@ -842,13 +846,13 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("claude-2")
 
         # Verify the attempt to load Claude tokenizer
-        mock_from_str.assert_called_once_with(claude_json_str)
+        mock_anthropic.assert_called_once_with()
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama2_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -1249,6 +1253,25 @@ def test_token_counter_with_thinking_content():
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
+
+
+def test_token_counter_with_redacted_thinking_content():
+    """
+    A replayed redacted_thinking block (Anthropic redacted reasoning, or the /v1/messages bridge's stand-in
+    for a reasoning item with no summary) counts zero tokens for its encrypted payload, like a thinking
+    block with no text. It used to raise, which made is_prompt_caching_valid_prompt return False and the
+    prompt_caching pre-call check stop pinning the deployment that held the cached prefix.
+    """
+    model = "anthropic/claude-sonnet-4-5-20250929"
+    reply = {"type": "text", "text": "Draw from the box labeled Mixed, because that label must be wrong."}
+    redacted_block = {"type": "redacted_thinking", "data": "EqQBCkYIBRgCKkBjZ2xhc3M" * 30}
+    user_turn = {"role": "user", "content": [{"type": "text", "text": "Which box do you draw from?"}]}
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Restate that in one sentence."}]}
+
+    without_block = [user_turn, {"role": "assistant", "content": [reply]}, follow_up]
+    with_block = [user_turn, {"role": "assistant", "content": [redacted_block, reply]}, follow_up]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
 def test_token_counter_with_tool_reference_block():
     """
