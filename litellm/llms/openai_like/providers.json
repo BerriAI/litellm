@@ -200,5 +200,11 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "cruise": {
+    "base_url": "https://cruise.bytesbrains.net/v1",
+    "api_key_env": "CRUISE_API_KEY",
+    "api_base_env": "CRUISE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }

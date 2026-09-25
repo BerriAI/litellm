@@ -947,6 +947,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://cruise.bytesbrains.net/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
