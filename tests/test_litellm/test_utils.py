@@ -238,6 +238,91 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert info["key"] == expected_key
 
 
+@pytest.fixture
+def bedrock_openai_alias_cost_map(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fake-openai-bedrock-model",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 9e-6,
+            "max_input_tokens": 1000,
+            "max_output_tokens": 100,
+            "max_tokens": 100,
+        },
+    )
+    litellm.utils._invalidate_model_cost_lowercase_map()
+    try:
+        yield
+    finally:
+        litellm.utils._invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_provider"),
+    [
+        ("bedrock/us.openai.fake-openai-bedrock-model", None, "bedrock"),
+        ("bedrock/global.openai.fake-openai-bedrock-model", None, "bedrock"),
+        ("openai.fake-openai-bedrock-model", "bedrock_mantle", "bedrock_mantle"),
+    ],
+)
+def test_get_model_info_bedrock_openai_alias_falls_back_to_openai_row(
+    bedrock_openai_alias_cost_map: None, model: str, custom_llm_provider: str | None, expected_provider: str
+) -> None:
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == "fake-openai-bedrock-model"
+    assert info["input_cost_per_token"] == 3e-6
+    assert info["output_cost_per_token"] == 9e-6
+    assert info["litellm_provider"] == expected_provider
+
+
+def test_get_model_info_bedrock_openai_alias_exact_row_wins(
+    bedrock_openai_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "us.openai.fake-openai-bedrock-model",
+        {
+            "litellm_provider": "bedrock_converse",
+            "mode": "chat",
+            "input_cost_per_token": 4e-6,
+            "output_cost_per_token": 8e-6,
+        },
+    )
+    litellm.utils._invalidate_model_cost_lowercase_map()
+    info: Final = litellm.get_model_info("bedrock/us.openai.fake-openai-bedrock-model")
+    assert info["key"] == "us.openai.fake-openai-bedrock-model"
+    assert info["input_cost_per_token"] == 4e-6
+
+
+def test_get_model_info_bedrock_non_openai_alias_still_unmapped(bedrock_openai_alias_cost_map: None) -> None:
+    with pytest.raises(litellm.ModelNotMappedError):
+        litellm.get_model_info("bedrock/us.anthropic.fake-nonexistent-model")
+
+
+def test_get_model_info_bedrock_openai_alias_skips_non_openai_row(
+    bedrock_openai_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fake-other-model",
+        {"litellm_provider": "groq", "mode": "chat", "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+    )
+    litellm.utils._invalidate_model_cost_lowercase_map()
+    with pytest.raises(litellm.ModelNotMappedError):
+        litellm.get_model_info("bedrock/us.openai.fake-other-model")
+
+
+def test_cost_per_token_bedrock_openai_alias_prices_off_openai_row(bedrock_openai_alias_cost_map: None) -> None:
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="bedrock/us.openai.fake-openai-bedrock-model", prompt_tokens=10, completion_tokens=5
+    )
+    assert prompt_cost == pytest.approx(3e-5)
+    assert completion_cost == pytest.approx(4.5e-5)
+
+
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
     with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:

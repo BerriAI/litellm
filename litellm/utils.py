@@ -5755,6 +5755,36 @@ def _get_model_info_from_generalization(
     return None
 
 
+_BEDROCK_OPENAI_MODEL_RE: Final = re.compile(r"^openai\.(.+)$")
+_BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
+
+
+def _get_model_info_from_bedrock_openai_alias(
+    split_model: str, custom_llm_provider: str | None
+) -> tuple[str, dict] | None:
+    """Price an unmapped Bedrock ``openai.<model>`` id off the OpenAI catalog row for ``<model>``."""
+    if custom_llm_provider not in _BEDROCK_PROVIDERS:
+        return None
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+    match: Final = _BEDROCK_OPENAI_MODEL_RE.match(get_bedrock_base_model(split_model))
+    if match is None:
+        return None
+    openai_key: Final = _get_model_cost_key(match.group(1))
+    if openai_key is None:
+        return None
+    openai_info: Final = _get_model_info_from_model_cost(key=openai_key)
+    if openai_info.get("litellm_provider") != "openai":
+        return None
+    verbose_logger.debug(
+        "bedrock openai alias: pricing model=%s provider=%s off openai cost-map key=%s",
+        split_model,
+        custom_llm_provider,
+        openai_key,
+    )
+    return openai_key, {**openai_info, "litellm_provider": custom_llm_provider}
+
+
 def _strip_mantle_region_prefix(model: str) -> str:
     from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
 
@@ -6074,6 +6104,13 @@ def _get_model_info_helper(
                         **{k: v for k, v in fill_missing.items() if k not in _model_info},
                         **_model_info,
                     }
+
+            if _model_info is None:
+                alias: Final = _get_model_info_from_bedrock_openai_alias(
+                    split_model=split_model, custom_llm_provider=custom_llm_provider
+                )
+                if alias is not None:
+                    key, _model_info = alias
 
             if _model_info is None:
                 generalization: Final = _get_model_info_from_generalization(
