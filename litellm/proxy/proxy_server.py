@@ -971,6 +971,16 @@ _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS: Final = frozenset(
 )
 
 
+def _json_loads_value(raw: str) -> object:
+    """Parse a JSON string whose top-level shape the caller narrows itself."""
+    return json.loads(raw)
+
+
+def _yaml_safe_load_value(raw: str) -> object:
+    """Parse a YAML string whose top-level shape the caller narrows itself."""
+    return yaml.safe_load(raw)
+
+
 def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] | None) -> JsonValue:
     """Mask sensitive fields in the worker config before it enters a log record.
 
@@ -2545,7 +2555,7 @@ def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
 
 
-config_passthrough_endpoints: list[dict[str, Any]] | None = None
+config_passthrough_endpoints: list[dict[str, object]] | None = None
 log_file: Final = "api_log.json"
 worker_config: Final = None
 master_key: str | None = None
@@ -3122,7 +3132,7 @@ async def _increment_spend_counters_batched(
             key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
         )
         if isinstance(key_budget_limits, str):
-            key_budget_limits = json.loads(key_budget_limits)
+            key_budget_limits = _json_loads_value(key_budget_limits)
         if not isinstance(key_budget_limits, list):
             return key_pending
         window_pending: Final = await asyncio.gather(
@@ -3183,7 +3193,7 @@ async def _increment_spend_counters_batched(
             team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
         )
         if isinstance(team_budget_limits, str):
-            team_budget_limits = json.loads(team_budget_limits)
+            team_budget_limits = _json_loads_value(team_budget_limits)
         if not isinstance(team_budget_limits, list):
             return team_pending
         window_pending: Final = await asyncio.gather(
@@ -4685,7 +4695,7 @@ def _build_redis_usage_cache(redis_params: Mapping[str, object]) -> RedisCache:
     if startup_nodes is None:
         env_cluster_nodes: Final = get_secret_str("REDIS_CLUSTER_NODES")
         if env_cluster_nodes is not None:
-            startup_nodes = json.loads(env_cluster_nodes)
+            startup_nodes = _json_loads_value(env_cluster_nodes)
     non_node_params: Final = {key: value for key, value in redis_params.items() if key != "startup_nodes"}
     if startup_nodes:
         return RedisClusterCache(startup_nodes=startup_nodes, **non_node_params)
@@ -7331,17 +7341,17 @@ class ProxyConfig:
         if value is None:
             return None
 
-        parsed: dict | None = None
+        parsed: object = None
         if isinstance(value, dict):
             parsed = value
         elif isinstance(value, str):
             import json
 
             try:
-                parsed = yaml.safe_load(value)
+                parsed = _yaml_safe_load_value(value)
             except (yaml.YAMLError, json.JSONDecodeError):
                 try:
-                    parsed = json.loads(value)
+                    parsed = _json_loads_value(value)
                 except json.JSONDecodeError:
                     pass
 
@@ -10149,7 +10159,7 @@ class ProxyStartupEvent:
             )
             if row is not None:
                 stored: Final = row.param_value
-                decoded: Final = json.loads(stored) if isinstance(stored, str) else stored
+                decoded: Final = _json_loads_value(stored) if isinstance(stored, str) else stored
                 return MappingProxyType(
                     {
                         str(identity): str(fingerprint)
@@ -10172,7 +10182,7 @@ class ProxyStartupEvent:
                 )
                 competing_value: Final = None if competing_row is None else competing_row.param_value
                 competing_decoded: Final = (
-                    json.loads(competing_value) if isinstance(competing_value, str) else competing_value
+                    _json_loads_value(competing_value) if isinstance(competing_value, str) else competing_value
                 )
                 return MappingProxyType(
                     {

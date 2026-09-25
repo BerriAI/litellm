@@ -3,7 +3,7 @@
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine, Iterable
+from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from functools import partial
 from typing import Any, Final, Literal
 
@@ -233,8 +233,8 @@ def create_assistants(
     name: str | None = None,
     description: str | None = None,
     instructions: str | None = None,
-    tools: list[dict[str, Any]] | None = None,
-    tool_resources: dict[str, Any] | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
+    tool_resources: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
@@ -244,7 +244,7 @@ def create_assistants(
     api_base: str | None = None,
     api_version: str | None = None,
     **kwargs,
-) -> Assistant | Coroutine[Any, Any, Assistant]:
+) -> Assistant | Coroutine[object, object, Assistant]:
     async_create_assistants: Final[bool | None] = kwargs.pop("async_create_assistants", None)
     if async_create_assistants is not None and not isinstance(async_create_assistants, bool):
         raise ValueError("Invalid value passed in for async_create_assistants. Only bool or None allowed")
@@ -283,7 +283,7 @@ def create_assistants(
     # only send params that are not None
     create_assistant_data = {k: v for k, v in create_assistant_data.items() if v is not None}
 
-    response: Coroutine[Any, Any, Assistant] | Assistant | None = None
+    response: Coroutine[object, object, Assistant] | Assistant | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -415,7 +415,7 @@ def delete_assistant(
     api_base: str | None = None,
     api_version: str | None = None,
     **kwargs,
-) -> AssistantDeleted | Coroutine[Any, Any, AssistantDeleted]:
+) -> AssistantDeleted | Coroutine[object, object, AssistantDeleted]:
     optional_params: Final = GenericLiteLLMParams(api_key=api_key, api_base=api_base, api_version=api_version, **kwargs)
 
     litellm_params_dict: Final = get_litellm_params(**kwargs)
@@ -440,7 +440,7 @@ def delete_assistant(
     elif timeout is None:
         timeout = 600.0
 
-    response: AssistantDeleted | Coroutine[Any, Any, AssistantDeleted] | None = None
+    response: AssistantDeleted | Coroutine[object, object, AssistantDeleted] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base
