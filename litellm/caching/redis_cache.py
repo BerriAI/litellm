@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
 from pydantic import TypeAdapter
@@ -302,11 +303,13 @@ def _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownParameterType] 
     node: Final = cluster.get_default_node() or next(iter(cluster.nodes_manager.startup_nodes.values()), None)
     if node is None:  # pyright: ignore[reportUnnecessaryComparison]  # get_default_node is None before cluster init
         raise ValueError("cannot derive a pub/sub client: redis cluster has no default node and no startup nodes")
-    node_kwargs: Final[dict[str, object]] = {
-        key: cast(object, value)  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
-        for key, value in cluster.connection_kwargs.items()  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
-        if key not in _CLUSTER_ONLY_CONNECTION_KWARGS
-    }
+    node_kwargs: Final = MappingProxyType(
+        {
+            key: value  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
+            for key, value in cluster.connection_kwargs.items()  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
+            if key not in _CLUSTER_ONLY_CONNECTION_KWARGS
+        }
+    )
     pool: Final = ConnectionPool(host=node.host, port=node.port, **node_kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # cluster kwargs validated by redis-py at runtime
     return Redis(connection_pool=pool)  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
@@ -772,9 +775,9 @@ class RedisCache(BaseCache):
             key=cache_key
         )
         if cached_client is not None:
-            return cast(
+            return cast(  # cast-ok: per-loop pub/sub client stored by this method  # pyright: ignore[reportUnknownVariableType]  # redis generics
                 async_redis_client, cached_client
-            )  # cast-ok: per-loop pub/sub client stored by this method  # pyright: ignore[reportUnknownVariableType]  # redis generics
+            )
         pubsub_client: Final = _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownVariableType]  # redis generics
             cluster=client
         )
