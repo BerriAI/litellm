@@ -2359,6 +2359,37 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
     ]
 
 
+def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_output_config(
+    local_model_cost_map, local_beta_headers_config
+):
+    """Claude Code's per-turn control sends a mid-conversation ``role: "system"``
+    message carrying a message-level ``output_config`` together with the
+    per-turn-control-2026-07-01 beta. Bedrock Invoke rejects that message with
+    "messages.N.output_config: Extra inputs are not permitted" unless the beta
+    is present, so the beta must reach ``anthropic_beta`` and the message must
+    stay in place with its ``output_config``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "system", "content": [], "output_config": {"effort": "low"}},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-5-5",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "per-turn-control-2026-07-01"},
+    )
+
+    assert result["messages"] == messages
+    assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
+
+
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
     """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
     4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
