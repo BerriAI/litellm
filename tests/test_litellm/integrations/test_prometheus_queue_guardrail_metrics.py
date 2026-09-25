@@ -567,3 +567,15 @@ class TestPrometheusGuardrailMetrics:
             )
             is None
         )
+
+    def test_record_guardrail_fail_open_swallows_metric_errors(self):
+        prometheus_logger = PrometheusLogger()
+        broken_counter = MagicMock()
+        broken_counter.labels.side_effect = ValueError("registry exploded")
+        prometheus_logger.litellm_guardrail_errors_total = broken_counter
+
+        prometheus_logger.record_guardrail_fail_open(guardrail_name="a365", hook_type="pre_call")
+
+        broken_counter.labels.assert_called_once_with(
+            guardrail_name="a365", error_type="fail_open", hook_type="pre_call"
+        )

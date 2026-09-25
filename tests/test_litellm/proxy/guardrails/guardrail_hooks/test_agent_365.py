@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from types import SimpleNamespace
@@ -21,7 +22,6 @@ from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     guardrail_initializer_registry,
     initialize_guardrail,
 )
-from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import registered_prometheus_logger
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -29,6 +29,7 @@ from litellm.types.guardrails import (
     SupportedGuardrailIntegrations,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
+    AGENT_365_DEFAULT_AUTHORITY_HOST,
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
     Agent365GuardrailConfigModel,
@@ -133,6 +134,7 @@ def _make_guardrail(
     unreachable_fallback: str = "fail_closed",
     agent_id: str | None = None,
     api_base: str = AGENT_365_PROD_API_BASE,
+    authority_host: str = AGENT_365_DEFAULT_AUTHORITY_HOST,
     prometheus: FakePrometheus | None = None,
 ) -> Agent365Guardrail:
     return Agent365Guardrail(
@@ -142,6 +144,7 @@ def _make_guardrail(
         client_secret="secret-123",
         api_base=api_base,
         agent_id=agent_id,
+        authority_host=authority_host,
         unreachable_fallback=unreachable_fallback,
         async_handler=handler,
         prometheus_logger_lookup=lambda: prometheus,
@@ -269,6 +272,41 @@ class TestInitializeGuardrail:
         assert LitellmParams(guardrail="generic_guardrail_api", mode="pre_call").unreachable_fallback is None
         assert Agent365GuardrailConfigModel.model_fields["unreachable_fallback"].default == "fail_open"
 
+    def test_authority_host_defaults_to_public_entra(self, monkeypatch):
+        monkeypatch.delenv("AGENT365_AUTHORITY_HOST", raising=False)
+        monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+        params: Final = LitellmParams(
+            guardrail="agent_365", mode="pre_mcp_call", tenant_id="t", client_id="c", client_secret="s"
+        )
+        guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-authority"})
+        assert guardrail.authority_host == "https://login.microsoftonline.com"
+
+    def test_authority_host_precedence_param_then_agent365_env_then_azure_env(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.us/")
+        azure_only: Final = initialize_guardrail(
+            LitellmParams(guardrail="agent_365", mode="pre_mcp_call", tenant_id="t", client_id="c", client_secret="s"),
+            {"guardrail_name": "a365-azure"},
+        )
+        assert azure_only.authority_host == "https://login.microsoftonline.us"
+        monkeypatch.setenv("AGENT365_AUTHORITY_HOST", "https://login.partner.microsoftonline.cn")
+        agent_env: Final = initialize_guardrail(
+            LitellmParams(guardrail="agent_365", mode="pre_mcp_call", tenant_id="t", client_id="c", client_secret="s"),
+            {"guardrail_name": "a365-agentenv"},
+        )
+        assert agent_env.authority_host == "https://login.partner.microsoftonline.cn"
+        explicit: Final = initialize_guardrail(
+            LitellmParams(
+                guardrail="agent_365",
+                mode="pre_mcp_call",
+                tenant_id="t",
+                client_id="c",
+                client_secret="s",
+                authority_host="http://127.0.0.1:9",
+            ),
+            {"guardrail_name": "a365-explicit"},
+        )
+        assert explicit.authority_host == "http://127.0.0.1:9"
+
     def test_explicit_params_win(self, monkeypatch):
         monkeypatch.setenv("AGENT365_TENANT_ID", "env-tenant")
         params: Final = LitellmParams(
@@ -334,6 +372,14 @@ class TestAllowFlow:
         assert token_call.data["client_id"] == "client-xyz"
         assert token_call.data["client_secret"] == "secret-123"
         assert token_call.data["scope"] == f"{AGENT_365_PROD_RESOURCE_APP_ID}/ThreatProtection.Evaluate.All"
+
+    @pytest.mark.asyncio
+    async def test_obo_exchange_goes_to_the_configured_authority_host(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, authority_host="https://login.microsoftonline.us/")
+        await _run(guardrail, _mcp_data())
+        assert handler.calls[0].url == "https://login.microsoftonline.us/tenant-abc/oauth2/v2.0/token"
+        assert handler.calls[1].url == EVALUATE_URL
 
     @pytest.mark.asyncio
     async def test_evaluate_payload(self):
@@ -522,15 +568,18 @@ class TestDefenderNotEvaluated:
 
 class TestFailOpenDefault:
     @pytest.mark.asyncio
-    async def test_constructor_default_lets_timed_out_evaluation_through_unscanned(self):
+    async def test_constructor_default_lets_timed_out_evaluation_through_unscanned(self, caplog):
         handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
         guardrail: Final = _default_fallback_guardrail(handler)
         assert guardrail.unreachable_fallback == "fail_open"
         data: Final = _mcp_data()
-        assert await _run(guardrail, data) is data
+        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            assert await _run(guardrail, data) is data
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_failed_to_respond"
         assert info["guardrail_response"]["verdict"] == "Unscanned"
+        fail_open_logs: Final = [r for r in caplog.records if "unreachable_fallback='fail_open'" in r.getMessage()]
+        assert [r.levelno for r in fail_open_logs] == [logging.ERROR], caplog.text
 
     @pytest.mark.asyncio
     async def test_constructor_default_still_blocks_a_policy_block(self):
@@ -576,12 +625,17 @@ class TestFailOpenDefault:
             await _run(guardrail, _mcp_data())
         assert prometheus.fail_opens == []
 
-    def test_registered_prometheus_logger_reads_litellm_callbacks(self, monkeypatch):
-        monkeypatch.setattr(litellm, "callbacks", [])
-        assert registered_prometheus_logger() is None
-        logger: Final = PrometheusLogger.__new__(PrometheusLogger)
-        monkeypatch.setattr(litellm, "callbacks", ["langfuse", logger])
-        assert registered_prometheus_logger() is logger
+    def test_default_lookup_is_the_registered_prometheus_logger(self):
+        guardrail: Final = Agent365Guardrail(
+            guardrail_name="agent-365-guard",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            async_handler=FakeHandler([]),
+            event_hook="pre_mcp_call",
+            default_on=True,
+        )
+        assert guardrail._prometheus_logger_lookup is PrometheusLogger.get_instance
 
 
 class TestUnreachableFallback:

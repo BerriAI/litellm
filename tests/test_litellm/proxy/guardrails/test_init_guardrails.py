@@ -1,8 +1,6 @@
 import json
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
@@ -167,6 +165,29 @@ def test_initialize_guardrail_sets_run_in_parallel(config_value, expected):
     assert custom_guardrail.run_in_parallel is expected
 
 
+@pytest.mark.parametrize(
+    "guardrail, provider_params, expected",
+    [
+        ("agent_365", {"tenant_id": "t", "client_id": "c", "client_secret": "s", "mode": "pre_mcp_call"}, "fail_open"),
+        ("typesafe", {"api_key": "k"}, "fail_open"),
+        ("generic_guardrail_api", {"api_base": "http://127.0.0.1:1/guard"}, "fail_closed"),
+        ("akto", {"akto_base_url": "http://127.0.0.1:1", "akto_api_key": "k", "akto_account_id": "1"}, "fail_closed"),
+        ("alice", {"api_key": "k", "api_base": "http://127.0.0.1:1"}, "fail_closed"),
+        ("deepkeep", {"api_base": "http://127.0.0.1:1", "api_key": "k", "deepkeep_firewall_id": "f"}, "fail_closed"),
+        ("repelloai", {"api_key": "k", "api_base": "http://127.0.0.1:1", "asset_id": "a"}, "fail_closed"),
+    ],
+)
+def test_unset_unreachable_fallback_applies_each_guardrails_own_default(guardrail, provider_params, expected):
+    litellm_params = {"guardrail": guardrail, "mode": "pre_call", **provider_params}
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": f"default-fallback-{guardrail}", "litellm_params": litellm_params},
+    )
+
+    custom_guardrail = guardrail_handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+    assert custom_guardrail.unreachable_fallback == expected, f"{guardrail} with unreachable_fallback unset"
+
+
 def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     """Regression (LIT-4785): `presidio_analyze_chunk_size_bytes` set in
     config.yaml must reach the guardrail instance. The field lives on
@@ -195,8 +216,7 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     initialized = [
         callback
         for callback in litellm.callbacks
-        if isinstance(callback, _OPTIONAL_PresidioPIIMasking)
-        and callback.guardrail_name == "test_presidio_chunk_size"
+        if isinstance(callback, _OPTIONAL_PresidioPIIMasking) and callback.guardrail_name == "test_presidio_chunk_size"
     ]
     assert initialized, "presidio guardrail was not registered as a callback"
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000

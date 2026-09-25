@@ -38,6 +38,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidUrl } from "@/lib/forms/urlValidation";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { buildEquivalentConfigYaml, type TeamGuardrail, type TeamGuardrailStatus } from "./teamGuardrailConfigYaml";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
@@ -97,32 +98,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
   </>
 );
 
-type GuardrailStatus = "active" | "pending" | "rejected";
-
-type TeamGuardrail = {
-  id: string;
-  team: string;
-  name: string;
-  endpoint: string;
-  status: GuardrailStatus;
-  model: string;
-  forwardKey: boolean;
-  description: string;
-  method: "POST" | "GET";
-  customHeaders: {
-    key: string;
-    value: string;
-  }[];
-  extraHeaders: string[];
-  submittedAt: string;
-  submittedBy: string;
-  mode?: string;
-  unreachable_fallback?: string;
-  additionalProviderParams?: Record<string, unknown>;
-  guardrailType?: string;
-};
-
-function mapStatus(apiStatus: string): GuardrailStatus {
+function mapStatus(apiStatus: string): TeamGuardrailStatus {
   if (apiStatus === "pending_review") return "pending";
   if (apiStatus === "active" || apiStatus === "rejected") return apiStatus;
   return "active";
@@ -180,7 +156,7 @@ function submissionToTeamGuardrail(item: GuardrailSubmissionItem): TeamGuardrail
   };
 }
 
-const STATUS_CONFIG: Record<GuardrailStatus, { label: string; bg: string; text: string; dot: string }> = {
+const STATUS_CONFIG: Record<TeamGuardrailStatus, { label: string; bg: string; text: string; dot: string }> = {
   active: {
     label: "Active",
     bg: "bg-success/10",
@@ -209,52 +185,6 @@ const TEAM_COLORS: Record<string, string> = {
   Legal: "bg-muted text-foreground",
   Finance: "bg-success/15 text-success",
 };
-
-const FAIL_OPEN_BY_DEFAULT_GUARDRAILS: ReadonlySet<string> = new Set(["agent_365", "typesafe"]);
-
-function defaultUnreachableFallback(guardrailType: string | undefined): "fail_open" | "fail_closed" {
-  return guardrailType !== undefined && FAIL_OPEN_BY_DEFAULT_GUARDRAILS.has(guardrailType)
-    ? "fail_open"
-    : "fail_closed";
-}
-
-function buildEquivalentConfigYaml(g: TeamGuardrail): string {
-  const lines: string[] = [
-    "litellm_settings:",
-    "  guardrails:",
-    `    - guardrail_name: "${g.name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
-    "      litellm_params:",
-    `        guardrail: ${g.guardrailType ?? "generic_guardrail_api"}`,
-    `        mode: ${g.mode ?? "pre_call"}  # or post_call, during_call`,
-    `        api_base: ${g.endpoint || "https://your-guardrail-api.com"}`,
-    "        api_key: os.environ/YOUR_GUARDRAIL_API_KEY  # optional",
-    `        unreachable_fallback: ${g.unreachable_fallback ?? defaultUnreachableFallback(g.guardrailType)}  # fail_closed blocks, fail_open proceeds when the guardrail endpoint is unreachable. Shown value is this guardrail's default.`,
-    `        forward_api_key: ${g.forwardKey}`,
-  ];
-  if (g.model && g.model !== "—") {
-    lines.push(`        model: "${g.model}"  # LLM model name sent to the guardrail for context`);
-  }
-  if (g.customHeaders.length > 0) {
-    lines.push("        headers:  # static headers (sent with every request)");
-    for (const h of g.customHeaders) {
-      lines.push(`          ${h.key}: "${String(h.value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
-    }
-  }
-  if (g.extraHeaders.length > 0) {
-    lines.push("        extra_headers:  # forward these client request headers to the guardrail");
-    for (const name of g.extraHeaders) {
-      lines.push(`          - ${name}`);
-    }
-  }
-  if (g.additionalProviderParams && Object.keys(g.additionalProviderParams).length > 0) {
-    lines.push("        additional_provider_specific_params:");
-    for (const [k, v] of Object.entries(g.additionalProviderParams)) {
-      const val = typeof v === "string" ? `"${v}"` : String(v);
-      lines.push(`          ${k}: ${val}`);
-    }
-  }
-  return lines.join("\n");
-}
 
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
@@ -833,7 +763,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   });
   const [search, setSearch] = useState("");
   const [searchDebounced] = useDebouncedValue(search, { wait: DEBOUNCE_WAIT_MS });
-  const [statusFilter, setStatusFilter] = useState<"all" | GuardrailStatus>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | TeamGuardrailStatus>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedHeaders, setExpandedHeaders] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<{

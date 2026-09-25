@@ -34085,6 +34085,11 @@ export interface components {
              */
             auth_token?: string | null;
             /**
+             * Authority Host
+             * @description Microsoft Entra authority host that issues the On-Behalf-Of token, for sovereign clouds. Defaults to https://login.microsoftonline.com. Falls back to the AGENT365_AUTHORITY_HOST, then AZURE_AUTHORITY_HOST environment variables.
+             */
+            authority_host?: string | null;
+            /**
              * Aws Access Key Id
              * @description AWS access key ID for authentication
              */

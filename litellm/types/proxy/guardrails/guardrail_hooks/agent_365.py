@@ -7,6 +7,7 @@ from .base import GuardrailConfigModel
 AGENT_365_PROD_API_BASE: Final = "https://agent365.svc.cloud.microsoft"
 AGENT_365_PROD_RESOURCE_APP_ID: Final = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
 AGENT_365_SCOPE_NAME: Final = "ThreatProtection.Evaluate.All"
+AGENT_365_DEFAULT_AUTHORITY_HOST: Final = "https://login.microsoftonline.com"
 
 
 class Agent365GuardrailConfigModel(GuardrailConfigModel):
@@ -61,13 +62,23 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
         ),
     )
 
+    authority_host: str | None = Field(
+        default=None,
+        description=(
+            "Microsoft Entra authority host that issues the On-Behalf-Of token, for sovereign clouds. "
+            f"Defaults to {AGENT_365_DEFAULT_AUTHORITY_HOST}. "
+            "Falls back to the AGENT365_AUTHORITY_HOST, then AZURE_AUTHORITY_HOST environment variables."
+        ),
+    )
+
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
         default="fail_open",
         description=(
-            "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, or skips the evaluation. "
-            "'fail_open' (default) allows the tool call and records it as Unscanned in the logs, OpenTelemetry "
-            "and the litellm_guardrail_errors_total Prometheus counter. 'fail_closed' blocks it with HTTP 503. "
-            "Blocks, 4xx rejections, throttling and Entra token failures always block."
+            "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, skips the evaluation, or "
+            "rejects the gateway's own client credentials. 'fail_open' (default) allows the tool call and records "
+            "it as Unscanned in the logs, OpenTelemetry and the litellm_guardrail_errors_total Prometheus counter. "
+            "'fail_closed' blocks it with HTTP 503. Policy blocks, 4xx rejections, throttling and a rejected "
+            "caller token always block."
         ),
     )
 

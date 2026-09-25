@@ -22,7 +22,6 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import (
@@ -38,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
+    AGENT_365_DEFAULT_AUTHORITY_HOST,
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
     AGENT_365_SCOPE_NAME,
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
     from litellm.types.utils import GuardrailStatus
 
-TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+TOKEN_PATH_TEMPLATE: Final = "/{tenant_id}/oauth2/v2.0/token"
 EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
 DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
@@ -81,10 +81,6 @@ def _parse_aadsts_codes(raw: object) -> tuple[int, ...]:
         return _AADSTS_CODES_ADAPTER.validate_python(raw)
     except ValidationError:
         return ()
-
-
-def registered_prometheus_logger() -> PrometheusLogger | None:
-    return next((cb for cb in litellm.callbacks if isinstance(cb, PrometheusLogger)), None)
 
 
 def entra_assertion(value: object) -> str | None:
@@ -162,10 +158,11 @@ class Agent365Guardrail(CustomGuardrail):
         api_base: str = AGENT_365_PROD_API_BASE,
         resource_app_id: str = AGENT_365_PROD_RESOURCE_APP_ID,
         agent_id: str | None = None,
+        authority_host: str = AGENT_365_DEFAULT_AUTHORITY_HOST,
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_open",
         async_handler: AsyncHTTPHandler | None = None,
-        prometheus_logger_lookup: Callable[[], PrometheusLogger | None] = registered_prometheus_logger,
+        prometheus_logger_lookup: Callable[[], PrometheusLogger | None] = PrometheusLogger.get_instance,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail (event_hook, default_on)
     ) -> None:
         super().__init__(
@@ -181,6 +178,7 @@ class Agent365Guardrail(CustomGuardrail):
         self.api_base = api_base.rstrip("/")
         self.resource_app_id = resource_app_id
         self.agent_id = agent_id
+        self.authority_host = authority_host.rstrip("/")
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_closed" if unreachable_fallback == "fail_closed" else "fail_open"
@@ -456,7 +454,7 @@ class Agent365Guardrail(CustomGuardrail):
                 return cached[0]
 
         response: Final = await self._post_allowing_error_status(
-            url=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id),
+            url=f"{self.authority_host}{TOKEN_PATH_TEMPLATE.format(tenant_id=self.tenant_id)}",
             data={  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "client_id": self.client_id,
