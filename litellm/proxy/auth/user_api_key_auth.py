@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
+    key_model_aliases_for_auth_check,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
 )
@@ -469,6 +470,7 @@ async def _check_key_model_budget_with_fallback(
                     models=valid_token.team_models,
                     team_model_aliases=valid_token.team_model_aliases,
                     team_id=valid_token.team_id,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="team",
                 )
         except ProxyException:

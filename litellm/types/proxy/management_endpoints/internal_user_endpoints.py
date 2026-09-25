@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
@@ -26,6 +26,16 @@ class UserSearchWhere(TypedDict):
     """Prisma filter behind `/user/list?search=`: user_id or user_email contains the term, case-insensitive."""
 
     OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email"], InsensitiveContains], ...]]
+
+
+class KeyActivitySearchWhere(TypedDict):
+    """Prisma filter behind `/user/daily/activity/aggregated/search`: exact token hash, or key alias
+    or user id containing the term, case-insensitive."""
+
+    user_id: NotRequired[ReadOnly[str]]
+    OR: ReadOnly[
+        tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]
+    ]
 
 
 class UserListResponse(BaseModel):

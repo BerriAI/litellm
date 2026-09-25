@@ -14,9 +14,12 @@ from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
+    DiscoverRequest,
+    DiscoverResult,
     GetPromptRequest,
     GetPromptRequestParams,
     GetPromptResult,
+    InputRequiredResult,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -27,10 +30,14 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
     Prompt,
+    PromptsCapability,
     ReadResourceRequest,
     ReadResourceRequestParams,
+    ResourcesCapability,
     ResourceTemplate,
+    ServerCapabilities,
     TextContent,
+    ToolsCapability,
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, ConfigDict, Field, TypeAdapter
@@ -49,6 +56,11 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     byok_credential_cache_key,
     cache_byok_credential,
     get_cached_byok_credential,
+)
+from litellm.proxy._experimental.mcp_server.capabilities import (
+    GATEWAY_OPERATIONS,
+    build_discovery,
+    configured_versions,
 )
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
@@ -85,6 +97,12 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_extra_headers,
     _request_resolved_auth_headers,
 )
+from litellm.proxy._experimental.mcp_server.result_conversion import (
+    WireCompat,
+    complete_call_tool_result,
+    handler_outcome,
+    to_call_tool_result,
+)
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -115,7 +133,9 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
+    MCP_LEGACY_VERSIONS,
     MCPAuth,
+    MCPTransport,
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
@@ -1804,8 +1824,9 @@ async def execute_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    wire_compat: WireCompat = WireCompat.LEGACY,
     **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
@@ -1813,6 +1834,7 @@ async def execute_mcp_tool(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         client_ip=client_ip,
+        wire_compat=wire_compat,
     )
     operation: Final = AuthorizedToolCall(
         name=name,
@@ -1839,8 +1861,9 @@ async def _execute_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    wire_compat: WireCompat = WireCompat.LEGACY,
     **kwargs: Any,
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     """
     Execute MCP tool.
 
@@ -2088,7 +2111,7 @@ async def _execute_mcp_tool(
         _extra_token: Final = _request_extra_headers.set(forwarded_headers)
         _resolved_token: Final = _request_resolved_auth_headers.set(resolved_auth_headers)
         try:
-            response = await _handle_local_mcp_tool(name, arguments)
+            response = await _handle_local_mcp_tool(name, arguments, wire_compat)
         finally:
             _request_auth_header.reset(_auth_token)
             _request_extra_headers.reset(_extra_token)
@@ -2112,6 +2135,7 @@ async def _execute_mcp_tool(
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
             host_progress_callback=host_progress_callback,
+            wire_compat=wire_compat,
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2169,10 +2193,13 @@ async def _execute_mcp_tool(
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
 
-        response = await _handle_local_mcp_tool(original_tool_name, arguments)
+        response = await _handle_local_mcp_tool(original_tool_name, arguments, wire_compat)
 
+    converted: Final = to_call_tool_result(response, wire_compat)
+    if isinstance(converted, InputRequiredResult):
+        return converted
     return await _run_post_mcp_call_guardrails(
-        result=response,
+        result=converted,
         litellm_logging_obj=litellm_logging_obj,
         user_api_key_auth=user_api_key_auth,
         request_data=kwargs,
@@ -2204,6 +2231,13 @@ async def _run_post_mcp_call_guardrails(
         ),
         user_api_key_dict=user_api_key_auth,
     )
+
+
+def suppress_completed_success_logging(logging_obj: LiteLLMLoggingObj) -> None:
+    """An interim ``InputRequiredResult`` is not a completed call, so the ``@client`` wrapper
+    on ``call_mcp_tool`` must not run the success handlers for it when the coroutine returns."""
+    logging_obj.has_run_logging(event_type="sync_success")
+    logging_obj.has_run_logging(event_type="async_success")
 
 
 async def _fire_mcp_tool_call_logging(
@@ -2322,10 +2356,14 @@ async def call_mcp_tool(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    wire_compat: WireCompat = WireCompat.LEGACY,
     **kwargs: Any,
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     """
     Call a specific tool with the provided arguments (handles prefixed tool names).
+
+    A modern ``InputRequiredResult`` is an interim answer, so it is returned as is and skips the
+    completed-call logging below.
     """
     start_time: Final = datetime.now()
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
@@ -2376,12 +2414,17 @@ async def call_mcp_tool(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            wire_compat=wire_compat,
             **kwargs,
         )
     except Exception as e:
         await fire_mcp_tool_call_failure_logging(litellm_logging_obj, e, start_time, user_api_key_auth, kwargs)
         raise
 
+    if isinstance(response, InputRequiredResult):
+        if litellm_logging_obj:
+            suppress_completed_success_logging(litellm_logging_obj)
+        return response
     if litellm_logging_obj:
         response = await _fire_mcp_tool_call_logging(
             logging_obj=litellm_logging_obj,
@@ -2547,7 +2590,8 @@ async def _handle_managed_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
-) -> CallToolResult:
+    wire_compat: WireCompat = WireCompat.LEGACY,
+) -> CallToolResult | InputRequiredResult:
     """Handle tool execution for managed server tools"""
     # Import here to avoid circular import
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -2566,12 +2610,15 @@ async def _handle_managed_mcp_tool(
         host_progress_callback=host_progress_callback,
         litellm_logging_obj=litellm_logging_obj,
         guardrail_context=guardrail_context,
+        wire_compat=wire_compat,
     )
     verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
     return call_tool_result
 
 
-async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> CallToolResult:
+async def _handle_local_mcp_tool(
+    name: str, arguments: dict[str, object], wire_compat: WireCompat = WireCompat.LEGACY
+) -> CallToolResult:
     """Execute a local-registry tool and report whether it succeeded.
 
     Returns the result rather than bare content because the verdict is part of it: the content
@@ -2604,10 +2651,7 @@ async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> Cal
             content=[TextContent(text=f"Error: {e}", type="text")],  # mutable-ok: MCP result content
             is_error=True,
         )
-    return CallToolResult(
-        content=[TextContent(text=str(result), type="text")],  # mutable-ok: MCP result content
-        is_error=False,
-    )
+    return complete_call_tool_result(handler_outcome(result), wire_compat)
 
 
 _MCP_CREDENTIAL_REQUEST_FIELDS: Final = frozenset(
@@ -2626,7 +2670,11 @@ class _McpDeniedDetail(TypedDict):
 
 
 async def _execute_handle_list_tools(
-    context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
+    context: OperationContext,
+    params: PaginatedRequestParams,
+    host_progress_callback: ProgressCallback | None = None,
+    *,
+    log_list_tools_to_spendlogs: bool = True,
 ) -> ListToolsResult:
     try:
         (
@@ -2669,7 +2717,7 @@ async def _execute_handle_list_tools(
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            log_list_tools_to_spendlogs=True,
+            log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
             list_tools_log_source="mcp_protocol",
             client_ip=_client_ip,
         )
@@ -2694,7 +2742,7 @@ async def _execute_handle_list_tools(
 
 async def _execute_mcp_server_tool_call(
     context: OperationContext, params: CallToolRequestParams, host_progress_callback: ProgressCallback | None = None
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     from mcp.types import CallToolResult
 
     from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -2778,6 +2826,7 @@ async def _execute_mcp_server_tool_call(
             raw_headers=raw_headers,
             client_ip=_client_ip,
             host_progress_callback=host_progress_callback,
+            wire_compat=context.wire_compat,
             **data,  # for logging
         )
     except MCPMissingUserEnvVarsError as e:
@@ -3032,6 +3081,8 @@ def prepare_context(
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    wire_compat: WireCompat = WireCompat.LEGACY,
+    protocol_version: str | None = None,
 ) -> OperationContext:
     return OperationContext(
         _caller=user_api_key_auth,
@@ -3042,11 +3093,14 @@ def prepare_context(
         raw_headers=raw_headers,
         client_ip=client_ip,
         mcp_proxy_mode=mcp_proxy_mode,
+        wire_compat=wire_compat,
+        protocol_version=protocol_version,
     )
 
 
 GatewayOperation: TypeAlias = (
     AuthorizedToolCall
+    | DiscoverRequest
     | ListToolsRequest
     | CallToolRequest
     | ListPromptsRequest
@@ -3056,8 +3110,10 @@ GatewayOperation: TypeAlias = (
     | ReadResourceRequest
 )
 GatewayResult: TypeAlias = (
-    ListToolsResult
+    DiscoverResult
+    | ListToolsResult
     | CallToolResult
+    | InputRequiredResult
     | ListPromptsResult
     | GetPromptResult
     | ListResourcesResult
@@ -3071,13 +3127,20 @@ class GatewayOperations:
         self._host_progress_callback = host_progress_callback
 
     @overload
-    async def execute(self, operation: AuthorizedToolCall, context: OperationContext) -> CallToolResult: ...
+    async def execute(self, operation: DiscoverRequest, context: OperationContext) -> DiscoverResult: ...
+
+    @overload
+    async def execute(
+        self, operation: AuthorizedToolCall, context: OperationContext
+    ) -> CallToolResult | InputRequiredResult: ...
 
     @overload
     async def execute(self, operation: ListToolsRequest, context: OperationContext) -> ListToolsResult: ...
 
     @overload
-    async def execute(self, operation: CallToolRequest, context: OperationContext) -> CallToolResult: ...
+    async def execute(
+        self, operation: CallToolRequest, context: OperationContext
+    ) -> CallToolResult | InputRequiredResult: ...
 
     @overload
     async def execute(self, operation: ListPromptsRequest, context: OperationContext) -> ListPromptsResult: ...
@@ -3098,6 +3161,51 @@ class GatewayOperations:
 
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
+            case DiscoverRequest():
+                listings: Final = (
+                    ()
+                    if context.mcp_proxy_mode
+                    else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
+                )
+                tasks: Final = (
+                    asyncio.create_task(
+                        _execute_handle_list_tools(
+                            context,
+                            PaginatedRequestParams(),
+                            self._host_progress_callback,
+                            log_list_tools_to_spendlogs=False,
+                        )
+                    ),
+                    *(asyncio.create_task(self.execute(listing, context)) for listing in listings),
+                )
+                try:
+                    results: Final = await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                return build_discovery(
+                    configured=configured_versions(),
+                    revision=context.protocol_version or "2025-11-25",
+                    transport=MCPTransport.http,
+                    authorized_operations=GATEWAY_OPERATIONS,
+                    upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
+                    capabilities=ServerCapabilities(
+                        tools=ToolsCapability()
+                        if any(isinstance(result, ListToolsResult) and result.tools for result in results)
+                        else None,
+                        prompts=PromptsCapability()
+                        if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
+                        else None,
+                        resources=ResourcesCapability()
+                        if any(
+                            (isinstance(result, ListResourcesResult) and result.resources)
+                            or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
+                            for result in results
+                        )
+                        else None,
+                    ),
+                )
             case AuthorizedToolCall():
                 auth, token, _servers, server_headers, oauth_headers, headers, _client_ip = context.legacy_auth()
                 return await _execute_mcp_tool(
@@ -3113,6 +3221,7 @@ class GatewayOperations:
                     client_ip=_client_ip,
                     host_progress_callback=operation.host_progress_callback,
                     guardrail_context=operation.guardrail_context,
+                    wire_compat=context.wire_compat,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, overload, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -230,6 +230,11 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
     return next((status for status in map(_status_code_for_error_field, fields) if status is not None), 500)
 
 
+def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
+    message, error_type, error_code = _error_event_fields(error_obj)
+    return _status_code_for_error_fields(error_type, error_code), message
+
+
 def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_provider: str) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -260,6 +265,9 @@ def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
     return not isinstance(status_code, int) or status_code >= 500 or status_code == 429
 
 
+_PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
+
+
 class BaseResponsesAPIStreamingIterator:
     """
     Base class for streaming iterators that process responses from the Responses API.
@@ -287,6 +295,7 @@ class BaseResponsesAPIStreamingIterator:
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
+        self._output_started = False
         self._generated_content = ""
         self._generated_tool_arguments = ""
         self._completed_response_cached = False
@@ -874,6 +883,46 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             pass
 
+    def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
+        self._yielded_first_chunk = True
+        if event.type not in _PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
+            self._output_started = True
+
+    def _fallback_error(self, original: Exception) -> MidStreamFallbackError:
+        return MidStreamFallbackError(
+            message=str(original),
+            model=self.model or "",
+            llm_provider=self.custom_llm_provider or "",
+            original_exception=original,
+            generated_content="",
+            is_pre_first_chunk=not self._yielded_first_chunk,
+        )
+
+    def _stream_ended_early_error(self) -> litellm.APIConnectionError:
+        return litellm.APIConnectionError(
+            message=(
+                f"{self.custom_llm_provider or 'provider'} closed the responses stream before any terminal event "
+                "(response.completed, response.incomplete or response.failed)"
+            ),
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+
+    def _raise_if_ended_without_terminal_event(self) -> None:
+        if self.completed_response is not None:
+            return
+        error: Final = self._stream_ended_early_error()
+        self._handle_failure(error)
+        if self._output_started:
+            raise error
+        raise self._fallback_error(error) from error
+
+    def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
+        self._handle_failure(error)
+        if self._output_started:
+            raise error
+        raise self._fallback_error(error) from error
+
 
 async def call_post_streaming_hooks_for_testing(
     iterator: object, chunk: ResponsesAPIStreamingResponse
@@ -929,12 +978,14 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     sse = await self.stream_iterator.__anext__()
                 except StopAsyncIteration:
                     self.finished = True
+                    self._raise_if_ended_without_terminal_event()
                     raise StopAsyncIteration
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
 
                 if self.finished:
+                    self._raise_if_ended_without_terminal_event()
                     raise StopAsyncIteration
                 elif result is not None:
                     self._maybe_raise_for_error_event(result)
@@ -943,7 +994,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     result = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
-                    self._yielded_first_chunk = True
+                    self._note_yielded_event(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -952,10 +1003,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             self.finished = True
-            if self.completed_response is None:
-                self._handle_failure(e)
-                raise
-            raise StopAsyncIteration from e
+            if self.completed_response is not None:
+                raise StopAsyncIteration from e
+            self._raise_for_transport_error(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -1011,12 +1061,14 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     sse = next(self.stream_iterator)
                 except StopIteration:
                     self.finished = True
+                    self._raise_if_ended_without_terminal_event()
                     raise StopIteration
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
 
                 if self.finished:
+                    self._raise_if_ended_without_terminal_event()
                     raise StopIteration
                 elif result is not None:
                     self._maybe_raise_for_error_event(result)
@@ -1025,7 +1077,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
-                    self._yielded_first_chunk = True
+                    self._note_yielded_event(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -1034,10 +1086,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             self.finished = True
-            if self.completed_response is None:
-                self._handle_failure(e)
-                raise
-            raise StopIteration from e
+            if self.completed_response is not None:
+                raise StopIteration from e
+            self._raise_for_transport_error(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True

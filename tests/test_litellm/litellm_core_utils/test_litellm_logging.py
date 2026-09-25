@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import datetime
 import json
 import logging
@@ -19,11 +20,12 @@ from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
 from litellm._logging import session_id_var, trace_id_var
-from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+from litellm.constants import SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
+    _extract_response_obj_and_hidden_params,
     _get_status_fields,
     set_callbacks,
 )
@@ -32,6 +34,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    ImageResponse,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     TextCompletionResponse,
@@ -354,108 +357,23 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
-def test_sentry_sample_rate(monkeypatch):
-    existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
-    try:
-        # test with default value by removing the environment variable
-        if existing_sample_rate:
-            del os.environ["SENTRY_API_SAMPLE_RATE"]
-
-        set_callbacks(["sentry"])
-        # Check if the default sample rate is set to 1.0
-        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "1.0"
-
-        # test with custom value
-        monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", "0.5")
-
-        set_callbacks(["sentry"])
-        # Check if the custom sample rate is set correctly
-        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "0.5"
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # Restore the original environment variable
-        if existing_sample_rate:
-            monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", existing_sample_rate)
-        else:
-            if "SENTRY_API_SAMPLE_RATE" in os.environ:
-                del os.environ["SENTRY_API_SAMPLE_RATE"]
-
-
 def test_sentry_environment(monkeypatch):
-    """Test that SENTRY_ENVIRONMENT is properly handled during Sentry initialization"""
-    existing_environment = os.getenv("SENTRY_ENVIRONMENT")
-    existing_dsn = os.getenv("SENTRY_DSN")
+    import sentry_sdk
 
-    # Create mock sentry_sdk module
-    mock_event_scrubber_instance = MagicMock()
-    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
-
-    mock_scrubber_module = MagicMock()
-    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
-
-    mock_sentry_sdk = MagicMock()
-    mock_sentry_sdk.scrubber = mock_scrubber_module
     mock_init = MagicMock()
-    mock_sentry_sdk.init = mock_init
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
+    monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
 
-    # Inject mocks into sys.modules
-    sys.modules["sentry_sdk"] = mock_sentry_sdk
-    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
+    set_callbacks(["sentry"])
+    assert mock_init.call_args[1]["environment"] == "production"
 
-    try:
-        # Set a mock DSN to allow Sentry initialization
-        monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
-
-        # Test with default value (no environment set)
-        if existing_environment:
-            del os.environ["SENTRY_ENVIRONMENT"]
-
+    for environment in ("development", "staging"):
+        monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
         mock_init.reset_mock()
         set_callbacks(["sentry"])
-        # Check that init was called with default environment "production"
         mock_init.assert_called_once()
-        call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "production"
-
-        # Test with custom environment value
-        monkeypatch.setenv("SENTRY_ENVIRONMENT", "development")
-
-        mock_init.reset_mock()
-        set_callbacks(["sentry"])
-        # Check that init was called with custom environment "development"
-        mock_init.assert_called_once()
-        call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "development"
-
-        # Test with staging environment
-        monkeypatch.setenv("SENTRY_ENVIRONMENT", "staging")
-
-        mock_init.reset_mock()
-        set_callbacks(["sentry"])
-        # Check that init was called with custom environment "staging"
-        mock_init.assert_called_once()
-        call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "staging"
-
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
-    finally:
-        # Restore the original environment variables
-        if existing_environment:
-            monkeypatch.setenv("SENTRY_ENVIRONMENT", existing_environment)
-        else:
-            if "SENTRY_ENVIRONMENT" in os.environ:
-                del os.environ["SENTRY_ENVIRONMENT"]
-
-        if existing_dsn:
-            monkeypatch.setenv("SENTRY_DSN", existing_dsn)
-        else:
-            if "SENTRY_DSN" in os.environ:
-                del os.environ["SENTRY_DSN"]
-
-
+        assert mock_init.call_args[1]["environment"] == environment
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
@@ -3097,37 +3015,34 @@ def test_speech_call_is_still_priced_from_input_characters(call_type):
 
 
 def test_sentry_event_scrubber_initialization(monkeypatch):
-    # Step 1: Create a fake sentry_sdk.scrubber module
-    mock_event_scrubber_instance = MagicMock()
-    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
+    import sentry_sdk
 
-    mock_scrubber_module = MagicMock()
-    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
-
-    # Step 2: Create a fake sentry_sdk module and insert into sys.modules
-    mock_sentry_sdk = MagicMock()
-    mock_sentry_sdk.scrubber = mock_scrubber_module
     mock_init = MagicMock()
-    mock_sentry_sdk.init = mock_init
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.delenv("SENTRY_SEND_DEFAULT_PII", raising=False)
 
-    # Step 3: Inject both into sys.modules BEFORE import occurs
-    sys.modules["sentry_sdk"] = mock_sentry_sdk
-    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
-
-    # Step 4: Run the actual sentry setup code
     set_callbacks(["sentry"])
 
-    # Step 5: Assert the EventScrubber was constructed correctly
-    mock_event_scrubber_cls.assert_called_once_with(
-        denylist=SENTRY_DENYLIST,
-        pii_denylist=SENTRY_PII_DENYLIST,
-    )
-
-    # Step 6: Assert the event_scrubber and PII args were passed
     mock_init.assert_called_once()
     call_args = mock_init.call_args[1]
-    assert call_args["event_scrubber"] == mock_event_scrubber_instance
     assert call_args["send_default_pii"] is False
+    assert call_args["event_scrubber"].recursive is True
+    assert {name.lower() for name in SENTRY_PII_DENYLIST} <= {name.lower() for name in call_args["event_scrubber"].denylist}
+    assert call_args["before_send"] is call_args["before_send_transaction"]
+
+
+def test_sentry_send_default_pii_opt_in(monkeypatch):
+    import sentry_sdk
+
+    mock_init = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+
+    set_callbacks(["sentry"])
+
+    call_args = mock_init.call_args[1]
+    assert call_args["send_default_pii"] is True
+    assert not {name.lower() for name in SENTRY_PII_DENYLIST} & {name.lower() for name in call_args["event_scrubber"].denylist}
 
 
 def test_get_masked_values():
@@ -5391,6 +5306,19 @@ def test_handle_anthropic_messages_response_logging_passes_model_response_throug
     logging_obj = _anthropic_messages_logging_obj()
     model_response = ModelResponse()
     assert logging_obj._handle_anthropic_messages_response_logging(result=model_response) is model_response
+
+
+def test_anthropic_messages_logged_response_tolerates_a_stream_that_assembled_nothing():
+    """A /v1/messages stream whose upstream yielded no chunks assembles to None; the spend
+    row must still land under the message id the caller was served instead of crashing."""
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_streamed_anthropic_message_id("msg_served")
+
+    result = logging_obj._anthropic_messages_logged_response(result=None)
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_served"
+    assert result.model == "openai/my-local"
 
 
 def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_responses_payload():
@@ -8694,3 +8622,126 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert "smoke-failure" in payload["error_str"]
     assert payload["model"] == "openai/gpt-5.6"
     assert events.empty()
+
+
+def _image_logging_obj() -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gpt-image-2",
+        messages="a cat",
+        stream=False,
+        call_type="aimage_generation",
+        start_time=time.time(),
+        litellm_call_id="response-headers-test",
+        function_id="response-headers-test",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    logging_obj.optional_params = {}
+    return logging_obj
+
+
+def _image_result_with_headers(request_id: str) -> ImageResponse:
+    result = ImageResponse(created=1, data=[])
+    result._hidden_params = {"headers": {"x-request-id": request_id}}
+    return result
+
+
+def test_process_hidden_params_surfaces_response_headers_from_the_result():
+    logging_obj = _image_logging_obj()
+
+    logging_obj._process_hidden_params_and_response_cost(
+        _image_result_with_headers("req_img"), datetime.datetime.now(), datetime.datetime.now()
+    )
+
+    assert logging_obj.model_call_details["response_headers"] == {"x-request-id": "req_img"}
+
+
+def test_process_hidden_params_keeps_handler_set_response_headers():
+    logging_obj = _image_logging_obj()
+    logging_obj.model_call_details["response_headers"] = {"x-request-id": "from-handler"}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        _image_result_with_headers("from-result"), datetime.datetime.now(), datetime.datetime.now()
+    )
+
+    assert logging_obj.model_call_details["response_headers"] == {"x-request-id": "from-handler"}
+
+
+def _assembled_stream_result_with_headers() -> ModelResponse:
+    result = _assembled_stream_result()
+    result._hidden_params = {"headers": {"x-request-id": "req_stream"}}
+    return result
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_success_passes_result_headers_to_callback_kwargs():
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+
+    with patcher:
+        await logging_obj.async_success_handler(result=_assembled_stream_result_with_headers())
+
+    kwargs = releasing.async_log_success_event.await_args.kwargs["kwargs"]
+    assert kwargs["response_headers"] == {"x-request-id": "req_stream"}
+
+
+def test_sync_streaming_success_passes_result_headers_to_callback_kwargs():
+    releasing = CustomLogger()
+    releasing.log_success_event = MagicMock()
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+
+    with patcher:
+        logging_obj.success_handler(result=_assembled_stream_result_with_headers())
+
+    kwargs = releasing.log_success_event.call_args.kwargs["kwargs"]
+    assert kwargs["response_headers"] == {"x-request-id": "req_stream"}
+
+
+def test_extract_response_obj_and_hidden_params_reads_binary_content_hidden_params():
+    from litellm.types.llms.openai import HttpxBinaryResponseContent as LiteLLMBinaryResponseContent
+
+    result = LiteLLMBinaryResponseContent(response=httpx.Response(status_code=200, content=b"audio bytes"))
+    result._hidden_params = {"headers": {"x-request-id": "req_tts"}}
+
+    response_obj, hidden_params = _extract_response_obj_and_hidden_params(result, None)
+
+    assert hidden_params == {"headers": {"x-request-id": "req_tts"}}
+    assert response_obj["object"] == "binary"
+
+
+def _preserved_thinking_client_turns() -> tuple[list[dict], list[dict]]:
+    turn_n = [{"role": "user", "content": "First question"}]
+    reply = {
+        "role": "assistant",
+        "content": "First answer",
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": "sig-1"}],
+    }
+    return turn_n, [*turn_n, reply, {"role": "user", "content": "Second question"}]
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_with_unchanged_variables_replays_a_byte_identical_prefix(logging_obj, tmp_path):
+    """A prompt template rendered with the same variables on every turn must prepend the
+    same messages, or the signed thinking blocks in the history lose their binding."""
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+
+    (tmp_path / "greeting.prompt").write_text(
+        "---\nmodel: claude-fable-5-1\n---\nSystem: You are a {{persona}}. Answer in one sentence.\n"
+    )
+    manager = DotpromptManager(prompt_directory=str(tmp_path))
+    compiled = [
+        await logging_obj.async_get_chat_completion_prompt(
+            model="claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            non_default_params={},
+            prompt_variables={"persona": "pirate"},
+            prompt_id="greeting",
+            prompt_management_logger=manager,
+        )
+        for turn in _preserved_thinking_client_turns()
+    ]
+    (_, messages_n, _), (_, messages_n_plus_one, _) = compiled
+
+    assert json.dumps(messages_n_plus_one[: len(messages_n)], sort_keys=True) == json.dumps(messages_n, sort_keys=True)
+    assert messages_n[0] == {"role": "system", "content": "You are a pirate. Answer in one sentence."}
+    assert len(messages_n_plus_one) == len(messages_n) + 2

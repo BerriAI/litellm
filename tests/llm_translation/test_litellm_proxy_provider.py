@@ -210,11 +210,14 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         "created": 1,
         "data": [{"url": "https://example.com/image.png"}],
     }
+    mock_raw_response = MagicMock()
+    mock_raw_response.parse.return_value = mock_openai_response
+    mock_raw_response.headers = {}
 
     if is_async:
         # Mock the AsyncOpenAI client that gets created inside _get_openai_client
         mock_async_client = AsyncMock()
-        mock_async_client.images.generate = AsyncMock(return_value=mock_openai_response)
+        mock_async_client.images.with_raw_response.generate = AsyncMock(return_value=mock_raw_response)
 
         with patch(
             "litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client
@@ -234,14 +237,14 @@ async def test_litellm_gateway_image_generation_direct(is_async):
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
             # Verify the AsyncOpenAI client was called correctly
-            mock_async_client.images.generate.assert_awaited_once()
-            call_kwargs = mock_async_client.images.generate.call_args.kwargs
+            mock_async_client.images.with_raw_response.generate.assert_awaited_once()
+            call_kwargs = mock_async_client.images.with_raw_response.generate.call_args.kwargs
             assert call_kwargs["model"] == "dall-e-3"
             assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
     else:
         # Mock the sync OpenAI client that gets created inside _get_openai_client
         mock_sync_client = MagicMock()
-        mock_sync_client.images.generate.return_value = mock_openai_response
+        mock_sync_client.images.with_raw_response.generate.return_value = mock_raw_response
 
         with patch(
             "litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client
@@ -260,8 +263,8 @@ async def test_litellm_gateway_image_generation_direct(is_async):
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
             # Verify the OpenAI client was called correctly
-            mock_sync_client.images.generate.assert_called_once()
-            call_kwargs = mock_sync_client.images.generate.call_args.kwargs
+            mock_sync_client.images.with_raw_response.generate.assert_called_once()
+            call_kwargs = mock_sync_client.images.with_raw_response.generate.call_args.kwargs
             assert call_kwargs["model"] == "dall-e-3"
             assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
 
@@ -285,6 +288,7 @@ async def test_litellm_gateway_from_sdk_image_edit(is_async):
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data

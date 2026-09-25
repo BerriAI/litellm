@@ -279,6 +279,14 @@ class Provider:
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
+        if request.method == "POST" and "json" in request.headers.get("content-type", ""):
+            raw_body: Final = await request.body()
+            if raw_body:
+                body: Final = JSON_OBJECT.validate_json(raw_body)
+                if isinstance(body, dict):
+                    self.observations.put(
+                        Observation(request.url.path, request.headers.get("authorization", ""), body)
+                    )
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(
