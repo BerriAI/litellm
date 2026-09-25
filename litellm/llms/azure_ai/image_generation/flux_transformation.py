@@ -1,10 +1,20 @@
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+from litellm.types.utils import ImageResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 FLUX2_DROPPED_OPENAI_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = (
     "background",
@@ -13,6 +23,31 @@ FLUX2_DROPPED_OPENAI_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ..
     "quality",
     "user",
 )
+
+
+class _Flux2RequestMeta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_mp: float = Field(ge=0)
+    output_mp: float = Field(ge=0)
+
+
+class _Flux2ResponseBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    request_meta: _Flux2RequestMeta
+
+
+def with_flux2_billed_megapixels(image_response: ImageResponse, raw_response: httpx.Response) -> ImageResponse:
+    try:
+        request_meta: Final = _Flux2ResponseBody.model_validate_json(raw_response.content).request_meta
+    except ValidationError:
+        return image_response
+    billed_megapixels: Final = request_meta.input_mp + request_meta.output_mp
+    if not math.isfinite(billed_megapixels):
+        return image_response
+    image_response.set_provider_billed_megapixels(billed_megapixels)
+    return image_response
 
 
 class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
@@ -152,3 +187,32 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
             }
         )
         return {**optional_params, **mapped_params}  # mutable-ok: inherited config contract returns a dict
+
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        image_response: Final = super().transform_image_generation_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+        return (
+            with_flux2_billed_megapixels(image_response, raw_response) if self.is_flux2_model(model) else image_response
+        )

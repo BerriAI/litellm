@@ -2585,6 +2585,14 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    _provider_billed_megapixels: float | None = None
+
+    @property
+    def provider_billed_megapixels(self) -> float | None:
+        return self._provider_billed_megapixels
+
+    def set_provider_billed_megapixels(self, megapixels: float) -> None:
+        self._provider_billed_megapixels = megapixels
 
     usage: ImageUsage | None = None
     """

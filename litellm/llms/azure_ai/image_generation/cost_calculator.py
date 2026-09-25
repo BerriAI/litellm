@@ -9,6 +9,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.types.utils import ImageResponse, ModelInfo
 
+_PIXELS_PER_MEGAPIXEL: Final = 1024 * 1024
+
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:
     deployment_price: Final = _get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
@@ -53,7 +55,11 @@ def cost_calculator(
         if output_cost_per_image:
             return output_cost_per_image * num_images
 
-        if _input_cost_per_pixel(_model_info):
+        input_cost_per_pixel: Final = _input_cost_per_pixel(_model_info)
+        if input_cost_per_pixel and image_response.provider_billed_megapixels is not None:
+            return input_cost_per_pixel * _PIXELS_PER_MEGAPIXEL * image_response.provider_billed_megapixels
+
+        if input_cost_per_pixel:
             from litellm.cost_calculator import default_image_cost_calculator
 
             width: Final = optional_params.get("width") if optional_params else None

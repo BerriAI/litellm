@@ -28,6 +28,10 @@ def use_local_model_cost_map(monkeypatch):
     _invalidate_model_cost_lowercase_map()
 
 
+def _flex_rate() -> float:
+    return litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"]
+
+
 @pytest.mark.parametrize(
     ("model", "provider_path"),
     [
@@ -127,7 +131,8 @@ def test_flux2_flex_model_info():
     assert model_info["max_input_tokens"] == 32000
     assert model_info["max_tokens"] == 32000
     assert model_info["supported_endpoints"] == ["/v1/images/generations", "/v1/images/edits"]
-    assert catalog_info["input_cost_per_pixel"] == 5e-08
+    # Azure Retail Prices API "Flex Megapixel" is $0.05, and Cost Management metered a 1024x1024 image as 1.0 MP (2026-09-22)
+    assert catalog_info["input_cost_per_pixel"] * 1024 * 1024 == pytest.approx(0.05)
     assert catalog_info["supported_modalities"] == ["text", "image"]
     assert catalog_info["supported_output_modalities"] == ["image"]
 
@@ -148,7 +153,7 @@ def test_flux2_flex_cost_uses_generated_megapixels():
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    assert cost == pytest.approx(_flex_rate() * 2048 * 1024 * 2)
 
 
 @pytest.mark.parametrize("model", ("FLUX-1.1-pro", "FLUX.1-Kontext-pro"))
@@ -189,7 +194,40 @@ def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensi
         completion_response=response,
         optional_params=params,
         call_type="image_generation",
-    ) == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    ) == pytest.approx(_flex_rate() * 2048 * 1024 * 2)
+
+
+@pytest.mark.parametrize(
+    ("request_meta", "expected_megapixels"),
+    (
+        ({"input_mp": 0.0, "output_mp": 0.39}, 0.39),
+        ({"input_mp": 45.78, "output_mp": 1.0}, 46.78),
+        ({"output_mp": 0.39}, 2048 * 1024 / (1024 * 1024)),
+        ({"input_mp": -1.0, "output_mp": 0.39}, 2048 * 1024 / (1024 * 1024)),
+        ({"input_mp": 1.7e308, "output_mp": 1.7e308}, 2048 * 1024 / (1024 * 1024)),
+    ),
+)
+def test_flux2_generation_bills_azure_reported_megapixels_and_falls_back_to_requested_size(
+    request_meta: Mapping[str, float], expected_megapixels: float
+):
+    params: Final = {"width": 2048, "height": 1024}
+    response: Final = get_azure_image_generation_config("FLUX.2-flex").transform_image_generation_response(
+        model="FLUX.2-flex",
+        raw_response=httpx.Response(200, json={"data": [{"b64_json": "aW1n"}], "request_meta": request_meta}),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={"prompt": "A red fox", **params},
+        optional_params=params,
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert litellm.completion_cost(
+        model="azure_ai/FLUX.2-flex",
+        completion_response=response,
+        optional_params=params,
+        call_type="image_generation",
+    ) == pytest.approx(_flex_rate() * 1024 * 1024 * expected_megapixels)
 
 
 def test_flux2_flex_cost_accepts_lowercase_model_spelling():
@@ -202,7 +240,7 @@ def test_flux2_flex_cost_accepts_lowercase_model_spelling():
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(5e-08 * 1536 * 1024 * 2)
+    assert cost == pytest.approx(_flex_rate() * 1536 * 1024 * 2)
 
 
 def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
