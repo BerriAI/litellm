@@ -3763,7 +3763,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,
@@ -3782,6 +3782,7 @@ class TestSpendLogsPayload:
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
                     "agent_id": None,
+                    "billing_agent_id": None,
                 }
             )
 
@@ -6587,9 +6588,7 @@ def test_key_spend_report_scopes_to_caller_key(client, monkeypatch):
 
 
 def test_key_spend_report_scopes_a_cli_session_to_the_per_user_alias_not_the_login_token(client, monkeypatch):
-    mock_prisma = _spend_report_mock_prisma(
-        query_raw_returns=[{"api_key": "cli-session-alice", "total_cost": 1.5}]
-    )
+    mock_prisma = _spend_report_mock_prisma(query_raw_returns=[{"api_key": "cli-session-alice", "total_cost": 1.5}])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -7139,8 +7138,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         rep_call = emitted[2]
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
         assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            f"ORDER BY {SESSION_GROUP_KEY_SQL}, " + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
         ) in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
@@ -7651,15 +7649,18 @@ def test_session_representative_uses_completed_agent_outcome(parent_status, chil
         )
         result = connection.execute(
             "SELECT request_id, status FROM logs ORDER BY "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL + " LIMIT 1"
+            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + " LIMIT 1"
         ).fetchone()
         assert result == ("parent", expected)
         connection.execute("DELETE FROM logs WHERE call_type = 'asend_message'")
         fallback = connection.execute(
             "SELECT request_id, status FROM logs ORDER BY "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL + " LIMIT 1"
+            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + " LIMIT 1"
         ).fetchone()
         assert fallback == ("llm", "success")
+
 
 @pytest.mark.asyncio
 async def test_calculate_spend_unpriced_model_returns_400():

@@ -44,8 +44,8 @@ def test_custom_provider_endpoints_do_not_enroll_trusted_microsoft_subjects(endp
 @pytest.mark.asyncio
 async def test_interactive_enrollment_preserves_the_canonical_local_user() -> None:
     table: Final = AsyncMock()
-    table.upsert.return_value = SimpleNamespace(user_id="canonical", verified_via="sso_interactive")
-    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_verifiedhumansubject=table))
+    table.upsert.return_value = SimpleNamespace(kind="human", user_id="canonical", verified_via="sso_interactive")
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_verifiedsubject=table))
     subject: Final = microsoft_interactive_subject(TENANT, {"id": OID}, {})
     assert subject is not None
     await enroll_microsoft_subject(subject, "canonical", client)
@@ -68,8 +68,8 @@ async def test_interactive_enrollment_preserves_the_canonical_local_user() -> No
 @pytest.mark.parametrize("user_id,verified_via", [("another-user", "sso_interactive"), ("canonical", "untrusted")])
 async def test_interactive_enrollment_does_not_reassign_an_existing_subject(user_id: str, verified_via: str) -> None:
     table: Final = AsyncMock()
-    table.upsert.return_value = SimpleNamespace(user_id=user_id, verified_via=verified_via)
-    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_verifiedhumansubject=table))
+    table.upsert.return_value = SimpleNamespace(kind="human", user_id=user_id, verified_via=verified_via)
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_verifiedsubject=table))
     with pytest.raises(HTTPException) as failure:
         await enroll_microsoft_subject(microsoft_interactive_subject(TENANT, {"id": OID}, {}), "canonical", client)
     assert failure.value.status_code == 403
@@ -80,7 +80,7 @@ async def test_interactive_enrollment_does_not_reassign_an_existing_subject(user
 async def test_enrollment_storage_failure_is_not_a_successful_login() -> None:
     table: Final = AsyncMock()
     table.upsert.side_effect = RuntimeError("database unavailable")
-    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_verifiedhumansubject=table))
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_verifiedsubject=table))
     with pytest.raises(HTTPException) as failure:
         await enroll_microsoft_subject(microsoft_interactive_subject(TENANT, {"id": OID}, {}), "canonical", client)
     assert failure.value.status_code == 503
@@ -90,7 +90,7 @@ async def test_enrollment_storage_failure_is_not_a_successful_login() -> None:
 @pytest.mark.parametrize("user_id", [None, "", 42])
 async def test_enrollment_requires_a_canonical_local_user(user_id: object) -> None:
     table: Final = AsyncMock()
-    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_verifiedhumansubject=table))
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_verifiedsubject=table))
     await enroll_microsoft_subject(microsoft_interactive_subject(TENANT, {"id": OID}, {}), user_id, client)
     table.upsert.assert_not_awaited()
 
@@ -98,6 +98,17 @@ async def test_enrollment_requires_a_canonical_local_user(user_id: object) -> No
 @pytest.mark.asyncio
 async def test_untrusted_metadata_cannot_enroll_a_human() -> None:
     table: Final = AsyncMock()
-    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_verifiedhumansubject=table))
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_verifiedsubject=table))
     await enroll_microsoft_subject({"issuer": "forged", "tenant_id": TENANT, "oid": OID}, "canonical", client)
     table.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scim_agent_subject_cannot_be_enrolled_as_a_human() -> None:
+    table: Final = AsyncMock()
+    table.upsert.return_value = SimpleNamespace(kind="agent_user", user_id=None, verified_via="scim")
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_verifiedsubject=table))
+    with pytest.raises(HTTPException) as failure:
+        await enroll_microsoft_subject(microsoft_interactive_subject(TENANT, {"id": OID}, {}), "canonical", client)
+    assert failure.value.status_code == 403
+    assert table.upsert.call_args.kwargs["data"]["update"] == {}

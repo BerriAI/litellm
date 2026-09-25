@@ -9456,3 +9456,40 @@ def test_can_object_call_model_allows_listed_model_for_key():
     )
 
     assert result is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed", [True, False])
+async def test_authoritative_access_group_reads_writer_despite_stale_allow_cache(allowed: bool) -> None:
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import get_access_object
+
+    stale: Final = LiteLLM_AccessGroupTable(access_group_id="group", access_group_name="Policy", access_model_names=["old"])
+    current: Final = stale.model_copy(update={"access_model_names": ["new"] if allowed else []})
+    client: Final = MagicMock()
+    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=current)
+    client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=stale)
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=stale)
+    cache.async_set_cache = AsyncMock()
+    result: Final = await get_access_object("group", client, cache, check_db_only=True)
+    assert result.access_model_names == (["new"] if allowed else [])
+    cache.async_get_cache.assert_not_awaited()
+    client.db.litellm_accessgrouptable.find_unique.assert_not_awaited()
+    client.writer_db.litellm_accessgrouptable.find_unique.assert_awaited_once_with(where={"access_group_id": "group"})
+
+
+@pytest.mark.asyncio
+async def test_authoritative_access_group_outage_does_not_use_cached_grants() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_access_object
+
+    client: Final = MagicMock()
+    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("writer unavailable"))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock()
+    with pytest.raises(HTTPException) as failure:
+        await get_access_object("group", client, cache, check_db_only=True)
+    assert failure.value.status_code == 404
+    cache.async_get_cache.assert_not_awaited()

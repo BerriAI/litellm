@@ -15,8 +15,8 @@ from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.agent_endpoints.identity import preserve_identity
-from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
+from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
 from litellm.proxy.management_helpers.object_permission_utils import (
     prepare_object_permission_upsert,
 )
@@ -648,13 +648,30 @@ class AgentRegistry:
         """
         Delete an agent from the database
         """
-        try:
-            deleted_agent: Final = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
+        from prisma.types import (
+            LiteLLM_AgentsTableWhereUniqueInput,
+            LiteLLM_RetiredAgentCreateInput,
+            LiteLLM_RetiredAgentUpsertInput,
+            LiteLLM_RetiredAgentWhereUniqueInput,
+            LiteLLM_VerificationTokenWhereInput,
+        )
+
+        where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id}
+        async with prisma_client.tx() as tx:
+            existing: Final = await tx.litellm_agentstable.find_unique(where=where)
+            if existing is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
+            if existing.identity_managed:
+                history_where: Final[LiteLLM_RetiredAgentWhereUniqueInput] = {"original_agent_id": agent_id}
+                history_create: Final = LiteLLM_RetiredAgentCreateInput(original_agent_id=agent_id)
+                history_data: Final[LiteLLM_RetiredAgentUpsertInput] = {"create": history_create, "update": {}}
+                await tx.litellm_retiredagent.upsert(where=history_where, data=history_data)
+                keys_where: Final[LiteLLM_VerificationTokenWhereInput] = {"agent_id": agent_id}
+                await tx.litellm_verificationtoken.delete_many(where=keys_where)
+            deleted_agent: Final = await tx.litellm_agentstable.delete(where=where)
             if deleted_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            return dict(deleted_agent)
-        except Exception as e:
-            raise Exception(f"Error deleting agent from DB: {e}")
+            return deleted_agent.model_dump()
 
     async def patch_agent_in_db(
         self,

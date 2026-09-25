@@ -1,16 +1,17 @@
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
-from prisma.models import LiteLLM_VerifiedHumanSubject
+from prisma.models import LiteLLM_VerifiedSubject
 
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
-    VerifiedHumanSubjectRepository,
+    VerifiedSubjectRepository,
 )
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityBinding, AgentIdentityFailure, ManagedAgentContext
@@ -49,7 +50,7 @@ def stored_agent(**overrides: object) -> AgentResponse:
 
 def setup_store(
     agent: AgentResponse | None = stored_agent(),
-    human: LiteLLM_VerifiedHumanSubject | None = None,
+    human: LiteLLM_VerifiedSubject | None = None,
 ) -> tuple[AgentIdentityStore, AsyncMock, AsyncMock, AsyncMock]:
     agents: Final = AsyncMock()
     identities: Final = AsyncMock()
@@ -62,11 +63,11 @@ def setup_store(
         db=SimpleNamespace(
             litellm_agentstable=agents,
             litellm_agentidentity=identities,
-            litellm_verifiedhumansubject=humans,
+            litellm_verifiedsubject=humans,
         )
     )
     return (
-        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedHumanSubjectRepository(db)),
+        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db)),
         agents,
         identities,
         humans,
@@ -81,7 +82,7 @@ async def test_application_authentication_has_no_fabricated_human() -> None:
     assert result.agent_id == "agent-one"
     assert result.mode == "autonomous"
     assert result.user_id is None
-    humans.find_unique.assert_not_awaited()
+    humans.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -117,7 +118,8 @@ async def test_unclassified_delegated_subject_cannot_authenticate_as_a_user() ->
 
 @pytest.mark.asyncio
 async def test_delegated_subject_uses_canonical_sso_user_not_email_claim() -> None:
-    human: Final = LiteLLM_VerifiedHumanSubject(
+    human: Final = LiteLLM_VerifiedSubject(
+        kind="human",
         subject_id="subject-one",
         issuer=ISSUER,
         tenant_id=TENANT,
@@ -191,16 +193,149 @@ async def test_retired_client_cannot_fall_back_to_ordinary_user_authentication()
             litellm_agentidentity=identities,
             litellm_retiredagentidentity=retired,
             litellm_agentstable=AsyncMock(),
-            litellm_verifiedhumansubject=AsyncMock(),
+            litellm_verifiedsubject=AsyncMock(),
         )
     )
     store: Final = AgentIdentityStore(
         AgentsRepository(db),
         AgentIdentityRepository(db),
-        VerifiedHumanSubjectRepository(db),
+        VerifiedSubjectRepository(db),
         RetiredAgentIdentityRepository(db),
     )
     result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
     assert isinstance(result, AgentIdentityFailure)
     assert result.code == "identity_denied"
     assert "retired" in result.message
+
+
+def native_store():
+    from prisma.models import LiteLLM_SCIMResource, LiteLLM_SCIMSource
+
+    from litellm.repositories.table_repositories import SCIMResourceRepository, SCIMSourceRepository
+    from litellm.types.proxy.management_endpoints.scim_agent_provisioning import SCIM_AGENT_USER_SCHEMA
+
+    now: Final = datetime.now(timezone.utc)
+    native: Final = LiteLLM_VerifiedSubject(
+        subject_id="native-subject",
+        kind="agent_user",
+        issuer=ISSUER,
+        tenant_id=TENANT,
+        oid=HUMAN,
+        agent_id="agent-one",
+        parent_client_id=CLIENT,
+        scim_resource_id="directory-user",
+        verified_via="scim",
+        verified_at=now,
+    )
+    store, agents, identities, humans = setup_store(human=native)
+    binding: Final = BINDING.model_copy(update={"provisioning_source_id": "source", "service_principal_id": None})
+    agents.find_unique.return_value = stored_agent(identity=binding, execution_mode="autonomous")
+    identities.find_unique.return_value = binding
+    source: Final = LiteLLM_SCIMSource(
+        source_id="source",
+        display_name="Directory",
+        tenant_id=TENANT,
+        key_hash="hash",
+        enabled=True,
+        group_mappings=json.dumps([{"external_group_id": PRINCIPAL, "access_group_ids": ["read"]}]),
+        created_at=now,
+        updated_at=now,
+    )
+    resource: Final = LiteLLM_SCIMResource(
+        id="directory-user",
+        source_id="source",
+        kind="Users",
+        external_id=HUMAN,
+        local_id="agent-one",
+        display_name="Native",
+        member_ids=[],
+        document=json.dumps(
+            {
+                "schemas": [],
+                "userName": "native@example.com",
+                "externalId": HUMAN,
+                SCIM_AGENT_USER_SCHEMA: {"identityParentId": CLIENT},
+            }
+        ),
+        active=True,
+        deleted=False,
+        created_at=now,
+        updated_at=now,
+    )
+    group: Final = resource.model_copy(update={"id": "directory-group", "kind": "Groups", "external_id": PRINCIPAL})
+    sources: Final = AsyncMock()
+    resources: Final = AsyncMock()
+    sources.find_unique.return_value = source
+    resources.find_many.side_effect = lambda **query: [resource] if query["where"]["kind"] == "Users" else [group]
+    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_scimsource=sources, litellm_scimresource=resources))
+    return (
+        AgentIdentityStore(
+            store.agents,
+            store.identities,
+            store.humans,
+            sources=SCIMSourceRepository(client),
+            resources=SCIMResourceRepository(client),
+        ),
+        sources,
+        resources,
+        humans,
+        native,
+        resource,
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_subject_is_autonomous_and_directory_grants_are_separate() -> None:
+    store, _, _, _, _, _ = native_store()
+    context: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
+    assert isinstance(context, ManagedAgentContext)
+    assert context.mode == "autonomous"
+    assert context.user_id is None
+    assert context.subject_oid == HUMAN
+    agent: Final = await store.agent("agent-one")
+    assert isinstance(agent, AgentResponse)
+    assert agent.directory_active is True
+    assert agent.directory_access_group_ids == ("read",)
+    assert agent.access_group_ids is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("kind", "human"),
+        ("verified_via", "sso_interactive"),
+        ("agent_id", "foreign-agent"),
+        ("parent_client_id", PRINCIPAL),
+        ("scim_resource_id", "foreign-resource"),
+    ],
+)
+async def test_directory_policy_rejects_mismatched_subject_ownership(field: str, value: str) -> None:
+    store, _, _, humans, native, _ = native_store()
+    humans.find_unique.return_value = native.model_copy(update={field: value})
+    result: Final = await store.agent("agent-one")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "subject" in result.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["source-disabled", "resource-disabled", "resource-deleted", "no-groups"])
+async def test_native_revocation_cannot_fall_back_to_human_or_unrestricted_agent(state: str) -> None:
+    store, sources, resources, _, _, resource = native_store()
+    if state == "source-disabled":
+        sources.find_unique.return_value = sources.find_unique.return_value.model_copy(update={"enabled": False})
+    elif state == "no-groups":
+        resources.find_many.side_effect = lambda **query: [resource] if query["where"]["kind"] == "Users" else []
+    else:
+        resources.find_many.side_effect = None
+        resources.find_many.return_value = [
+            resource.model_copy(
+                update={
+                    "active": state != "resource-disabled",
+                    "deleted": state == "resource-deleted",
+                }
+            )
+        ]
+    result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "identity_denied"

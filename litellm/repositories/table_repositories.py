@@ -21,8 +21,9 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     table_name: str
 
-    def __init__(self, prisma_client: object):
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
         self._prisma_client = prisma_client
+        self._use_writer = use_writer
 
     @property
     def prisma_client(self) -> Any:
@@ -32,7 +33,9 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     @property
     def table(self) -> TableActions[RowT_co]:
-        actions: Final[TableActions[RowT_co]] = getattr(self.prisma_client.db, self.table_name)
+        actions: Final[TableActions[RowT_co]] = getattr(
+            self.prisma_client.writer_db if self._use_writer else self.prisma_client.db, self.table_name
+        )
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 
@@ -52,8 +55,8 @@ class RetiredAgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLL
     table_name = "litellm_retiredagentidentity"
 
 
-class VerifiedHumanSubjectRepository(PrismaTableRepository["prisma_models.LiteLLM_VerifiedHumanSubject"]):
-    table_name = "litellm_verifiedhumansubject"
+class VerifiedSubjectRepository(PrismaTableRepository["prisma_models.LiteLLM_VerifiedSubject"]):
+    table_name = "litellm_verifiedsubject"
 
 
 class ObjectPermissionRepository(PrismaTableRepository["prisma_models.LiteLLM_ObjectPermissionTable"]):
@@ -258,3 +261,15 @@ class AuditLogRepository(PrismaTableRepository["prisma_models.LiteLLM_AuditLog"]
 
 class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteLLM_AdaptiveRouterSession"]):
     table_name = "litellm_adaptiveroutersession"
+
+
+class SCIMSourceRepository(PrismaTableRepository["prisma_models.LiteLLM_SCIMSource"]):
+    table_name = "litellm_scimsource"
+
+
+class SCIMResourceRepository(PrismaTableRepository["prisma_models.LiteLLM_SCIMResource"]):
+    table_name = "litellm_scimresource"
+
+
+class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
+    table_name = "litellm_retiredagent"

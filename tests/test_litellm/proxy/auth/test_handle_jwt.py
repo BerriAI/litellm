@@ -7755,9 +7755,10 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
         }
     )
     database: Final = MagicMock()
-    database.db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
-    database.db.litellm_agentidentity.update_many = AsyncMock(return_value=1)
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    database.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
+    database.writer_db.litellm_agentidentity.update_many = AsyncMock(return_value=1)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    database.writer_db.litellm_verifiedsubject.find_unique = AsyncMock(return_value=None)
     database.db.litellm_usertable.upsert = AsyncMock()
     token: Final = _encode_rsa_jwt(
         private_key,

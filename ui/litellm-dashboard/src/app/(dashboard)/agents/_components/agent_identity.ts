@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { components } from "@/lib/http/schema";
 import type { AgentFormValues, AgentRequestPayload } from "./AgentFormKit";
 
@@ -9,42 +10,43 @@ type AgentIdentityState = Pick<
 
 export const IDENTITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const stringGrants = (fallback: string[]) =>
+  z
+    .unknown()
+    .transform((value) =>
+      Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : fallback,
+    );
+
+const identityShape = {
+  provider: z.literal("microsoft_entra"),
+  tenant_id: z.string().regex(IDENTITY_UUID_PATTERN),
+  client_id: z.string().regex(IDENTITY_UUID_PATTERN),
+  service_principal_id: z.string().regex(IDENTITY_UUID_PATTERN).nullable().default(null),
+  provisioning_source_id: z.string().nullable().optional(),
+  required_roles: stringGrants([]),
+  required_scopes: stringGrants(["user_impersonation"]),
+};
+const identitySchema = z.object(identityShape);
+
 export const readAgentIdentity = (value: unknown): EntraAgentIdentity | null => {
-  if (typeof value !== "object" || value === null) return null;
-  if (!("provider" in value) || value.provider !== "microsoft_entra") return null;
-  if (!("tenant_id" in value) || typeof value.tenant_id !== "string" || !IDENTITY_UUID_PATTERN.test(value.tenant_id))
-    return null;
-  if (!("client_id" in value) || typeof value.client_id !== "string" || !IDENTITY_UUID_PATTERN.test(value.client_id))
-    return null;
-  const principal = "service_principal_id" in value ? value.service_principal_id : null;
-  if (principal != null && (typeof principal !== "string" || !IDENTITY_UUID_PATTERN.test(principal))) return null;
-  const roles =
-    "required_roles" in value && Array.isArray(value.required_roles)
-      ? value.required_roles.filter((role): role is string => typeof role === "string")
-      : [];
-  const scopes =
-    "required_scopes" in value && Array.isArray(value.required_scopes)
-      ? value.required_scopes.filter((scope): scope is string => typeof scope === "string")
-      : ["user_impersonation"];
-  return {
-    provider: value.provider,
-    tenant_id: value.tenant_id,
-    client_id: value.client_id,
-    service_principal_id: principal,
-    required_roles: roles,
-    required_scopes: scopes,
-  };
+  const parsed = identitySchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 };
 
+const identityFormFields = (identity: EntraAgentIdentity | null): AgentFormValues => ({
+  identity_provider: identity?.provider ?? "none",
+  identity_tenant_id: identity?.tenant_id ?? "",
+  identity_client_id: identity?.client_id ?? "",
+  identity_service_principal_id: identity?.service_principal_id ?? "",
+  identity_provisioning_source_id: identity?.provisioning_source_id ?? "",
+  identity_required_roles: identity?.required_roles?.join(", ") ?? "",
+  identity_required_scopes: identity?.required_scopes?.join(", ") ?? "user_impersonation",
+});
+
 export const parseIdentityForForm = (agent?: Partial<AgentIdentityState> | null): AgentFormValues => {
-  const identity = readAgentIdentity(agent?.identity);
+  const identity = agent?.identity?.active === false ? null : readAgentIdentity(agent?.identity);
   return {
-    identity_provider: identity && agent?.identity?.active !== false ? identity.provider : "none",
-    identity_tenant_id: identity?.tenant_id ?? "",
-    identity_client_id: identity?.client_id ?? "",
-    identity_service_principal_id: identity?.service_principal_id ?? "",
-    identity_required_roles: identity?.required_roles?.join(", ") ?? "",
-    identity_required_scopes: identity?.required_scopes?.join(", ") ?? "user_impersonation",
+    ...identityFormFields(identity),
     execution_mode: agent?.execution_mode ?? "autonomous",
     enabled: agent?.enabled ?? true,
     agent_max_budget: agent?.litellm_budget_table?.max_budget ?? "",
@@ -67,7 +69,9 @@ export const buildIdentityParams = (
   if (values.identity_provider === undefined) return {};
   if (values.identity_provider !== "microsoft_entra")
     return readAgentIdentity(existingIdentity) ? { identity: null } : {};
+  const provisioningSource = readAgentIdentity(existingIdentity)?.provisioning_source_id;
   const candidate: EntraAgentIdentity = {
+    ...(provisioningSource ? { provisioning_source_id: provisioningSource } : {}),
     provider: "microsoft_entra",
     tenant_id: typeof values.identity_tenant_id === "string" ? values.identity_tenant_id.trim().toLowerCase() : "",
     client_id: typeof values.identity_client_id === "string" ? values.identity_client_id.trim().toLowerCase() : "",
@@ -80,7 +84,7 @@ export const buildIdentityParams = (
   };
   const identity = readAgentIdentity(candidate);
   if (!identity) throw new Error("Enter valid Entra tenant, application client and service principal IDs");
-  if (values.execution_mode !== "delegated" && !identity.service_principal_id)
+  if (values.execution_mode !== "delegated" && !identity.service_principal_id && !identity.provisioning_source_id)
     throw new Error("Autonomous agents require the Enterprise application Object ID");
   return { identity };
 };

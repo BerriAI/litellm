@@ -83,7 +83,9 @@ describe("AddAgentForm logos", () => {
     expect(titleLogo).toBeInstanceOf(HTMLImageElement);
     expect(titleLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
 
-    const selectionLogo = within(await screen.findByRole("combobox", { name: "Agent Type" })).getByAltText("A2A Agent logo");
+    const selectionLogo = within(await screen.findByRole("combobox", { name: "Agent Type" })).getByAltText(
+      "A2A Agent logo",
+    );
     expect(selectionLogo).toBeInstanceOf(HTMLImageElement);
     expect(selectionLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
   });

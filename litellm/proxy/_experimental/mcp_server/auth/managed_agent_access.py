@@ -1,7 +1,7 @@
 from typing import Final
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_agent_access_group_ceiling
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
 
@@ -14,24 +14,21 @@ async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
     if agent is None:
         return ()
 
-    async def group_ids(_agent_id: str) -> tuple[str, ...]:
-        return tuple(agent.access_group_ids or ())
-
     try:
-        base: Final = frozenset(await MCPRequestHandler._get_allowed_mcp_servers_for_agent(auth))
-        ceiling: Final = await resolve_agent_access_group_ceiling(agent.agent_id, load_access_group_ids=group_ids)
-        own: Final = (
-            base
-            if ceiling is None
-            else base.intersection(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
+        base: Final = frozenset(await MCPRequestHandler.get_allowed_mcp_servers_for_agent(auth))
+        ceilings: Final = await resolve_managed_agent_ceilings(agent)
+        expanded: Final = tuple(
+            frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
+            for ceiling in ceilings
         )
+        own: Final = frozenset(server for server in base if all(server in ceiling for ceiling in expanded))
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
             return tuple(sorted(own))
         if context.user_id is None:
             return ()
         human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id)
-        allowed: Final = await MCPRequestHandler._resolve_admitted_subject_servers(human)
+        allowed: Final = await MCPRequestHandler.resolve_admitted_subject_servers(human)
         return tuple(sorted(own.intersection(allowed)))
     except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
         raise_identity_failure(
@@ -45,14 +42,14 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
     if server_id not in await managed_agent_servers(auth):
         return []
     try:
-        own: Final = await MCPRequestHandler._get_agent_tool_permissions_for_server(server_id, auth)
+        own: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(server_id, auth)
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
             return own
         if context.user_id is None:
             return []
         human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id)
-        human_tools: Final = await MCPRequestHandler._resolve_admitted_subject_tools(server_id, human)
+        human_tools: Final = await MCPRequestHandler.resolve_admitted_subject_tools(server_id, human)
         if own is None:
             return human_tools
         return own if human_tools is None else sorted(frozenset(own).intersection(human_tools))

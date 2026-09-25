@@ -609,11 +609,10 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
     own_auth: Final = UserAPIKeyAuth(object_permission=permission)
     own: Final = _granted_ids(await AgentRequestHandler._get_allowed_agents_for_key(own_auth, strict=True))
 
-    async def group_ids(_agent_id: str) -> tuple[str, ...]:
-        return tuple(agent.access_group_ids or ())
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 
-    ceiling: Final = await resolve_agent_access_group_ceiling(agent.agent_id, load_access_group_ids=group_ids)
-    capped: Final = own if ceiling is None else own.intersection(ceiling.agent_ids)
+    ceilings: Final = await resolve_managed_agent_ceilings(agent)
+    capped: Final = frozenset(target for target in own if all(target in ceiling.agent_ids for ceiling in ceilings))
     context: Final = auth.managed_agent_context
     if context is None or context.mode == "autonomous":
         return RestrictedAgentAccess(capped)

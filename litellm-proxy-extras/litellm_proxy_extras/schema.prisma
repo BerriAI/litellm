@@ -84,6 +84,7 @@ model LiteLLM_AgentsTable {
   execution_mode String @default("autonomous")
   identity LiteLLM_AgentIdentity?
   retired_identities LiteLLM_RetiredAgentIdentity[]
+  verified_subjects LiteLLM_VerifiedSubject[]
   budget_id String? @unique
   litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
   tpm_limit  Int?
@@ -105,6 +106,7 @@ model LiteLLM_AgentIdentity {
   tenant_id String
   client_id String
   service_principal_id String?
+  provisioning_source_id String?
   required_roles String[] @default([])
   required_scopes String[] @default(["user_impersonation"])
   revision String @default(uuid())
@@ -124,18 +126,66 @@ model LiteLLM_RetiredAgentIdentity {
   @@unique([provider, tenant_id, client_id])
 }
 
-model LiteLLM_VerifiedHumanSubject {
+model LiteLLM_RetiredAgent {
+  original_agent_id String @id
+  retired_at DateTime @default(now())
+}
+
+model LiteLLM_VerifiedSubject {
   subject_id String @id @default(uuid())
   issuer String
   tenant_id String
   oid String
-  user_id String
-  user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  kind String @default("human")
+  user_id String?
+  user LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  agent_id String?
+  agent LiteLLM_AgentsTable? @relation(fields: [agent_id], references: [agent_id], onDelete: SetNull)
+  parent_client_id String?
+  scim_resource_id String? @unique
+  scim_resource LiteLLM_SCIMResource? @relation(fields: [scim_resource_id], references: [id], onDelete: Restrict)
   verified_via String @default("sso_interactive")
   verified_at DateTime @default(now())
   @@unique([issuer, tenant_id, oid])
   @@index([user_id])
+  @@index([agent_id])
 }
+
+model LiteLLM_SCIMSource {
+  source_id String @id @default(uuid())
+  display_name String
+  tenant_id String
+  key_hash String @unique
+  enabled Boolean @default(true)
+  group_mappings Json @default("[]")
+  resources LiteLLM_SCIMResource[]
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model LiteLLM_SCIMResource {
+  id String @id @default(uuid())
+  source_id String
+  source LiteLLM_SCIMSource @relation(fields: [source_id], references: [source_id], onDelete: Restrict)
+  kind String
+  external_id String
+  user_name String?
+  display_name String
+  document Json
+  active Boolean @default(true)
+  deleted Boolean @default(false)
+  local_id String? @unique
+  human_email String? @unique
+  human_subject_key String? @unique
+  member_ids String[] @default([])
+  subject LiteLLM_VerifiedSubject?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  @@unique([source_id, kind, external_id])
+  @@unique([source_id, kind, user_name])
+  @@index([source_id, kind])
+}
+
 
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
@@ -291,7 +341,7 @@ model LiteLLM_DeletedTeamTable {
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 
-    verified_human_subjects LiteLLM_VerifiedHumanSubject[]
+    verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
     team_id    String?

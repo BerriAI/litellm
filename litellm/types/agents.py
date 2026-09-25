@@ -316,6 +316,8 @@ class AgentKeySummary(BaseModel):
 
 
 class AgentResponse(BaseModel):
+    directory_active: bool = True
+    directory_access_group_ids: tuple[str, ...] | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True

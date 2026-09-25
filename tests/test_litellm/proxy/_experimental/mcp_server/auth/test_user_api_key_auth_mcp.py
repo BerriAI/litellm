@@ -4239,7 +4239,7 @@ class TestAgentMCPPermissions:
                 self._team_servers({"callers": ["server_2", "server_3"]}),
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: neither the agent's owner nor the caller has a personal grant
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({})
@@ -4258,7 +4258,7 @@ class TestAgentMCPPermissions:
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": ["server_1"]})
@@ -4277,7 +4277,7 @@ class TestAgentMCPPermissions:
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: None is the resolver's own "entitlement unresolvable" signal
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": None})
@@ -4394,7 +4394,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_1"]
@@ -4411,7 +4411,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = []  # no agent-level restriction
@@ -4467,7 +4467,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_2", "server_3"]
@@ -4493,7 +4493,7 @@ class TestAgentMCPPermissions:
             ):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_agent_tool_permissions_for_server",
+                    "get_agent_tool_permissions_for_server",
                     new_callable=AsyncMock,
                     return_value=["tool_a"],
                 ) as mock_agent_tools:
@@ -4525,7 +4525,7 @@ class TestAgentMCPPermissions:
             ):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_agent_tool_permissions_for_server",
+                    "get_agent_tool_permissions_for_server",
                     new_callable=AsyncMock,
                     return_value=None,
                 ):
@@ -4564,7 +4564,7 @@ class TestAgentMCPPermissions:
             ),
         )
 
-    async def test_get_allowed_mcp_servers_for_agent_includes_toolset_servers(self):
+    async def testget_allowed_mcp_servers_for_agent_includes_toolset_servers(self):
         """An agent granted only mcp_toolsets reaches the toolset's servers, exactly as a
         key, team, or org granted only toolsets does"""
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
@@ -4574,7 +4574,7 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+            result = await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
 
         assert sorted(result) == ["server-a", "server-direct"]
         mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
@@ -4616,7 +4616,7 @@ class TestAgentMCPPermissions:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
             with pytest.raises(UnloadableEntitlementError):
-                await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+                await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
                     MCPRequestHandler,
@@ -4633,7 +4633,7 @@ class TestAgentMCPPermissions:
 
         assert result == []
 
-    async def test_get_agent_tool_permissions_for_server_unions_direct_and_toolset_tools(self):
+    async def testget_agent_tool_permissions_for_server_unions_direct_and_toolset_tools(self):
         """The agent's tool ceiling on a server is its direct tool grants plus the tools its
         toolsets grant there, and None only when neither names the server"""
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
@@ -4645,13 +4645,13 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            server_a_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 "server-a", user_api_key_auth
             )
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            server_b_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 "server-b", user_api_key_auth
             )
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            server_c_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 "server-c", user_api_key_auth
             )
 

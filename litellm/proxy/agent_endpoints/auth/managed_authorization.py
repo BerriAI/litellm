@@ -18,10 +18,10 @@ async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore) -
     if isinstance(agent, AgentIdentityFailure):
         raise_identity_failure(agent)
     if agent is None:
-        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-
-        configured: Final = global_agent_registry.get_agent_by_id(auth.agent_id)
-        if auth.managed_agent_context is not None or configured is None or configured.identity_managed:
+        retired: Final = await store.retired_agent(auth.agent_id)
+        if isinstance(retired, AgentIdentityFailure):
+            raise_identity_failure(retired)
+        if auth.managed_agent_context is not None or retired:
             raise_identity_failure(AgentIdentityFailure(message="Agent no longer exists"))
         return
     if not agent.identity_managed:
@@ -47,9 +47,17 @@ def actor_admission_failure(
     agent: AgentResponse,
     context: ManagedAgentContext | None,
 ) -> AgentIdentityFailure | None:
-    if not agent.enabled or agent.identity is None or not agent.identity.active:
+    if (
+        not agent.enabled
+        or not agent.directory_active
+        or agent.directory_access_group_ids == ()
+        or agent.identity is None
+        or not agent.identity.active
+    ):
         return AgentIdentityFailure(message="Agent execution is disabled")
     if context is None:
+        if agent.identity.provisioning_source_id is not None:
+            return AgentIdentityFailure(message="Provisioned agent-users require their Entra token")
         if agent.execution_mode == "delegated":
             return AgentIdentityFailure(message="This agent requires a verified delegated user token")
         return None

@@ -497,16 +497,39 @@ async def test_patch_agent_in_db_raises_when_row_deleted_mid_update():
 
 
 @pytest.mark.asyncio
-async def test_delete_agent_from_db_raises_when_row_already_gone():
-    """Prisma's delete returns None for a missing row, which dict() cannot consume."""
+async def test_delete_agent_from_db_raises_when_row_already_gone() -> None:
     registry: Final = AgentRegistry()
-    mock_prisma: Final = MagicMock()
-    mock_prisma.db.litellm_agentstable.delete = AsyncMock(return_value=None)
+    database: Final = MagicMock()
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    tx.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="Agent not found, passed agent_id=agent-123"):
+        await registry.delete_agent_from_db(agent_id="agent-123", prisma_client=database)
+    tx.litellm_verificationtoken.delete_many.assert_not_called()
 
-    with pytest.raises(Exception, match="Error deleting agent from DB") as exc_info:
-        await registry.delete_agent_from_db(agent_id="agent-123", prisma_client=mock_prisma)
 
-    assert str(exc_info.value) == "Error deleting agent from DB: Agent not found, passed agent_id=agent-123"
+@pytest.mark.asyncio
+@pytest.mark.parametrize("managed", [True, False])
+async def test_agent_deletion_revokes_managed_keys_and_keeps_identity_history(managed: bool) -> None:
+    registry: Final = AgentRegistry()
+    database: Final = MagicMock()
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    row: Final = _stored_agent_row({"agent_id": "agent-123", "identity_managed": managed})
+    tx.litellm_agentstable.find_unique = AsyncMock(return_value=row)
+    tx.litellm_agentstable.delete = AsyncMock(return_value=row)
+    tx.litellm_verificationtoken.delete_many = AsyncMock(return_value=2)
+    tx.litellm_retiredagent.upsert = AsyncMock()
+    result: Final = await registry.delete_agent_from_db("agent-123", database)
+    assert result["agent_id"] == "agent-123"
+    tx.litellm_agentstable.delete.assert_awaited_once_with(where={"agent_id": "agent-123"})
+    if managed:
+        tx.litellm_retiredagent.upsert.assert_awaited_once_with(
+            where={"original_agent_id": "agent-123"},
+            data={"create": {"original_agent_id": "agent-123"}, "update": {}},
+        )
+        tx.litellm_verificationtoken.delete_many.assert_awaited_once_with(where={"agent_id": "agent-123"})
+    else:
+        tx.litellm_retiredagent.upsert.assert_not_awaited()
+        tx.litellm_verificationtoken.delete_many.assert_not_awaited()
 
 
 # ---------- LIT-6736: agent litellm_params secret redaction ----------
@@ -1210,11 +1233,14 @@ def _stored_agent_row(values: Mapping[str, object] | SimpleNamespace) -> LiteLLM
             "enabled": True,
             "execution_mode": "autonomous",
             **{
-                key: json.dumps(value) if key in ("litellm_params", "agent_card_params", "kill_switch") and not isinstance(value, str) else value
+                key: json.dumps(value)
+                if key in ("litellm_params", "agent_card_params", "kill_switch") and not isinstance(value, str)
+                else value
                 for key, value in fields.items()
             },
         }
     )
+
 
 _KILL_SWITCH: Final = {
     "url": "https://ops.example.com/kill",
@@ -1276,13 +1302,15 @@ async def test_patch_agent_in_db_keeps_kill_switch_when_omitted_and_clears_it_on
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
-        return_value=_stored_agent_row({
-            "agent_id": "agent-123",
-            "agent_name": "Old",
-            "litellm_params": {},
-            "object_permission_id": None,
-            "kill_switch": _KILL_SWITCH,
-        })
+        return_value=_stored_agent_row(
+            {
+                "agent_id": "agent-123",
+                "agent_name": "Old",
+                "litellm_params": {},
+                "object_permission_id": None,
+                "kill_switch": _KILL_SWITCH,
+            }
+        )
     )
     mock_update = AsyncMock(return_value=_agent_row_mock([]))
     mock_prisma.db.litellm_agentstable.update = mock_update
@@ -1305,13 +1333,15 @@ async def test_patch_agent_in_db_restores_the_stored_kill_switch_secret_behind_t
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
-        return_value=_stored_agent_row({
-            "agent_id": "agent-123",
-            "agent_name": "A",
-            "litellm_params": {},
-            "object_permission_id": None,
-            "kill_switch": _KILL_SWITCH,
-        })
+        return_value=_stored_agent_row(
+            {
+                "agent_id": "agent-123",
+                "agent_name": "A",
+                "litellm_params": {},
+                "object_permission_id": None,
+                "kill_switch": _KILL_SWITCH,
+            }
+        )
     )
     mock_update = AsyncMock(return_value=_agent_row_mock([]))
     mock_prisma.db.litellm_agentstable.update = mock_update
@@ -1340,7 +1370,9 @@ async def test_update_agent_in_db_clears_kill_switch_when_omitted_and_restores_s
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
-        return_value=_stored_agent_row(SimpleNamespace(litellm_params={}, object_permission_id=None, kill_switch=json.dumps(_KILL_SWITCH)))
+        return_value=_stored_agent_row(
+            SimpleNamespace(litellm_params={}, object_permission_id=None, kill_switch=json.dumps(_KILL_SWITCH))
+        )
     )
     mock_update = AsyncMock(return_value=_agent_row_mock([]))
     mock_prisma.db.litellm_agentstable.update = mock_update

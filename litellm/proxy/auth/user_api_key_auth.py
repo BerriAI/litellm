@@ -3114,7 +3114,10 @@ async def _reserve_budget_after_common_checks(
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-            fail_closed_budget_enforcement=(general_settings.get("fail_closed_budget_enforcement") is True or user_api_key_auth_obj.billing_agent_policy is not None),
+            fail_closed_budget_enforcement=(
+                general_settings.get("fail_closed_budget_enforcement") is True
+                or user_api_key_auth_obj.billing_agent_policy is not None
+            ),
             raw_body=await read_raw_json_body(request=request),
         )
     if request is not None:

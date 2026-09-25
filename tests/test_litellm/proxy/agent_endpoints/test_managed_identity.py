@@ -163,3 +163,79 @@ def test_each_application_binding_records_its_history_atomically() -> None:
     )
     assert not isinstance(replacement, AgentIdentityFailure)
     assert replacement["retired_identities"]["connectOrCreate"]["create"]["client_id"] == HUMAN
+
+
+def test_native_agent_user_uses_proven_subject_without_optional_facets() -> None:
+    from litellm.types.proxy.agent_identity import VerifiedAgentSubject
+
+    subject: Final = VerifiedAgentSubject(
+        issuer=ISSUER,
+        tenant_id=TENANT,
+        oid=HUMAN,
+        agent_id=BINDING.agent_id,
+        parent_client_id=CLIENT,
+        scim_resource_id="scim-subject",
+    )
+    result: Final = classify_agent_subject(
+        BINDING,
+        claims(oid=HUMAN, scp="user_impersonation"),
+        "autonomous",
+        native_subject=subject,
+    )
+    assert result == AgentSubject(kind="agent_user", oid=HUMAN, mode="autonomous")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"oid": PRINCIPAL},
+        {"azp": HUMAN},
+        {"tid": HUMAN},
+        {"scp": "unrelated"},
+        {"scp": None},
+        {"idtyp": "app"},
+    ],
+)
+def test_native_subject_binding_rejects_other_subjects_parents_and_scopes(overrides: dict[str, object]) -> None:
+    from litellm.types.proxy.agent_identity import VerifiedAgentSubject
+
+    subject: Final = VerifiedAgentSubject(
+        issuer=ISSUER,
+        tenant_id=TENANT,
+        oid=HUMAN,
+        agent_id=BINDING.agent_id,
+        parent_client_id=CLIENT,
+        scim_resource_id="scim-subject",
+    )
+    result: Final = classify_agent_subject(
+        BINDING,
+        claims(**{"oid": HUMAN, "scp": "user_impersonation", **overrides}),
+        "both",
+        native_subject=subject,
+    )
+    assert isinstance(result, AgentIdentityFailure)
+
+
+@pytest.mark.parametrize("change", [None, {"client_id": HUMAN}, {"provisioning_source_id": "another-source"}])
+def test_directory_owned_identity_cannot_be_unbound_or_reassigned(change: dict[str, str] | None) -> None:
+    native_binding: Final = BINDING.model_copy(update={"provisioning_source_id": "source"})
+    existing: Final = AgentResponse(
+        agent_id="agent-one", agent_name="Native", agent_card_params={}, identity=native_binding,
+        identity_managed=True, execution_mode="autonomous",
+    )
+    identity: Final = None if change is None else {
+        "provider": "microsoft_entra", "tenant_id": TENANT, "client_id": CLIENT,
+        "provisioning_source_id": "source", **change,
+    }
+    result: Final = managed_write_fields({"identity": identity}, existing, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "directory-owned" in result.message
+
+
+def test_manual_registration_cannot_claim_directory_ownership() -> None:
+    result: Final = managed_write_fields({"identity": {
+        "provider": "microsoft_entra", "tenant_id": TENANT, "client_id": CLIENT,
+        "provisioning_source_id": "source",
+    }}, None, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Only SCIM" in result.message

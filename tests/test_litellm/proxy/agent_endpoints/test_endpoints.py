@@ -352,6 +352,7 @@ class TestAgentByIdKeyRedaction:
 
         test_client = _make_app_with_role(role)
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.writer_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
@@ -414,6 +415,7 @@ class TestAgentRBACInternalUser:
             return_value=_sample_agent_response()
         )
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.writer_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
@@ -1199,7 +1201,7 @@ def test_identity_evidence_is_persisted_and_never_taken_from_runtime_metadata(mo
         litellm_params={"last_authenticated_at": "forged-proof"},
     )
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=bound)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=bound)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     pending: Final = client.get("/v1/agents/bound/identity")
     assert pending.status_code == 200
@@ -1207,13 +1209,13 @@ def test_identity_evidence_is_persisted_and_never_taken_from_runtime_metadata(mo
     verified_binding: Final = binding.model_copy(
         update={"last_authenticated_at": datetime(2026, 1, 1, tzinfo=timezone.utc)}
     )
-    database.db.litellm_agentstable.find_unique.return_value = bound.model_copy(update={"identity": verified_binding})
+    database.writer_db.litellm_agentstable.find_unique.return_value = bound.model_copy(update={"identity": verified_binding})
     verified: Final = client.get("/v1/agents/bound/identity")
     assert verified.json()["last_authenticated_at"] == "2026-01-01T00:00:00Z"
     assert verified.json()["identity"]["client_id"] == binding.client_id
-    database.db.litellm_agentstable.find_unique.return_value = None
+    database.writer_db.litellm_agentstable.find_unique.return_value = None
     assert client.get("/v1/agents/missing/identity").status_code == 404
-    database.db.litellm_agentstable.find_unique.side_effect = RuntimeError("unavailable")
+    database.writer_db.litellm_agentstable.find_unique.side_effect = RuntimeError("unavailable")
     assert client.get("/v1/agents/bound/identity").status_code == 503
 
 
@@ -1477,6 +1479,7 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
 
     def _get_as(role: LitellmUserRoles):
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.writer_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
             mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
             return _make_app_with_role(role).get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})

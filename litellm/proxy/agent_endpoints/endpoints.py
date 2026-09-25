@@ -52,8 +52,6 @@ from litellm.proxy.agent_endpoints.identity import (
     validate_identity_binding,
 )
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
-from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
-
 from litellm.proxy.agent_endpoints.kill_switch import (
     KillSwitchAuditLogWriter,
     KillSwitchHttpClient,
@@ -63,6 +61,7 @@ from litellm.proxy.agent_endpoints.kill_switch import (
     fire_kill_switch,
     redact_kill_switch,
 )
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -507,6 +506,8 @@ async def get_agent_identity_status(
     return ManagedAgentIdentityStatus(
         identity=agent.identity,
         identity_managed=agent.identity_managed,
+        directory_active=agent.directory_active,
+        directory_access_group_ids=agent.directory_access_group_ids,
         enabled=agent.enabled,
         execution_mode=agent.execution_mode,
         last_authenticated_at=agent.identity.last_authenticated_at if agent.identity else None,

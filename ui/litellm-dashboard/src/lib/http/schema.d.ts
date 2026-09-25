@@ -13974,6 +13974,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/scim/v2/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sources */
+        get: operations["list_sources_scim_v2_sources_get"];
+        put?: never;
+        /** Create Source */
+        post: operations["create_source_scim_v2_sources_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Source */
+        put: operations["update_source_scim_v2_sources__source_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -24378,6 +24413,8 @@ export interface components {
              * @constant
              */
             provider: "microsoft_entra";
+            /** Provisioning Source Id */
+            provisioning_source_id?: string | null;
             /**
              * Required Roles
              * @default []
@@ -24554,6 +24591,13 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Directory Access Group Ids */
+            directory_access_group_ids?: string[] | null;
+            /**
+             * Directory Active
+             * @default true
+             */
+            directory_active: boolean;
             /**
              * Enabled
              * @default true
@@ -30256,6 +30300,8 @@ export interface components {
              * @constant
              */
             provider: "microsoft_entra";
+            /** Provisioning Source Id */
+            provisioning_source_id?: string | null;
             /**
              * Required Roles
              * @default []
@@ -35666,6 +35712,13 @@ export interface components {
         };
         /** ManagedAgentIdentityStatus */
         ManagedAgentIdentityStatus: {
+            /** Directory Access Group Ids */
+            directory_access_group_ids?: string[] | null;
+            /**
+             * Directory Active
+             * @default true
+             */
+            directory_active: boolean;
             /**
              * Enabled
              * @default true
@@ -41707,6 +41760,14 @@ export interface components {
             /** Run Id */
             run_id: string;
         };
+        /** SCIMAgentUser */
+        SCIMAgentUser: {
+            /**
+             * Identityparentid
+             * Format: uuid
+             */
+            identityParentId: string;
+        };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
             /** Costcenter */
@@ -41748,6 +41809,16 @@ export interface components {
             } | null;
             /** Schemas */
             schemas: string[];
+        };
+        /** SCIMGroupMapping */
+        SCIMGroupMapping: {
+            /** Access Group Ids */
+            access_group_ids: string[];
+            /**
+             * External Group Id
+             * Format: uuid
+             */
+            external_group_id: string;
         };
         /** SCIMListResponse */
         SCIMListResponse: {
@@ -41891,6 +41962,73 @@ export interface components {
              */
             sort: components["schemas"]["SCIMFeature"];
         };
+        /** SCIMSourceConfig */
+        SCIMSourceConfig: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Group Mappings
+             * @default []
+             */
+            group_mappings: components["schemas"]["SCIMGroupMapping"][];
+            /**
+             * Tenant Id
+             * Format: uuid
+             */
+            tenant_id: string;
+        };
+        /** SCIMSourceCreate */
+        SCIMSourceCreate: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Group Mappings
+             * @default []
+             */
+            group_mappings: components["schemas"]["SCIMGroupMapping"][];
+            /**
+             * Provisioning Token
+             * Format: password
+             */
+            provisioning_token: string;
+            /**
+             * Tenant Id
+             * Format: uuid
+             */
+            tenant_id: string;
+        };
+        /** SCIMSourceResponse */
+        SCIMSourceResponse: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Group Mappings
+             * @default []
+             */
+            group_mappings: components["schemas"]["SCIMGroupMapping"][];
+            /** Source Id */
+            source_id: string;
+            /**
+             * Tenant Id
+             * Format: uuid
+             */
+            tenant_id: string;
+        };
         /** SCIMUser */
         "SCIMUser-Input": {
             /**
@@ -41920,6 +42058,7 @@ export interface components {
             /** Schemas */
             schemas: string[];
             "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"?: components["schemas"]["SCIMEnterpriseUser"] | null;
+            "urn:ietf:params:scim:schemas:extension:litellmAgent:2.0:User"?: components["schemas"]["SCIMAgentUser"] | null;
             /** Username */
             userName?: string | null;
         };
@@ -65523,6 +65662,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SCIMPlaceholderMergeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sources_scim_v2_sources_get: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMSourceResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_source_scim_v2_sources_post: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SCIMSourceCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_source_scim_v2_sources__source_id__put: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SCIMSourceConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMSourceResponse"];
                 };
             };
             /** @description Validation Error */

@@ -139,7 +139,7 @@ async def test_invocation_prepares_target_fee_for_the_correct_agent(
     registry.register_agent(target)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="invoke-grant", agents=["agent"])
     auth: Final = UserAPIKeyAuth(
@@ -159,27 +159,27 @@ async def test_invocation_prepares_target_fee_for_the_correct_agent(
 
 
 @pytest.mark.asyncio
-async def test_deleted_agent_key_cannot_fall_back_to_unmanaged_authentication(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi import HTTPException
-
-    from litellm.proxy.agent_endpoints import agent_registry
-    from litellm.proxy.agent_endpoints.auth.managed_authorization import admit_managed_actor
-    from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
-
-    registry: Final = agent_registry.AgentRegistry()
-    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+async def test_deleted_agent_key_cannot_fall_back_to_unmanaged_authentication() -> None:
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    database.writer_db.litellm_retiredagent.find_unique = AsyncMock(return_value={"original_agent_id": "deleted"})
     with pytest.raises(HTTPException, match="Agent no longer exists"):
         await admit_managed_actor(UserAPIKeyAuth(agent_id="deleted"), AgentIdentityStore.from_client(database))
-    registry.register_agent(AgentResponse(agent_id="configured", agent_name="Configured", agent_card_params={}))
-    auth: Final = UserAPIKeyAuth(agent_id="configured")
+    database.writer_db.litellm_retiredagent.find_unique.return_value = None
+    auth: Final = UserAPIKeyAuth(agent_id="legacy-attribution-label")
     await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
     assert auth.managed_agent_policy is None
+    database.db.litellm_agentstable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_history_outage_does_not_permit_legacy_fallback() -> None:
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    database.writer_db.litellm_retiredagent.find_unique = AsyncMock(side_effect=RuntimeError("unavailable"))
+    with pytest.raises(HTTPException) as failure:
+        await admit_managed_actor(UserAPIKeyAuth(agent_id="deleted"), AgentIdentityStore.from_client(database))
+    assert failure.value.status_code == 503
 
 
 @pytest.mark.parametrize(
@@ -202,7 +202,7 @@ def test_invocation_routes_resolve_the_same_target(route: str, body: dict[str, o
 async def test_aggregate_budget_applies_to_both_entra_and_legacy_agent_keys(managed: bool) -> None:
     policy: Final = agent(identity_managed=managed, litellm_budget_table={"budget_id": "budget", "max_budget": 0.5})
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
     auth: Final = UserAPIKeyAuth(agent_id="agent")
     await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
     assert auth.billing_agent_policy == policy
@@ -212,7 +212,7 @@ async def test_aggregate_budget_applies_to_both_entra_and_legacy_agent_keys(mana
 @pytest.mark.asyncio
 async def test_agent_admission_database_outage_fails_closed() -> None:
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(side_effect=RuntimeError("DB unavailable"))
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(side_effect=RuntimeError("DB unavailable"))
     with pytest.raises(HTTPException) as failure:
         await admit_managed_actor(UserAPIKeyAuth(agent_id="agent"), AgentIdentityStore.from_client(database))
     assert failure.value.status_code == 503
@@ -221,15 +221,15 @@ async def test_agent_admission_database_outage_fails_closed() -> None:
 @pytest.mark.asyncio
 async def test_human_authentication_does_not_load_an_agent() -> None:
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock()
     await admit_managed_actor(UserAPIKeyAuth(user_id="human"), AgentIdentityStore.from_client(database))
-    database.db.litellm_agentstable.find_unique.assert_not_awaited()
+    database.writer_db.litellm_agentstable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_disabled_agent_key_is_rejected_at_admission() -> None:
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=agent(enabled=False))
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent(enabled=False))
     with pytest.raises(HTTPException) as failure:
         await admit_managed_actor(UserAPIKeyAuth(agent_id="agent"), AgentIdentityStore.from_client(database))
     assert failure.value.status_code == 403
@@ -247,7 +247,7 @@ async def test_verified_human_still_needs_an_explicit_agent_invocation_grant(
 
     policy: Final = agent()
     database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     permission: Final = LiteLLM_ObjectPermissionTable(
         object_permission_id="human-grants",

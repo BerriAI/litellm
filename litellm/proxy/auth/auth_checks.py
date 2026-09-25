@@ -3330,15 +3330,14 @@ async def get_access_object(
     prisma_client: DatabaseClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    check_db_only: bool = False,
 ) -> LiteLLM_AccessGroupTable:
     """
     - Check if access_group_id in proxy AccessGroupTable
-    - Always checks cache first, then DB only when not found in cache
+    - Checks cache first unless authoritative writer admission is requested
     - if valid, return LiteLLM_AccessGroupTable object
     - if not, then raise an error
-
-    Unlike get_team_object, this has no check_cache_only or check_db_only flags;
-    it always follows cache-first-then-db semantics.
 
     Raises:
         - HTTPException: If access group doesn't exist in db or cache (status_code=404)
@@ -3348,18 +3347,19 @@ async def get_access_object(
 
     key: Final = f"access_group_id:{access_group_id}"
 
-    cached_access_obj: Final = await user_api_key_cache.async_get_cache(
-        key=key,
-        model_type=LiteLLM_AccessGroupTable,
+    cached_access_obj: Final = (
+        None
+        if check_db_only
+        else await user_api_key_cache.async_get_cache(key=key, model_type=LiteLLM_AccessGroupTable)
     )
     if cached_access_obj is not None:
         return cached_access_obj
 
     # Not in cache - fetch from DB
     try:
-        response: Final = await _dictable_table(AccessGroupRepository(prisma_client), "access_group").find_unique(
-            where={"access_group_id": access_group_id}
-        )
+        response: Final = await _dictable_table(
+            AccessGroupRepository(prisma_client, use_writer=check_db_only), "access_group"
+        ).find_unique(where={"access_group_id": access_group_id})
 
         if response is None:
             raise HTTPException(
@@ -4446,32 +4446,33 @@ async def _check_agent_access_group_model_access(
     if not model or valid_token is None or not valid_token.agent_id:
         return True
 
-    async def managed_group_ids(_agent_id: str) -> tuple[str, ...]:
-        agent: Final = valid_token.managed_agent_policy
-        return tuple(agent.access_group_ids or ()) if agent else ()
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 
-    ceiling: Final = (
-        await resolve_agent_access_group_ceiling(valid_token.agent_id, load_access_group_ids=managed_group_ids)
+    unmanaged: Final = await resolve_ceiling(valid_token.agent_id) if valid_token.managed_agent_policy is None else None
+    ceilings: Final = (
+        await resolve_managed_agent_ceilings(valid_token.managed_agent_policy)
         if valid_token.managed_agent_policy is not None
-        else await resolve_ceiling(valid_token.agent_id)
+        else (unmanaged,)
+        if unmanaged is not None
+        else ()
     )
-    if ceiling is None:
-        return True
-    if not ceiling.models:
-        raise ModelAccessDeniedProxyException(
-            message=model_access_denied_client_message(model=model),
-            internal_message=f"agent {valid_token.agent_id} access groups {ceiling.access_group_ids} grant no models",
-            type=ProxyErrorTypes.agent_model_access_denied,
-            param="model",
-            code=status.HTTP_403_FORBIDDEN,
+    for ceiling in ceilings:
+        if not ceiling.models:
+            raise ModelAccessDeniedProxyException(
+                message=model_access_denied_client_message(model=model),
+                internal_message=f"agent {valid_token.agent_id} access groups grant no models",
+                type=ProxyErrorTypes.agent_model_access_denied,
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=sorted(ceiling.models),
+            team_id=valid_token.team_id,
+            object_type="agent",
         )
-    return _can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=sorted(ceiling.models),
-        team_id=valid_token.team_id,
-        object_type="agent",
-    )
+    return True
 
 
 LoadedCallerTeam: TypeAlias = LiteLLM_TeamTable | None

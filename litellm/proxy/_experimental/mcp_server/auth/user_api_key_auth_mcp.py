@@ -1610,7 +1610,7 @@ class MCPRequestHandler:
             # independent; an opt-out silences only its own source, inside the recursive call).
             if _is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
                 return MCPServerAccess(
-                    server_ids=tuple(await MCPRequestHandler._resolve_admitted_subject_servers(user_api_key_auth)),
+                    server_ids=tuple(await MCPRequestHandler.resolve_admitted_subject_servers(user_api_key_auth)),
                 )
 
             # Get allowed servers from key and team
@@ -1707,7 +1707,7 @@ class MCPRequestHandler:
             if user_api_key_auth and user_api_key_auth.agent_id:
                 agent_capped: Final = _agent_capped_servers(
                     allowed_mcp_servers,
-                    await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth),
+                    await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth),
                     await MCPRequestHandler._get_agent_access_group_server_ceiling(user_api_key_auth),
                 )
                 if agent_capped is not None:
@@ -1949,7 +1949,7 @@ class MCPRequestHandler:
         ]
 
     @staticmethod
-    async def _resolve_admitted_subject_servers(auth: UserAPIKeyAuth) -> list[str]:
+    async def resolve_admitted_subject_servers(auth: UserAPIKeyAuth) -> list[str]:
         """Union of what each of the admitted subject's sources reaches, each answered by the
         canonical resolver so no rule is reimplemented for this caller shape."""
         reachable: Final[set[str]] = set()
@@ -2011,7 +2011,7 @@ class MCPRequestHandler:
         return min((source for source, _ in granting), key=lambda s: s.team_id or "")
 
     @staticmethod
-    async def _resolve_admitted_subject_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
+    async def resolve_admitted_subject_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
         """Effective tool allowlist on ``server_id`` for an admitted subject, as the union over the
         sources that actually grant that server.
 
@@ -2229,7 +2229,7 @@ class MCPRequestHandler:
             # source and shares nothing with the single-credential prelude below. Ordering is the invariant:
             # sat after the prelude, a fault in a lookup the subject never uses denied tools its teams grant.
             if _is_mcp_admitted_user_subject(user_api_key_auth):
-                return await MCPRequestHandler._resolve_admitted_subject_tools(server_id, user_api_key_auth)
+                return await MCPRequestHandler.resolve_admitted_subject_tools(server_id, user_api_key_auth)
 
             # Get key and team object permissions (already loaded in main auth flow)
             key_obj_perm: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
@@ -2343,7 +2343,7 @@ class MCPRequestHandler:
         if user_api_key_auth.agent_id:
             # Pre-fetch agent object_permission once to avoid a duplicate DB query.
             agent_obj_perm: Final = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-            agent_tools: Final = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            agent_tools: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 server_id=server_id,
                 user_api_key_auth=user_api_key_auth,
                 agent_object_permission=agent_obj_perm,
@@ -2559,7 +2559,7 @@ class MCPRequestHandler:
         """Get allowed MCP servers a caller inherits from the team it is pinned to.
 
         Exactly one team, or none. A subject that reaches servers through SEVERAL teams does not
-        fan out here: it is resolved one source per team in ``_resolve_admitted_subject_servers``,
+        fan out here: it is resolved one source per team in ``resolve_admitted_subject_servers``,
         and each of those sources pins a single ``team_id`` before reaching this point. Keeping the
         fan-out here as well would be a second multi-team path to drift from that one.
         """
@@ -2577,7 +2577,7 @@ class MCPRequestHandler:
         which must NOT silently gain the union across every team the user belongs to), and it covers
         each single-source auth an admitted subject fans out into — those pin a team_id, so they land
         on the first branch. The admitted subject itself never reaches here: it resolves per source
-        in ``_resolve_admitted_subject_servers`` before this point. The ``UI_TEAM_ID`` sentinel
+        in ``resolve_admitted_subject_servers`` before this point. The ``UI_TEAM_ID`` sentinel
         resolves to no teams exactly as before."""
         if user_api_key_auth is None or not user_api_key_auth.team_id:
             return []
@@ -3128,7 +3128,7 @@ class MCPRequestHandler:
         (any non-empty entitlement, or an unresolved one, disqualifies), exactly as
         ``operator_open_server_ids`` reads the same row. The one owner of this predicate: the
         server-axis registry resolution in ``get_allowed_mcp_servers`` and the tools-axis open
-        channel in ``_resolve_admitted_subject_tools`` both consult it, so the two axes cannot
+        channel in ``resolve_admitted_subject_tools`` both consult it, so the two axes cannot
         disagree."""
         if user_api_key_auth is None or not user_api_key_has_admin_view(user_api_key_auth):
             return False
@@ -3332,7 +3332,7 @@ class MCPRequestHandler:
         )
 
     @staticmethod
-    async def _get_allowed_mcp_servers_for_agent(
+    async def get_allowed_mcp_servers_for_agent(
         user_api_key_auth: UserAPIKeyAuth | None = None,
         agent_object_permission: LiteLLM_ObjectPermissionTable | None = None,
     ) -> list[str]:
@@ -3403,7 +3403,7 @@ class MCPRequestHandler:
         return frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
 
     @staticmethod
-    async def _get_agent_tool_permissions_for_server(
+    async def get_agent_tool_permissions_for_server(
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         agent_object_permission: LiteLLM_ObjectPermissionTable | None = None,
