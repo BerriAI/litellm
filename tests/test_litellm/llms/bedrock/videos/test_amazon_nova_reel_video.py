@@ -1609,6 +1609,93 @@ def test_download_s3_object_bearer_without_sigv4_credentials_maps_to_400(monkeyp
     assert attempted == []
 
 
+def test_download_s3_object_bearer_with_failing_credential_chain_maps_to_400(monkeypatch):
+    """A bearer token plus an unresolvable SigV4 chain (NoCredentialsError from
+    _load_credentials itself) must surface the bearer guidance 400, not a raw
+    BotoCoreError/500."""
+    from botocore.exceptions import NoCredentialsError
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+
+    def _raise_credentials(optional_params, aws_region_name=None, bearer_token=None):
+        raise NoCredentialsError()
+
+    monkeypatch.setattr(handler, "_load_credentials", _raise_credentials)
+    with pytest.raises(BedrockError) as excinfo:
+        handler._download_s3_object(
+            "bucket",
+            ["out/output.mp4"],
+            {},
+            raw,
+            region_default="us-east-1",
+            api_key="some-bearer-token",
+        )
+    assert excinfo.value.status_code == 400
+    assert "SigV4" in str(excinfo.value.message)
+    assert "bearer" in str(excinfo.value.message)
+
+
+def test_download_s3_object_no_bearer_credential_chain_failure_propagates(monkeypatch):
+    """Without a bearer token the NoCredentialsError propagation is unchanged."""
+    from botocore.exceptions import NoCredentialsError
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+
+    def _raise_credentials(optional_params, aws_region_name=None, bearer_token=None):
+        raise NoCredentialsError()
+
+    monkeypatch.setattr(handler, "_load_credentials", _raise_credentials)
+    with pytest.raises(NoCredentialsError):
+        handler._download_s3_object(
+            "bucket",
+            ["out/output.mp4"],
+            {},
+            raw,
+            region_default="us-east-1",
+        )
+
+
+#################################################
+# non-JSON status responses through the handler
+#################################################
+
+
+def test_map_status_response_non_json_maps_to_bedrock_502():
+    """A 200 with a non-JSON body must surface as BedrockError 502 from the handler's
+    guarded parse (before the transform's own guard, which never runs)."""
+    handler = BedrockVideoGeneration()
+    resp = httpx.Response(200, content=b"<html>gateway error</html>")
+    with pytest.raises(BedrockError) as excinfo:
+        handler._map_status_response(resp, TEST_MODEL, "video-id", None)
+    assert excinfo.value.status_code == 502
+    assert "non-JSON response from Bedrock status endpoint" in str(excinfo.value.message)
+
+
+def test_video_status_non_json_body_maps_to_bedrock_502(monkeypatch):
+    """End-to-end through video_status: non-JSON 200 -> 502, never a raw 500."""
+    handler = BedrockVideoGeneration()
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    monkeypatch.setattr(
+        handler,
+        "_status_request_parts",
+        lambda arn, params, api_base, api_key=None: (
+            "https://example.com/async-invoke/arn",
+            Mock(url="https://example.com/async-invoke/arn", headers={}),
+            "us-east-1",
+        ),
+    )
+    resp = httpx.Response(200, content=b"not json at all")
+    monkeypatch.setattr(handler, "_sync_get", lambda prepped, timeout=None: resp)
+    with pytest.raises(BedrockError) as excinfo:
+        handler.video_status(video_id=video_id, litellm_params={})
+    assert excinfo.value.status_code == 502
+    assert "non-JSON response from Bedrock status endpoint" in str(excinfo.value.message)
+
+
 #################################################
 # S3 client timeouts + resource closes
 #################################################

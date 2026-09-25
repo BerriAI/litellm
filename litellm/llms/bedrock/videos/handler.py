@@ -525,7 +525,15 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 headers=response.headers,
                 response=response,
             )
-        raw: Final[BedrockGetAsyncInvokeResponse] = response.json()
+        try:
+            # Guarded parse: the transform's own non-JSON guard never runs because
+            # raw is needed here first; a non-JSON 200 must map to a 502, not a 500.
+            raw: BedrockGetAsyncInvokeResponse = response.json()
+        except ValueError as err:
+            raise BedrockError(
+                status_code=502,
+                message=f"non-JSON response from Bedrock status endpoint (expected GetAsyncInvoke JSON): {err}",
+            ) from err
         config: Final = BedrockNovaReelVideoConfig()
         video_obj = config.transform_video_status_retrieve_response(
             raw_response=response,
@@ -668,28 +676,37 @@ class BedrockVideoGeneration(BaseAWSLLM):
         try:
             import boto3
             from botocore.config import Config as BotocoreConfig
-            from botocore.exceptions import BotoCoreError, ClientError
+            from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
         except ImportError:
             raise ImportError("Missing boto3 to download Nova Reel output. Run 'pip install boto3'.")
 
         optional_params: Final[_LitellmParamsDict] = _params_to_dict(litellm_params)
         explicit_region: Final[str | None] = optional_params.pop("aws_region_name", None)
         bearer_token: Final[str | None] = bedrock_bearer_token(api_key)
-        # Always resolve SigV4 credentials for S3: a Bedrock bearer token only
-        # covers the async-invoke API, never S3 object access.
-        credentials, region = self._load_credentials(
-            optional_params,
-            aws_region_name=(explicit_region if explicit_region is not None else region_default),
+        bearer_s3_guidance: Final = (
+            "Nova Reel video content download requires AWS SigV4 credentials with S3 read "
+            "access (aws_access_key_id/aws_secret_access_key or an ambient credential chain). "
+            "Bedrock bearer tokens only cover the Bedrock asynchronous invoke API and cannot "
+            "download objects from S3."
         )
+        # Always resolve SigV4 credentials for S3: a Bedrock bearer token only
+        # covers the async-invoke API, never S3 object access. With a bearer token
+        # in play and no resolvable SigV4 credentials, resolve_credentials raises
+        # NoCredentialsError before the guidance check below can fire; catch it so
+        # the bearer guidance 400 (not the generic mapping) reaches the caller.
+        try:
+            credentials, region = self._load_credentials(
+                optional_params,
+                aws_region_name=(explicit_region if explicit_region is not None else region_default),
+            )
+        except NoCredentialsError as err:
+            if bearer_token is not None:
+                raise BedrockError(status_code=400, message=bearer_s3_guidance) from err
+            raise  # no bearer in play: unchanged propagation
         if bearer_token is not None and credentials is None:
             raise BedrockError(
                 status_code=400,
-                message=(
-                    "Nova Reel video content download requires AWS SigV4 credentials with S3 read "
-                    "access (aws_access_key_id/aws_secret_access_key or an ambient credential chain). "
-                    "Bedrock bearer tokens only cover the Bedrock asynchronous invoke API and cannot "
-                    "download objects from S3."
-                ),
+                message=bearer_s3_guidance,
             )
         session_kwargs: Final[dict[str, str]] = {"region_name": region}  # mutable-ok: credential keys are added below
         if credentials is not None:
