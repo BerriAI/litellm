@@ -1,5 +1,6 @@
 import hashlib
 import json
+import secrets
 from collections.abc import Callable, Mapping
 from functools import reduce
 from typing import Final, cast
@@ -11,10 +12,11 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from sentry_sdk.utils import event_from_exception
 
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, MINIMUM_CUSTOM_KEY_LENGTH
 from litellm.litellm_core_utils.sentry_scrubbing import (
     FILTERED,
     MAX_SCRUB_DEPTH,
+    build_key_pattern,
     build_sentry_init_options,
     build_string_scrubber,
     scrub_json_strings,
@@ -211,6 +213,13 @@ def test_bare_key_floor_follows_the_custom_key_minimum() -> None:
     shortest_key: Final = "sk-" + "a" * (MINIMUM_CUSTOM_KEY_LENGTH - len("sk-"))
     assert scrub(f"label={shortest_key} model=gpt-5") == f"label={FILTERED} model=gpt-5"
     assert scrub(f"label={shortest_key[:-1]} model=gpt-5") == f"label={shortest_key[:-1]} model=gpt-5"
+
+
+def test_key_pattern_floor_never_exceeds_a_generated_key() -> None:
+    generated_key: Final = "sk-" + secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)
+    stricter_custom_minimum: Final = len(generated_key) + 10
+    assert build_key_pattern(stricter_custom_minimum, LENGTH_OF_LITELLM_GENERATED_KEY).fullmatch(generated_key)
+    assert build_key_pattern(stricter_custom_minimum, LENGTH_OF_LITELLM_GENERATED_KEY).fullmatch(generated_key[:-1]) is None
 
 
 def test_json_walk_fails_closed_past_the_depth_cap() -> None:
