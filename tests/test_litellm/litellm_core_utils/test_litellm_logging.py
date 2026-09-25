@@ -986,6 +986,132 @@ class TestZeroCostDiagnostic:
             litellm.model_cost.pop(served_model, None)
 
 
+class TestDeploymentPricingOnGenericRoutes:
+    """The proxy builds the logging object before the router picks a deployment, so a rate
+    declared in the deployment's litellm_params only reaches cost calculation through the
+    kwargs the router merges in afterwards (chat re-reads them in completion(); /v1/responses
+    and /v1/messages go through update_from_kwargs)."""
+
+    DEPLOYMENT_ID: Final = "lit8323-per-second-priced-deployment"
+    MODEL_GROUP: Final = "per-second-priced-chat"
+    PER_SECOND_PRICING: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
+    PROXY_METADATA: Final = {"user_api_key_hash": "sk-hashed", "user_api_key_alias": "lit8323"}
+
+    @pytest.fixture(autouse=True)
+    def registered_deployment(self) -> Iterator[None]:
+        litellm.register_model(model_cost={self.DEPLOYMENT_ID: self.PER_SECOND_PRICING}, persist_across_reloads=False)
+        try:
+            yield
+        finally:
+            litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
+
+    def _proxy_logging_obj(self, call_type: str) -> LitellmLogging:
+        logging_obj: Final = LitellmLogging(
+            model=self.MODEL_GROUP,
+            messages=[{"role": "user", "content": "Say hi in three words"}],
+            stream=False,
+            call_type=call_type,
+            start_time=time.time(),
+            litellm_call_id="lit8323",
+            function_id="fn",
+            kwargs={"model": self.MODEL_GROUP, "litellm_metadata": dict(self.PROXY_METADATA)},
+        )
+        logging_obj.update_environment_variables(
+            model=self.MODEL_GROUP,
+            user="",
+            optional_params={},
+            litellm_params={"api_base": "", "litellm_metadata": dict(self.PROXY_METADATA)},
+        )
+        return logging_obj
+
+    def _routed_kwargs(self) -> dict[str, object]:
+        return {
+            "model": "openai/gpt-5.4-nano",
+            **self.PER_SECOND_PRICING,
+            "litellm_metadata": {
+                **self.PROXY_METADATA,
+                "deployment": "openai/gpt-5.4-nano",
+                "model_info": {"id": self.DEPLOYMENT_ID},
+            },
+        }
+
+    @staticmethod
+    def _call_took_one_second(logging_obj: LitellmLogging) -> None:
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + 1.0
+
+    def test_responses_route_bills_the_deployment_per_second_rate(self) -> None:
+        logging_obj: Final = self._proxy_logging_obj("aresponses")
+        kwargs: Final = self._routed_kwargs()
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            model="openai/gpt-5.4-nano",
+            user=None,
+            optional_params={},
+            litellm_params={
+                "aresponses": True,
+                "litellm_call_id": "lit8323",
+                "model_info": None,
+                "metadata": kwargs["litellm_metadata"],
+            },
+            custom_llm_provider="openai",
+        )
+        self._call_took_one_second(logging_obj)
+        response: Final = ResponsesAPIResponse(
+            id="resp_lit8323",
+            created_at=1,
+            model="gpt-5.4-nano",
+            output=[],
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+        assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00084)
+        assert logging_obj.litellm_params["litellm_metadata"]["user_api_key_alias"] == "lit8323"
+
+    def test_messages_route_bills_the_deployment_per_second_rate(self) -> None:
+        logging_obj: Final = self._proxy_logging_obj("anthropic_messages")
+        logging_obj.update_from_kwargs(
+            kwargs=self._routed_kwargs(),
+            model="openai/gpt-5.4-nano",
+            optional_params={"max_tokens": 32},
+            litellm_params={"preset_cache_key": None, "stream_response": {}, "model_info": None, "max_tokens": 32},
+            custom_llm_provider="openai",
+        )
+        self._call_took_one_second(logging_obj)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(
+            result={
+                "id": "msg_lit8323",
+                "type": "message",
+                "role": "assistant",
+                "model": "gpt-5.4-nano",
+                "content": [{"type": "text", "text": "Hi there friend"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }
+        )
+
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(0.00084)
+        assert logging_obj.litellm_params["litellm_metadata"]["user_api_key_alias"] == "lit8323"
+
+    def test_a_deployment_without_custom_rates_keeps_the_cost_map_price(self) -> None:
+        logging_obj: Final = self._proxy_logging_obj("aresponses")
+        kwargs: Final = {**self._routed_kwargs(), "input_cost_per_second": None, "output_cost_per_second": None}
+        logging_obj.update_from_kwargs(kwargs=kwargs, model="openai/gpt-5.4-nano", custom_llm_provider="openai")
+        self._call_took_one_second(logging_obj)
+        response: Final = ResponsesAPIResponse(
+            id="resp_lit8323",
+            created_at=1,
+            model="gpt-5.4-nano",
+            output=[],
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+        assert logging_obj.custom_pricing is False
+        assert logging_obj._response_cost_calculator(result=response) == pytest.approx(
+            litellm.completion_cost(completion_response=response, model="openai/gpt-5.4-nano", call_type="aresponses")
+        )
+
+
 class TestGetRouterModelId:
     """Tests for the get_router_model_id helper method."""
 
