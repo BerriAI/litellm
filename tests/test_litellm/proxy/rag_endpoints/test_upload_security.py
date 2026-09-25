@@ -7,6 +7,7 @@ dependency-injected malware scanner validated with the EICAR test file.
 """
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
     EICAR_TEST_SIGNATURE,
     DetectedFormat,
     EicarTestMalwareScanner,
+    MalwareScannerConfigError,
     RejectedUpload,
     RejectionReason,
     ScanResult,
@@ -21,6 +23,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
     SecuredUpload,
     generate_safe_filename,
     inspect_content,
+    resolve_malware_scanner,
     safe_download_headers,
     validate_upload,
 )
@@ -174,3 +177,96 @@ def test_safe_download_headers_sanitize_injection(hostile):
     disposition = safe_download_headers(hostile)["Content-Disposition"]
     assert "\r" not in disposition and "\n" not in disposition
     assert disposition.count('"') == 2
+
+
+def _loader_returning(loaded: object):
+    calls: list[tuple[str, str | None]] = []
+
+    def load_instance(value: str, config_file_path: str | None) -> object:
+        calls.append((value, config_file_path))
+        return loaded
+
+    return load_instance, calls
+
+
+def _loader_raising(error: Exception):
+    def load_instance(value: str, config_file_path: str | None) -> object:
+        raise error
+
+    return load_instance
+
+
+def test_resolve_malware_scanner_unset_runs_the_eicar_test_scanner():
+    load_instance, calls = _loader_returning(_CLEAN_SCANNER)
+    for rag_ingest in (None, {}, {"malware_scanner": None}):
+        resolved = resolve_malware_scanner(
+            rag_ingest, config_file_path="/etc/litellm/config.yaml", load_instance=load_instance
+        )
+        assert isinstance(resolved, EicarTestMalwareScanner), rag_ingest
+    assert calls == []
+
+
+def test_resolve_malware_scanner_loads_the_configured_instance_next_to_the_config():
+    load_instance, calls = _loader_returning(_INFECTED_SCANNER)
+    resolved = resolve_malware_scanner(
+        {"malware_scanner": "custom_scanner.scanner"},
+        config_file_path="/etc/litellm/config.yaml",
+        load_instance=load_instance,
+    )
+    assert resolved is _INFECTED_SCANNER
+    assert calls == [("custom_scanner.scanner", "/etc/litellm/config.yaml")]
+    assert validate_upload(content=_TEXT_BYTES, scanner=resolved).reason is RejectionReason.MALWARE_DETECTED
+
+
+@pytest.mark.parametrize(
+    "loaded, expected_fragment",
+    [
+        (object(), "no scan(content: bytes) -> ScanResult method"),
+        ("custom_scanner.scanner", "no scan(content: bytes) -> ScanResult method"),
+        (SimpleNamespace(scan="not callable"), "no scan(content: bytes) -> ScanResult method"),
+        (_StubScanner, "names the class _StubScanner"),
+    ],
+)
+def test_resolve_malware_scanner_rejects_an_object_that_is_not_a_scanner(loaded, expected_fragment):
+    load_instance, _calls = _loader_returning(loaded)
+    resolved = resolve_malware_scanner(
+        {"malware_scanner": "custom_scanner.scanner"},
+        config_file_path=None,
+        load_instance=load_instance,
+    )
+    assert isinstance(resolved, MalwareScannerConfigError)
+    assert "general_settings.rag_ingest.malware_scanner" in resolved.message
+    assert "custom_scanner.scanner" in resolved.message
+    assert expected_fragment in resolved.message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ImportError("Could not import scanner from custom_scanner"),
+        AttributeError("module has no attribute scanner"),
+        ValueError("Empty module name"),
+        RuntimeError("clamd socket is missing"),
+    ],
+)
+def test_resolve_malware_scanner_reports_a_failed_load_with_the_option_name(error):
+    resolved = resolve_malware_scanner(
+        {"malware_scanner": "custom_scanner.scanner"},
+        config_file_path=None,
+        load_instance=_loader_raising(error),
+    )
+    assert isinstance(resolved, MalwareScannerConfigError)
+    assert "general_settings.rag_ingest.malware_scanner" in resolved.message
+    assert str(error) in resolved.message
+
+
+@pytest.mark.parametrize(
+    "rag_ingest",
+    [{"malware_scaner": "custom_scanner.scanner"}, {"malware_scanner": 42}, "custom_scanner.scanner", ["x"]],
+)
+def test_resolve_malware_scanner_rejects_an_invalid_rag_ingest_block(rag_ingest):
+    load_instance, calls = _loader_returning(_CLEAN_SCANNER)
+    resolved = resolve_malware_scanner(rag_ingest, config_file_path=None, load_instance=load_instance)
+    assert isinstance(resolved, MalwareScannerConfigError)
+    assert "general_settings.rag_ingest" in resolved.message
+    assert calls == []

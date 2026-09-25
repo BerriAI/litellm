@@ -553,6 +553,10 @@ class HTTPResponseLimitError(ValueError):
     pass
 
 
+class HTTPResponseEncodingError(HTTPResponseLimitError):
+    pass
+
+
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(self, original_error, message: str | None = None, text: str | None = None):
         # Create a new error with the masked URL
@@ -781,7 +785,7 @@ class AsyncHTTPHandler:
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
             if response.headers.get("content-encoding", "identity").lower() != "identity":
-                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
+                raise HTTPResponseEncodingError("Response size limits require an uncompressed response")
             if int(response.headers.get("content-length", "0")) > max_bytes:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             with BytesIO() as body:

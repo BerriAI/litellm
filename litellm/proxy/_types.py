@@ -52,6 +52,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.rag_ingest import RagIngestSettings
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -2760,6 +2761,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     custom_auth: str | None = Field(
         None,
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
+    )
+    rag_ingest: RagIngestSettings | None = Field(
+        None,
+        description=(
+            "controls run on every upload that lands in a vector store (/v1/rag/ingest and /v1/files with purpose "
+            "assistants or user_data); rag_ingest.malware_scanner names the scanner instance as <module>.<instance> "
+            "the way custom_auth does, and unset runs the EICAR test scanner - https://docs.litellm.ai/docs/rag_ingest"
+        ),
     )
     max_parallel_requests: int | None = Field(
         None,

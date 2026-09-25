@@ -94,6 +94,7 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     coerce_optional_str_list_setting,
     raise_upload_validation_failure,
 )
+from litellm.proxy.rag_endpoints.upload_security import MalwareScanner, RejectedUpload, validate_upload
 from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
@@ -527,6 +528,26 @@ async def route_create_file(
     return response
 
 
+_VECTOR_STORE_UPLOAD_PURPOSES: Final[frozenset[str]] = frozenset({"assistants", "user_data"})
+
+
+async def _reject_unsafe_vector_store_upload(
+    purpose: str,
+    file_source: bytes | BinaryIO,
+    scanner: MalwareScanner,
+) -> None:
+    if purpose not in _VECTOR_STORE_UPLOAD_PURPOSES or not isinstance(file_source, bytes):
+        return
+    validation: Final = await asyncio.to_thread(validate_upload, content=file_source, scanner=scanner)
+    if isinstance(validation, RejectedUpload):
+        raise ProxyException(
+            message=f"{validation.message} Rejection reason: {validation.reason.value}.",
+            type="invalid_request_error",
+            param="file",
+            code=400,
+        )
+
+
 @router.post(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -577,6 +598,7 @@ async def create_file(
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        rag_upload_malware_scanner,
         version,
     )
 
@@ -654,6 +676,8 @@ async def create_file(
         blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
         if blocked_extension_failure is not None:
             raise_upload_validation_failure(blocked_extension_failure)
+
+        await _reject_unsafe_vector_store_upload(purpose, file_source, rag_upload_malware_scanner)
 
         if passthrough:
             _validate_passthrough_upload(

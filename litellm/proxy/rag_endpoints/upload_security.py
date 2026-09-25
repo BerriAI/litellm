@@ -11,15 +11,20 @@ server-generated filename so the client-controlled name never reaches storage.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 
+from pydantic import ValidationError
 from typing_extensions import assert_never
 
+from litellm.types.proxy.rag_ingest import RagIngestSettings
+
 MAX_UPLOAD_SIZE_BYTES: Final = 512 * 1024 * 1024
+
+MALWARE_SCANNER_OPTION: Final = "general_settings.rag_ingest.malware_scanner"
 
 EICAR_TEST_SIGNATURE: Final = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 
@@ -91,6 +96,13 @@ class ScanResult:
 
 @runtime_checkable
 class MalwareScanner(Protocol):
+    """One shared instance scans every upload, from worker threads running at the same time.
+
+    ``scan`` must therefore be safe to call concurrently and must return
+    :class:`ScanResult` with the ``error`` verdict instead of raising when the
+    engine is unavailable.
+    """
+
     def scan(self, content: bytes) -> ScanResult: ...
 
 
@@ -108,6 +120,45 @@ class EicarTestMalwareScanner:
         if EICAR_TEST_SIGNATURE in content:
             return ScanResult(verdict=ScanVerdict.INFECTED, signature="EICAR-STANDARD-ANTIVIRUS-TEST-FILE")
         return ScanResult(verdict=ScanVerdict.CLEAN)
+
+
+@dataclass(frozen=True, slots=True)
+class MalwareScannerConfigError:
+    message: str
+
+
+InstanceLoader: TypeAlias = Callable[[str, str | None], object]
+
+
+def resolve_malware_scanner(
+    rag_ingest: object,
+    *,
+    config_file_path: str | None,
+    load_instance: InstanceLoader,
+) -> MalwareScanner | MalwareScannerConfigError:
+    try:
+        settings: Final = RagIngestSettings() if rag_ingest is None else RagIngestSettings.model_validate(rag_ingest)
+    except ValidationError as e:
+        return MalwareScannerConfigError(f"general_settings.rag_ingest is invalid: {e}")
+    if settings.malware_scanner is None:
+        return EicarTestMalwareScanner()
+    try:
+        loaded: Final = load_instance(settings.malware_scanner, config_file_path)
+    except Exception as e:
+        return MalwareScannerConfigError(
+            f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} could not be loaded: {e}"
+        )
+    if isinstance(loaded, type):
+        return MalwareScannerConfigError(
+            f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} names the class {loaded.__qualname__}; "
+            "name an instance of it instead"
+        )
+    if isinstance(loaded, MalwareScanner) and callable(loaded.scan):
+        return loaded
+    return MalwareScannerConfigError(
+        f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} resolved to a {type(loaded).__qualname__}, "
+        "which has no scan(content: bytes) -> ScanResult method"
+    )
 
 
 @dataclass(frozen=True, slots=True)

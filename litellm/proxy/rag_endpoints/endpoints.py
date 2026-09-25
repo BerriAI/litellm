@@ -6,12 +6,14 @@ Provides:
 - /rag/query: RAG query pipeline (Search -> Rerank -> LLM Completion)
 """
 
+import asyncio
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
+import httpx
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse, StreamingResponse
@@ -22,6 +24,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
+)
+from litellm.litellm_core_utils.url_utils import async_safe_get
+from litellm.llms.custom_httpx.http_handler import (
+    HTTPResponseEncodingError,
+    HTTPResponseLimitError,
+    get_async_httpx_client,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import is_request_body_safe
@@ -38,9 +46,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
-    EicarTestMalwareScanner,
     MalwareScanner,
     RejectedUpload,
+    RejectionReason,
     validate_upload,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import (
@@ -52,6 +60,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 )
 from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -388,17 +397,60 @@ async def _save_vector_store_to_db_from_rag_ingest(
         verbose_proxy_logger.exception("Failed to save vector store %s to database: %s", vector_store_id, db_error)
 
 
-def _secure_uploaded_file(
-    file_data: tuple[str, bytes, str],
-    scanner: MalwareScanner,
-) -> tuple[str, bytes, str]:
-    validation: Final = validate_upload(content=file_data[1], scanner=scanner)
+async def _secure_uploaded_file(content: bytes, scanner: MalwareScanner) -> tuple[str, bytes, str]:
+    validation: Final = await asyncio.to_thread(validate_upload, content=content, scanner=scanner)
     if isinstance(validation, RejectedUpload):
         raise HTTPException(
             status_code=400,
             detail={"error": validation.message, "reason": validation.reason.value},
         )
-    return validation.safe_filename, file_data[1], validation.content_type
+    return validation.safe_filename, content, validation.content_type
+
+
+UrlFetcher: TypeAlias = Callable[[str], Awaitable[httpx.Response]]
+
+_FILE_URL_FETCH_TIMEOUT: Final = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+
+
+async def fetch_file_url(url: str) -> httpx.Response:
+    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
+    return await async_safe_get(client, url, timeout=_FILE_URL_FETCH_TIMEOUT, max_response_bytes=MAX_UPLOAD_SIZE_BYTES)
+
+
+async def _download_file_url(file_url: str, fetch_url: UrlFetcher) -> bytes:
+    try:
+        response: Final = await fetch_url(file_url)
+    except HTTPResponseEncodingError as e:
+        raise HTTPException(status_code=400, detail={"error": f"Could not fetch file_url: {e}"}) from e
+    except HTTPResponseLimitError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Could not fetch file_url: {e}", "reason": RejectionReason.FILE_TOO_LARGE.value},
+        ) from e
+    except (ValueError, httpx.HTTPError) as e:
+        raise HTTPException(status_code=400, detail={"error": f"Could not fetch file_url: {e}"}) from e
+    if not response.is_success:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Could not fetch file_url: the server answered HTTP {response.status_code}"},
+        )
+    return response.content
+
+
+async def fetch_and_secure_file_url(
+    file_url: str,
+    *,
+    scanner: MalwareScanner,
+    fetch_url: UrlFetcher,
+) -> tuple[str, bytes, str]:
+    return await _secure_uploaded_file(await _download_file_url(file_url, fetch_url), scanner)
+
+
+def _optional_str_field(body: Mapping[str, object], name: str) -> str | None:
+    value: Final = body.get(name)
+    if value is None or isinstance(value, str):
+        return value
+    raise HTTPException(status_code=400, detail={"error": f"'{name}' must be a string"})
 
 
 async def parse_rag_ingest_request(
@@ -415,7 +467,9 @@ async def parse_rag_ingest_request(
     Uploaded file bytes are validated against the vector-store upload controls
     (size limit, format allowlist with content inspection, archive rejection,
     and the injected malware scanner) and given a server-generated filename
-    before they are returned.
+    before they are returned. A ``file_url`` is returned as given; the route
+    fetches it through :func:`fetch_and_secure_file_url` once the rest of the
+    request has been validated.
 
     Returns:
         Tuple of (ingest_options, file_data, file_url, file_id)
@@ -443,15 +497,15 @@ async def parse_rag_ingest_request(
         if request_json_str:
             request_data: Final = orjson.loads(request_json_str)
             ingest_options = request_data.get("ingest_options", {})
-            file_url = request_data.get("file_url")
-            file_id = request_data.get("file_id")
+            file_url = _optional_str_field(request_data, "file_url")
+            file_id = _optional_str_field(request_data, "file_id")
 
     else:
         # JSON body
         data: Final = await _read_request_body(request)
         ingest_options = data.get("ingest_options", {})
-        file_url = data.get("file_url")
-        file_id = data.get("file_id")
+        file_url = _optional_str_field(data, "file_url")
+        file_id = _optional_str_field(data, "file_id")
 
         # Handle base64-encoded file in JSON body
         file_obj = data.get("file")
@@ -476,10 +530,6 @@ async def parse_rag_ingest_request(
             status_code=400,
             detail={"error": "Must provide file, file_url, or file_id"},
         )
-
-    secured_file_data: Final[tuple[str, bytes, str] | None] = (
-        _secure_uploaded_file(file_data, scanner) if file_data is not None else None
-    )
 
     if "vector_store" not in ingest_options:
         raise HTTPException(
@@ -521,6 +571,8 @@ async def parse_rag_ingest_request(
                         "Credentials must be configured server-side."
                     },
                 )
+
+    secured_file_data: Final = await _secure_uploaded_file(file_data[1], scanner) if file_data is not None else None
 
     return ingest_options, secured_file_data, file_url, file_id
 
@@ -580,13 +632,14 @@ async def rag_ingest(
         llm_router,
         prisma_client,
         proxy_config,
+        rag_upload_malware_scanner,
         version,
     )
 
     try:
         # Parse request
         ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
-            request, scanner=EicarTestMalwareScanner()
+            request, scanner=rag_upload_malware_scanner
         )
 
         # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
@@ -634,6 +687,12 @@ async def rag_ingest(
                 detail={"error": provider_error},  # mutable-ok: FastAPI serializes the detail as JSON
             )
 
+        uploaded_file_data: Final = (
+            await fetch_and_secure_file_url(file_url, scanner=rag_upload_malware_scanner, fetch_url=fetch_file_url)
+            if file_data is None and file_url is not None
+            else file_data
+        )
+
         # Add litellm data
         request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
@@ -654,8 +713,7 @@ async def rag_ingest(
         # Call ingest
         response: Final = await litellm.aingest(
             ingest_options=merged_ingest_options,
-            file_data=file_data,
-            file_url=file_url,
+            file_data=uploaded_file_data,
             file_id=file_id,
             router=llm_router,
             **request_data,

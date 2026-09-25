@@ -5,17 +5,28 @@ Covers:
 - internal_user_viewer restriction: can only ingest to existing vector stores (must provide vector_store_id)
 """
 
+import base64
 import io
 import json
+from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPResponseEncodingError, HTTPResponseLimitError
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.proxy.rag_endpoints.upload_security import (
+    MAX_UPLOAD_SIZE_BYTES,
+    EicarTestMalwareScanner,
+    ScanResult,
+    ScanVerdict,
+)
 
 
 @pytest.fixture
@@ -58,19 +69,13 @@ def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
     response = client_internal_user_viewer.post(
         "/v1/rag/ingest",
         files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        data={
-            "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-        },
+        data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
     )
 
     assert response.status_code == 403
     detail = response.json()
     assert "detail" in detail
-    error_msg = (
-        detail["detail"]["error"]
-        if isinstance(detail["detail"], dict)
-        else str(detail["detail"])
-    )
+    error_msg = detail["detail"]["error"] if isinstance(detail["detail"], dict) else str(detail["detail"])
     assert "internal_user_viewer" in error_msg
     assert "vector_store_id" in error_msg
 
@@ -97,8 +102,7 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
 
     # Should not be 403 (role check passed)
     assert response.status_code != 403, (
-        f"internal_user_viewer with vector_store_id should pass role check. "
-        f"Response: {response.json()}"
+        f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
     )
 
 
@@ -114,15 +118,12 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         response = client_internal_user.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-            data={
-                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-            },
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
         )
 
     # Should not be 403
     assert response.status_code != 403, (
-        f"internal_user should be allowed to create new vector stores. "
-        f"Response: {response.json()}"
+        f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
     )
 
 
@@ -170,13 +171,13 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             },
         },
     )
-    assert (
-        response.status_code == 400
-    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    assert response.status_code == 400, (
+        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    )
     body = response.json()
-    assert blocked_field in str(
-        body
-    ), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
+
+
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected
@@ -193,9 +194,7 @@ class TestRagIngestSSRFBlocked:
             ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
         ],
     )
-    def test_ssrf_field_in_vector_store_config_rejected(
-        self, field, value, client_internal_user
-    ):
+    def test_ssrf_field_in_vector_store_config_rejected(self, field, value, client_internal_user):
         payload = {
             "file_url": "https://example.com/doc.pdf",
             "ingest_options": {
@@ -215,12 +214,12 @@ class TestRagIngestSSRFBlocked:
         )
         body = response.json()
         detail = body.get("detail", {})
-        error_text = (
-            detail.get("error", "") if isinstance(detail, dict) else str(detail)
-        )
+        error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
         assert field in error_text, f"Error should name the offending field: {error_text}"
 
-    def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
+    def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user, monkeypatch):
+        fetch_url, _seen = _fetcher_answering(200, b"%PDF-1.7\n1 0 obj<<>>endobj\n", content_type="application/pdf")
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", fetch_url)
         with patch(
             "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
             new_callable=AsyncMock,
@@ -230,14 +229,10 @@ class TestRagIngestSSRFBlocked:
                 "/v1/rag/ingest",
                 json={
                     "file_url": "https://example.com/doc.pdf",
-                    "ingest_options": {
-                        "vector_store": {"custom_llm_provider": "bedrock"}
-                    },
+                    "ingest_options": {"vector_store": {"custom_llm_provider": "bedrock"}},
                 },
             )
-        assert response.status_code != 400, (
-            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
-        )
+        assert response.status_code != 400, f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
 
 
 S3_REGISTRY_STORE = {
@@ -703,12 +698,14 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
     )
     mock_response._hidden_params["response_cost"] = 3.45e-06
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ), patch("litellm.vector_store_registry", None), patch(
-        "litellm.proxy.proxy_server.prisma_client", None
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -742,7 +739,9 @@ def test_rag_query_surfaces_upstream_status_code(client_internal_user, upstream_
             new=AsyncMock(side_effect=upstream_error),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -779,10 +778,14 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
             api_key="test-key",
         )
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new=AsyncMock(side_effect=fake_aquery),
-    ), patch("litellm.vector_store_registry", None), patch("litellm.proxy.proxy_server.prisma_client", None):
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fake_aquery),
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         response = client_internal_user.post(
             "/v1/rag/query",
             json={
@@ -825,7 +828,9 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
             new=AsyncMock(side_effect=slow_aquery),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -849,9 +854,7 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
     assert response.text.endswith("data: [DONE]\n\n")
 
 
-def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(
-    client_internal_user, monkeypatch
-):
+def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(client_internal_user, monkeypatch):
     import litellm as litellm_module
 
     monkeypatch.setattr(litellm_module, "sse_keepalive_ping_interval_seconds", 5)
@@ -873,7 +876,9 @@ def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepal
             new=AsyncMock(side_effect=fast_aquery),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -925,13 +930,17 @@ def test_rag_query_merges_managed_store_params(client_internal_user):
         model="gpt-4o-mini",
     )
 
-    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_aquery,
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -971,13 +980,17 @@ def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_u
         model="gpt-4o-mini",
     )
 
-    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_aquery,
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1124,6 +1137,163 @@ def _multipart_ingest_request(*, filename: str, content: bytes, content_type: st
     return Request(scope, receive)
 
 
+async def _never_fetch(url: str):
+    raise AssertionError(f"no fetch expected, got {url}")
+
+
+@dataclass(frozen=True)
+class _FixedScanner:
+    verdict: ScanVerdict
+
+    def scan(self, content: bytes) -> ScanResult:
+        return ScanResult(verdict=self.verdict, signature="Custom.Sig")
+
+
+def _fetcher_answering(status_code: int, content: bytes, content_type: str = "text/plain"):
+    seen: list[str] = []
+
+    async def fetch_url(url: str) -> httpx.Response:
+        seen.append(url)
+        return httpx.Response(status_code, content=content, headers={"content-type": content_type})
+
+    return fetch_url, seen
+
+
+FILE_URL_BODY = {
+    "file_url": "https://docs.example.com/reports/q3.txt",
+    "ingest_options": json.loads(INGEST_REQUEST)["ingest_options"],
+}
+
+
+class TestFileUrlUploadControls:
+    """A ``file_url`` is fetched by the proxy and goes through the same controls as an inline upload."""
+
+    async def _fetch(self, fetch_url, scanner=None):
+        from litellm.proxy.rag_endpoints.endpoints import fetch_and_secure_file_url
+
+        return await fetch_and_secure_file_url(
+            FILE_URL_BODY["file_url"],
+            scanner=scanner or EicarTestMalwareScanner(),
+            fetch_url=fetch_url,
+        )
+
+    async def _expect_rejection(self, fetch_url, reason: str | None, scanner=None) -> dict:
+        with pytest.raises(HTTPException) as excinfo:
+            await self._fetch(fetch_url, scanner=scanner)
+        assert excinfo.value.status_code == 400
+        detail = excinfo.value.detail
+        assert detail.get("reason") == reason, detail
+        return detail
+
+    async def test_eicar_behind_a_url_is_blocked(self):
+        fetch_url, seen = _fetcher_answering(200, EICAR.encode())
+        await self._expect_rejection(fetch_url, "malware_detected")
+        assert seen == [FILE_URL_BODY["file_url"]]
+
+    async def test_shebang_behind_a_url_is_blocked(self):
+        fetch_url, _seen = _fetcher_answering(200, b"#!/bin/sh\nrm -rf /\n")
+        await self._expect_rejection(fetch_url, "executable_not_allowed")
+
+    async def test_oversize_url_is_blocked_before_it_is_buffered(self):
+        async def fetch_url(url: str) -> httpx.Response:
+            raise HTTPResponseLimitError(f"Response exceeded {MAX_UPLOAD_SIZE_BYTES} bytes")
+
+        detail = await self._expect_rejection(fetch_url, "file_too_large")
+        assert str(MAX_UPLOAD_SIZE_BYTES) in detail["error"]
+
+    async def test_compressed_url_response_is_refused_without_calling_it_too_large(self):
+        async def fetch_url(url: str) -> httpx.Response:
+            raise HTTPResponseEncodingError("Response size limits require an uncompressed response")
+
+        detail = await self._expect_rejection(fetch_url, None)
+        assert "uncompressed" in detail["error"]
+
+    @pytest.mark.parametrize("status_code", [301, 403, 404, 500])
+    async def test_non_2xx_fetch_is_a_client_error_naming_the_status(self, status_code):
+        fetch_url, _seen = _fetcher_answering(status_code, b"benign document text")
+        detail = await self._expect_rejection(fetch_url, None)
+        assert f"HTTP {status_code}" in detail["error"]
+
+    async def test_ssrf_or_transport_failure_is_a_client_error(self):
+        async def fetch_url(url: str) -> httpx.Response:
+            raise ValueError("Blocked private address")
+
+        detail = await self._expect_rejection(fetch_url, None)
+        assert "Blocked private address" in detail["error"]
+
+    async def test_clean_text_behind_a_url_is_handed_on_as_bytes(self):
+        fetch_url, _seen = _fetcher_answering(200, b"benign document text\n", content_type="text/x-whatever")
+        server_filename, content_bytes, content_type = await self._fetch(fetch_url)
+        assert content_bytes == b"benign document text\n"
+        assert server_filename.endswith(".txt") and "/" not in server_filename
+        assert content_type == "text/plain"
+
+    async def test_url_bytes_go_through_the_injected_scanner(self):
+        fetch_url, _seen = _fetcher_answering(200, b"benign document text\n")
+        await self._expect_rejection(fetch_url, "malware_detected", scanner=_FixedScanner(ScanVerdict.INFECTED))
+
+    def test_route_prefers_an_inline_file_and_never_fetches_the_url(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _never_fetch)
+        inline = {"filename": "inline.txt", "content": base64.b64encode(b"inline text").decode()}
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts the forwarded bytes
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post("/v1/rag/ingest", json={**FILE_URL_BODY, "file": inline})
+        assert response.status_code == 200, response.text
+        assert mock_aingest.await_args.kwargs["file_data"][1] == b"inline text"
+
+    @pytest.mark.parametrize("field", [{"file_url": ["https://docs.example.com/q3.txt"]}, {"file_id": {"id": 1}}])
+    def test_route_rejects_a_non_string_file_reference(self, client_internal_user, monkeypatch, field):
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _never_fetch)
+        body = {"ingest_options": FILE_URL_BODY["ingest_options"], **field}
+        response = client_internal_user.post("/v1/rag/ingest", json=body)
+        assert response.status_code == 400, response.text
+        assert f"'{next(iter(field))}' must be a string" in response.json()["detail"]["error"]
+
+    def test_route_validates_the_request_before_fetching_the_url(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _never_fetch)
+        vector_store = {"custom_llm_provider": "bedrock", "aws_sts_endpoint": "https://attacker.example/sts"}
+        body = {**FILE_URL_BODY, "ingest_options": {"vector_store": vector_store}}
+        response = client_internal_user.post("/v1/rag/ingest", json=body)
+        assert response.status_code == 400, response.text
+        assert "aws_sts_endpoint" in response.json()["detail"]["error"]
+
+    def test_route_hands_fetched_bytes_to_ingestion_and_never_the_url(self, client_internal_user, monkeypatch):
+        fetch_url, seen = _fetcher_answering(200, b"benign document text\n")
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", fetch_url)
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts the forwarded bytes
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post("/v1/rag/ingest", json=FILE_URL_BODY)
+        assert response.status_code == 200, response.text
+        assert seen == [FILE_URL_BODY["file_url"]]
+        forwarded = mock_aingest.await_args.kwargs
+        assert forwarded["file_data"][1] == b"benign document text\n"
+        assert "file_url" not in forwarded
+
+    def test_route_rejects_eicar_behind_a_url(self, client_internal_user, monkeypatch):
+        fetch_url, _seen = _fetcher_answering(200, EICAR.encode())
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", fetch_url)
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post("/v1/rag/ingest", json=FILE_URL_BODY)
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+        mock_aingest.assert_not_awaited()
+
+
 class TestVectorStoreUploadControls:
     """End-to-end enforcement of pentest M4 upload controls on /v1/rag/ingest."""
 
@@ -1155,6 +1325,43 @@ class TestVectorStoreUploadControls:
         assert response.status_code == 400, response.text
         assert response.json()["detail"]["reason"] == "archive_not_allowed"
 
+    def test_route_runs_the_configured_scanner(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.rag_upload_malware_scanner", _FixedScanner(ScanVerdict.INFECTED)
+        )
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post(
+                "/v1/rag/ingest",
+                files={"file": ("doc.txt", io.BytesIO(b"benign document text"), "text/plain")},
+                data={"request": INGEST_REQUEST},
+            )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+        assert "Custom.Sig" in response.json()["detail"]["error"]
+        mock_aingest.assert_not_awaited()
+
+    def test_route_lets_a_clean_verdict_from_the_configured_scanner_through(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.rag_upload_malware_scanner", _FixedScanner(ScanVerdict.CLEAN))
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts the forwarded bytes
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post(
+                "/v1/rag/ingest",
+                files={"file": ("clean_name.txt", io.BytesIO(EICAR.encode()), "text/plain")},
+                data={"request": INGEST_REQUEST},
+            )
+        assert response.status_code == 200, response.text
+        assert mock_aingest.await_args.kwargs["file_data"][1] == EICAR.encode()
+
     async def test_clean_text_upload_gets_server_generated_filename(self):
         from litellm.proxy.rag_endpoints.endpoints import parse_rag_ingest_request
         from litellm.proxy.rag_endpoints.upload_security import EicarTestMalwareScanner
@@ -1164,9 +1371,7 @@ class TestVectorStoreUploadControls:
             content=b"benign document text\n",
             content_type="text/plain",
         )
-        _options, file_data, _url, _file_id = await parse_rag_ingest_request(
-            request, scanner=EicarTestMalwareScanner()
-        )
+        _options, file_data, _url, _file_id = await parse_rag_ingest_request(request, scanner=EicarTestMalwareScanner())
         assert file_data is not None
         server_filename, content_bytes, secured_content_type = file_data
         assert server_filename != "../../etc/passwd"

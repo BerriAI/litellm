@@ -28451,6 +28451,8 @@ export interface components {
              * @default 30
              */
             proxy_config_reload_interval_seconds: number;
+            /** @description controls run on every upload that lands in a vector store (/v1/rag/ingest and /v1/files with purpose assistants or user_data); rag_ingest.malware_scanner names the scanner instance as <module>.<instance> the way custom_auth does, and unset runs the EICAR test scanner - https://docs.litellm.ai/docs/rag_ingest */
+            rag_ingest?: components["schemas"]["RagIngestSettings"] | null;
             /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
@@ -39050,6 +39052,14 @@ export interface components {
                     [key: string]: unknown;
                 };
             } | null;
+        };
+        /** RagIngestSettings */
+        RagIngestSettings: {
+            /**
+             * Malware Scanner
+             * @description The scanner every vector-store upload goes through, as <module>.<instance> where the module sits next to config.yaml or is importable, resolved the way custom_auth is. The instance must expose scan(content: bytes) -> ScanResult and be safe to call from several threads at once. Unset runs the EICAR test scanner, which flags only the EICAR test file
+             */
+            malware_scanner?: string | null;
         };
         /**
          * RankingOptions

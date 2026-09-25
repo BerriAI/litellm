@@ -4939,7 +4939,7 @@ def test_create_file_blocked_extension_unset_allows_everything(monkeypatch, llm_
     try:
         response = client.post(
             "/v1/files",
-            files={"file": ("payload.exe", b"MZ\x90\x00", "application/octet-stream")},
+            files={"file": ("payload.exe", b"plain text under an executable name\n", "application/octet-stream")},
             data={"purpose": "user_data"},
             headers={"Authorization": "Bearer test-key"},
         )
@@ -5907,3 +5907,129 @@ def test_create_file_passthrough_fails_closed_when_guardrails_would_scan_the_bat
     assert error["param"] == "passthrough"
     assert "guardrails" in error["message"]
     assert forwarded_calls == []
+
+
+EICAR_BYTES: Final = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+
+
+def _post_file_as_admin(monkeypatch, llm_router: Router, *, purpose: str, name: str, content: bytes, ctype: str):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    captured: dict = {}
+
+    async def fake_route_create_file(*, _create_file_request, **kwargs):
+        captured["file"] = _create_file_request["file"]
+        return OpenAIFileObject(
+            id="file-clean",
+            object="file",
+            bytes=len(content),
+            created_at=1234567890,
+            filename=name,
+            purpose=purpose,
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": (name, content, ctype)},
+            data={"purpose": purpose},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    return resp, captured
+
+
+@pytest.mark.parametrize("purpose", ["assistants", "user_data"])
+@pytest.mark.parametrize(
+    "name, content, ctype, reason",
+    [
+        ("notes.txt", EICAR_BYTES, "text/plain", "malware_detected"),
+        ("setup.txt", b"#!/bin/sh\nrm -rf /\n", "text/plain", "executable_not_allowed"),
+        ("report.pdf", b"PK\x03\x04\x14\x00\x00\x00payload", "application/pdf", "archive_not_allowed"),
+        ("empty.txt", b"", "text/plain", "empty_file"),
+    ],
+)
+def test_create_file_for_vector_store_purposes_runs_the_upload_controls(
+    monkeypatch, llm_router: Router, purpose, name, content, ctype, reason
+):
+    resp, captured = _post_file_as_admin(
+        monkeypatch, llm_router, purpose=purpose, name=name, content=content, ctype=ctype
+    )
+    assert resp.status_code == 400, resp.text
+    error = resp.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert f"Rejection reason: {reason}." in error["message"]
+    assert captured == {}
+
+
+@pytest.mark.parametrize("purpose", ["assistants", "user_data"])
+@pytest.mark.parametrize(
+    "name, content, ctype",
+    [
+        ("Quarterly Notes (final).txt", b"benign document text\n", "text/plain"),
+        ("handbook.pdf", b"%PDF-1.7\n1 0 obj<<>>endobj\n", "application/pdf"),
+    ],
+)
+def test_create_file_for_vector_store_purposes_keeps_the_callers_filename_on_clean_uploads(
+    monkeypatch, llm_router: Router, purpose, name, content, ctype
+):
+    resp, captured = _post_file_as_admin(
+        monkeypatch, llm_router, purpose=purpose, name=name, content=content, ctype=ctype
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["file"][0] == name
+    assert captured["file"][1] == content
+
+
+def test_create_file_for_vector_store_purposes_uses_the_configured_scanner(monkeypatch, llm_router: Router):
+    from litellm.proxy.rag_endpoints.upload_security import ScanResult, ScanVerdict
+
+    class _InfectedScanner:
+        def scan(self, content: bytes) -> ScanResult:
+            return ScanResult(verdict=ScanVerdict.INFECTED, signature="Custom.Sig")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.rag_upload_malware_scanner", _InfectedScanner())
+    resp, captured = _post_file_as_admin(
+        monkeypatch, llm_router, purpose="assistants", name="notes.txt", content=b"benign text\n", ctype="text/plain"
+    )
+    assert resp.status_code == 400, resp.text
+    assert "Custom.Sig" in resp.json()["error"]["message"]
+    assert captured == {}
+
+
+@pytest.mark.parametrize(
+    "purpose, name, content, ctype",
+    [
+        ("batch", "batch.jsonl", VALID_BATCH_LINE, "application/jsonl"),
+        ("fine-tune", "train.jsonl", VALID_BATCH_LINE, "application/jsonl"),
+        ("vision", "photo.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16, "image/png"),
+    ],
+)
+def test_create_file_other_purposes_skip_the_vector_store_upload_controls(
+    monkeypatch, llm_router: Router, purpose, name, content, ctype
+):
+    from litellm.proxy.rag_endpoints.upload_security import ScanResult, ScanVerdict
+
+    class _InfectedScanner:
+        def scan(self, content: bytes) -> ScanResult:
+            return ScanResult(verdict=ScanVerdict.INFECTED, signature="Custom.Sig")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.rag_upload_malware_scanner", _InfectedScanner())
+    resp, captured = _post_file_as_admin(
+        monkeypatch, llm_router, purpose=purpose, name=name, content=content, ctype=ctype
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["file"][0] == name
