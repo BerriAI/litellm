@@ -6163,9 +6163,15 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_above_272k_tokens_batches=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_batches"
                 ),
+                cache_read_input_token_cost_above_200k_tokens_batches=_model_info.get(
+                    "cache_read_input_token_cost_above_200k_tokens_batches"
+                ),
                 cache_creation_input_token_cost_batches=_model_info.get("cache_creation_input_token_cost_batches"),
                 cache_creation_input_token_cost_above_272k_tokens_batches=_model_info.get(
                     "cache_creation_input_token_cost_above_272k_tokens_batches"
+                ),
+                cache_creation_input_token_cost_above_200k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_200k_tokens_batches"
                 ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
@@ -6200,9 +6206,15 @@ def _get_model_info_helper(
                 input_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_batches"
                 ),
+                input_cost_per_token_above_200k_tokens_batches=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens_batches"
+                ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
                 output_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_batches"
+                ),
+                output_cost_per_token_above_200k_tokens_batches=_model_info.get(
+                    "output_cost_per_token_above_200k_tokens_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
