@@ -2542,18 +2542,20 @@ describe("EntityUsageExport utils", () => {
                 api_keys: {
                   k1: perUserKey("__proto__", "team-1", 4),
                   k2: perUserKey("constructor", "team-1", 6),
+                  k3: perUserKey("normal-user", "team-2", 8),
                 },
               },
             },
           ],
         } as EntitySpendData;
 
-        const result = generateDailyData(colliding, "user", "User");
+        const result = generateExportData(colliding, "daily", "user");
 
-        expect(result).toHaveLength(2);
+        expect(result).toHaveLength(3);
         const byId = Object.fromEntries(result.map((row: any) => [row["User ID"], row]));
         expect(byId["__proto__"]["Spend ($)"]).toBe("4.0000");
         expect(byId["constructor"]["Spend ($)"]).toBe("6.0000");
+        expect(byId["normal-user"]["Spend ($)"]).toBe("8.0000");
       });
 
       it("should still group by team_id for team exports on the same input", () => {
