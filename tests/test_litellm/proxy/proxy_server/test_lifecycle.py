@@ -343,42 +343,94 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
     assert "Error flushing spend counters on shutdown: db gone" in caplog.text
 
 
-def test_shutdown_drains_passthrough_error_reports_before_spend_flushes():
-    """Passthrough error report callbacks write spend rows through the logging
-    worker, so the drain must complete before the spend producer, counters and
-    spend-log queue are flushed or the delivered rows can be skipped. The drain
-    lives inside the ``proxy_startup_event`` lifespan teardown which cannot be
-    driven without running the whole startup, so assert the await order in
-    source: a revert of the ordering is what this guards.
-    """
-    import ast
+def _recorded_step(calls: List[str], name: str, report_done: "asyncio.Event") -> Callable[[], Awaitable[None]]:
+    async def _step() -> None:
+        calls.append(f"{name}:report_done={report_done.is_set()}")
 
-    parsed = ast.parse(inspect.getsource(ps))
-    startup = next(
-        node
-        for node in parsed.body
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "proxy_startup_event"
+    return _step
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flush_runs_after_in_flight_passthrough_error_reports():
+    """A passthrough error report callback writes its spend row through the
+    logging worker, so every spend flush must run only after in-flight reports
+    have finished: a flush that ran while the report was still pending could
+    skip its row.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _spawn_report_task,
+        drain_passthrough_upstream_error_reports,
     )
-    awaited = tuple(
-        child.value.func.id
-        for child in sorted(
-            (
-                node
-                for node in ast.walk(startup)
-                if isinstance(node, ast.Await)
-                and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name)
-            ),
-            key=lambda node: node.lineno,
-        )
+
+    report_done = asyncio.Event()
+    calls: List[str] = []
+
+    async def report() -> None:
+        await asyncio.sleep(0.05)
+        report_done.set()
+
+    _spawn_report_task(report())
+    await ps._drain_reports_then_flush_spend(
+        drain_reports=drain_passthrough_upstream_error_reports,
+        drain_spend_events=_recorded_step(calls, "drain_spend_events", report_done),
+        stop_scheduler_jobs=_recorded_step(calls, "stop_scheduler_jobs", report_done),
+        flush_spend_counters=_recorded_step(calls, "flush_spend_counters", report_done),
+        flush_spend_logs=_recorded_step(calls, "flush_spend_logs", report_done),
     )
-    drain_at = awaited.index("drain_passthrough_upstream_error_reports")
-    for flush in (
-        "_drain_spend_event_producer_on_shutdown",
-        "flush_spend_counters_on_shutdown",
-        "_flush_spend_logs_queue_on_shutdown",
-    ):
-        assert drain_at < awaited.index(flush), f"report drain must run before {flush}"
+
+    assert calls == [
+        "drain_spend_events:report_done=True",
+        "stop_scheduler_jobs:report_done=True",
+        "flush_spend_counters:report_done=True",
+        "flush_spend_logs:report_done=True",
+    ], calls
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flush_continues_when_report_drain_fails():
+    report_done = asyncio.Event()
+    calls: List[str] = []
+
+    async def failing_drain() -> None:
+        raise RuntimeError("drain gone")
+
+    await ps._drain_reports_then_flush_spend(
+        drain_reports=failing_drain,
+        drain_spend_events=_recorded_step(calls, "drain_spend_events", report_done),
+        stop_scheduler_jobs=_recorded_step(calls, "stop_scheduler_jobs", report_done),
+        flush_spend_counters=_recorded_step(calls, "flush_spend_counters", report_done),
+        flush_spend_logs=_recorded_step(calls, "flush_spend_logs", report_done),
+    )
+
+    assert calls == [
+        "drain_spend_events:report_done=False",
+        "stop_scheduler_jobs:report_done=False",
+        "flush_spend_counters:report_done=False",
+        "flush_spend_logs:report_done=False",
+    ], calls
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flush_skips_scheduler_step_when_no_scheduler():
+    report_done = asyncio.Event()
+    calls: List[str] = []
+
+    async def noop_drain() -> None:
+        report_done.set()
+
+    await ps._drain_reports_then_flush_spend(
+        drain_reports=noop_drain,
+        drain_spend_events=_recorded_step(calls, "drain_spend_events", report_done),
+        stop_scheduler_jobs=None,
+        flush_spend_counters=_recorded_step(calls, "flush_spend_counters", report_done),
+        flush_spend_logs=_recorded_step(calls, "flush_spend_logs", report_done),
+    )
+
+    assert calls == [
+        "drain_spend_events:report_done=True",
+        "flush_spend_counters:report_done=True",
+        "flush_spend_logs:report_done=True",
+    ], calls
 
 
 # ---------------------------------------------------------------------------
