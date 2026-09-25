@@ -1451,6 +1451,7 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         mock_user_api_key_dict = MagicMock()
                         mock_user_api_key_dict.api_key = "test-api-key"
                         mock_user_api_key_dict.key_alias = "test-alias"
+                        mock_user_api_key_dict.is_session_token = False
                         mock_user_api_key_dict.user_email = "test@example.com"
                         mock_user_api_key_dict.user_id = "test-user-id"
                         mock_user_api_key_dict.team_id = "test-team-id"
@@ -7416,3 +7417,32 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/anthropic/v1/messages"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        key_alias="cli-session-alice",
+        user_id="alice",
+        is_session_token=True,
+    )
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=session,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={},
+        litellm_call_id="lit-6852-passthrough-call-id",
+    )
+
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert metadata["user_api_key"] == "cli-session-alice"
+    assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
