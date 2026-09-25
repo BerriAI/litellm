@@ -702,7 +702,7 @@ async def test_managed_agent_invocation_grants_intersect_verified_user_grants(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("revoked", ["user", "team-member", "team-grant", "direct-grant", "access-group"])
+@pytest.mark.parametrize("revoked", ["user", "team-member", "team-grant", "team-permission", "direct-grant", "access-group"])
 async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches(
     monkeypatch: pytest.MonkeyPatch, revoked: str
 ) -> None:
@@ -726,7 +726,7 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
         team_id="team",
         models=[],
         members_with_roles=[{"user_id": "human", "role": "user"}],
-        object_permission=None if grouped else permission,
+        object_permission_id=None if grouped else "grant",
         access_group_ids=["group"] if grouped else [],
     )
     group: Final = LiteLLM_AccessGroupTable(
@@ -751,12 +751,12 @@ async def test_delegated_grants_revoke_with_warm_user_team_and_permission_caches
     client.writer_db.litellm_teamtable.find_unique.return_value = (
         team.model_copy(update={"members_with_roles": []})
         if revoked == "team-member"
-        else team.model_copy(update={"object_permission": None})
+        else team.model_copy(update={"object_permission_id": None})
         if revoked == "team-grant"
         else team
     )
     client.writer_db.litellm_objectpermissiontable.find_unique.return_value = (
-        permission.model_copy(update={"agents": []}) if direct else permission
+        permission.model_copy(update={"agents": []}) if direct or revoked == "team-permission" else permission
     )
     client.writer_db.litellm_accessgrouptable.find_unique.return_value = (
         group.model_copy(update={"access_agent_ids": []}) if grouped else group

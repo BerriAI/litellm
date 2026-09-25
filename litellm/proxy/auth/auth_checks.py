@@ -3289,7 +3289,18 @@ async def get_team_object(
             )
             if row is None:
                 raise TeamNotFoundError(team_id=team_id)
-            return LiteLLM_TeamTableCachedObj.model_validate(row.dict())
+            team: Final = LiteLLM_TeamTableCachedObj.model_validate(row.dict())
+            if team.object_permission_id is None:
+                return team
+            permission: Final = await get_object_permission(
+                object_permission_id=team.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=True,
+            )
+            return team.model_copy(update=MappingProxyType({"object_permission": permission}))
 
         return await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
