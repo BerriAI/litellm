@@ -3454,32 +3454,29 @@ def test_google_ai_studio_presence_penalty_supported():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [False, True])
 async def test_google_ai_studio_forwards_seed_to_generation_config(drop_params: bool):
-    captured: dict[str, dict] = {}
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
+    def echo_seed_sent_upstream(request: httpx.Request) -> httpx.Response:
+        seed_sent: Final = json.loads(request.content).get("generationConfig", {}).get("seed")
         return httpx.Response(
             200,
             json={
-                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "candidates": [
+                    {"content": {"parts": [{"text": f"seed={seed_sent}"}], "role": "model"}, "finishReason": "STOP"}
+                ],
                 "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             },
             request=request,
         )
 
-    client: Final = AsyncHTTPHandler()
-    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
-
-    await litellm.acompletion(
+    response: Final = await litellm.acompletion(
         model="gemini/gemini-3.8-flash",
         messages=[{"role": "user", "content": "hi"}],
         seed=42,
         drop_params=drop_params,
         api_key="fake-gemini-key",
-        client=client,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(echo_seed_sent_upstream)),
     )
 
-    assert captured["body"]["generationConfig"]["seed"] == 42
+    assert response.choices[0].message.content == "seed=42"
 
 
 # ==================== Tool Type Separation Tests ====================
