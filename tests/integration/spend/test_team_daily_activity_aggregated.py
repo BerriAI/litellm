@@ -79,3 +79,50 @@ def test_aggregated_team_activity_reports_the_whole_range_team_spend_in_one_page
             pytest.approx(0.12),
             pytest.approx(0.12),
         ), response.text
+
+
+def test_model_top_keys_ranks_keys_by_spend_on_the_model_not_total_spend(gateway: Gateway) -> None:
+    """Regression for the per-model Top Keys list: a key that spends more
+    globally but less on the model must rank below the model's real top key."""
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        other_model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        team: Final = scenario.team(models=[model, other_model])
+        heavy: Final = scenario.key(team_id=team, models=[model, other_model])
+        light: Final = scenario.key(team_id=team, models=[model])
+        heavy_digest: Final = sha256(heavy.encode()).hexdigest()
+        light_digest: Final = sha256(light.encode()).hexdigest()
+        for _ in range(3):
+            reply: Final = gateway.chat(other_model, key=heavy, text=f"top keys {uuid.uuid4().hex}")
+            assert object_value(reply["usage"])["total_tokens"] == 40, reply
+        reply = gateway.chat(model, key=heavy, text=f"top keys {uuid.uuid4().hex}")
+        assert object_value(reply["usage"])["total_tokens"] == 40, reply
+        for _ in range(2):
+            reply = gateway.chat(model, key=light, text=f"top keys {uuid.uuid4().hex}")
+            assert object_value(reply["usage"])["total_tokens"] == 40, reply
+        daily: Final = eventually(
+            lambda: read_rows(
+                'SELECT api_key, model, spend FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s', (team,)
+            ),
+            lambda values: sum(float(row["spend"]) for row in values) >= 0.36 - 1e-9,
+            seconds=70,
+        )
+        assert {row["api_key"] for row in daily} == {heavy_digest, light_digest}, daily
+        today: Final = datetime.now(timezone.utc)
+        response: Final = gateway.request(
+            "GET",
+            "/team/daily/activity/aggregated/model_top_keys",
+            params={
+                "team_ids": team,
+                "model": model,
+                "start_date": (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+                "end_date": (today + timedelta(days=1)).strftime("%Y-%m-%d"),
+                "timezone": "0",
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        api_keys: Final = body["api_keys"]
+        assert isinstance(api_keys, list), body
+        assert tuple(object_value(row)["api_key"] for row in api_keys) == (light_digest, heavy_digest), response.text
+        assert tuple(object_value(row)["spend"] for row in api_keys) == (pytest.approx(0.12), pytest.approx(0.06))

@@ -311,6 +311,7 @@ class KeyManagementRoutes(str, enum.Enum):
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
     TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
     TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
+    TEAM_DAILY_ACTIVITY_AGGREGATED_MODEL_TOP_KEYS = "/team/daily/activity/aggregated/model_top_keys"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -679,6 +680,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_MODEL_TOP_KEYS.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -706,6 +708,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
             "/user/daily/activity/aggregated/search",
+            "/user/daily/activity/aggregated/model_top_keys",
             # team
             "/team/new",
             "/team/update",
@@ -725,6 +728,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/daily/activity/aggregated",
             "/team/daily/activity/export",
             "/team/daily/activity/aggregated/search",
+            "/team/daily/activity/aggregated/model_top_keys",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
@@ -898,6 +902,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/daily/activity/aggregated",
         "/team/daily/activity/export",
         "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/aggregated/model_top_keys",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
@@ -914,6 +919,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
         "/user/daily/activity/aggregated/search",
+        "/user/daily/activity/aggregated/model_top_keys",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -999,6 +1005,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/daily/activity/aggregated",
             "/team/daily/activity/export",
             "/team/daily/activity/aggregated/search",
+            "/team/daily/activity/aggregated/model_top_keys",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",

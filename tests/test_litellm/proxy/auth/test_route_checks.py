@@ -3518,6 +3518,7 @@ def test_internal_user_still_blocked_from_another_users_info():
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
         "/user/daily/activity/aggregated/search",
+        "/user/daily/activity/aggregated/model_top_keys",
     ],
 )
 @pytest.mark.parametrize(
@@ -3606,6 +3607,7 @@ def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
         "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/aggregated/model_top_keys",
     ],
 )
 @pytest.mark.parametrize(
