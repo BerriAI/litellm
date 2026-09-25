@@ -4013,17 +4013,17 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
-
-class HTTPExceptionErrorDetail(TypedDict):
-    """The `{"error": <message>}` shape most proxy endpoints raise as `HTTPException.detail`."""
-
-    error: ReadOnly[str]
-
     signoz: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="signoz",
         ui_callback_name="SigNoz",
         litellm_callback_params=("SIGNOZ_INGESTION_ENDPOINT", "SIGNOZ_INGESTION_KEY"),
     )
+
+
+class HTTPExceptionErrorDetail(TypedDict):
+    """The `{"error": <message>}` shape most proxy endpoints raise as `HTTPException.detail`."""
+
+    error: ReadOnly[str]
 
 
 class SpendLogsRouterMetadata(TypedDict):
