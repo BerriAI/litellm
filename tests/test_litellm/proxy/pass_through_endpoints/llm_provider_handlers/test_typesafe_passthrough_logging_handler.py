@@ -42,6 +42,7 @@ def _handler_result(response_body: dict, request_body: dict) -> dict:
         end_time=datetime.now(),
         cache_hit=False,
         request_body=request_body,
+        custom_llm_provider="typesafe",
     )
 
 
@@ -59,6 +60,7 @@ def test_uses_registry_pricing_and_standard_usage():
         end_time=datetime.now(),
         cache_hit=False,
         request_body={"model": "jev-latest"},
+        custom_llm_provider="typesafe",
     )
 
     expected_cost = 312 * model_cost["input_cost_per_token"] + 48 * model_cost["output_cost_per_token"]
@@ -105,6 +107,7 @@ def test_records_model_provider_and_cost_on_logging_details():
         end_time=datetime.now(),
         cache_hit=False,
         request_body={"model": "jev-latest"},
+        custom_llm_provider="typesafe",
     )
 
     assert result["kwargs"]["model"] == "typesafe/jev-1.13.0"
@@ -132,3 +135,76 @@ def test_success_handler_dispatches_to_typesafe_handler():
 
     assert normalized["kwargs"]["custom_llm_provider"] == "typesafe"
     assert normalized["kwargs"]["model"] == "typesafe/jev-1.13.0"
+
+
+def test_openrouter_decisions_response_is_priced_from_request_model_registry_row():
+    logging_obj = _logging_obj()
+    model_cost = litellm.model_cost["openrouter/typesafe/jev-1.13"]
+    response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+        httpx_response=_response(),
+        response_body={
+            "model": "typesafe/jev-1.13-20260917",
+            "usage": {"input_tokens": 282, "output_tokens": 20},
+        },
+        logging_obj=logging_obj,
+        url_route="https://openrouter.ai/api/alpha/decisions",
+        result='{"answers": {}}',
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        request_body={"model": "typesafe/jev-1.13"},
+        custom_llm_provider="openrouter",
+    )
+
+    expected_cost = 282 * model_cost["input_cost_per_token"] + 20 * model_cost["output_cost_per_token"]
+    assert response["kwargs"]["model"] == "openrouter/typesafe/jev-1.13-20260917"
+    assert response["kwargs"]["custom_llm_provider"] == "openrouter"
+    assert response["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert response["kwargs"]["combined_usage_object"].prompt_tokens == 282
+    assert response["kwargs"]["combined_usage_object"].completion_tokens == 20
+    assert response["kwargs"]["combined_usage_object"].total_tokens == 302
+
+
+def test_success_handler_dispatches_openrouter_to_the_shared_handler():
+    logging_obj = _logging_obj()
+    normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=_response(),
+        response_body={
+            "model": "typesafe/jev-1.13-20260917",
+            "usage": {"input_tokens": 282, "output_tokens": 20},
+        },
+        request_body={"model": "typesafe/jev-1.13"},
+        logging_obj=logging_obj,
+        url_route="https://openrouter.ai/api/alpha/decisions",
+        result="{}",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        custom_llm_provider="openrouter",
+    )
+
+    assert normalized["kwargs"]["custom_llm_provider"] == "openrouter"
+    assert normalized["kwargs"]["model"] == "openrouter/typesafe/jev-1.13-20260917"
+
+
+def test_success_handler_skips_typesafe_pricing_for_non_decisions_openrouter_routes():
+    logging_obj = _logging_obj()
+    normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=_response(),
+        response_body={
+            "model": "typesafe/jev-1.13-20260917",
+            "usage": {"input_tokens": 282, "output_tokens": 20},
+        },
+        request_body={"model": "typesafe/jev-1.13"},
+        logging_obj=logging_obj,
+        url_route="https://openrouter.ai/api/v1/chat/completions",
+        result="{}",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        custom_llm_provider="openrouter",
+    )
+
+    assert normalized["standard_logging_response_object"] is None
+    assert "combined_usage_object" not in normalized["kwargs"]
+    assert normalized["kwargs"].get("model") != "openrouter/typesafe/jev-1.13-20260917"

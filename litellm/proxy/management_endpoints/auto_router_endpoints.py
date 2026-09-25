@@ -32,10 +32,25 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    refresh_proxy_server_request_body_snapshot,
+)
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
+)
+from litellm.proxy.management_helpers.auto_router_permissions import (
+    authorize_member_auto_router_dependencies,
+    authorize_member_auto_router_team,
+    validate_member_auto_router_config,
+)
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_utils.auto_router_model_naming import (
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,
@@ -57,13 +72,13 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import APIRouter, Depends, HTTPException, Query, status
+    from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 else:
     try:
-        from fastapi import APIRouter, Depends, HTTPException, Query, status
+        from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
     except ImportError:
         # fastapi is only required for proxy, not for SDK usage
         pass
@@ -134,21 +149,14 @@ async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -
     return await prisma_client.db.query_raw(query, *args)
 
 
-async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
-    """Allow exactly the callers who could create this router.
-
-    Both dry runs are gated like the write they rehearse rather than as reads: a proxy
-    admin, or a team admin naming their own team, matching /model/new. Routing a test
-    prompt can also spend money (an `llm` classifier config calls its classifier, a
-    semantic config embeds the prompt), so a read-level gate would be too loose anyway.
-    """
+async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
+        return None
 
     if team_id is None:
         raise HTTPException(
@@ -177,12 +185,47 @@ async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: 
             },
         )
 
-    ModelManagementAuthChecks.can_user_make_team_model_call(
-        team_id=team_id,
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
+        ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id=team_id,
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team,
+            premium_user=premium_user,
+        )
+        return None
+    authorize_member_auto_router_team(
         user_api_key_dict=user_api_key_dict,
-        team_obj=LiteLLM_TeamTable.model_validate(team_row.model_dump()),
+        team=team,
         premium_user=premium_user,
     )
+    return team
+
+
+async def _authorize_member_dry_run_config(
+    *,
+    config: Mapping[str, object],
+    default_model: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    team: LiteLLM_TeamTable,
+) -> UserAPIKeyAuth:
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    if prisma_client is None or llm_router is None:
+        raise HTTPException(status_code=503, detail="Cannot verify auto-router model access")
+    validated: Final = validate_member_auto_router_config(config)
+    scoped_actor: Final = user_api_key_dict.model_copy(
+        update=MappingProxyType({"team_id": team.team_id, "team_models": team.models, "org_id": team.organization_id})
+    )
+    await authorize_member_auto_router_dependencies(
+        config=validated,
+        default_model=default_model,
+        user_api_key_dict=scoped_actor,
+        team=team,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+    )
+    return scoped_actor
 
 
 def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[str, ...]:
@@ -191,14 +234,16 @@ def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[s
     Excludes every tier's models: the prompt is never sent to the model it routed to.
     """
     return tuple(
-        model
-        for model in (
-            config.classifier_llm_config.model
-            if config.classifier_type == "llm" and config.classifier_llm_config is not None
-            else None,
-            config.embedding_model if config.semantic_keyword_matching else None,
+        dependency.model_name
+        for dependency in strategy_router_dependencies(
+            MappingProxyType(
+                {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": config.model_dump(exclude_none=True),
+                }
+            )
         )
-        if model is not None
+        if dependency.role in ("classifier", "embedding", "evaluation")
     )
 
 
@@ -216,7 +261,7 @@ async def _authorize_models_this_test_can_call(
     its calls through the proxy. Team and member budgets are already enforced on every route.
     """
     models: Final = _models_this_test_can_call(config)
-    if not models:
+    if not models and config.classifier_type != "jev":
         return
 
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -242,6 +287,14 @@ async def _authorize_models_this_test_can_call(
             code=status.HTTP_400_BAD_REQUEST,
         ) from e
 
+    if config.classifier_type == "jev" and user_api_key_dict.budget_throttle_pct is not None:
+        raise ProxyException(
+            message="Budget has been exceeded! JEV Test Routing requires available budget.",
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
 
 @router.post(
     "/auto_router/validate_complexity_router_config",
@@ -259,17 +312,58 @@ async def validate_complexity_router_config(
 
     Runs the same check every write path runs (the router's own pydantic model), so a form can
     show the backend's exact verdict while the operator is still editing rather than after a
-    rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
-    naming their own team. Nothing is created, routed, or billed.
+    rejected save. Uses the same team opt-in and model-access checks as configuration
+    writes for members. Nothing is created, routed, or billed.
     """
-    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
     from litellm.router_utils.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
 
     error: Final = validate_complexity_router_config_write(data.complexity_router_config)
+    if error is None and member_team is not None:
+        await _authorize_member_dry_run_config(
+            config=data.complexity_router_config,
+            default_model=None,
+            user_api_key_dict=user_api_key_dict,
+            team=member_team,
+        )
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+async def _resolve_saved_routing_test(
+    data: AutoRouterRoutingTestRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router",
+) -> AutoRouterRoutingTestRequest:
+    if data.saved_model_id is None:
+        return data
+    deployment: Final = llm_router.get_deployment(data.saved_model_id)
+    if deployment is None or deployment.model_info.blocked:
+        raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and deployment.model_info.team_id != data.team_id:
+        raise HTTPException(status_code=403, detail="Saved auto router belongs to a different team")
+    await can_key_call_resolved_model(
+        model=deployment.model_info.team_public_model_name or deployment.model_name,
+        llm_model_list=llm_router.model_list,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    params: Final = deployment.litellm_params
+    if classify_strategy_router_model(params.model or "") != "complexity" or params.complexity_router_config is None:
+        raise HTTPException(status_code=400, detail="Saved deployment is not a complexity auto router")
+    return data.model_copy(
+        update=MappingProxyType(
+            {
+                "complexity_router_config": RequestComplexityRouterConfig.model_validate(
+                    params.complexity_router_config
+                ),
+                "default_model": params.complexity_router_default_model,
+                "router_name": deployment.model_name,
+            }
+        )
+    )
 
 
 @router.post(
@@ -282,6 +376,7 @@ async def validate_complexity_router_config(
 async def preview_auto_router_routing(
     data: AutoRouterRoutingTestRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    http_request: Request,
 ) -> AutoRouterRoutingTestResponse:
     """
     Route a single prompt through a complexity-router config and report where it landed.
@@ -314,8 +409,7 @@ async def preview_auto_router_routing(
     )
     from litellm.proxy.utils import get_available_models_for_user
 
-    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
-
+    member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
     if llm_router is None:
         raise HTTPException(
             status_code=500,
@@ -323,34 +417,61 @@ async def preview_auto_router_routing(
                 "error": CommonProxyErrors.no_llm_router.value
             },
         )
+    resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
+    actor: Final = (
+        await _authorize_member_dry_run_config(
+            config=resolved.complexity_router_config.model_dump(exclude_none=True),
+            default_model=resolved.default_model,
+            user_api_key_dict=user_api_key_dict,
+            team=member_team,
+        )
+        if member_team is not None
+        else user_api_key_dict
+    )
+    request_data: Final[dict[str, object]] = {  # mutable-ok: auth and routing enrich this request in place
+        **resolved.wire_body(),
+        "metadata": {},  # mutable-ok: centralized auth and identity stamping share this metadata bucket
+        "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills this body in place
+    }
+
+    if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
+        from litellm.proxy.auth.user_api_key_auth import (
+            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+        )
+
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=actor,
+            request=http_request,
+            request_data=request_data,
+            route="/auto_router/test_routing",
+        )
 
     await _authorize_models_this_test_can_call(
-        config=data.complexity_router_config,
-        user_api_key_dict=user_api_key_dict,
+        config=resolved.complexity_router_config,
+        user_api_key_dict=actor,
         llm_router=llm_router,
     )
 
     complexity_router: Final = ComplexityRouter(
-        model_name=data.router_name,
+        model_name=resolved.router_name,
         litellm_router_instance=llm_router,
-        complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
-        default_model=data.default_model,
+        complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
+        default_model=resolved.default_model,
         derive_savings_baseline=False,
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
-        data={"metadata": {}},  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
-        user_api_key_dict=user_api_key_dict,
+        data=request_data,
+        user_api_key_dict=actor,
         _metadata_variable_name="metadata",
     )
+    refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
         hook_response: Final = await complexity_router.async_pre_routing_hook(
-            model=data.router_name,
+            model=resolved.router_name,
             request_kwargs=request_kwargs,
-            messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
-            ],
+            messages=request_kwargs["messages"],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
         verbose_proxy_logger.exception("Auto router routing test failed. Due to error - %s", e)

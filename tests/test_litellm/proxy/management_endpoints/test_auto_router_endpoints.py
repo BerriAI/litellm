@@ -2,27 +2,45 @@
 Unit tests for auto router management endpoints
 """
 
+from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
-from fastapi import HTTPException
+import respx
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
-
+import litellm
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.management_endpoints import auto_router_endpoints
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
+from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.jev_classifier import (
+    JevChoiceAnswer,
+    JevClassifierClient,
+    JevSystemOneResponse,
+)
+from litellm.types.router import Deployment
 from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestRequest,
+)
+
+ROUTING_HTTP_REQUEST: Final = Request(
+    {"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []}
 )
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
@@ -35,22 +53,47 @@ TIERS = {
 }
 
 
+ROUTER_MODEL_LIST = [
+    {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"}}
+    for name in ("cheap-model", "mid-model", "strong-model", "reasoning-model")
+]
+
+
 def _router() -> Router:
-    return Router(
-        model_list=[
-            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"}}
-            for name in ("cheap-model", "mid-model", "strong-model", "reasoning-model")
-        ]
+    return Router(model_list=ROUTER_MODEL_LIST)
+
+
+class RecordingRouter(Router):
+    """A real router that records the classifier calls the endpoint makes instead of sending them.
+
+    Injected at the same `proxy_server.llm_router` boundary the endpoint reads, so model resolution
+    and the key's model-access checks still run against a genuine Router.
+    """
+
+    def __init__(self, classified_tier: str) -> None:
+        super().__init__(model_list=ROUTER_MODEL_LIST)
+        self.classified_tier = classified_tier
+        self.recorded_calls: list[dict] = []
+
+    async def acompletion(self, model, messages, stream=False, **kwargs):
+        self.recorded_calls.append({"model": model, "messages": messages, **kwargs})
+        return ModelResponse(
+            choices=[Choices(message=Message(content=f'{{"tier": "{self.classified_tier}"}}'))],
+            model=model,
+        )
+
+
+def _request_from(body: Mapping[str, object], **config_overrides: object) -> AutoRouterRoutingTestRequest:
+    return AutoRouterRoutingTestRequest.model_validate(
+        {
+            **body,
+            "complexity_router_config": {"tiers": TIERS, "classifier_type": "heuristic", **config_overrides},
+        }
     )
 
 
 def _request(prompt: str, **config_overrides: object) -> AutoRouterRoutingTestRequest:
-    return AutoRouterRoutingTestRequest.model_validate(
-        {
-            "prompt": prompt,
-            "complexity_router_config": {"tiers": TIERS, "classifier_type": "heuristic", **config_overrides},
-        }
-    )
+    return _request_from({"prompt": prompt}, **config_overrides)
 
 
 async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
@@ -58,6 +101,7 @@ async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_override
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     return await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request(prompt, **config_overrides),
         user_api_key_dict=ADMIN,
     )
@@ -118,7 +162,7 @@ async def test_tier_model_missing_from_the_proxy_is_reported(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -134,6 +178,7 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     response = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request(
             "what is 2+2",
             classifier_type="llm",
@@ -163,7 +208,7 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
 async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it_is_called(
     monkeypatch: pytest.MonkeyPatch, config_overrides: dict
 ):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -178,6 +223,7 @@ async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it
 
     with pytest.raises(ProxyException) as exc_info:
         await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
             data=_request("what is 2+2", **config_overrides),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -193,7 +239,7 @@ async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it
 
 @pytest.mark.asyncio
 async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     router = _router()
     calls: list[dict] = []
@@ -207,6 +253,7 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
 
     with pytest.raises(ProxyException) as exc_info:
         await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
             data=_request(
                 "what is 2+2",
                 classifier_type="llm",
@@ -225,20 +272,128 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "max_budget, spend, denied",
+    (
+        pytest.param(0.0, 0.0, True, id="zero-budget"),
+        pytest.param(1.0, 1.0, True, id="budget-reached"),
+        pytest.param(1.0, 2.0, True, id="budget-exceeded"),
+        pytest.param(1.0, 0.5, False, id="budget-remaining"),
+        pytest.param(None, 2.0, False, id="unlimited"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.MonkeyPatch):
+async def test_jev_test_routing_enforces_key_budget_before_provider_invocation(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float | None, spend: float, denied: bool
+) -> None:
+    client: Final = AsyncMock(spec=JevClassifierClient)
+    client.evaluate.return_value = JevSystemOneResponse(
+        model="jev-test",
+        answers={
+            "tier": JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities={"SIMPLE": 1.0}, confidence=1.0)
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.setattr(auto_router_endpoints, "ComplexityRouter", partial(ComplexityRouter, jev_client=client))
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-budget-test",
+        user_id="admin",
+        models=["cheap-model", "typesafe/jev-test"],
+        max_budget=max_budget,
+        spend=spend,
+    )
+    request: Final = _request(
+        "what is 2+2",
+        classifier_type="jev",
+        jev_classifier_config={"model": "jev-test"},
+    )
+
+    if denied:
+        with pytest.raises(ProxyException) as exc_info:
+            await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "400"
+        assert exc_info.value.param is None
+        assert "Budget has been exceeded!" in exc_info.value.message
+        client.evaluate.assert_not_called()
+        return
+
+    response: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor
+    )
+    assert response.routed_model == "cheap-model"
+    assert response.routing_decision["cause"] == "jev_classifier"
+    assert response.routing_decision["classifier_model"] == "typesafe/jev-test"
+    client.evaluate.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "max_budget, spend, denied",
+    ((0.0, 0.0, True), (1.0, 2.0, True), (1.0, 0.5, False), (None, 2.0, False)),
+)
+@pytest.mark.asyncio
+async def test_jev_test_routing_hard_blocks_exhausted_throttle_enabled_keys(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float | None, spend: float, denied: bool
+) -> None:
+    client: Final = AsyncMock(spec=JevClassifierClient)
+    client.evaluate.return_value = JevSystemOneResponse(
+        model="jev-test",
+        answers={
+            "tier": JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities={"SIMPLE": 1.0}, confidence=1.0)
+        },
+    )
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.setattr(auto_router_endpoints, "ComplexityRouter", partial(ComplexityRouter, jev_client=client))
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-throttle-test",
+        user_id="admin",
+        models=["cheap-model", "typesafe/jev-test"],
+        max_budget=max_budget,
+        spend=spend,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+    request: Final = _request(
+        "what is 2+2",
+        classifier_type="jev",
+        jev_classifier_config={"model": "jev-test"},
+    )
+    if denied:
+        with pytest.raises(ProxyException) as exc_info:
+            await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "400"
+        client.evaluate.assert_not_called()
+        return
+
+    response: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor
+    )
+    assert response.routing_decision["cause"] == "jev_classifier"
+    client.evaluate.assert_awaited_once()
+
+
+@pytest.mark.parametrize("max_budget, spend", ((0.0, 0.0), (1.0, 2.0)))
+@pytest.mark.asyncio
+async def test_a_heuristic_config_does_not_need_a_budget(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float, spend: float
+):
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
 
     response = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request("what is 2+2"),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-broke",
             user_id="admin",
-            max_budget=1.0,
-            spend=2.0,
+            max_budget=max_budget,
+            spend=spend,
             models=["cheap-model"],
         ),
     )
@@ -253,7 +408,9 @@ async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await preview_auto_router_routing(data=_request("what is 2+2"), user_api_key_dict=ADMIN)
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST, data=_request("what is 2+2"), user_api_key_dict=ADMIN
+        )
 
     assert exc_info.value.status_code == 500
 
@@ -266,6 +423,7 @@ async def test_non_admin_without_a_team_is_rejected(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(HTTPException) as exc_info:
         await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
             data=_request("what is 2+2"),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user"
@@ -477,8 +635,6 @@ class TestAutoRouterBenchmarks:
 # ---------------------------------------------------------------------------
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
-
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
@@ -810,7 +966,7 @@ async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkey
 async def test_start_shadow_eval_rejects_keys_this_proxy_does_not_know(monkeypatch: pytest.MonkeyPatch):
     """A typo'd api_key_id would otherwise create a leg no traffic can ever match. Every
     unknown key is named at once, so a caller passing several fixes them in one round."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(known_keys=("key-hash",))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -913,7 +1069,7 @@ async def test_get_shadow_eval_job_pools_counts_and_slices_results_per_key(monke
 
 @pytest.mark.asyncio
 async def test_get_shadow_eval_job_404s_and_gates_on_role(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "prisma_client", _shadow_prisma())
 
@@ -930,7 +1086,7 @@ async def test_get_shadow_eval_job_404s_and_gates_on_role(monkeypatch: pytest.Mo
 async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monkeypatch: pytest.MonkeyPatch):
     """A job over two keys is one list entry with both keys, not two entries, and a job
     whose keys all stopped reads stopped while a half-stopped one still runs."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     stamp = datetime.now(timezone.utc)
     prisma = _shadow_prisma(
@@ -981,7 +1137,7 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
 async def test_list_shadow_eval_jobs_filters_to_jobs_containing_the_key(monkeypatch: pytest.MonkeyPatch):
     """The filter matches a key anywhere in a job's key set and still returns the whole
     job, sibling keys included."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(
         legs=[
@@ -1013,7 +1169,7 @@ async def test_list_shadow_eval_jobs_filters_to_jobs_containing_the_key(monkeypa
 async def test_job_status_runs_until_every_key_stops_and_completed_outranks_stopped(
     monkeypatch: pytest.MonkeyPatch, stopped_flags: tuple[bool, ...], days_left: int, expected: str
 ):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     stamp = datetime.now(timezone.utc)
     prisma = _shadow_prisma(
@@ -1040,7 +1196,7 @@ async def test_list_reads_completed_once_every_key_spends_its_budget(monkeypatch
     it must read completed on the very next list, before any sweep stamps its legs; one
     key under budget keeps the whole job running. An operator starting an unrelated eval
     must never look like it terminated a finished one."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(
         legs=[
@@ -1071,7 +1227,7 @@ async def test_list_reads_completed_once_every_key_spends_its_budget(monkeypatch
 async def test_recorded_operator_stop_outranks_budget_arithmetic(monkeypatch: pytest.MonkeyPatch):
     """A detached attempt can land around the stop and push the raw count past the
     budget; the recorded stopped_by must keep the job reading stopped regardless."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     stamp = datetime.now(timezone.utc)
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=5, stopped_at=stamp, stopped_by="admin")])
@@ -1090,7 +1246,7 @@ async def test_recorded_operator_stop_outranks_budget_arithmetic(monkeypatch: py
 async def test_backfilled_legacy_stop_never_reads_as_completion(monkeypatch: pytest.MonkeyPatch):
     """Jobs stopped before stopped_by existed are backfilled with 'unknown' by the
     migration, so even one whose stray attempts crossed the budget stays stopped."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(
         legs=[_leg_record(max_turns=5, stopped_at=datetime.now(timezone.utc), stopped_by="unknown")]
@@ -1147,7 +1303,7 @@ def test_max_budget_migration_is_additive_and_leaves_legacy_rows_null():
 
 @pytest.mark.asyncio
 async def test_stop_rejects_a_job_that_already_spent_its_budget(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=3)])
     prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3, "spend": 0.0}]
@@ -1165,7 +1321,7 @@ async def test_list_reads_completed_once_every_key_spends_its_dollar_budget(monk
     """A spend-budgeted job completes on dollars, not turns: every key's recorded shadow
     plus judge spend reaching max_budget reads completed long before the turn valve, while
     one key with budget left keeps the whole job running."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(
         legs=[
@@ -1194,7 +1350,7 @@ async def test_list_reads_completed_once_every_key_spends_its_dollar_budget(monk
 
 @pytest.mark.asyncio
 async def test_stop_rejects_a_job_whose_dollar_budget_is_spent(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=SHADOW_EVAL_TURN_VALVE, max_budget=0.5)])
     prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 7, "spend": 0.5}]
@@ -1212,7 +1368,7 @@ async def test_legacy_jobs_without_a_dollar_budget_stay_turn_gated(monkeypatch: 
     """A job from before spend budgets existed carries max_budget NULL: recorded spend
     can never complete it, only its own max_turns can, so migration changes nothing about
     what it was configured to do."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=200, max_budget=None)])
     prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 40, "spend": 250.0}]
@@ -1227,7 +1383,7 @@ async def test_legacy_jobs_without_a_dollar_budget_stay_turn_gated(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_shadow_eval_responses_name_every_shadowed_key(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(
         legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="deleted-key-hash")],
@@ -1254,7 +1410,7 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
 ):
     """One stop ends sampling for the whole job, while a leg that already stopped on its
     own budget keeps the stopped_at it earned."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     earned = datetime.now(timezone.utc) - timedelta(hours=1)
     prisma = _shadow_prisma(legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="key-hash-2", stopped_at=earned)])
@@ -1379,12 +1535,16 @@ async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypa
     )
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-probe", models=["mid-model"]))
-    probing = await preview_auto_router_routing(data=_request("team-probe"), user_api_key_dict=team_admin)
+    probing = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-probe"), user_api_key_dict=team_admin
+    )
     assert probing.routed_model == "cheap-model"
     assert probing.routed_model_configured is False
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-grant", models=["cheap-model"]))
-    granted = await preview_auto_router_routing(data=_request("team-grant"), user_api_key_dict=team_admin)
+    granted = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-grant"), user_api_key_dict=team_admin
+    )
     assert granted.routed_model == "cheap-model"
     assert granted.routed_model_configured is True
 
@@ -1459,7 +1619,7 @@ async def test_a_stop_racing_the_last_budgeted_attempt_reports_completed_not_sto
     """The statement claims the job only while a leg still samples, so a stop landing in
     the same instant the budget spends records nothing and the job keeps reading
     completed; stamping it would misreport a self-ended job as operator-stopped forever."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=2)])
     prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 2, "spend": 0.0}]
@@ -1476,7 +1636,7 @@ async def test_a_stop_racing_the_last_budgeted_attempt_reports_completed_not_sto
 async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.MonkeyPatch):
     """The statement's stopped_by IS NULL predicate lets only one racer claim rows; the
     loser reads the stamped state and gets the same answer a late caller gets."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record()])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
@@ -1488,3 +1648,188 @@ async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.M
         await stop_shadow_eval_job("job-1", ADMIN)
     assert exc.value.status_code == 400
     assert "already stopped" in exc.value.detail
+
+
+import litellm.router_strategy.complexity_router.complexity_router as complexity_module
+from litellm.llms.custom_httpx import http_handler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denial", ["key", "team", "budget", None])
+async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typesafe(
+    monkeypatch: pytest.MonkeyPatch, denial: str | None
+) -> None:
+    router: Final = RecordingRouter("SIMPLE")
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.test")
+    models: Final = ["cheap-model", "typesafe/jev-latest"]
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-test",
+        user_id="admin",
+        models=["cheap-model"] if denial == "key" else models,
+        team_id="jev-test-team" if denial == "team" else None,
+        team_models=["cheap-model"] if denial == "team" else models,
+        max_budget=1,
+        spend=1 if denial == "budget" else 0,
+    )
+    with respx.mock(assert_all_called=False) as http:
+        handler: Final = http_handler.AsyncHTTPHandler()
+        handler.client = httpx.AsyncClient(transport=httpx.MockTransport(http.async_handler))
+
+        def http_client(_provider: object) -> http_handler.AsyncHTTPHandler:
+            return handler
+
+        monkeypatch.setattr(complexity_module, "get_async_httpx_client", http_client)
+        evaluation: Final = http.post("https://typesafe.test/v1/systemone").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "answers": {
+                        "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
+                    }
+                },
+            )
+        )
+        call: Final = preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
+            data=_request("small deterministic ask", classifier_type="jev", jev_classifier_config={}),
+            user_api_key_dict=actor,
+        )
+        if denial is not None:
+            with pytest.raises(ProxyException) as exc:
+                await call
+            assert (
+                exc.value.type
+                == {
+                    "key": ProxyErrorTypes.key_model_access_denied,
+                    "team": ProxyErrorTypes.team_model_access_denied,
+                    "budget": ProxyErrorTypes.budget_exceeded,
+                }[denial]
+            )
+            assert evaluation.call_count == 0
+        else:
+            response: Final = await call
+            assert response.routing_decision["cause"] == "jev_classifier"
+            assert response.routed_model == "cheap-model"
+            assert evaluation.call_count == 1
+        assert router.recorded_calls == []
+        await handler.client.aclose()
+
+
+def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True) -> UserAPIKeyAuth:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTable
+
+    team: Final = LiteLLM_TeamTable(
+        team_id="member-preview-team",
+        models=list(TIERS[name][0] for name in TIERS),
+        members_with_roles=[{"role": "user", "user_id": "preview-member"}],
+        team_member_permissions=["/auto_router/manage"] if allowed else [],
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="preview-member",
+        team_id=UI_TEAM_ID,
+        api_key="sk-preview-member",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["allowed", "credential-free", "missing", "blocked", "key", "budget", "team", "not-router"]
+)
+async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+    router: Final = RecordingRouter("SIMPLE")
+    stored_key: Final = "synthetic-server-jev-key"
+    stored_config: Final = {
+        "classifier_type": "jev",
+        "tiers": TIERS,
+        "jev_classifier_config": {"api_key": stored_key, "api_base": "https://saved-jev.test"},
+    }
+    router.add_deployment(
+        Deployment.model_validate(
+            {
+                "model_name": "saved-jev",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini" if case == "not-router" else "auto_router/complexity_router",
+                    "complexity_router_config": stored_config,
+                },
+                "model_info": {
+                    "id": "saved-jev-id",
+                    "blocked": case == "blocked",
+                    "team_id": "owner-team" if case == "team" else None,
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    actor: Final = (
+        _configure_member_preview(monkeypatch)
+        if case == "team"
+        else UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-probe",
+            user_id="admin",
+            models=["typesafe/jev-latest"] if case == "key" else ["saved-jev", "typesafe/jev-latest"],
+            max_budget=1,
+            spend=1 if case == "budget" else 0,
+        )
+    )
+    request: Final = _request_from(
+        {
+            "prompt": "what is 2+2",
+            "saved_model_id": "missing-id" if case == "missing" else "saved-jev-id",
+            "team_id": "member-preview-team" if case == "team" else None,
+        },
+        classifier_type="jev",
+        jev_classifier_config=(
+            {"model": "jev-latest", "timeout_ms": 3000}
+            if case == "credential-free"
+            else {"api_key": "masked-key", "api_base": "https://browser-override.test"}
+        ),
+    )
+    with respx.mock(assert_all_called=False) as http:
+        handler: Final = http_handler.AsyncHTTPHandler()
+        handler.client = httpx.AsyncClient(transport=httpx.MockTransport(http.async_handler))
+
+        def http_client(_provider: object) -> http_handler.AsyncHTTPHandler:
+            return handler
+
+        monkeypatch.setattr(complexity_module, "get_async_httpx_client", http_client)
+        evaluation: Final = http.post("https://saved-jev.test/v1/systemone").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "answers": {
+                        "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
+                    }
+                },
+            )
+        )
+        operation: Final = preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
+        if case in ("missing", "blocked", "team", "not-router"):
+            with pytest.raises(HTTPException) as denied:
+                await operation
+            assert denied.value.status_code == {"missing": 404, "blocked": 404, "team": 403, "not-router": 400}[case]
+        elif case in ("key", "budget"):
+            with pytest.raises(ProxyException) as forbidden:
+                await operation
+            assert forbidden.value.type == (
+                ProxyErrorTypes.key_model_access_denied if case == "key" else ProxyErrorTypes.budget_exceeded
+            )
+        else:
+            result: Final = await operation
+            assert result.routing_decision["cause"] == "jev_classifier"
+            assert result.routed_model == "cheap-model"
+            assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
+            assert stored_key not in result.model_dump_json()
+        assert evaluation.call_count == (1 if case in ("allowed", "credential-free") else 0)
+        assert router.recorded_calls == []
+        await handler.client.aclose()

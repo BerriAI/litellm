@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { type JevClassifierConfig, normalizeJevClassifierConfig } from "./jev_classifier_config";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
 import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
@@ -15,6 +16,7 @@ import {
   TokenThresholds,
   effectiveTierLabel,
   heuristicScoringRoleFor,
+  usesClassifierContext,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -34,12 +36,26 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        system_prompt,
+      }
+    : {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(classification_rubric && { classification_rubric }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -79,7 +95,10 @@ export interface BuildComplexityRouterConfigParams {
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classificationPrompt: string | undefined;
+  jevClassifierConfig?: JevClassifierConfig;
   classifierContextWindowSize: number | undefined;
+  classifierContextBudgetChars: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
@@ -110,7 +129,10 @@ export interface ComplexityRouterConfigPayload {
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
+  classification_prompt?: string;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -218,7 +240,10 @@ export const buildComplexityRouterConfig = ({
   tierLabels,
   classifierType,
   classifierLlmConfig,
+  jevClassifierConfig,
+  classificationPrompt,
   classifierContextWindowSize,
+  classifierContextBudgetChars,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
@@ -262,18 +287,26 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
+    ...(classifierType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     ...(classifierType === "llm" &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...(classifierType === "llm" &&
+      classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(usesClassifierContext(classifierType) &&
+      classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
-    ...(classifierType === "llm" &&
+    ...((classifierType === "llm" || classifierType === "jev") &&
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
+      }),
+    ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextPerTurnChars !== undefined && {
         classifier_context_per_turn_chars: classifierContextPerTurnChars,
       }),
-    ...(classifierType === "llm" &&
+    ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),

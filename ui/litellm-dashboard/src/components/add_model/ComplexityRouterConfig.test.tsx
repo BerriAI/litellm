@@ -1,6 +1,6 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
@@ -108,7 +108,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000, classification_rubric: "agentic" },
       classifier_context_window_size: 3,
-      classifier_context_per_turn_chars: 200,
+      classifier_context_budget_chars: 8000,
     };
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
@@ -128,13 +128,34 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
     expect(screen.getByText("Timeout (ms)")).toBeInTheDocument();
     expect(screen.getByDisplayValue("750")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).toBeChecked();
+    expect(screen.getByLabelText("Circuit breaker cooldown (seconds)")).toHaveValue("30");
     expect(screen.getByText("Context Window Size")).toBeInTheDocument();
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
     expect(screen.getByText("Context Per-Turn Character Limit")).toBeInTheDocument();
     expect(screen.getByDisplayValue("400")).toBeInTheDocument();
   });
 
-  it("should default classifier context fields to 3 and 200 when llm is selected without explicit values", () => {
+  it("should allow the default-on classifier circuit breaker to be disabled", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_llm_config: expect.objectContaining({ circuit_breaker_enabled: false }),
+      }),
+    );
+  });
+
+  it("should default the context window and budget when llm is selected", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -209,7 +230,22 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
-  it("should call onChange with the updated classifier_context_window_size when edited", () => {
+  it.each([
+    ["Timeout (ms)", "7", { classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 7 } }],
+    [
+      "Circuit breaker cooldown (seconds)",
+      "45",
+      {
+        classifier_llm_config: {
+          model: "gpt-3.5-turbo",
+          timeout_ms: 3000,
+          circuit_breaker_cooldown_seconds: 45,
+        },
+      },
+    ],
+    ["Context Window Size", "0", { classifier_context_window_size: 0 }],
+    ["Context Character Budget", "7", { classifier_context_budget_chars: 7 }],
+  ])("keeps %s empty while it is being edited, then commits %s", (label, replacement, expected) => {
     const onChange = vi.fn();
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,

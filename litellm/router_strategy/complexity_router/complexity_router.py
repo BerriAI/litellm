@@ -18,12 +18,14 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections.abc import Iterator, Mapping, Sequence
-from itertools import accumulate, islice
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import accumulate, islice, takewhile
+from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
@@ -32,6 +34,9 @@ from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_f
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -55,6 +60,15 @@ from .config import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    JevClassifierConfig,
+)
+from .jev_classifier import (
+    DEFAULT_JEV_INSTRUCTIONS,
+    HttpJevClassifierClient,
+    JevClassifierClient,
+    JevVerdict,
+    build_jev_request,
+    jev_classifier_cost,
 )
 
 if TYPE_CHECKING:
@@ -104,6 +118,16 @@ _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProx
             "open-ended analysis, proofs, famous hard problems, step-by-step reasoning, tradeoffs, or anything "
             "where a correct answer requires careful thought rather than a quick lookup."
         ),
+    }
+)
+
+_JEV_TIER_CRITERIA: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "NON_REASONING": "Relaying, reformatting, or extracting stated information without judgment",
+        ComplexityTier.SIMPLE.value: "Greetings, chitchat, or short factual lookups with known answers",
+        ComplexityTier.MEDIUM.value: "Everyday requests needing explanation, light reasoning, or minor technical work",
+        ComplexityTier.COMPLEX.value: "Non-trivial code, architecture, multi-step work, or specialized domain depth",
+        ComplexityTier.REASONING.value: "Open-ended analysis, proofs, tradeoffs, or tasks requiring careful thought",
     }
 )
 
@@ -272,8 +296,17 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
 _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
+_CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<environment_context>", "</environment_context>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environments_instructions>", "</environments_instructions>"),
+    ("# agents.md instructions for ", "</instructions>"),
+)
 
 _TRUNCATION_MARKER: Final = "..."
+_TRUNCATION_HEAD_FRACTION: Final = 0.3
+_MIN_QUOTED_TURN_CHARS: Final = 120
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
 
@@ -348,6 +381,49 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
     return _strip_reminder_blocks(_message_text(content), marker_pairs)
+
+
+def _encrypted_classifier_task(
+    request_kwargs: Mapping[str, object] | None,
+    marker_pairs: tuple[tuple[str, str], ...],
+) -> dict[str, object] | None:  # mutable-ok: builds one fresh result mapping
+    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+    raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
+    if not isinstance(raw_input, list) or (request_kwargs or EMPTY_MAPPING).get("messages"):
+        return None
+    try:
+        items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    except ValidationError:
+        return None
+    current: Final = next(
+        (
+            item
+            for item in reversed(items)
+            if (
+                messages := resolve_structured_messages(
+                    messages=None,
+                    request_kwargs={"input": [item]},  # mutable-ok: resolve wants a plain dict
+                )
+            )
+            and any(_iter_human_asks_newest_first(messages, marker_pairs))
+        ),
+        None,
+    )
+    if current is None or current.get("type") != "agent_message" or not isinstance(current.get("content"), list):
+        return None
+    try:
+        parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    except ValidationError:
+        return None
+    if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
+        return None
+    return {  # mutable-ok: rebuilt payload entry
+        **current,
+        "content": [  # mutable-ok: rebuilt payload entry
+            part for part in parts if part.get("type") in ("input_text", "encrypted_content")
+        ],
+    }
 
 
 def _iter_human_asks_newest_first(
@@ -552,8 +628,49 @@ def _matched_plan_mode_sentinel(
 
 
 def _truncate(text: str, limit: int) -> str:
-    """Cap text at limit characters, marking it so the classifier can tell the turn was cut short."""
-    return text if len(text) <= limit else f"{text[:limit]}{_TRUNCATION_MARKER}"
+    """Cap text at limit characters, keeping both ends and eliding the middle.
+
+    A chat turn states its ask at the end, so cutting the tail keeps the preamble and discards the
+    request the turn exists to make: a turn opening with an incident report and closing with "rewrite
+    the retry path and prove it cannot livelock" reached the classifier as the incident report alone.
+    Keeping both ends costs nothing at the same budget and is what the truncation literature finds
+    best for classifying long text, head+tail measuring above both head-only and tail-only in Sun et
+    al. 2019. The marker sits at the cut, so the turn reads as having its middle removed rather than
+    as trailing off mid-thought.
+    """
+    if len(text) <= limit:
+        return text
+    head_chars: Final = max(int(limit * _TRUNCATION_HEAD_FRACTION), 0)
+    tail_chars: Final = max(limit - head_chars, 0)
+    return f"{text[:head_chars]}{_TRUNCATION_MARKER}{text[len(text) - tail_chars :]}"
+
+
+def _turns_within_budget(
+    turns: Sequence[tuple[str, str]],
+    budget_chars: int,
+) -> tuple[tuple[str, str], ...]:
+    """The newest-first turns that fit budget_chars, quoted whole wherever they fit.
+
+    Bounding the block rather than every turn in it is what lets an ordinary conversation reach the
+    classifier intact: a per-turn cap cuts a 785 character turn even when the whole block would have
+    been 353 characters, which is three orders of magnitude below anything the classifier call is
+    near. Once the budget does run out the older turns are dropped entire rather than shortened, so
+    at most one turn is ever cut and the rest read as themselves. A remainder too small to carry a
+    sentence buys less signal than the ellipses it would arrive wrapped in, so that turn is dropped.
+
+    The boundary turn is cut to leave room for the marker rather than to the remainder itself, so the
+    quoted block never exceeds budget_chars; the marker is part of what the budget buys, not an extra
+    charged on top of it.
+    """
+    spent: Final = accumulate(len(text) for _, text in turns)
+    fitting: Final = tuple(takewhile(lambda pair: pair[1] <= budget_chars, zip(turns, spent)))
+    remaining: Final = budget_chars - (fitting[-1][1] if fitting else 0)
+    whole: Final = tuple(turn for turn, _ in fitting)
+    cut_to: Final = remaining - len(_TRUNCATION_MARKER)
+    if len(whole) == len(turns) or cut_to < _MIN_QUOTED_TURN_CHARS:
+        return whole
+    boundary_role, boundary_text = turns[len(whole)]
+    return (*whole, (boundary_role, _truncate(boundary_text, cut_to)))
 
 
 def _iter_context_turns_newest_first(
@@ -583,7 +700,8 @@ def _extract_prior_turns(
     messages: Sequence[Mapping[str, object]],
     current_ask: str | None,
     window_size: int,
-    per_turn_chars: int,
+    budget_chars: int,
+    per_turn_chars: int | None,
     include_assistant: bool,
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> tuple[tuple[str, str], ...]:
@@ -602,15 +720,20 @@ def _extract_prior_turns(
     if window_size <= 0 or not messages:
         return ()
 
-    prior: Final = islice(
-        (
-            turn
-            for turn in _iter_context_turns_newest_first(messages, include_assistant, marker_pairs)
-            if turn[1] != current_ask
-        ),
-        window_size,
+    prior: Final = tuple(
+        islice(
+            (
+                turn
+                for turn in _iter_context_turns_newest_first(messages, include_assistant, marker_pairs)
+                if turn[1] != current_ask
+            ),
+            window_size,
+        )
     )
-    return tuple((role, _truncate(text, per_turn_chars)) for role, text in reversed(tuple(prior)))
+    clamped: Final = (
+        prior if per_turn_chars is None else tuple((role, _truncate(text, per_turn_chars)) for role, text in prior)
+    )
+    return tuple(reversed(_turns_within_budget(clamped, budget_chars)))
 
 
 def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:
@@ -665,11 +788,105 @@ class ClassificationOutcome(NamedTuple):
         "heuristic_scorer",
         "reasoning_override",
         "llm_classifier",
+        "jev_classifier",
         "classifier_plugin",
         "classifier_fallback",
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+    jev_verdict: JevVerdict | None = None
+
+
+def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
+    return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+
+
+def _with_classifier_forecast(
+    decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
+) -> StandardLoggingRoutingDecision:
+    """Attach validated forecasts and their applied policy to the routing decision."""
+    if outcome.jev_verdict is not None:
+        forecasted_decision: Final[StandardLoggingRoutingDecision] = {
+            **decision,
+            "classifier_probabilities": outcome.jev_verdict.probabilities,
+            "classifier_confidence": outcome.jev_verdict.confidence,
+        }
+        return forecasted_decision
+    return decision
+
+
+_CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
+
+
+class _ClassifierCircuitBreaker:
+    """Process-local timeout breaker for one complexity-router classifier.
+
+    The router instance serves every session assigned to that auto-router deployment, so the
+    breaker prevents one unhealthy classifier from charging the same timeout to each session.
+    Exactly one request becomes the recovery probe after the cooldown; the lock makes that state
+    transition atomic even when several request tasks arrive together.
+    """
+
+    CLOSED: Final = "closed"
+    OPEN: Final = "open"
+    HALF_OPEN: Final = "half_open"
+
+    def __init__(self, cooldown_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._cooldown_seconds = cooldown_seconds
+        self._clock = clock
+        self._state = self.CLOSED
+        self._opened_at: float | None = None
+        self._generation = 0
+        self._lock = Lock()
+
+    def acquire_permit(self) -> int | None:
+        """Return a generation-scoped permit, or deny the call while the circuit is open.
+
+        Calls admitted together while closed share a generation. The first timeout advances it,
+        making every other in-flight completion stale so it cannot erase the new cooldown.
+        """
+        with self._lock:
+            if self._state == self.CLOSED:
+                return self._generation
+            if self._state == self.HALF_OPEN:
+                return None
+            opened_at: Final = self._opened_at
+            if opened_at is not None and self._clock() - opened_at >= self._cooldown_seconds:
+                self._state = self.HALF_OPEN
+                return self._generation
+            return None
+
+    def record_success(self, permit: int) -> None:
+        """Close only when the current half-open recovery probe succeeds."""
+        with self._lock:
+            if self._state != self.HALF_OPEN or permit != self._generation:
+                return
+            self._state = self.CLOSED
+            self._opened_at = None
+
+    def record_failure(self, permit: int, *, is_timeout: bool) -> None:
+        """Open on a normal timeout, or reopen when the single recovery probe fails."""
+        with self._lock:
+            if permit != self._generation:
+                return
+            if self._state == self.CLOSED:
+                if not is_timeout:
+                    return
+            elif self._state != self.HALF_OPEN:
+                return
+            self._generation += 1
+            self._state = self.OPEN
+            self._opened_at = self._clock()
+
+
+def _is_classifier_timeout(exc: BaseException) -> bool:
+    # asyncio.TimeoutError became an alias of the built-in TimeoutError in Python 3.11.
+    # LiteLLM still supports 3.10, where they are distinct exception classes.
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    from litellm.exceptions import Timeout as LiteLLMTimeout
+
+    return isinstance(exc, LiteLLMTimeout)
 
 
 class _SessionAffinityPin(NamedTuple):
@@ -716,6 +933,18 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
+    @staticmethod
+    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        if not api_key:
+            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
+        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        return HttpJevClassifierClient(
+            api_key=api_key,
+            api_base=api_base,
+            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+        )
+
     def __init__(
         self,
         model_name: str,
@@ -723,6 +952,7 @@ class ComplexityRouter(CustomLogger):
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
         derive_savings_baseline: bool = True,
+        jev_client: JevClassifierClient | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -749,6 +979,15 @@ class ComplexityRouter(CustomLogger):
         # Override default_model if provided
         if default_model:
             self.config.default_model = default_model
+
+        jev_config: Final = self.config.jev_classifier_config
+        self._jev_client: JevClassifierClient | None = (
+            jev_client
+            if jev_client is not None
+            else self._build_jev_client(jev_config)
+            if self.config.classifier_type == "jev" and jev_config is not None
+            else None
+        )
 
         # Checked here rather than on the config model because the deployment's
         # complexity_router_default_model arrives outside complexity_router_config and is
@@ -815,6 +1054,20 @@ class ComplexityRouter(CustomLogger):
             type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
             if llm_classifier_configured
             else None
+        )
+        circuit_breaker_cooldown: Final[float | None] = (
+            self.config.classifier_llm_config.circuit_breaker_cooldown_seconds
+            if (
+                llm_classifier_configured
+                and self.config.classifier_llm_config is not None
+                and self.config.classifier_llm_config.circuit_breaker_enabled
+            )
+            else jev_config.circuit_breaker_cooldown_seconds
+            if (self.config.classifier_type == "jev" and jev_config is not None and jev_config.circuit_breaker_enabled)
+            else None
+        )
+        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
+            _ClassifierCircuitBreaker(circuit_breaker_cooldown) if circuit_breaker_cooldown is not None else None
         )
 
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
@@ -1190,12 +1443,26 @@ class ComplexityRouter(CustomLogger):
         """
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type == "jev":
+            return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "LLM classifier circuit is open",
+                prompt,
+                system_prompt,
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )
+
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
             return ClassificationOutcome(
                 tier=tier,
                 score=None,
@@ -1204,27 +1471,197 @@ class ComplexityRouter(CustomLogger):
                 classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt)
 
-    def _classifier_failure_outcome(self, reason: str, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+    async def _jev_classifier_outcome(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        config: Final = self.config.jev_classifier_config
+        client: Final = self._jev_client
+        if config is None or client is None:
+            return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        if _encrypted_classifier_task(request_kwargs, marker_pairs) is not None:
+            return self._classifier_failure_outcome(
+                "jev classifier does not support encrypted agent tasks", prompt, system_prompt
+            )
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "jev classifier circuit is open",
+                prompt,
+                system_prompt,
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )
+        criteria: Final[Mapping[str, str]] = (
+            MappingProxyType(
+                {
+                    definition.name: definition.description
+                    or _JEV_TIER_CRITERIA.get(definition.name.upper(), definition.name)
+                    for definition in self.config.tier_definitions
+                }
+            )
+            if self.config.tier_definitions is not None
+            else MappingProxyType(
+                {label: _JEV_TIER_CRITERIA[tier.value] for tier, label in self.config.labeled_tiers()}
+            )
+        )
+        timeout_s: Final = config.timeout_ms / 1000
+        request: Final = build_jev_request(
+            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
+            system_prompt=None,
+            model=config.model,
+            instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+            criteria=criteria,
+        )
+        try:
+            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
+            answer: Final = response.answers.get("tier")
+            if answer is None:
+                raise ValueError("Jev response is missing the 'tier' answer")
+            tier: Final = self.config.resolve_classified_tier(answer.choice)
+            if tier is None:
+                raise ValueError(f"Jev classifier returned unknown tier {answer.choice!r}")
+            tier_name: Final = _tier_name(tier)
+            if not self._tier_pools().get(tier_name):
+                raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
+            model: Final = response.model or config.model
+            verdict: Final = JevVerdict(
+                label=answer.choice,
+                probabilities=answer.probabilities,
+                confidence=answer.confidence,
+                model=model,
+                cost=jev_classifier_cost(response, config.model),
+            )
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
+            return ClassificationOutcome(
+                tier=tier,
+                score=None,
+                signals=(
+                    f"jev-classifier:{tier_name}",
+                    f"jev-confidence={answer.confidence:.6f}",
+                    *(
+                        f"tier-probability:{label}={probability:.6f}"
+                        for label, probability in answer.probabilities.items()
+                    ),
+                ),
+                cause="jev_classifier",
+                classifier_cost=verdict.cost,
+                jev_verdict=verdict,
+            )
+        except asyncio.CancelledError:
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=False)
+            raise
+        except Exception as e:  # noqa: BLE001 -- external Jev call can fail in many distinct ways
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
+            return self._classifier_failure_outcome(
+                f"jev classifier failed ({type(e).__name__})", prompt, system_prompt
+            )
+
+    def _classifier_caller_constraints(
+        self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
+    ) -> str | None:
+        """Exclude Claude Code's environment and skill catalogs from task forecasts."""
+        from litellm.proxy.litellm_pre_call_utils import is_claude_code_user_agent
+
+        return (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
+
+    def _classifier_context_payload(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        *,
+        encrypted_task: bool = False,
+    ) -> str:
+        include_assistant: Final = self.config.classifier_context_include_assistant_turns
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
+        prior_turns: Final = (
+            _extract_prior_turns(
+                messages,
+                current_ask=prompt,
+                window_size=self.config.classifier_context_window_size,
+                budget_chars=self.config.classifier_context_budget_chars,
+                per_turn_chars=self.config.classifier_context_per_turn_chars,
+                include_assistant=include_assistant,
+                marker_pairs=marker_pairs,
+            )
+            if context_enabled
+            else ()
+        )
+        has_prior_conversation: Final = (
+            context_enabled
+            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
+            > 1
+        )
+        return self._build_classifier_user_payload(
+            prompt="The delegated task in the following agent_message." if encrypted_task else prompt,
+            system_prompt=self._classifier_caller_constraints(system_prompt, request_kwargs),
+            prior_turns=prior_turns,
+            messages=messages,
+            has_prior_conversation=has_prior_conversation,
+            label_roles=include_assistant,
+        )
+
+    def _classifier_failure_outcome(
+        self,
+        reason: str,
+        prompt: str,
+        system_prompt: str | None,
+        scored: ClassificationOutcome | None = None,
+        signal: str | None = None,
+    ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
         fallback_tier on a custom tier set, classifier_fallback otherwise."""
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
-            return ClassificationOutcome(
+            outcome: Final = ClassificationOutcome(
                 tier=fallback_tier,
                 score=None,
                 signals=(f"classifier-fallback:{fallback_tier}",),
                 cause="classifier_fallback",
             )
+            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
         verbose_router_logger.warning(
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            return self._default_model_fallback_outcome()
+            default_outcome: Final = self._default_model_fallback_outcome()
+            return (
+                default_outcome
+                if signal is None
+                else default_outcome._replace(signals=(*default_outcome.signals, signal))
+            )
+        if scored is not None:
+            return scored if signal is None else scored._replace(signals=(*scored.signals, signal))
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        return ClassificationOutcome(
+            tier=tier,
+            score=score,
+            signals=signals if signal is None else (*signals, signal),
+            cause=cause,
+        )
 
     async def _classify_with_plugin(
         self,
@@ -1349,6 +1786,7 @@ class ComplexityRouter(CustomLogger):
                 messages,
                 current_ask=prompt,
                 window_size=self.config.classifier_context_window_size,
+                budget_chars=self.config.classifier_context_budget_chars,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
                 include_assistant=include_assistant,
                 marker_pairs=self._reminder_markers,
@@ -2019,6 +2457,20 @@ class ComplexityRouter(CustomLogger):
         """
         return _extract_current_ask_and_system_prompt(messages)
 
+    def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+        from litellm.proxy.litellm_pre_call_utils import is_codex_user_agent
+
+        if self.config.reminder_markers is not None:
+            return self._reminder_markers
+        if any(
+            is_codex_user_agent(user_agent)
+            for metadata_key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
+            if isinstance(user_agent := metadata.get("user_agent"), str)
+        ):
+            return _CODEX_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
+
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
         """Metadata may land on `metadata` or `litellm_metadata` depending on the
@@ -2448,7 +2900,9 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            self.config.classifier_llm_config.model
+            f"typesafe/{outcome.jev_verdict.model}"
+            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
+            else self.config.classifier_llm_config.model
             if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
             else None
         )
@@ -2473,18 +2927,21 @@ class ComplexityRouter(CustomLogger):
             model=routed_model,
             messages=messages if has_original_messages else None,
             litellm_params=tier_litellm_params,
-            routing_decision=self._build_routing_decision(
-                routed_model=routed_model,
-                conversation_continuing=conversation_continuing,
-                cause=decision_cause,
-                tier=classified_pool_tier,
-                score=score,
-                signals=decision_signals,
-                matched_keyword=plan_mode_sentinel if plan_floored else None,
-                escalation_keyword=escalation_keyword,
-                escalated=escalated,
-                classifier_model=classifier_model,
-                classifier_cost=outcome.classifier_cost,
-                tier_litellm_params=tier_litellm_params,
+            routing_decision=_with_classifier_forecast(
+                self._build_routing_decision(
+                    routed_model=routed_model,
+                    conversation_continuing=conversation_continuing,
+                    cause=decision_cause,
+                    tier=classified_pool_tier,
+                    score=score,
+                    signals=decision_signals,
+                    matched_keyword=plan_mode_sentinel if plan_floored else None,
+                    escalation_keyword=escalation_keyword,
+                    escalated=escalated,
+                    classifier_model=classifier_model,
+                    classifier_cost=outcome.classifier_cost,
+                    tier_litellm_params=tier_litellm_params,
+                ),
+                outcome,
             ),
         )

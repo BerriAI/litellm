@@ -1,3 +1,4 @@
+import { describe, expect, it } from "vitest";
 import {
   buildComplexityRouterConfig,
   getPlanModeTierError,
@@ -19,6 +20,10 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  defaultModel: undefined,
+  planModeMinTier: undefined,
+  heuristicFirstMaxTier: undefined,
+  classificationMode: undefined,
   tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
@@ -82,6 +87,21 @@ describe("buildComplexityRouterConfig", () => {
     });
     expect(config.classifier_type).toBe("llm");
     expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("preserves explicit classifier circuit-breaker settings, including disabled", () => {
+    const classifierLlmConfig = {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 45,
+    };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig,
+    });
+    expect(config.classifier_llm_config).toEqual(classifierLlmConfig);
   });
 
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {

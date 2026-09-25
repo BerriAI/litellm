@@ -99,7 +99,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import RowT_co
+from litellm.repositories.prisma_protocols import DatabaseClient, RowT_co
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -3755,6 +3755,7 @@ async def can_key_call_model(
     llm_model_list: list | None,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
+    prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -3784,6 +3785,7 @@ async def can_key_call_model(
         if key_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
+                prisma_client=prisma_client,
             )
             if models_from_groups:
                 return _can_object_call_model(
@@ -3912,6 +3914,7 @@ async def can_team_access_model(
     team_object: LiteLLM_TeamTable | None,
     llm_router: Router | None,
     team_model_aliases: dict[str, str] | None = None,
+    prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -3934,6 +3937,7 @@ async def can_team_access_model(
         if team_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
+                prisma_client=prisma_client,
             )
             if models_from_groups:
                 return _can_object_call_model(
@@ -4600,6 +4604,8 @@ async def _check_team_member_model_access(
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ) -> None:
     """
     Check if a team member's per-member model scope allows access to the requested model.
@@ -4610,22 +4616,26 @@ async def _check_team_member_model_access(
     if valid_token.user_id is None or team_object.team_id is None:
         return
 
-    team_membership: Final = await get_team_membership(
-        user_id=valid_token.user_id,
-        team_id=team_object.team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    if not team_membership_loaded:
+        team_membership = await get_team_membership(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    loaded_membership = team_membership
 
     if (
-        team_membership is None
-        or team_membership.litellm_budget_table is None
-        or not team_membership.litellm_budget_table.allowed_models
+        loaded_membership is None
+        or loaded_membership.litellm_budget_table is None
+        or not loaded_membership.litellm_budget_table.allowed_models
     ):
         return  # no per-member restriction — inherit team-level check
 
-    member_allowed_models: Final[list[str]] = team_membership.litellm_budget_table.allowed_models
+    member_allowed_models: Final[list[str]] = (  # mutable-ok: row's stored list, only read
+        loaded_membership.litellm_budget_table.allowed_models
+    )  # mutable-ok: row's stored list, only read
     try:
         _can_object_call_model(
             model=model,

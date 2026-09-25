@@ -2,14 +2,31 @@ import pytest
 
 from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
+    strategy_router_dependencies,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
 
 COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
-SEMANTIC_FIELDS = frozenset(
-    {"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"}
-)
+SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
+
+
+@pytest.mark.parametrize("model", ["jev-latest", "jev-preview"])
+def test_jev_enumerates_a_paid_evaluation_without_a_completion_classifier(model: str) -> None:
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"model": model},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+        }
+    )
+    assert tuple((dep.model_name, dep.role) for dep in found) == (
+        ("cheap", "tier"),
+        (f"typesafe/{model}", "evaluation"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -164,9 +181,7 @@ def test_validate_accepts_loadable_complexity_config(complexity_router_config):
 def test_naming_check_ignores_the_config_entirely():
     """The naming contract and the config's contents are separate questions with separate owners;
     a write may carry a config without naming a model, so neither can stand in for the other."""
-    violation = validate_strategy_router_model_write(
-        model="auto_router/complexity_router", present_fields=frozenset()
-    )
+    violation = validate_strategy_router_model_write(model="auto_router/complexity_router", present_fields=frozenset())
     assert violation is not None
     assert "requires" in violation
 

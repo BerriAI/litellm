@@ -17,6 +17,7 @@ import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
@@ -879,6 +880,11 @@ export default function ModelInfoView({
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>

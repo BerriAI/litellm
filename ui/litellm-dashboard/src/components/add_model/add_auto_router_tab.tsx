@@ -27,6 +27,7 @@ import ComplexityRouterConfig, {
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
+  effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
@@ -42,7 +43,11 @@ import {
 } from "./build_complexity_router_config";
 import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
-import AutoRouterConnectionTest from "./auto_router_connection_test";
+import { AutoRouterConnectionTestDialog } from "./auto_router_connection_test";
+import {
+  buildAutoRouterRoutingTestRequest,
+  JEV_CONNECTION_TEST_PROMPT,
+} from "./build_auto_router_routing_test_request";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { toast } from "@/lib/toast";
 import {
@@ -348,10 +353,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tiers: complexityRouterConfig.tiers,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
+    classificationPrompt: complexityRouterConfig.classification_prompt,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
+    jevClassifierConfig: complexityRouterConfig.jev_classifier_config,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
+    classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
     classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
     classifierFallback: complexityRouterConfig.classifier_fallback,
@@ -480,6 +488,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setIsTestingConnection(true);
     setIsTestModalVisible(true);
   };
+
+  const jevConnectionTestParams =
+    effectiveClassifierType(complexityRouterConfig) === "jev"
+      ? {
+          prompt: JEV_CONNECTION_TEST_PROMPT,
+          config: buildComplexityRouterConfig(complexityRouterConfigParams),
+          defaultModel: resolveComplexityDefaultModel(
+            complexityRouterConfig.tiers,
+            complexityRouterConfig.default_model,
+          ),
+          routerName: watchedName,
+          teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
+        }
+      : undefined;
 
   return (
     <TooltipProvider>
@@ -712,42 +734,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <AutoRouterConnectionTestDialog
         open={isTestModalVisible}
-        onOpenChange={(open) => {
-          if (!open) {
-            setIsTestModalVisible(false);
-            setIsTestingConnection(false);
-          }
+        onClose={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
         }}
-      >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
-          <DialogHeader>
-            <DialogTitle>Connection Test Results</DialogTitle>
-          </DialogHeader>
-          {isTestModalVisible && (
-            <AutoRouterConnectionTest
-              key={connectionTestId}
-              accessToken={accessToken}
-              targets={testTargets}
-              onTestComplete={() => setIsTestingConnection(false)}
-            />
-          )}
-          <DialogFooter>
-            {" "}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsTestModalVisible(false);
-                setIsTestingConnection(false);
-              }}
-            >
-              Close
-            </Button>
-            , ]
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        testId={connectionTestId}
+        accessToken={accessToken}
+        targets={testTargets}
+        jevRequest={jevConnectionTestParams && buildAutoRouterRoutingTestRequest(jevConnectionTestParams)}
+        onTestComplete={() => setIsTestingConnection(false)}
+      />
     </TooltipProvider>
   );
 };

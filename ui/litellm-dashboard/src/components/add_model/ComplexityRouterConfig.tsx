@@ -1,3 +1,6 @@
+import type { JevClassifierConfig } from "./jev_classifier_config";
+import { type ClassifierType } from "./classifier_types";
+export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -31,6 +34,7 @@ export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
+export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
@@ -90,11 +94,11 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  circuit_breaker_enabled?: boolean;
+  circuit_breaker_cooldown_seconds?: number;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
-
-export type ClassifierType = "heuristic" | "llm";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -125,6 +129,9 @@ export const heuristicScoringRoleFor = (
 export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
   heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
 
+export const effectiveClassifierType = (value: Pick<ComplexityRouterConfigValue, "classifier_type">): ClassifierType =>
+  value.classifier_type;
+
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -136,10 +143,14 @@ export interface ComplexityRouterConfigValue {
   default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  classification_prompt?: string;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
   /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
