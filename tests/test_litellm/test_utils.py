@@ -3099,6 +3099,67 @@ class TestExtraBodyCannotOverrideModel:
 
         assert result["extra_body"] == {"top_k": 5}, result
 
+    @pytest.mark.parametrize("custom_llm_provider", ["azure_ai", "openai", "azure"])
+    def test_extra_body_model_alias_map_is_dropped(self, custom_llm_provider: str) -> None:
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        result: Final = add_provider_specific_params_to_optional_params(
+            optional_params={"extra_body": {"model_alias_map": {"alias": "gpt-5"}, "provider_flag": True}},
+            passed_params={
+                "model": "gpt-5.6-luna",
+                "model_alias_map": {"alias": "gpt-5"},
+                "extra_body": {"model_alias_map": {"alias": "gpt-5"}, "top_k": 5},
+                "custom_param": "kept",
+            },
+            custom_llm_provider=custom_llm_provider,
+            openai_params=["model", "temperature"],
+            additional_drop_params=None,
+        )
+
+        assert result == {"extra_body": {"provider_flag": True, "top_k": 5, "custom_param": "kept"}}, result
+
+    def test_get_optional_params_strips_model_alias_map_for_azure_ai(self) -> None:
+        result: Final = litellm.get_optional_params(
+            model="azure_ai/gpt-5.6-luna",
+            custom_llm_provider="azure_ai",
+            model_alias_map={"alias": "gpt-5"},
+            extra_body={"model_alias_map": {"alias": "gpt-5"}, "top_k": 5},
+        )
+
+        assert "model_alias_map" not in result.get("extra_body", {}), result
+        assert result["extra_body"] == {"top_k": 5}, result
+
+    def test_completion_rejects_per_request_model_alias_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "model_alias_map", {})
+        response: Final = litellm.completion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            model_alias_map={"gpt-5.5": "unauthorized-model"},
+            mock_response="Hello",
+        )
+        assert response.model == "gpt-5.5"
+
+    @pytest.mark.asyncio
+    async def test_acompletion_rejects_per_request_model_alias_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "model_alias_map", {})
+        response: Final = await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            model_alias_map={"gpt-5.5": "unauthorized-model"},
+            mock_response="Hello",
+        )
+        assert response.model == "gpt-5.5"
+
+    def test_completion_resolves_global_model_alias_map_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "model_alias_map", {"alias-model": "gpt-5.5"})
+        response: Final = litellm.completion(
+            model="alias-model",
+            messages=[{"role": "user", "content": "hi"}],
+            model_alias_map={"alias-model": "gpt-4"},
+            mock_response="Hello",
+        )
+        assert response.model == "gpt-5.5"
+
     def test_nested_drop_paths_do_not_break_extra_body_filtering(self) -> None:
         from litellm.utils import add_provider_specific_params_to_optional_params
 

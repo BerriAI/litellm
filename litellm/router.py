@@ -2525,6 +2525,7 @@ class Router:
                 deployment["litellm_params"], kwargs
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
+            litellm_params.pop("model_alias_map", None)
 
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
@@ -2541,6 +2542,7 @@ class Router:
             kwargs.setdefault("messages", messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            kwargs.pop("model_alias_map", None)
             model_name = litellm_params["model"]
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs)
             # check if provided keys == client keys #
@@ -3634,6 +3636,7 @@ class Router:
                 deployment["litellm_params"], kwargs
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
+            litellm_params.pop("model_alias_map", None)
 
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
@@ -3649,6 +3652,7 @@ class Router:
             kwargs.setdefault("messages", messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            kwargs.pop("model_alias_map", None)
 
             model_name = litellm_params["model"]
 
@@ -12593,6 +12597,8 @@ class Router:
         _model_from_alias: Final = self._get_model_from_alias(model=model)
         if _model_from_alias is not None:
             model = _model_from_alias
+        elif model not in self.model_names and litellm.model_alias_map and model in litellm.model_alias_map:
+            model = litellm.model_alias_map[model]
 
         _routing_group_deployments: Final = self._get_routing_group_deployments(model=model, team_id=request_team_id)
         if _routing_group_deployments is None:
@@ -12705,11 +12711,6 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
-
-        if litellm.model_alias_map and model in litellm.model_alias_map:
-            model = litellm.model_alias_map[
-                model
-            ]  # update the model to the actual value if an alias has been passed in
 
         return model, self._drop_strategy_markers(model, healthy_deployments)
 
