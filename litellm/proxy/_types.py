@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 
 import httpx
 from pydantic import (
+    AnyHttpUrl,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -15,6 +16,7 @@ from pydantic import (
     Json,
     JsonValue,
     PositiveInt,
+    SecretStr,
     field_validator,
     model_validator,
 )
@@ -2626,12 +2628,31 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+class OsoAuthorizationConfig(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True, extra="forbid", protected_namespaces=())
+
+    enabled: bool = False
+    api_key: SecretStr | None = None
+    url: AnyHttpUrl = AnyHttpUrl("https://api.osohq.com")
+    timeout: float = Field(default=5.0, gt=0, le=30)
+
+    @model_validator(mode="after")
+    def validate_enabled_config(self) -> "OsoAuthorizationConfig":
+        if self.enabled and (self.api_key is None or not self.api_key.get_secret_value().strip()):
+            raise ValueError("api_key is required when Oso authorization is enabled")
+        return self
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
+    oso_authorization: OsoAuthorizationConfig | None = Field(
+        None,
+        description="optional Oso authorization check for authenticated model invocations",
+    )
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"
     )
