@@ -17,7 +17,7 @@ body can still arrive, released once the caller is done with the response.
 
 Nothing here re-tests the shapes ``_handler_may_close_client`` covers -- a
 borrowed ``handler.client``, a caller-supplied client, an evicted-but-held
-client. Those are pinned in ``tests/test_litellm/llms/custom_httpx/
+client. Those are pinned in ``tests/unit/llms/custom_httpx/
 test_http_handler.py``. What is uncovered there is the in-flight response, so no
 test here may keep the client in a local: that inflates the very refcount under
 test, and the test then passes on a broken handler. They hold weak references
