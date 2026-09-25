@@ -26,14 +26,15 @@ There are two distinct families:
   ``gpt-5.3-chat``, …) — ARE GPT-5 reasoning models and must stay on the GPT-5
   path.
 
-The fix uses a prefix check (``startswith("gpt-5-chat")``) on the normalised model
-name instead of a substring check, which correctly distinguishes the two families.
+The fix uses a substring check for ``gpt-5-chat`` on the normalised model
+name (not a prefix check), which correctly distinguishes the two families.
 """
 
 import pytest
 
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
 # ---------------------------------------------------------------------------
 # Parametrized fixtures
@@ -73,6 +74,9 @@ NON_GPT5_MODELS = [
     "gpt-5-chat",  # gpt-5-chat family — regular chat path
     "gpt-5-chat-latest",  # gpt-5-chat family with alias suffix
     "gpt-5-chat-2025-08-07",  # gpt-5-chat family with date suffix
+    "ft:gpt-5-chat-latest:org:abc",  # fine-tuned gpt-5-chat alias
+    "my-custom-gpt-5-chat",  # custom deployment name containing gpt-5-chat
+    "openai/ft:gpt-5-chat-latest:org:abc",  # provider-prefixed fine-tuned alias
     "gpt-4",
     "gpt-4o",
     "gpt-4-turbo",
@@ -89,33 +93,36 @@ NON_GPT5_MODELS = [
 
 
 class TestOpenAIGPT5ConfigIsModelGpt5Model:
-
     @pytest.mark.parametrize("model", GPT5_MODELS)
     def test_gpt5_models_are_classified_as_gpt5(self, model: str):
-        assert OpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected '{model}' to be classified as a GPT-5 model"
+        assert OpenAIGPT5Config.is_model_gpt_5_model(model), f"Expected '{model}' to be classified as a GPT-5 model"
 
     @pytest.mark.parametrize("model", NON_GPT5_MODELS)
     def test_non_gpt5_models_are_not_classified_as_gpt5(self, model: str):
-        assert not OpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected '{model}' NOT to be classified as a GPT-5 model"
+        assert not OpenAIGPT5Config.is_model_gpt_5_model(model), (
+            f"Expected '{model}' NOT to be classified as a GPT-5 model"
+        )
 
     def test_versioned_chat_models_are_not_excluded_by_prefix(self):
         """Core regression guard: gpt-5-chat prefix must not match versioned models."""
         versioned_chat_models = ["gpt-5.1-chat", "gpt-5.2-chat", "gpt-5.3-chat"]
         for model in versioned_chat_models:
-            assert OpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Regression: '{model}' was incorrectly excluded from GPT-5 path"
+            assert OpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Regression: '{model}' was incorrectly excluded from GPT-5 path"
+            )
 
     def test_gpt5_chat_family_is_excluded(self):
         """gpt-5-chat family should stay on the regular chat path."""
         for model in ["gpt-5-chat", "gpt-5-chat-latest", "gpt-5-chat-2025-08-07"]:
-            assert not OpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Expected '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            assert not OpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Expected '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            )
+
+    def test_responses_api_gpt5_chat_aliases_are_not_gpt5(self):
+        for model in ["ft:gpt-5-chat-latest:org:abc", "openai/my-custom-gpt-5-chat"]:
+            assert not OpenAIResponsesAPIConfig._is_gpt_5_model(model), (
+                f"Expected Responses API '{model}' NOT to be on the GPT-5 path"
+            )
 
 
 # Models that are gpt-5.4 or newer. main.py gates the automatic switch to the
@@ -145,18 +152,17 @@ GPT5_PRE_5_4_MODELS = [
 
 
 class TestOpenAIGPT5ConfigIsModelGpt54PlusModel:
-
     @pytest.mark.parametrize("model", GPT5_4_PLUS_MODELS)
     def test_gpt5_4_plus_models_are_classified_as_5_4_plus(self, model: str):
-        assert OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
-            model
-        ), f"Expected '{model}' to be classified as gpt-5.4-or-newer"
+        assert OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model), (
+            f"Expected '{model}' to be classified as gpt-5.4-or-newer"
+        )
 
     @pytest.mark.parametrize("model", GPT5_PRE_5_4_MODELS)
     def test_pre_5_4_models_are_not_classified_as_5_4_plus(self, model: str):
-        assert not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
-            model
-        ), f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
+        assert not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model), (
+            f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
+        )
 
 
 GPT5_6_PLUS_MODELS = [
@@ -193,7 +199,6 @@ GPT_PRE_6_MODELS = [
 
 
 class TestOpenAIGPT5ConfigSeriesBoundaries:
-
     @pytest.mark.parametrize("model", GPT5_6_PLUS_MODELS)
     def test_gpt5_6_plus_models_are_classified_as_5_6_plus(self, model: str):
         assert OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
@@ -217,38 +222,37 @@ class TestOpenAIGPT5ConfigSeriesBoundaries:
 
 
 class TestAzureOpenAIGPT5ConfigIsModelGpt5Model:
-
     @pytest.mark.parametrize("model", GPT5_MODELS)
     def test_gpt5_models_are_classified_as_gpt5(self, model: str):
-        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected Azure '{model}' to be classified as a GPT-5 model"
+        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+            f"Expected Azure '{model}' to be classified as a GPT-5 model"
+        )
 
     @pytest.mark.parametrize("model", NON_GPT5_MODELS)
     def test_non_gpt5_models_are_not_classified_as_gpt5(self, model: str):
-        assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected Azure '{model}' NOT to be classified as a GPT-5 model"
+        assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+            f"Expected Azure '{model}' NOT to be classified as a GPT-5 model"
+        )
 
     def test_versioned_chat_models_are_not_excluded_by_prefix(self):
         """Core regression guard: gpt-5-chat prefix must not match versioned models."""
         versioned_chat_models = ["gpt-5.1-chat", "gpt-5.2-chat", "gpt-5.3-chat"]
         for model in versioned_chat_models:
-            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Regression: Azure '{model}' was incorrectly excluded from GPT-5 path"
+            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Regression: Azure '{model}' was incorrectly excluded from GPT-5 path"
+            )
 
     def test_gpt5_chat_family_is_excluded(self):
         """gpt-5-chat family should stay on the regular chat path."""
         for model in ["gpt-5-chat", "gpt-5-chat-latest", "gpt-5-chat-2025-08-07"]:
-            assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Expected Azure '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Expected Azure '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            )
 
     def test_gpt5_series_routing_prefix_is_always_classified_as_gpt5(self):
         """Models using the gpt5_series/ manual-routing prefix must always match."""
         series_models = ["gpt5_series/my-deployment", "gpt5_series/prod"]
         for model in series_models:
-            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Azure '{model}' with gpt5_series/ prefix should be classified as GPT-5"
+            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Azure '{model}' with gpt5_series/ prefix should be classified as GPT-5"
+            )
