@@ -581,8 +581,10 @@ pub struct ModelInfo {
     pub supports_audio_input: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_audio_output: Option<bool>,
+    /// The Bedrock native /v1/chat/completions route enforces a json_schema response_format for this model; unset means LiteLLM serves those requests through Converse's json_tool_call emulation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_bedrock_runtime_chat_completions_response_format: Option<bool>,
+    /// The Bedrock native /v1/chat/completions route serves this model's function tools with any reasoning_effort; unset means LiteLLM serves a tools request through Converse unless reasoning_effort is exactly 'none'.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_bedrock_runtime_chat_completions_tools_with_reasoning: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

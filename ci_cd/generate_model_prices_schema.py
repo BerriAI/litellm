@@ -211,6 +211,24 @@ NUMBER_KEYS: dict[str, JsonSchema] = {
     },
 }
 
+BOOLEAN_KEYS: dict[str, JsonSchema] = {
+    "supports_bedrock_runtime_chat_completions_response_format": {
+        "type": "boolean",
+        "description": (
+            "The Bedrock native /v1/chat/completions route enforces a json_schema response_format for this model; "
+            "unset means LiteLLM serves those requests through Converse's json_tool_call emulation."
+        ),
+    },
+    "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+        "type": "boolean",
+        "description": (
+            "The Bedrock native /v1/chat/completions route serves this model's function tools with any "
+            "reasoning_effort; unset means LiteLLM serves a tools request through Converse unless reasoning_effort "
+            "is exactly 'none'."
+        ),
+    },
+}
+
 COST_DESCRIPTIONS: dict[str, str] = {
     "input_cost_per_token": "USD per prompt token.",
     "output_cost_per_token": "USD per generated token.",
@@ -292,7 +310,7 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
 
 
 def classify(key: str, modes: tuple) -> Optional[JsonSchema]:
-    curated = {**OBJECT_KEYS, **ARRAY_KEYS, **string_key_schemas(modes), **INTEGER_KEYS, **NUMBER_KEYS}
+    curated = {**OBJECT_KEYS, **ARRAY_KEYS, **string_key_schemas(modes), **INTEGER_KEYS, **NUMBER_KEYS, **BOOLEAN_KEYS}
     if key in curated:
         return curated[key]
     if key.startswith("supports_") or key in EXTRA_BOOLEAN_KEYS:
