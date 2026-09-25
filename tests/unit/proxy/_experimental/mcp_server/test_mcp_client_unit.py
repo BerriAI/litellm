@@ -12,7 +12,7 @@ import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
 from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import ListToolsResult, PaginatedRequestParams
+from mcp.types import Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities
 from mcp.types import Tool as MCPTool
 
 
@@ -128,6 +128,11 @@ class TestMCPClientUnitTests:
         mock_session_ctx = AsyncMock()
         mock_session_class.return_value = mock_session_ctx
         mock_session_instance = AsyncMock()
+        mock_session_instance.initialize.return_value = InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="test-peer", version="1"),
+        )
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         client = MCPClient(
@@ -163,6 +168,11 @@ class TestMCPClientUnitTests:
         mock_session_ctx = AsyncMock()
         mock_session_class.return_value = mock_session_ctx
         mock_session_instance = AsyncMock()
+        mock_session_instance.initialize.return_value = InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="test-peer", version="1"),
+        )
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         mock_tools = [
@@ -204,6 +214,11 @@ class TestMCPClientUnitTests:
         mock_session_ctx = AsyncMock()
         mock_session_class.return_value = mock_session_ctx
         mock_session_instance = AsyncMock()
+        mock_session_instance.initialize.return_value = InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="test-peer", version="1"),
+        )
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         first_page_tools = [
@@ -245,6 +260,11 @@ class TestMCPClientUnitTests:
         mock_session_ctx = AsyncMock()
         mock_session_class.return_value = mock_session_ctx
         mock_session_instance = AsyncMock()
+        mock_session_instance.initialize.return_value = InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="test-peer", version="1"),
+        )
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         mock_session_instance.list_tools.side_effect = [
@@ -277,6 +297,11 @@ class TestMCPClientUnitTests:
         mock_session_ctx = AsyncMock()
         mock_session_class.return_value = mock_session_ctx
         mock_session_instance = AsyncMock()
+        mock_session_instance.initialize.return_value = InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="test-peer", version="1"),
+        )
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         mock_result = MCPCallToolResult(content=[])
@@ -289,10 +314,7 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool",
-            arguments={"arg1": "value1"},
-            progress_callback=ANY,
-            allow_input_required=False,
+            name="test_tool", arguments={"arg1": "value1"}, progress_callback=ANY, allow_input_required=False
         )
 
 
