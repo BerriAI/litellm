@@ -12,7 +12,8 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _get_highest_media_resolution,
     _extract_max_media_resolution_from_messages,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import BlobType, RequestBody
 from litellm.types.utils import Message
 
 
@@ -2781,3 +2782,115 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+def _gemini_request_body(messages: list[AllMessageValues]) -> RequestBody:
+    return _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+
+def test_mid_conversation_system_message_keeps_prompt_prefix_stable():
+    """Regression for #42104: a mid-conversation system message must not rewrite the cached prefix."""
+    turn_one: list[AllMessageValues] = [
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": "first question"},
+    ]
+    turn_two: list[AllMessageValues] = turn_one + [
+        {"role": "assistant", "content": "first answer"},
+        {"role": "system", "content": "the user just enabled verbose mode"},
+        {"role": "user", "content": "second question"},
+    ]
+
+    first = _gemini_request_body(list(turn_one))
+    second = _gemini_request_body(list(turn_two))
+
+    assert second["system_instruction"] == first["system_instruction"]
+    assert second["contents"][: len(first["contents"])] == first["contents"]
+    assert {"text": "the user just enabled verbose mode"} in second["contents"][-1]["parts"]
+
+
+def test_leading_system_messages_are_hoisted_in_order():
+    body = _gemini_request_body(
+        [
+            {"role": "system", "content": "first instruction"},
+            {"role": "system", "content": [{"type": "text", "text": "second instruction"}]},
+            {"role": "user", "content": "hello"},
+        ]
+    )
+
+    assert body["system_instruction"]["parts"] == [
+        {"text": "first instruction"},
+        {"text": "second instruction"},
+    ]
+    assert body["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+
+
+def test_system_message_without_leading_system_stays_inline():
+    body = _gemini_request_body(
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "system", "content": "answer in JSON"},
+            {"role": "user", "content": "now what"},
+        ]
+    )
+
+    assert "system_instruction" not in body
+    assert body["contents"][-1]["parts"] == [{"text": "answer in JSON"}, {"text": "now what"}]
+
+
+def test_mid_conversation_system_after_tool_result_keeps_tool_ordering():
+    """A system message after a tool result stays after it, in its own turn, without reordering."""
+    body = _gemini_request_body(
+        [
+            {"role": "system", "content": "You are a helpful weather assistant"},
+            {"role": "user", "content": "weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "18C and sunny"},
+            {"role": "system", "content": "Reminder: reply in one short sentence."},
+        ]
+    )
+
+    assert body["system_instruction"]["parts"] == [{"text": "You are a helpful weather assistant"}]
+    tool_result_index = next(
+        i for i, content in enumerate(body["contents"]) if any("function_response" in part for part in content["parts"])
+    )
+    reminder_index = next(
+        i
+        for i, content in enumerate(body["contents"])
+        if {"text": "Reminder: reply in one short sentence."} in content["parts"]
+    )
+    assert tool_result_index < reminder_index
+
+
+def test_leading_system_message_with_malformed_content_does_not_drop_the_conversation():
+    """A system message whose content is neither text nor a content list must not raise or swallow the user turn."""
+    body = _gemini_request_body(
+        [
+            {"role": "system", "content": None},
+            {"role": "user", "content": "hello"},
+        ]
+    )
+
+    assert body["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+
+
+def test_system_only_request_still_sends_a_user_turn():
+    """Gemini requires contents, so a request carrying only system messages keeps a placeholder user turn."""
+    body = _gemini_request_body([{"role": "system", "content": "You are helpful"}])
+
+    assert body["system_instruction"]["parts"] == [{"text": "You are helpful"}]
+    assert len(body["contents"]) == 1
+    assert body["contents"][0]["role"] == "user"
