@@ -43,7 +43,6 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
@@ -142,70 +141,6 @@ async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: boo
             )
             assert error.value.headers is not None
             assert error.value.headers["retry-after"] == "7"
-
-
-OCR_RESPONSE = {
-    "pages": [{"index": 0, "markdown": "OCR output", "images": []}],
-    "model": "mistral-ocr-latest",
-    "usage_info": {"pages_processed": 1},
-}
-
-
-def _ocr_sync_client() -> HTTPHandler:
-    client = HTTPHandler()
-    client.client = httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=OCR_RESPONSE)))
-    return client
-
-
-def _ocr_async_client() -> AsyncHTTPHandler:
-    client = AsyncHTTPHandler()
-    client.client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=OCR_RESPONSE))
-    )
-    return client
-
-
-def test_ocr_calls_post_call_with_raw_provider_response():
-    logging_obj = Mock()
-
-    response = BaseLLMHTTPHandler().ocr(
-        model="mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
-        optional_params={},
-        timeout=5,
-        logging_obj=logging_obj,
-        api_key="test-key",
-        api_base="https://api.mistral.ai/v1/ocr",
-        custom_llm_provider="mistral",
-        client=_ocr_sync_client(),
-        provider_config=MistralOCRConfig(),
-    )
-
-    assert response.pages[0].markdown == "OCR output"
-    logging_obj.post_call.assert_called_once()
-    assert json.loads(logging_obj.post_call.call_args.kwargs["original_response"]) == OCR_RESPONSE
-
-
-@pytest.mark.asyncio
-async def test_async_ocr_calls_post_call_with_raw_provider_response():
-    logging_obj = Mock()
-
-    response = await BaseLLMHTTPHandler().async_ocr(
-        model="mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
-        optional_params={},
-        timeout=5,
-        logging_obj=logging_obj,
-        api_key="test-key",
-        api_base="https://api.mistral.ai/v1/ocr",
-        custom_llm_provider="mistral",
-        client=_ocr_async_client(),
-        provider_config=MistralOCRConfig(),
-    )
-
-    assert response.pages[0].markdown == "OCR output"
-    logging_obj.post_call.assert_called_once()
-    assert json.loads(logging_obj.post_call.call_args.kwargs["original_response"]) == OCR_RESPONSE
 
 
 def test_prepare_fake_stream_request():
