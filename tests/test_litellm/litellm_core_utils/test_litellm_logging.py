@@ -2681,13 +2681,14 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
     assert "snapshot-only" not in json.dumps(logging_obj.model_call_details, default=str)
 
 
-def test_get_user_agent_tags():
+@pytest.mark.parametrize("header_name", ["user-agent", "User-Agent", "USER-AGENT"])
+def test_get_user_agent_tags(header_name):
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     tags = StandardLoggingPayloadSetup._get_user_agent_tags(
         proxy_server_request={
             "headers": {
-                "user-agent": "litellm/0.1.0",
+                header_name: "litellm/0.1.0",
             }
         }
     )
