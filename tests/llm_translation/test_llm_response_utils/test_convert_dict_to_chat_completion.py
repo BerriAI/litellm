@@ -2079,6 +2079,38 @@ class TestHandleInvalidParallelToolCalls:
         assert len(result) == 1
         assert result[0].id == "call_1"
 
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            '{"tool_uses": [{"recipient_name": "functions.get_weather"}]}',
+            '{"tool_uses": "nope"}',
+            '{"tool_uses": [42]}',
+            "{}",
+        ],
+    )
+    def test_malformed_tool_uses_returns_original_calls(self, arguments):
+        """A hallucinated payload we cannot expand must not fail the response."""
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            _handle_invalid_parallel_tool_calls,
+        )
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_calls = [
+            ChatCompletionMessageToolCall(
+                id="call_1",
+                type="function",
+                function=Function(
+                    name="multi_tool_use.parallel", arguments=arguments
+                ),
+            )
+        ]
+
+        result = _handle_invalid_parallel_tool_calls(tool_calls)
+
+        assert len(result) == 1
+        assert result[0].function.name == "multi_tool_use.parallel"
+
+
 
 class TestShouldConvertToolCallToJsonMode:
     def test_returns_true_when_conditions_met(self):
