@@ -37,6 +37,10 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ..llms.dashscope.realtime.handler import (
+    DashScopeRealtime,
+    resolve_dashscope_realtime_api_base,
+)
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
@@ -53,6 +57,7 @@ azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
+dashscope_realtime: Final = DashScopeRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -583,6 +588,25 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
             query_params=query_params,
         )
+    elif _custom_llm_provider == "dashscope":
+        dashscope_api_base: Final = resolve_dashscope_realtime_api_base(
+            api_base=api_base,
+            dynamic_api_base=dynamic_api_base,
+        )
+        dashscope_api_key: Final = dynamic_api_key or api_key
+
+        await dashscope_realtime.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=dashscope_api_base,
+            api_key=dashscope_api_key,
+            client=None,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
     else:
         raise ValueError(f"Unsupported model: {model}")
 
@@ -694,6 +718,11 @@ async def _realtime_health_check(
     elif custom_llm_provider == "xai":
         url = xai_realtime._construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
+        )
+    elif custom_llm_provider == "dashscope":
+        url = dashscope_realtime.get_websocket_url(
+            api_base=resolve_dashscope_realtime_api_base(api_base=resolved_api_base),
+            query_params=RealtimeQueryParams(model=model),
         )
     elif custom_llm_provider == "vertex_ai":
         if is_vertex_speech_to_text_model(model):
