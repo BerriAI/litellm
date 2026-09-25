@@ -11,6 +11,7 @@ import litellm
 from litellm import ModelResponse
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
 
@@ -4626,6 +4627,78 @@ def test_transform_response_native_structured_output():
     # Should NOT have tool_calls
     assert result.choices[0].message.tool_calls is None
     assert result.choices[0].finish_reason == "stop"
+
+
+# AWS Bedrock Converse stopReason values, accessed 2026-09-16:
+# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+@pytest.mark.parametrize("stop_reason", ("stop_sequence", "end_turn"))
+def test_transform_response_preserves_raw_bedrock_stop_reason(stop_reason: str):
+    response_json = {
+        "metrics": {"latencyMs": 1},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "done"}],
+            }
+        },
+        "stopReason": stop_reason,
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 1,
+            "totalTokens": 11,
+        },
+    }
+    raw_response = httpx.Response(
+        200,
+        json=response_json,
+        request=httpx.Request("POST", "https://bedrock.test/converse"),
+    )
+
+    result = AmazonConverseConfig().transform_response(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=None,
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "stop"
+    assert result.choices[0].provider_specific_fields == {
+        "native_finish_reason": stop_reason
+    }
+
+
+# AWS Bedrock Converse stopReason values, accessed 2026-09-16:
+# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+@pytest.mark.parametrize("stop_reason", ("stop_sequence", "end_turn"))
+def test_converse_chunk_parser_preserves_raw_bedrock_stop_reason(stop_reason: str):
+    result = AWSEventStreamDecoder(model="bedrock/claude").converse_chunk_parser(
+        {"stopReason": stop_reason}
+    )
+
+    assert result.choices[0].finish_reason == "stop"
+    assert result.choices[0].provider_specific_fields == {
+        "native_finish_reason": stop_reason
+    }
+
+
+def test_converse_assembled_stream_preserves_raw_bedrock_stop_reason():
+    # AWS Bedrock Converse stopReason value, accessed 2026-09-16:
+    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    result = AWSEventStreamDecoder(model="bedrock/claude").converse_chunk_parser(
+        {"stopReason": "stop_sequence"}
+    )
+
+    assembled = litellm.stream_chunk_builder(chunks=[result])
+
+    assert assembled is not None
+    assert assembled.choices[0].provider_specific_fields == {
+        "native_finish_reason": "stop_sequence"
+    }
 
 
 def test_add_additional_properties_simple_object():
