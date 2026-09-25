@@ -17,7 +17,7 @@ use crate::{
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
-const AZURE_AI_OCR_PATH: &str = "/providers/mistral/azure/ocr";
+pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -179,9 +179,8 @@ impl AzureAiOcrConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let base = Self::resolve_api_base(api_base, env_lookup)?;
-        let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
         ApiUrl::parse(&base)
-            .and_then(|url| url.complete_path(&path))
+            .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
             .map(|url| url.into_string())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),

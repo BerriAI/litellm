@@ -2392,6 +2392,16 @@
               ],
               "title": "Extra Headers"
             },
+            "kill_switch": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentKillSwitchConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "litellm_params": {
               "additionalProperties": true,
               "title": "Litellm Params",
@@ -2559,6 +2569,221 @@
             "token"
           ],
           "title": "AgentKeySummary",
+          "type": "object"
+        },
+        "AgentKillSwitchApiKeyAuth": {
+          "additionalProperties": false,
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "header_name": {
+              "default": "x-api-key",
+              "title": "Header Name",
+              "type": "string"
+            },
+            "type": {
+              "const": "api_key",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "api_key"
+          ],
+          "title": "AgentKillSwitchApiKeyAuth",
+          "type": "object"
+        },
+        "AgentKillSwitchBasicAuth": {
+          "additionalProperties": false,
+          "properties": {
+            "password": {
+              "title": "Password",
+              "type": "string"
+            },
+            "type": {
+              "const": "basic",
+              "title": "Type",
+              "type": "string"
+            },
+            "username": {
+              "title": "Username",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "username",
+            "password"
+          ],
+          "title": "AgentKillSwitchBasicAuth",
+          "type": "object"
+        },
+        "AgentKillSwitchBearerAuth": {
+          "additionalProperties": false,
+          "properties": {
+            "token": {
+              "title": "Token",
+              "type": "string"
+            },
+            "type": {
+              "const": "bearer",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "token"
+          ],
+          "title": "AgentKillSwitchBearerAuth",
+          "type": "object"
+        },
+        "AgentKillSwitchConfig": {
+          "additionalProperties": false,
+          "description": "Webhook an admin fires to shut an agent down out of band. LiteLLM only\nmakes the call; whatever the endpoint does with it is the agent's business.",
+          "properties": {
+            "auth": {
+              "anyOf": [
+                {
+                  "discriminator": {
+                    "mapping": {
+                      "api_key": "#/components/schemas/AgentKillSwitchApiKeyAuth",
+                      "basic": "#/components/schemas/AgentKillSwitchBasicAuth",
+                      "bearer": "#/components/schemas/AgentKillSwitchBearerAuth"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentKillSwitchBearerAuth"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AgentKillSwitchApiKeyAuth"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AgentKillSwitchBasicAuth"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Auth"
+            },
+            "body": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Body"
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Headers",
+              "type": "object"
+            },
+            "method": {
+              "default": "POST",
+              "enum": [
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "GET"
+              ],
+              "title": "Method",
+              "type": "string"
+            },
+            "query_params": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Query Params",
+              "type": "object"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "title": "AgentKillSwitchConfig",
+          "type": "object"
+        },
+        "AgentKillSwitchResult": {
+          "properties": {
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "method": {
+              "enum": [
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "GET"
+              ],
+              "title": "Method",
+              "type": "string"
+            },
+            "response_body": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Response Body"
+            },
+            "status_code": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status Code"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "url",
+            "method"
+          ],
+          "title": "AgentKillSwitchResult",
           "type": "object"
         },
         "AgentMakePublicResponse": {
@@ -2774,6 +2999,16 @@
                 }
               ],
               "title": "Keys"
+            },
+            "kill_switch": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentKillSwitchConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "litellm_params": {
               "anyOf": [
@@ -3574,6 +3809,16 @@
               ],
               "title": "Extra Headers"
             },
+            "kill_switch": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentKillSwitchConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "litellm_params": {
               "additionalProperties": true,
               "title": "Litellm Params",
@@ -4336,6 +4581,54 @@
             }
           ],
           "summary": "Update Agent",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/v1/agents/{agent_id}/kill_switch": {
+        "post": {
+          "description": "Fire the agent's configured kill switch webhook. Proxy admin only.\n\nLiteLLM only makes the configured HTTP call and reports what came back; it\ndoes not change the agent's state in LiteLLM. Returns 200 when the webhook\nanswered 2xx, 502 with the same result body otherwise. Every attempt is\nwritten to the audit log as a `kill_switch_fired` row against the agent.\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```",
+          "operationId": "trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AgentKillSwitchResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Trigger Agent Kill Switch",
           "tags": [
             "agents"
           ]

@@ -8,8 +8,9 @@ use std::sync::LazyLock;
 use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::route::ocr_machine;
+use litellm_core::ocr::{provider_config, route::ocr_machine};
 use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_host_python::to_py;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use pyo3::{
     prelude::*,
@@ -104,6 +105,30 @@ pub(crate) fn aocr(
     kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
     run_ocr(py, request, args, kwargs, true)
+}
+
+#[pyfunction]
+pub(crate) fn ocr_health_check_document(
+    py: Python<'_>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let document = provider_config::get_health_check_document(model, custom_llm_provider)
+        .map_err(errors::to_pyerr)?;
+    to_py(py, &document)
+}
+
+#[pyfunction]
+pub(crate) fn ocr_passthrough_response(
+    py: Python<'_>,
+    model: &str,
+    endpoint: &str,
+    body: &[u8],
+) -> PyResult<Option<Py<PyAny>>> {
+    provider_config::passthrough_response(model, endpoint, body)
+        .map_err(errors::to_pyerr)?
+        .map(|response| to_py(py, &response.into_json()))
+        .transpose()
 }
 
 #[cfg(test)]
