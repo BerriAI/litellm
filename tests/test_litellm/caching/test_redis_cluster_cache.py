@@ -13,6 +13,8 @@ from redis.asyncio.connection import SSLConnection
 
 from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.caching.evicted_client_closer import EvictedClientCloser
+from litellm.caching.llm_caching_handler import LLMClientCache
 
 
 @patch("litellm._redis.init_redis_cluster")
@@ -298,9 +300,12 @@ def test_init_pubsub_client_rejects_missing_nodes_and_can_retry() -> None:
 
 
 @pytest.mark.parametrize("close_fails", [False, True])
-def test_disconnect_closes_derived_pubsub_connections_even_when_pool_close_fails(close_fails: bool) -> None:
-    cache = _isolated_redis_cache(f"cluster-pubsub-close-{close_fails}")
-    cache.async_redis_conn_pool = AsyncMock()
+@pytest.mark.parametrize("has_shared_pool", [False, True])
+def test_disconnect_closes_derived_pubsub_connections_even_when_pool_close_fails(
+    close_fails: bool, has_shared_pool: bool
+) -> None:
+    cache = _isolated_redis_cache(f"cluster-pubsub-close-{close_fails}-{has_shared_pool}")
+    cache.async_redis_conn_pool = AsyncMock() if has_shared_pool else None
     cache.init_async_client = MagicMock(return_value=_cluster_for_pubsub())
 
     async def exercise() -> None:
@@ -312,7 +317,32 @@ def test_disconnect_closes_derived_pubsub_connections_even_when_pool_close_fails
         await cache.disconnect()
 
         connection.disconnect.assert_awaited_once()
-        cache.async_redis_conn_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
+        if has_shared_pool:
+            cache.async_redis_conn_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
         cache.redis_client.close.assert_called_once()
 
     asyncio.run(exercise())
+
+
+def test_expired_pubsub_client_closes_connections_after_eviction() -> None:
+    cache = _isolated_redis_cache("cluster-pubsub-expired")
+    cache.init_async_client = MagicMock(return_value=_cluster_for_pubsub())
+    clients = LLMClientCache(evicted_client_closer=EvictedClientCloser(grace_seconds=0))
+
+    async def exercise() -> None:
+        client = cache.init_pubsub_client()
+        closed = asyncio.Event()
+        connection = AsyncMock()
+        connection.disconnect.side_effect = closed.set
+        client.connection_pool._available_connections.append(connection)
+        cache_key = clients.update_cache_key_with_event_loop(f"{cache._get_async_client_cache_key()}-pubsub")
+        clients.ttl_dict[cache_key] = 0
+
+        replacement = cache.init_pubsub_client()
+        await asyncio.wait_for(closed.wait(), timeout=1)
+
+        assert replacement is not client
+        connection.disconnect.assert_awaited_once()
+
+    with patch("litellm.in_memory_llm_clients_cache", clients):
+        asyncio.run(exercise())

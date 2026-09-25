@@ -781,7 +781,7 @@ class RedisCache(BaseCache):
         pubsub_client: Final = _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownVariableType]  # redis generics
             cluster=client
         )
-        in_memory_llm_clients_cache.set_cache(key=cache_key, value=pubsub_client)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in-memory client cache
+        in_memory_llm_clients_cache.set_cache(key=cache_key, value=pubsub_client, litellm_owned_client=True)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in-memory client cache
         return pubsub_client  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
     def _async_commands(self) -> _AsyncRedisCommands:
@@ -1833,7 +1833,8 @@ class RedisCache(BaseCache):
     async def disconnect(self):
         from litellm import in_memory_llm_clients_cache
 
-        await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        if self.async_redis_conn_pool is not None:
+            await self.async_redis_conn_pool.disconnect(inuse_connections=True)
         cached_pubsub_client: Final = cast(  # cast-ok: only this module stores clients under this key  # pyright: ignore[reportUnknownVariableType]  # redis generics
             async_redis_client | None,
             in_memory_llm_clients_cache.get_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped in-memory client cache
