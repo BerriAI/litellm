@@ -389,8 +389,24 @@ class AmazonConverseConfig(BaseConfig):
         return re.search(r"openai\.gpt-\d", model) is not None
 
     @staticmethod
-    def _requires_min_max_tokens(model: str) -> bool:
-        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+    def _get_min_max_tokens(model: str) -> int | None:
+        """Smallest `maxTokens` Bedrock accepts for this model, or None if unconstrained.
+
+        Read from `min_max_tokens` in model metadata first, so a newly published model id
+        opts in by editing the JSON rather than by upgrading litellm. The OpenAI-compatible
+        family match is the fallback for ids that have no entry yet -- Bedrock publishes
+        them before this repo's model map learns them.
+        """
+        try:
+            min_max_tokens = litellm.get_model_info(model=model, custom_llm_provider="bedrock").get("min_max_tokens")
+            if isinstance(min_max_tokens, int):
+                return min_max_tokens
+        except Exception:
+            # An id absent from the model map raises here; the family match below answers for it.
+            pass
+        if re.search(r"openai\.gpt-\d|xai\.grok-|moonshotai\.kimi-", model) is not None:
+            return BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS
+        return None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -1031,10 +1047,9 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
+                min_max_tokens = self._get_min_max_tokens(model)
                 optional_params["maxTokens"] = (
-                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
-                    if isinstance(value, int) and self._requires_min_max_tokens(model)
-                    else value
+                    max(value, min_max_tokens) if isinstance(value, int) and min_max_tokens is not None else value
                 )
             if param == "stream":
                 optional_params["stream"] = value

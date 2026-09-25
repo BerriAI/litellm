@@ -189,6 +189,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
+    # Smallest max_tokens the provider accepts; requests below it are clamped up.
+    min_max_tokens: int | None
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
