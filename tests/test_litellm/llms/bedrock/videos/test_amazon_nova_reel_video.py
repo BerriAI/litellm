@@ -1652,17 +1652,15 @@ def test_unsupported_extension_response_raises_400_class_bedrock_error():
     assert excinfo.value.status_code == 400
 
 
-def test_avideo_edit_bedrock_maps_unsupported_operation_to_bad_request(monkeypatch):
-    """Through the litellm video layer, litellm.avideo_edit on bedrock must surface
-    BadRequestError (400-class), never a NotImplementedError-driven 500. get_complete_url
-    is stubbed because it is documented as unused for this config (URLs are built in
-    the handler); the unsupported-operation error comes from the transform."""
-    monkeypatch.setattr(
-        BedrockNovaReelVideoConfig,
-        "get_complete_url",
-        lambda self, model, api_base, litellm_params: "https://example.com/videos/edits",
-    )
-    with pytest.raises(litellm.BadRequestError) as excinfo:
+def test_unsupported_operations_raise_400_without_stubbing():
+    """Through the litellm video layer, unsupported bedrock video operations must
+    surface BadRequestError (400-class) with the unsupported-operation message,
+    without stubbing get_complete_url: the shared video handler resolves the URL
+    before running the config transforms, so the config's get_complete_url raises
+    the 400 itself. Valid operations (create/status/content) never reach the
+    shared handler; videos/main.py routes bedrock to
+    litellm.llms.bedrock.videos.dispatch first."""
+    with pytest.raises(litellm.BadRequestError) as edit_exc:
         asyncio.run(
             litellm.avideo_edit(
                 video_id="some-video-id",
@@ -1670,21 +1668,12 @@ def test_avideo_edit_bedrock_maps_unsupported_operation_to_bad_request(monkeypat
                 custom_llm_provider="bedrock",
             )
         )
-    # The 400-class mapping is the contract; the generic edit error wrapper reads
-    # .text off the exception (empty for a synthesized BedrockError), so only the
-    # status survives here. The message is asserted in the config-level tests.
-    assert excinfo.value.status_code == 400
-
-
-def test_avideo_create_character_bedrock_maps_unsupported_operation_to_bad_request(monkeypatch):
-    """Through the litellm video layer, litellm.avideo_create_character on bedrock must
-    surface BadRequestError (400-class). get_complete_url is stubbed as above."""
-    monkeypatch.setattr(
-        BedrockNovaReelVideoConfig,
-        "get_complete_url",
-        lambda self, model, api_base, litellm_params: "https://example.com/characters",
-    )
-    with pytest.raises(litellm.BadRequestError) as excinfo:
+    assert edit_exc.value.status_code == 400
+    # The generic edit error wrapper reads .text off the exception (empty for a
+    # synthesized BedrockError), so the config-level message is asserted in
+    # test_get_complete_url_raises_unsupported_operation_400; the 400-class
+    # mapping is the contract here.
+    with pytest.raises(litellm.BadRequestError) as character_exc:
         asyncio.run(
             litellm.avideo_create_character(
                 name="hero",
@@ -1692,8 +1681,8 @@ def test_avideo_create_character_bedrock_maps_unsupported_operation_to_bad_reque
                 custom_llm_provider="bedrock",
             )
         )
-    assert excinfo.value.status_code == 400
-    assert "video create character is not supported" in str(excinfo.value)
+    assert character_exc.value.status_code == 400
+    assert "bedrock video supports create, status and content only" in str(character_exc.value)
 
 
 #################################################
@@ -2581,9 +2570,13 @@ def test_validate_environment_none_headers_gets_content_type():
     assert headers["Content-Type"] == "application/json"
 
 
-def test_get_complete_url_raises_not_implemented():
-    with pytest.raises(NotImplementedError, match="get_complete_url"):
+def test_get_complete_url_raises_unsupported_operation_400():
+    """get_complete_url runs before the transforms in the shared video handler,
+    so it must carry the 400 itself (a NotImplementedError would surface 500)."""
+    with pytest.raises(BedrockError) as excinfo:
         _make_config().get_complete_url(model=TEST_MODEL, api_base=None, litellm_params={})
+    assert excinfo.value.status_code == 400
+    assert "bedrock video supports create, status and content only" in str(excinfo.value.message)
 
 
 def test_transform_status_retrieve_request_raises_not_implemented():

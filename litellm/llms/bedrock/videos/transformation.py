@@ -367,10 +367,22 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         api_base: str | None,
         litellm_params: _VideoParams,
     ) -> str:
-        raise NotImplementedError(
-            "Nova Reel video URLs are built in BedrockVideoGeneration "
-            "(AWS runtime endpoint + /async-invoke paths). Do not use get_complete_url "
-            "for this config."
+        # The shared OpenAI-style video handlers resolve the URL before running
+        # any config transform, so the transform-level unsupported-operation
+        # guards never run for those routes. Nova Reel create/status/content
+        # bypass these handlers entirely (litellm.llms.bedrock.videos.dispatch
+        # builds the signed requests), so get_complete_url is only reachable
+        # for unsupported operations: raise the same 400-class BedrockError the
+        # transforms raise instead of a NotImplementedError that would surface
+        # as a 500-class APIConnectionError.
+        raise BedrockError(
+            status_code=400,
+            message=(
+                "bedrock video supports create, status and content only; this "
+                "request reached the shared video handler, which only happens "
+                "for unsupported operations (edit, characters, remix, extension, "
+                "list, delete)"
+            ),
         )
 
     def transform_video_create_request(
