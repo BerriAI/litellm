@@ -36,6 +36,7 @@ from mcp.types import (
     REQUEST_TIMEOUT,
     GetPromptRequestParams,
     GetPromptResult,
+    InputRequiredResult,
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
@@ -44,7 +45,6 @@ from mcp.types import (
     Prompt,
     ResourceTemplate,
     ServerNotification,
-    TextContent,
 )
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
@@ -61,6 +61,7 @@ from litellm.constants import (
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
+from litellm.proxy._experimental.mcp_server.result_conversion import error_text_result
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
@@ -828,17 +829,15 @@ class MCPClient:
     @staticmethod
     def error_tool_result(exc: Exception) -> MCPCallToolResult:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
-        return MCPCallToolResult(
-            content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],
-            is_error=True,
-        )
+        return error_text_result(exc)
 
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
         host_progress_callback: Callable | None = None,
         raise_on_error: bool = False,
-    ) -> MCPCallToolResult:
+        allow_input_required: bool = False,
+    ) -> MCPCallToolResult | InputRequiredResult:
         """
         Call an MCP Tool.
 
@@ -847,6 +846,9 @@ class MCPClient:
                 ``isError=True`` result. The token-exchange (OBO) tool-call path uses this to detect
                 an upstream 401 so it can re-mint the exchanged token and retry once; every other
                 caller keeps the default and gets graceful ``isError`` degradation.
+            allow_input_required: When True, a 2026-07-28 upstream may answer with an interim
+                ``InputRequiredResult`` and it is returned as is. The SDK rejects it otherwise, so
+                callers only opt in when the downstream side can carry it.
         """
         verbose_logger.info("MCP client calling tool '%s'", call_tool_request_params.name)
 
@@ -869,7 +871,7 @@ class MCPClient:
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
                 progress_callback=on_progress,
-                allow_input_required=False,
+                allow_input_required=allow_input_required,
             )
 
         try:
