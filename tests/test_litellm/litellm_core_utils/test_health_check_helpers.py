@@ -3,6 +3,7 @@
 import struct
 import zlib
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -513,10 +514,7 @@ def test_ocr_health_check_document_uses_the_native_binding():
     }
     NATIVE_OCR_HEALTH_CHECK_DOCUMENT.override(lambda model, provider: document)
     try:
-        assert (
-            _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral")
-            is document
-        )
+        assert _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral") is document
     finally:
         NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()
 
