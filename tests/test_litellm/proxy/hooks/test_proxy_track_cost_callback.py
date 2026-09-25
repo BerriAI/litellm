@@ -2743,3 +2743,36 @@ def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: 
     assert _should_track_cost_callback(
         user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
     ) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billing_agent", [None, "verified-agent"])
+async def test_callback_does_not_charge_a_header_selected_agent(
+    billing_agent: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    cache: Final = DualCache()
+    for key in ("spend:user:human", "spend:agent:header-selected-agent", "spend:agent:verified-agent", "spend:agent_window:20260102T000000.000000Z:verified-agent"):
+        cache.in_memory_cache.set_cache(key=key, value=0.0)
+    logging: Final = MagicMock()
+    logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+    logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "update_cache", AsyncMock())
+    kwargs: Final = {
+        "call_type": "acompletion", "model": "test-model", "response_cost": 0.01,
+        "litellm_params": {"metadata": {
+            "user_api_key_user_id": "human", "agent_id": "header-selected-agent", "billing_agent_id": billing_agent,
+            "billing_agent_counter_key": "spend:agent_window:20260102T000000.000000Z:verified-agent" if billing_agent else None,
+        }},
+    }
+    await _ProxyDBLogger()._PROXY_track_cost_callback(
+        kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
+    )
+    assert cache.in_memory_cache.get_cache(key="spend:user:human") == 0.01
+    assert cache.in_memory_cache.get_cache(key="spend:agent:header-selected-agent") == 0.0
+    assert cache.in_memory_cache.get_cache(key="spend:agent:verified-agent") == 0.0
+    assert cache.in_memory_cache.get_cache(key="spend:agent_window:20260102T000000.000000Z:verified-agent") == (0.01 if billing_agent else 0.0)

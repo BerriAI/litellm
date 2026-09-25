@@ -254,6 +254,41 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
           </>
         )}
       </section>
+      <section aria-label="Agent Budget" className="my-6 space-y-4 rounded-lg border border-border p-4">
+        <h3 className="font-medium">Agent Budget</h3>
+        <AgentFormField
+          name="agent_max_budget"
+          label="Aggregate Agent Budget ($)"
+          description="Shared across this agent's requests and keys. Leave empty for no aggregate limit"
+        >
+          {({ value, onChange, ref, ...control }) => (
+            <Input
+              {...control}
+              ref={ref}
+              type="number"
+              min="0"
+              step="any"
+              value={typeof value === "number" || typeof value === "string" ? value : ""}
+              onChange={onChange}
+            />
+          )}
+        </AgentFormField>
+        <AgentFormField
+          name="agent_budget_duration"
+          label="Budget Reset Period"
+          description="For example, 1d or 30d. Leave empty for a lifetime budget"
+        >
+          {({ value, onChange, ref, ...control }) => (
+            <Input
+              {...control}
+              ref={ref}
+              value={typeof value === "string" ? value : ""}
+              onChange={onChange}
+              placeholder="30d"
+            />
+          )}
+        </AgentFormField>
+      </section>
     </>
   );
 };

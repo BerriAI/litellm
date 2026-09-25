@@ -157,6 +157,10 @@ def _iter_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None)
         yield f"spend:end_user:{end_user_id}"
     if token.org_id is not None:
         yield f"spend:org:{token.org_id}"
+    billing_agent: Final = token.billing_agent_policy
+    charged_agent_id: Final = billing_agent.agent_id if billing_agent is not None else token.agent_id
+    if charged_agent_id is not None:
+        yield billing_agent.budget_counter_key if billing_agent is not None else f"spend:agent:{charged_agent_id}"
     if token.project_id is not None:
         yield project_spend_counter_key(token.project_id)
 
@@ -174,10 +178,19 @@ def post_call_counter_keys(
     tags: Sequence[object] | None,
     model_access_groups: Sequence[object] | None,
     project_id: str | None = None,
+    billing_agent_id: str | None = None,
+    billing_agent_counter_key: str | None = None,
 ) -> frozenset[str]:
     """Every counter ``increment_spend_counters`` warm-checks, except budget windows which bind on read."""
     entity_keys: Final = admission_counter_keys(
-        UserAPIKeyAuth(token=token, team_id=team_id, user_id=user_id, org_id=org_id, project_id=project_id),
+        UserAPIKeyAuth(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            project_id=project_id,
+            agent_id=billing_agent_id if billing_agent_counter_key is None else None,
+        ),
         end_user_id,
     )
     tag_keys: Final = frozenset(f"spend:tag:{tag}" for tag in tags or () if tag and isinstance(tag, str))
@@ -186,7 +199,12 @@ def post_call_counter_keys(
         for group in model_access_groups or ()
         if group and isinstance(group, str)
     )
-    return entity_keys | tag_keys | group_keys
+    return (
+        entity_keys
+        | tag_keys
+        | group_keys
+        | (frozenset((billing_agent_counter_key,)) if billing_agent_counter_key else frozenset())
+    )
 
 
 def bind_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> None:

@@ -839,6 +839,7 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.agents, cascade)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)

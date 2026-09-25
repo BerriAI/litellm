@@ -187,6 +187,51 @@ def test_delegated_identity_requires_a_scope() -> None:
     assert "delegated scope" in result.message
 
 
+@pytest.mark.parametrize("budget", [{"max_budget": -1}, {"max_budget": float("inf")}, {"max_budget": 1, "budget_duration": "0d"}, {"max_budget": 1, "budget_duration": "0s"}, {"max_budget": 1, "budget_duration": "-1d"}, {"max_budget": 1, "budget_duration": ""}])
+def test_invalid_budget_changes_are_rejected(budget: dict[str, object]) -> None:
+    result: Final = managed_write_fields({"budget": budget}, managed_agent(), "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Invalid agent identity or budget configuration" in result.message
+
+
+def test_budget_updates_preserve_current_window_until_duration_changes() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.types.proxy.agent_identity import AgentBudgetState
+
+    reset: Final = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    agent: Final = managed_agent().model_copy(
+        update={
+            "budget_id": "budget",
+            "litellm_budget_table": AgentBudgetState(
+                budget_id="budget", max_budget=1, budget_duration="1d", budget_reset_at=reset
+            ),
+        }
+    )
+    same: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1d"}}, agent, "admin")
+    assert not isinstance(same, AgentIdentityFailure)
+    assert same["litellm_budget_table"]["update"]["budget_reset_at"] == reset
+    assert same["litellm_budget_table"]["update"]["max_budget"] == 2
+    changed: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1h"}}, agent, "admin")
+    assert not isinstance(changed, AgentIdentityFailure)
+    assert changed["litellm_budget_table"]["update"]["budget_reset_at"] != reset
+    removed: Final = managed_write_fields({"budget": None}, agent, "admin")
+    assert removed == {"litellm_budget_table": {"disconnect": True}}
+    assert managed_write_fields({"budget": None}, managed_agent(), "admin") == {}
+
+
+def test_new_agent_budget_is_created_with_administrator_attribution() -> None:
+    result: Final = managed_write_fields({"budget": {"max_budget": 0}}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["litellm_budget_table"]["create"] == {
+        "max_budget": 0,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "created_by": "admin",
+        "updated_by": "admin",
+    }
+
+
 @pytest.mark.parametrize("roles", ["Agent.Invoke", [42], None])
 def test_malformed_application_roles_are_rejected(roles: object) -> None:
     result: Final = classify_agent_subject(BINDING, claims(roles=roles), "autonomous")

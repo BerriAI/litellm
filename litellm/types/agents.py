@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
@@ -8,6 +8,8 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.agent_identity import (
+    AgentBudgetConfig,
+    AgentBudgetState,
     AgentExecutionMode,
     AgentIdentityBinding,
     EntraIdentityConfig,
@@ -256,6 +258,7 @@ class AgentConfig(TypedDict, total=False):
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
+    budget: ReadOnly[AgentBudgetConfig | None]
     agent_name: Required[str]
     agent_card_params: ReadOnly[AgentCard]
     litellm_params: dict[str, object]  # allow for any future litellm params
@@ -274,6 +277,7 @@ class PatchAgentRequest(TypedDict, total=False):
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
+    budget: ReadOnly[AgentBudgetConfig | None]
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: dict[str, object]
@@ -311,11 +315,21 @@ class AgentKeySummary(BaseModel):
     key_name: str | None = None
 
 
+def agent_budget_counter_key(agent_id: str, reset_at: datetime | None) -> str:
+    if reset_at is None:
+        return f"spend:agent:{agent_id}"
+    aware: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
+    window: Final = aware.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return f"spend:agent_window:{window}:{agent_id}"
+
+
 class AgentResponse(BaseModel):
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
     execution_mode: AgentExecutionMode = "autonomous"
+    budget_id: str | None = None
+    litellm_budget_table: AgentBudgetState | None = None
     jwt_auth_configured: bool = False
     agent_id: str
     agent_name: str
@@ -337,6 +351,12 @@ class AgentResponse(BaseModel):
     updated_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
+
+    @property
+    def budget_counter_key(self) -> str:
+        return agent_budget_counter_key(
+            self.agent_id, self.litellm_budget_table.budget_reset_at if self.litellm_budget_table else None
+        )
 
 
 class ListAgentsResponse(BaseModel):
