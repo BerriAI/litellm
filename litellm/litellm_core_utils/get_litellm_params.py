@@ -1,9 +1,14 @@
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass, fields
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.constants import CONTROL_PARAMS_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.litellm_params import LiteLLMControlParams
 from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -69,6 +74,39 @@ OPTIONAL_KWARGS_KEYS: Final = (
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+_CONTROL_PARAMS: Final = TypeAdapter(LiteLLMControlParams)
+_CONTROL_PARAM_NAMES: Final = tuple(field.name for field in fields(LiteLLMControlParams))
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidControlParam:
+    param: str
+    message: str
+
+
+def control_params_from(kwargs: Mapping[str, object]) -> LiteLLMControlParams | InvalidControlParam:
+    given: Final = {name: kwargs[name] for name in _CONTROL_PARAM_NAMES if name in kwargs}
+    try:
+        return _CONTROL_PARAMS.validate_python(given)
+    except ValidationError as e:
+        error: Final = e.errors(include_url=False)[0]
+        param: Final = str(error["loc"][0])
+        return InvalidControlParam(param=param, message=f"Invalid {param}={given[param]!r}: {error['msg']}")
+
+
+def control_params_without_invalid(kwargs: Mapping[str, object]) -> LiteLLMControlParams:
+    valid: Final = {
+        name: kwargs[name]
+        for name in _CONTROL_PARAM_NAMES
+        if name in kwargs and isinstance(control_params_from({name: kwargs[name]}), LiteLLMControlParams)
+    }
+    return _CONTROL_PARAMS.validate_python(valid)
+
+
+def control_params_in(litellm_params: Mapping[str, object]) -> LiteLLMControlParams:
+    control: Final = litellm_params.get(CONTROL_PARAMS_KEY)
+    return control if isinstance(control, LiteLLMControlParams) else LiteLLMControlParams()
 
 
 def _get_base_model_from_litellm_call_metadata(

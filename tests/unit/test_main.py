@@ -24,7 +24,12 @@ from litellm import main as litellm_main
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from litellm.constants import CONTROL_PARAMS_KEY
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.types.litellm_params import LiteLLMControlParams
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
+from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
 
 
 @pytest.fixture(autouse=True)
@@ -4150,3 +4155,244 @@ def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
         )
     assert exc_info.value.status_code == 400
     assert f"tool_choice={tool_choice}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-4.1-mini", "bedrock/converse/anthropic.claude-sonnet-4-5"])
+@pytest.mark.parametrize(
+    "raw,reason",
+    [
+        ("sixty-four", "Input should be a valid integer"),
+        (0, "Input should be greater than 0"),
+        (-1, "Input should be greater than 0"),
+    ],
+)
+def test_completion_rejects_an_invalid_stream_chunk_size_with_a_400_naming_the_param(
+    model: str, raw: object, reason: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream_chunk_size=raw,
+            mock_response="unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.param == "stream_chunk_size"
+    assert f"Invalid stream_chunk_size={raw!r}: {reason}" in str(exc_info.value)
+
+
+class _PromptHookRecorder(CustomPromptManagement):
+    def __init__(self, on_prompt: MagicMock) -> None:
+        super().__init__()
+        self.on_prompt: Final = on_prompt
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        self.on_prompt("sync")
+        return model, messages, non_default_params
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLogging,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        self.on_prompt("async")
+        return model, messages, non_default_params
+
+
+async def _call_completion(is_async: bool, **kwargs: object) -> None:
+    if is_async:
+        await litellm.acompletion(**kwargs)
+    else:
+        litellm.completion(**kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async,hook", [(False, "sync"), (True, "async")], ids=["completion", "acompletion"])
+async def test_a_valid_stream_chunk_size_reaches_the_prompt_hook(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, hook: str
+) -> None:
+    on_prompt: Final = MagicMock()
+    monkeypatch.setattr(litellm, "callbacks", [_PromptHookRecorder(on_prompt)])
+
+    await _call_completion(
+        is_async,
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        prompt_id="greeting",
+        stream_chunk_size=64,
+        mock_response="hi",
+    )
+
+    on_prompt.assert_any_call(hook)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["completion", "acompletion"])
+async def test_an_invalid_stream_chunk_size_is_rejected_before_any_prompt_hook_runs(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    on_prompt: Final = MagicMock()
+    monkeypatch.setattr(litellm, "callbacks", [_PromptHookRecorder(on_prompt)])
+
+    with pytest.raises(litellm.BadRequestError):
+        await _call_completion(
+            is_async,
+            model="openai/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            prompt_id="greeting",
+            stream_chunk_size="sixty-four",
+            mock_response="hi",
+        )
+
+    on_prompt.assert_not_called()
+
+
+def test_completion_carries_the_control_params_into_the_logged_litellm_params() -> None:
+    logging_obj: Final = LiteLLMLogging(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="control-params-call-id",
+        function_id="control-params-function-id",
+    )
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream_chunk_size=64,
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+    )
+    assert logging_obj.litellm_params[CONTROL_PARAMS_KEY] == LiteLLMControlParams(stream_chunk_size=64)
+
+
+def test_completion_replaces_a_caller_supplied_control_params_key() -> None:
+    logging_obj: Final = LiteLLMLogging(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="control-params-injection-call-id",
+        function_id="control-params-injection-function-id",
+    )
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+        **{CONTROL_PARAMS_KEY: LiteLLMControlParams(stream_chunk_size=0)},
+    )
+    assert logging_obj.litellm_params[CONTROL_PARAMS_KEY] == LiteLLMControlParams()
+
+
+def _control_params_logging_obj(call_id: str) -> LiteLLMLogging:
+    return LiteLLMLogging(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id=call_id,
+        function_id=f"{call_id}-function",
+    )
+
+
+@pytest.mark.parametrize("drop_params", [True, "true"])
+def test_drop_params_drops_an_invalid_stream_chunk_size_instead_of_rejecting_it(drop_params: object) -> None:
+    logging_obj: Final = _control_params_logging_obj(f"drop-params-{drop_params}")
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream_chunk_size="sixty-four",
+        drop_params=drop_params,
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+    )
+    assert logging_obj.litellm_params[CONTROL_PARAMS_KEY] == LiteLLMControlParams()
+
+
+def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12346/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-drop",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        stream_chunk_size="sixty-four",
+        drop_params=True,
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "stream_chunk_size" not in sent, sent
+    assert sent["model"] == "gpt-4.1-mini"
+
+
+@pytest.mark.asyncio
+async def test_global_drop_params_drops_an_invalid_stream_chunk_size_on_acompletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    logging_obj: Final = _control_params_logging_obj("global-drop-params")
+    await litellm.acompletion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream_chunk_size=0,
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+    )
+    assert logging_obj.litellm_params[CONTROL_PARAMS_KEY] == LiteLLMControlParams()
+
+
+def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="openai/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream_chunk_size="sixty-four",
+            drop_params=False,
+            mock_response="hi",
+        )
+
