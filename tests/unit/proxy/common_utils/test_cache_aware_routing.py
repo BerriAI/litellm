@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -9,8 +9,14 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.llms.anthropic.prompt_cache_prediction import TokenCounter, cache_scope, parse_prompt
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.cache_aware_routing import choose_cached_model, eligible_models, select_cached_model
+from litellm.proxy.common_utils.cache_aware_routing import (
+    CacheAwareChoice,
+    choose_cached_model,
+    eligible_models,
+    select_cached_model,
+)
 from litellm.proxy.hooks.prompt_cache_prediction import CacheObservation, _cache_key
+from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.router import PreRoutingHookResponse
 
@@ -51,7 +57,9 @@ def _body(text: str = "Stable cached context") -> dict[str, JsonValue]:
     }
 
 
-def _router(strong_output_rate: float = 0.000015, *, free: bool = False) -> Router:
+def _router(
+    strong_output_rate: float = 0.000015, *, free: bool = False, cheap_limit: int = 30000, strong_limit: int = 30000
+) -> Router:
     return Router(
         model_list=[
             {
@@ -64,7 +72,7 @@ def _router(strong_output_rate: float = 0.000015, *, free: bool = False) -> Rout
                     "cache_read_input_token_cost": 0 if free else 0.0000001,
                     "cache_creation_input_token_cost": 0 if free else 0.00000125,
                 },
-                "model_info": {"id": "test-cache-cheap", "max_input_tokens": 100000, "max_output_tokens": 30000},
+                "model_info": {"id": "test-cache-cheap", "max_input_tokens": 100000, "max_output_tokens": cheap_limit},
             },
             {
                 "model_name": "strong",
@@ -76,7 +84,11 @@ def _router(strong_output_rate: float = 0.000015, *, free: bool = False) -> Rout
                     "cache_read_input_token_cost": 0 if free else 0.0000003,
                     "cache_creation_input_token_cost": 0 if free else 0.00000375,
                 },
-                "model_info": {"id": "test-cache-strong", "max_input_tokens": 100000, "max_output_tokens": 30000},
+                "model_info": {
+                    "id": "test-cache-strong",
+                    "max_input_tokens": 100000,
+                    "max_output_tokens": strong_limit,
+                },
             },
         ]
     )
@@ -119,11 +131,40 @@ async def _observed(cache: DualCache, *, caller: str = _CALLER, expires_at: floa
     await cache.async_set_cache(_cache_key(scope, prefix.fingerprint), observation.model_dump_json(), ttl=3600)
 
 
+async def _select(
+    *,
+    router: Router,
+    config: ComplexityRouterConfig,
+    response: PreRoutingHookResponse,
+    body: Mapping[str, JsonValue],
+    request_kwargs: Mapping[str, object],
+    messages: Sequence[Mapping[str, object]] | None,
+    caller: UserAPIKeyAuth,
+    cache: DualCache,
+    counter_for_model: Callable[[str], TokenCounter],
+    now: float,
+) -> CacheAwareChoice | None:
+    complexity: Final = ComplexityRouter("smart", router, config.model_dump())
+    return await select_cached_model(
+        router=router,
+        config=config,
+        params_for_model=complexity._litellm_params_for_model,
+        response=response,
+        body=body,
+        request_kwargs=request_kwargs,
+        messages=messages,
+        caller=caller,
+        cache=cache,
+        counter_for_model=counter_for_model,
+        now=now,
+    )
+
+
 @pytest.mark.asyncio
 async def test_warm_stronger_model_wins_after_counting_input_and_output_cost() -> None:
     cache: Final = DualCache()
     await _observed(cache)
-    choice: Final = await select_cached_model(
+    choice: Final = await _select(
         router=_router(),
         config=_config(),
         response=_response(),
@@ -145,7 +186,7 @@ async def test_warm_stronger_model_wins_after_counting_input_and_output_cost() -
 async def test_output_price_can_outweigh_the_cache_saving() -> None:
     cache: Final = DualCache()
     await _observed(cache)
-    choice: Final = await select_cached_model(
+    choice: Final = await _select(
         router=_router(strong_output_rate=0.001),
         config=_config(),
         response=_response(),
@@ -170,7 +211,7 @@ async def test_no_cache_discount_without_fresh_authorized_matching_evidence(case
             caller="someone-else" if case == "different_caller" else _CALLER,
             expires_at=999.0 if case == "expired" else 1290.0,
         )
-    choice: Final = await select_cached_model(
+    choice: Final = await _select(
         router=_router(),
         config=_config(),
         response=_response(),
@@ -193,6 +234,7 @@ async def test_disabled_setting_does_not_access_prediction_services() -> None:
         await choose_cached_model(
             router=_router(),
             config=config,
+            params_for_model=ComplexityRouter("smart", _router(), config.model_dump())._litellm_params_for_model,
             response=_response(),
             request_kwargs={},
             messages=None,
@@ -224,7 +266,7 @@ async def test_unavailable_or_inconsistent_counts_keep_the_classified_model(
     cache: Final = DualCache()
     await _observed(cache)
     assert (
-        await select_cached_model(
+        await _select(
             router=_router(),
             config=_config(),
             response=_response(),
@@ -244,9 +286,9 @@ async def test_unavailable_or_inconsistent_counts_keep_the_classified_model(
 async def test_output_estimate_is_capped_by_the_requested_limit() -> None:
     cache: Final = DualCache()
     await _observed(cache)
-    choice: Final = await select_cached_model(
+    choice: Final = await _select(
         router=_router(),
-        config=_config(cache_aware_routing_output_tokens=100000),
+        config=_config(cache_aware_routing_output_tokens=100000, max_tokens_from_tier_model=False),
         response=_response(),
         body={**_body(), "max_tokens": 1},
         request_kwargs={},
@@ -265,9 +307,9 @@ async def test_warm_model_that_cannot_fit_the_request_is_not_selected() -> None:
     cache: Final = DualCache()
     await _observed(cache)
     assert (
-        await select_cached_model(
+        await _select(
             router=_router(),
-            config=_config(),
+            config=_config(max_tokens_from_tier_model=False),
             response=_response(),
             body={**_body(), "max_tokens": 100000000},
             request_kwargs={},
@@ -296,6 +338,8 @@ def test_repeated_model_in_multiple_tiers_is_only_considered_once() -> None:
     [
         (False, "success", "cheap"),
         (True, "success", "strong"),
+        (True, "tier_cost", "cheap"),
+        (True, "tier_context", "cheap"),
         (True, "error", "cheap"),
         (True, "deadline", "cheap"),
         (True, "cancel", None),
@@ -326,7 +370,11 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
     config: Final = _config(
         cache_aware_routing=enabled, cache_aware_routing_timeout_ms=1 if behavior == "deadline" else 2000
     )
-    models: Final = _router().get_model_list()
+    models: Final = _router(
+        strong_output_rate=0.000048 if behavior == "tier_cost" else 0.000015,
+        cheap_limit=50 if behavior == "tier_cost" else 30000,
+        strong_limit=60000 if behavior == "tier_context" else 30000,
+    ).get_model_list()
     assert models is not None
     router: Final = Router(
         model_list=[
@@ -374,6 +422,7 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
         litellm.in_memory_llm_clients_cache.set_cache("async_httpx_clientanthropic", handler)
         body: Final = {
             **_body(),
+            **({"max_tokens": 1000} if behavior in ("tier_cost", "tier_context") else {}),
             **({"thinking": {"type": "enabled", "budget_tokens": 10000}} if behavior == "unsupported_shape" else {}),
         }
         kwargs: Final = {
@@ -419,7 +468,7 @@ async def test_equal_costs_keep_the_classified_model() -> None:
     cache: Final = DualCache()
     await _observed(cache)
     assert (
-        await select_cached_model(
+        await _select(
             router=_router(free=True),
             config=_config(),
             response=_response(),
@@ -448,3 +497,92 @@ def test_successful_classifiers_can_consider_cache_costs(cause: str) -> None:
     )
     assert response.routing_decision is not None
     assert eligible_models(_config(), response.routing_decision) == (("SIMPLE", "cheap"), ("COMPLEX", "strong"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cheap_limit,strong_limit,requested,from_tier,output_rate,expected_limits",
+    [
+        (50, 1000, 1000, True, 0.000048, None),
+        (30000, 30000, 1, True, 0.000049, None),
+        (30000, 60000, 1, True, 0.000015, None),
+        (50, 100, 20000, True, 0.000048, (50, 100)),
+        (30000, 30000, 1, False, 0.000048, (1, 1)),
+    ],
+)
+async def test_each_candidate_uses_its_effective_routed_output_limit(
+    cheap_limit: int,
+    strong_limit: int,
+    requested: int,
+    from_tier: bool,
+    output_rate: float,
+    expected_limits: tuple[int, int] | None,
+) -> None:
+    cache: Final = DualCache()
+    await _observed(cache)
+    choice: Final = await _select(
+        router=_router(strong_output_rate=output_rate, cheap_limit=cheap_limit, strong_limit=strong_limit),
+        config=_config(max_tokens_from_tier_model=from_tier),
+        response=_response(),
+        body={**_body(), "max_tokens": requested},
+        request_kwargs={},
+        messages=None,
+        caller=UserAPIKeyAuth(api_key=_CALLER, models=["cheap", "strong"]),
+        cache=cache,
+        counter_for_model=_counter_for_model,
+        now=_NOW,
+    )
+    if expected_limits is None:
+        assert choice is None
+        return
+    assert choice is not None
+    assert choice.original_cost == pytest.approx(50000 * 0.00000125 + 1000 * 0.000001 + expected_limits[0] * 0.000004)
+    assert choice.estimated_cost == pytest.approx(
+        50000 * 0.0000003 + 1000 * 0.000003 + expected_limits[1] * output_rate
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("warm,authorized", [(False, True), (True, True), (True, False)])
+async def test_authorization_only_runs_for_original_and_warm_alternatives_before_provider_counts(
+    monkeypatch: pytest.MonkeyPatch, warm: bool, authorized: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_utils import cache_aware_routing
+
+    cache: Final = DualCache()
+    if warm:
+        await _observed(cache)
+    models: Final = _router().get_model_list()
+    assert models is not None
+    router: Final = Router(
+        model_list=[
+            *models,
+            {**models[0], "model_name": "cold", "model_info": {"id": "test-cache-cold"}},
+        ]
+    )
+    authorization: Final = AsyncMock(wraps=cache_aware_routing.can_key_call_resolved_model)
+    monkeypatch.setattr(cache_aware_routing, "can_key_call_resolved_model", authorization)
+
+    def counter_for_model(model: str) -> TokenCounter:
+        assert warm and authorized
+        assert authorization.await_count == 2
+        return _Counts()
+
+    choice: Final = await _select(
+        router=router,
+        config=_config(tiers={"SIMPLE": "cheap", "MEDIUM": "cold", "COMPLEX": "strong"}),
+        response=_response(),
+        body=_body(),
+        request_kwargs={},
+        messages=None,
+        caller=UserAPIKeyAuth(api_key=_CALLER, models=["cheap", "strong", "cold"] if authorized else ["cheap", "cold"]),
+        cache=cache,
+        counter_for_model=counter_for_model,
+        now=_NOW,
+    )
+    assert (choice is not None) == (warm and authorized)
+    assert tuple(call.kwargs["model"] for call in authorization.await_args_list) == (
+        ("cheap", "strong") if warm else ()
+    )

@@ -7,29 +7,15 @@ from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
-import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-from litellm.llms.anthropic.prompt_cache_prediction import (
-    NativePredictionTarget,
-    PromptPrefix,
-    TokenCounter,
-    cache_scope,
-    count_prompt_tokens,
-    parse_prompt,
-    resolve_prediction_target,
-    supported_prediction_headers,
-)
+from litellm.llms.anthropic.cache_aware_routing import AnthropicCacheRouting, TokenCounter
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.common_utils.prompt_cache_prediction import predict_arm
-from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
-from litellm.proxy.hooks.prompt_cache_prediction import lookup
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.router import Deployment, PreRoutingHookResponse
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -37,28 +23,9 @@ from litellm.types.utils import StandardLoggingRoutingDecision
 if TYPE_CHECKING:
     from litellm.router import Router
 
-_JSON: Final = TypeAdapter(Mapping[str, JsonValue])
 _MESSAGES: Final = TypeAdapter(list[Mapping[str, object]])
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENTS: Final[TypeAdapter[tuple[Deployment, ...] | Deployment]] = TypeAdapter(tuple[Deployment, ...] | Deployment)
-_NATIVE_OPTIONS: Final = frozenset(
-    (
-        "max_tokens",
-        "system",
-        "tools",
-        "tool_choice",
-        "thinking",
-        "output_config",
-        "cache_control",
-        "speed",
-        "service_tier",
-        "temperature",
-        "top_p",
-        "top_k",
-        "stop_sequences",
-        "stream",
-    )
-)
 _MARKER_OPTIONS: Final = frozenset(
     ("model", "complexity_router_config", "rpm", "tpm", "tags", "timeout", "stream_timeout", "num_retries")
 )
@@ -89,11 +56,6 @@ class _CallerSettings(BaseModel):
     config: Mapping[str, object] | None = None
 
 
-class _ModelLimits(BaseModel):
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-
-
 @dataclass(frozen=True, slots=True)
 class CacheAwareChoice:
     model: str
@@ -108,7 +70,6 @@ class _Candidate:
     model: str
     tier: str
     deployment: Deployment
-    target: NativePredictionTarget
 
 
 def eligible_models(
@@ -137,65 +98,38 @@ def eligible_models(
     return tuple(entry for index, entry in enumerate(eligible) if entry[1] not in tuple(m for _, m in eligible[:index]))
 
 
-async def _candidate(
-    router: Router,
-    tier: str,
-    model: str,
-    caller: UserAPIKeyAuth,
-    request_kwargs: Mapping[str, object],
-    messages: Sequence[Mapping[str, object]] | None,
-) -> _Candidate | None:
+def _candidate(router: Router, tier: str, model: str, request_kwargs: Mapping[str, object]) -> _Candidate | None:
     deployments: Final = router.deployments_for_request(model, request_kwargs)
     if len(deployments) != 1:
         return None
     deployment: Final = Deployment.model_validate(deployments[0])
-    target: Final = resolve_prediction_target(deployment.litellm_params)
-    if deployment.model_info.blocked or not deployment.model_info.id or not isinstance(target, NativePredictionTarget):
+    if deployment.model_info.blocked or not deployment.model_info.id or not AnthropicCacheRouting.supports(deployment):
         return None
+    return _Candidate(model, tier, deployment)
+
+
+async def _available(
+    candidate: _Candidate,
+    router: Router,
+    caller: UserAPIKeyAuth,
+    request_kwargs: Mapping[str, object],
+    messages: Sequence[Mapping[str, object]] | None,
+) -> bool:
     try:
         await can_key_call_resolved_model(
-            model=model, llm_model_list=router.get_model_list(), valid_token=caller, llm_router=router
+            model=candidate.model, llm_model_list=router.get_model_list(), valid_token=caller, llm_router=router
         )
         healthy: Final = _DEPLOYMENTS.validate_python(
             await router.async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType]  # legacy router results are validated at this boundary
-                model=model,
+                model=candidate.model,
                 messages=_MESSAGES.validate_python(messages) if messages else None,  # pyright: ignore[reportArgumentType]  # router annotations predate structured native messages
                 request_kwargs=dict(request_kwargs),  # mutable-ok: Router's filtering API accepts a request dictionary
             )
         )
     except Exception:  # noqa: BLE001  # an unavailable optional candidate must not fail the originally selected route
-        return None
+        return False
     available: Final = (healthy,) if isinstance(healthy, Deployment) else healthy
-    return (
-        _Candidate(model, tier, deployment, target)
-        if any(entry.model_info.id == deployment.model_info.id for entry in available)
-        else None
-    )
-
-
-async def _warm(candidate: _Candidate, caller: str, cache: DualCache, prefix: PromptPrefix, now: float) -> bool:
-    scope: Final = cache_scope(
-        caller, candidate.deployment.model_info.id or "", candidate.target.api_key, candidate.target.model
-    )
-    observation: Final = await lookup(cache, scope, prefix, now=now)
-    return observation is not None and observation.expires_at > now
-
-
-def _fits(candidate: _Candidate, input_tokens: int, output_tokens: int) -> bool:
-    limits: Final = _ModelLimits.model_validate(
-        MappingProxyType(
-            {
-                **litellm.get_model_info(candidate.target.model, custom_llm_provider="anthropic"),
-                **candidate.deployment.model_info.model_dump(exclude_none=True),
-            }
-        )
-    )
-    return (
-        limits.max_input_tokens is not None
-        and input_tokens + output_tokens <= limits.max_input_tokens
-        and limits.max_output_tokens is not None
-        and output_tokens <= limits.max_output_tokens
-    )
+    return any(entry.model_info.id == candidate.deployment.model_info.id for entry in available)
 
 
 def supported_router_marker(router: Router, alias: str, request_kwargs: Mapping[str, object]) -> bool:
@@ -213,6 +147,7 @@ async def select_cached_model(
     *,
     router: Router,
     config: ComplexityRouterConfig,
+    params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse,
     body: Mapping[str, JsonValue],
     request_kwargs: Mapping[str, object],
@@ -224,45 +159,44 @@ async def select_cached_model(
 ) -> CacheAwareChoice | None:
     checked_at: Final = time.time() if now is None else now
     decision: Final = response.routing_decision
-    prefix: Final = parse_prompt(body)
-    requested_limit: Final = body.get("max_tokens")
-    if (
-        not config.cache_aware_routing
-        or decision is None
-        or prefix is None
-        or not caller.api_key
-        or not isinstance(requested_limit, int)
-        or isinstance(requested_limit, bool)
-        or requested_limit <= 0
-    ):
+    provider: Final = AnthropicCacheRouting.from_body(body)
+    if not config.cache_aware_routing or decision is None or provider is None or not caller.api_key:
         return None
     names: Final = eligible_models(config, decision)
     if not names or response.model not in tuple(model for _, model in names):
         return None
     candidates: Final = tuple(
-        candidate
-        for candidate in await asyncio.gather(
-            *(_candidate(router, tier, model, caller, request_kwargs, messages) for tier, model in names)
-        )
-        if candidate is not None
+        candidate for tier, model in names if (candidate := _candidate(router, tier, model, request_kwargs)) is not None
     )
     original: Final = next((candidate for candidate in candidates if candidate.model == response.model), None)
     if original is None:
         return None
     alternatives: Final = tuple(candidate for candidate in candidates if candidate.model != original.model)
     warm_flags: Final = await asyncio.gather(
-        *(_warm(candidate, caller.api_key, cache, prefix, checked_at) for candidate in alternatives)
+        *(provider.is_warm(candidate.deployment, caller.api_key, cache, checked_at) for candidate in alternatives)
     )
     warm: Final = tuple(candidate for candidate, fresh in zip(alternatives, warm_flags) if fresh)
     if not warm:
         return None
-    compared: Final = (original, *warm)
+    considered: Final = (original, *warm)
+    availability: Final = await asyncio.gather(
+        *(_available(candidate, router, caller, request_kwargs, messages) for candidate in considered)
+    )
+    authorized: Final = tuple(candidate for candidate, available in zip(warm, availability[1:]) if available)
+    if not availability[0] or not authorized:
+        return None
+    compared: Final = (original, *authorized)
+    output_limits: Final = tuple(
+        params_for_model(candidate.tier, candidate.model).get("max_tokens", provider.requested_output_limit)
+        for candidate in compared
+    )
+    if any(not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 for limit in output_limits):
+        return None
+    limits: Final = tuple(limit for limit in output_limits if isinstance(limit, int))
     arms: Final = await asyncio.gather(
         *(
-            predict_arm(
+            provider.predict(
                 candidate.deployment,
-                body,
-                prefix,
                 caller.api_key,
                 cache,
                 counter_for_model(candidate.model),
@@ -271,12 +205,8 @@ async def select_cached_model(
             for candidate in compared
         )
     )
-    output_tokens: Final = min(config.cache_aware_routing_output_tokens, requested_limit)
     costs: Final = tuple(
-        price_cache_tokens(arm.model or "", arm.deployment_id, arm.estimate.tokens, output_tokens)
-        if arm.estimate is not None
-        else None
-        for arm in arms
+        provider.cost(arm, min(config.cache_aware_routing_output_tokens, limit)) for arm, limit in zip(arms, limits)
     )
     original_cost: Final = costs[0]
     if original_cost is None:
@@ -284,14 +214,14 @@ async def select_cached_model(
     finished_at: Final = time.time() if now is None else now
     qualifying: Final = tuple(
         CacheAwareChoice(candidate.model, candidate.tier, arm.deployment_id, original_cost, cost)
-        for candidate, arm, cost in zip(warm, arms[1:], costs[1:])
+        for candidate, arm, cost, limit in zip(authorized, arms[1:], costs[1:], limits[1:])
         if cost is not None
         and cost < original_cost
         and arm.cache_state in ("warm", "partial")
         and arm.evidence is not None
         and arm.evidence.expires_at > finished_at
         and arm.estimate is not None
-        and _fits(candidate, arm.estimate.tokens.total_tokens, requested_limit)
+        and provider.fits(candidate.deployment, arm.estimate.tokens.total_tokens, limit)
     )
     return min(qualifying, key=lambda choice: choice.estimated_cost, default=None)
 
@@ -300,6 +230,7 @@ async def _choose_cached_model(
     *,
     router: Router,
     config: ComplexityRouterConfig,
+    params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse | None,
     request_kwargs: Mapping[str, object],
     messages: Sequence[Mapping[str, object]] | None,
@@ -336,8 +267,6 @@ async def _choose_cached_model(
         incoming: Final = _ProxyRequest.model_validate(request_kwargs.get("proxy_server_request"))
     except ValidationError:
         return None
-    if not urlparse(incoming.url).path.endswith("/v1/messages") or not supported_prediction_headers(incoming.headers):
-        return None
     if any(
         request_kwargs.get(key)
         for key in (
@@ -353,15 +282,11 @@ async def _choose_cached_model(
         )
     ):
         return None
-    body: Final = _JSON.validate_python(
-        MappingProxyType(
-            {
-                **incoming.body,
-                **MappingProxyType({key: request_kwargs[key] for key in _NATIVE_OPTIONS if key in request_kwargs}),
-                "messages": messages,
-            }
-        )
+    body: Final = AnthropicCacheRouting.request_body(
+        incoming.url, incoming.headers, incoming.body, request_kwargs, messages
     )
+    if body is None:
+        return None
     limiter: Final = proxy_server.proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
         return None
@@ -370,7 +295,7 @@ async def _choose_cached_model(
         async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
             try:
                 async with limiter.request_capacity(caller, model_name, request_data=request_kwargs):
-                    return await count_prompt_tokens(model, api_key, body)
+                    return await AnthropicCacheRouting.count_tokens(model, api_key, body)
             except Exception:  # noqa: BLE001  # an optional prediction denied capacity is an unavailable estimate
                 return None
 
@@ -379,6 +304,7 @@ async def _choose_cached_model(
     return await select_cached_model(
         router=router,
         config=config,
+        params_for_model=params_for_model,
         response=response,
         body=body,
         request_kwargs=request_kwargs,
@@ -393,6 +319,7 @@ async def choose_cached_model(
     *,
     router: Router,
     config: ComplexityRouterConfig,
+    params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse | None,
     request_kwargs: Mapping[str, object],
     messages: Sequence[Mapping[str, object]] | None,
@@ -402,7 +329,12 @@ async def choose_cached_model(
     try:
         return await asyncio.wait_for(
             _choose_cached_model(
-                router=router, config=config, response=response, request_kwargs=request_kwargs, messages=messages
+                router=router,
+                config=config,
+                params_for_model=params_for_model,
+                response=response,
+                request_kwargs=request_kwargs,
+                messages=messages,
             ),
             timeout=config.cache_aware_routing_timeout_ms / 1000,
         )

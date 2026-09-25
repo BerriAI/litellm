@@ -99,7 +99,7 @@ This first version supports the proxy's native `POST /v1/messages` endpoint with
 
 The proxy must have observed a successful cache read or write for the candidate's matching prefix, under the same caller key, deployment, provider key and model. A fresh observation allows a cache discount; missing or expired evidence does not. Provider eviction can still turn an expected hit into a miss
 
-The comparison includes uncached input, cache writes at the requested TTL, cache reads and expected output tokens. Set `cache_aware_routing_output_tokens` to your workload's expected response length; it defaults to 1024 and is capped by the request's `max_tokens`. The full requested output limit, together with the counted input, must fit the candidate's known limits. Custom deployment prices are respected
+The comparison includes uncached input, cache writes at the requested TTL, cache reads and expected output tokens. Set `cache_aware_routing_output_tokens` to your workload's expected response length; it defaults to 1024 and is capped separately by each model's effective output limit. With `max_tokens_from_tier_model: true` (the default), this is the model's known output ceiling; when disabled or unknown, the caller's `max_tokens` applies. The full effective output limit, together with the counted input, must fit the candidate's known limits. Custom deployment prices are respected
 
 Prediction makes up to two token-count requests per compared model. These use rate and concurrency capacity and add latency. The default total timeout is two seconds; timeout, missing counts or prices, and prediction failures preserve the classified route. No provider count requests run when there is no warm eligible alternative
 
