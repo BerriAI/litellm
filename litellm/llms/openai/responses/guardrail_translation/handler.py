@@ -167,6 +167,34 @@ def _tool_call_rewrite(before: _ToolCallShape, after: _ToolCallShape) -> _ToolCa
     return _ToolCallShape(name=after.name if after.name != before.name else None, arguments=after.arguments)
 
 
+def _undeliverable_tool_call_rewrite_reason(
+    call_ids: Sequence[str],
+    tool_call_item_count: int,
+    post_guardrail_tool_call_count: int,
+    unresolved_argument_event: bool,
+    rewritten_call_ids: frozenset[str],
+    event_call_ids: frozenset[str],
+) -> str | None:
+    if len(call_ids) != tool_call_item_count:
+        return (
+            f"{tool_call_item_count - len(call_ids)} of the stream's {tool_call_item_count} tool call items "
+            "carry no call_id"
+        )
+    if len(frozenset(call_ids)) != len(call_ids):
+        return "the stream's tool call items repeat a call_id"
+    if len(call_ids) != post_guardrail_tool_call_count:
+        return (
+            f"the guardrail returned {post_guardrail_tool_call_count} tool calls for the stream's "
+            f"{len(call_ids)} tool call items"
+        )
+    if unresolved_argument_event:
+        return "a tool call argument event names an item_id that no output_item event introduced"
+    missing_call_ids: Final = sorted(rewritten_call_ids - event_call_ids)
+    if missing_call_ids:
+        return f"no stream event carries the rewritten call_id {', '.join(missing_call_ids)}"
+    return None
+
+
 class ResponseOutputEnvelope(TypedDict, total=False):
     """Dict form of a Responses API response, as far as guardrail write-back reads it."""
 
@@ -210,7 +238,7 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call_output": "output", "message": "content"}
+    {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
 
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
@@ -966,7 +994,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _spread_text_rewrite_over_stream_events(
         self,
-        stream_events: Sequence[Any],
+        stream_events: Sequence[object],
         rewritten_text: str,
         guardrail_name: str,
     ) -> None:
@@ -999,7 +1027,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         ):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                "the scanned text events are not all output_text deltas with an integer output_index and "
+                "content_index, so the text rewrite has nowhere to land",
+            )
         self._sync_stream_events_with_rewrites(
             stream_events=stream_events,
             rewrites_by_position=MappingProxyType(dict(zip(placeable_positions, chain((rewritten_text,), repeat(""))))),
@@ -1106,16 +1138,18 @@ class OpenAIResponsesHandler(BaseTranslation):
             call_id is None and stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
             for event, call_id in zip(stream_events, event_call_ids)
         )
-        if (
-            len(call_ids) != len(tool_call_items)
-            or len(frozenset(call_ids)) != len(call_ids)
-            or len(call_ids) != len(post_guardrail_tool_calls)
-            or unresolved_argument_event
-            or not rewrites_by_call_id.keys() <= frozenset(event_call_ids)
-        ):
+        undeliverable_reason: Final = _undeliverable_tool_call_rewrite_reason(
+            call_ids=call_ids,
+            tool_call_item_count=len(tool_call_items),
+            post_guardrail_tool_call_count=len(post_guardrail_tool_calls),
+            unresolved_argument_event=unresolved_argument_event,
+            rewritten_call_ids=frozenset(rewrites_by_call_id),
+            event_call_ids=frozenset(call_id for call_id in event_call_ids if call_id is not None),
+        )
+        if undeliverable_reason is not None:
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(guardrail_name, undeliverable_reason)
         for output_item, rewrite in (
             (output_item, rewrites_by_call_id[call_id])
             for output_item, call_id in zip(tool_call_items, call_ids)

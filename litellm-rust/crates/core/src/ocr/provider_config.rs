@@ -5,15 +5,15 @@ use litellm_llms::{
         transformation::TextractDetectTextConfig,
     },
     azure_ai::ocr::{
-        cohere_parse_transformation::AzureAICohereParseConfig,
+        cohere_parse_transformation::{AZURE_COHERE_PARSE_PATH, AzureAICohereParseConfig},
         document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
-        transformation::AzureAiOcrConfig,
+        transformation::{AZURE_AI_OCR_PATH, AzureAiOcrConfig},
     },
     base_llm::ocr::{
         error::Error,
         handler::{self, CallHooks, OcrClient},
         transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument,
+            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
             PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
@@ -114,6 +114,10 @@ impl OcrConfigKind {
         with_config!(self, config => config.get_api_key_env_var())
     }
 
+    pub(crate) fn secret_names(self) -> Vec<&'static str> {
+        with_config!(self, config => config.secret_names())
+    }
+
     pub(crate) fn get_health_check_document(self) -> OcrDocument {
         with_config!(self, config => config.get_health_check_document())
     }
@@ -151,6 +155,36 @@ pub fn get_health_check_document(
     Ok(resolve_provider_config(model, custom_llm_provider)?
         .1
         .get_health_check_document())
+}
+
+/// Normalize a relayed Azure AI response into the LiteLLM OCR shape when
+/// `endpoint` is the OCR route of the model's resolved config.
+pub fn passthrough_response(
+    model: &str,
+    endpoint: &str,
+    body: &[u8],
+) -> Result<Option<LiteLLMOcrResponse>, Error> {
+    let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
+    let segments: Vec<&str> = endpoint
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let is_ocr_endpoint = match config {
+        OcrConfigKind::AzureAi => segments == AZURE_AI_OCR_PATH,
+        OcrConfigKind::AzureCohere => segments == AZURE_COHERE_PARSE_PATH,
+        OcrConfigKind::AzureDocumentIntelligence => {
+            segments == AzureDocumentIntelligenceOcrConfig::analyze_path(&model)?
+        }
+        other => {
+            let provider: &'static str = other.provider().into();
+            return Err(Error::InvalidProvider(provider.to_owned()));
+        }
+    };
+    if !is_ocr_endpoint {
+        return Ok(None);
+    }
+    with_config!(config, config => config.transform_ocr_response(&model, body, OcrResponseFormat::Litellm))
+        .map(Some)
 }
 
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
@@ -213,6 +247,8 @@ fn is_document_intelligence_model(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use litellm_auth::{InputSource, Sourced};
     use litellm_llms::{
         base_llm::ocr::document::InlineDocument, cohere::ocr::transformation::validate_document,
@@ -220,6 +256,27 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case(OcrConfigKind::AwsTextract)]
+    #[case(OcrConfigKind::AwsTextractAnalyze)]
+    #[case(OcrConfigKind::Cohere)]
+    #[case(OcrConfigKind::Mistral)]
+    #[case(OcrConfigKind::AzureAi)]
+    #[case(OcrConfigKind::AzureCohere)]
+    #[case(OcrConfigKind::AzureDocumentIntelligence)]
+    #[case(OcrConfigKind::ReductoLegacy)]
+    #[case(OcrConfigKind::ReductoV3)]
+    #[case(OcrConfigKind::VertexAi)]
+    #[case(OcrConfigKind::VertexDeepSeek)]
+    fn secret_names_include_api_keys_without_duplicates(#[case] config: OcrConfigKind) {
+        let names = config.secret_names();
+        let unique = names.iter().collect::<HashSet<_>>();
+        assert_eq!(names.len(), unique.len());
+        if let Some(api_key) = config.get_api_key_env_var() {
+            assert!(names.contains(&api_key));
+        }
+    }
 
     #[rstest]
     #[case("cohere")]
@@ -492,5 +549,69 @@ mod tests {
         let error = resolve_provider_config(model, provider).unwrap_err();
         assert!(matches!(&error, Error::InvalidProvider(provider) if provider == "not_a_provider"));
         assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
+    #[case("azure_ai/mistral-document-ai-2512", "providers/mistral/azure/ocr")]
+    #[case("azure_ai/mistral-document-ai-2512", "/providers/mistral/azure/ocr/")]
+    #[case("azure_ai/Cohere-parse-v5", "providers/cohere/v2/parse")]
+    #[case(
+        "azure_ai/doc-intelligence/prebuilt-layout",
+        "documentintelligence/documentModels/prebuilt-layout:analyze"
+    )]
+    fn passthrough_response_recognizes_the_resolved_config_ocr_route(
+        #[case] model: &str,
+        #[case] endpoint: &str,
+    ) {
+        assert!(passthrough_response(model, endpoint, b"not json").is_err());
+    }
+
+    #[rstest]
+    #[case("azure_ai/mistral-document-ai-2512", "models/info")]
+    #[case("azure_ai/mistral-document-ai-2512", "providers/cohere/v2/parse")]
+    #[case("azure_ai/Cohere-parse-v5", "providers/mistral/azure/ocr")]
+    #[case(
+        "azure_ai/doc-intelligence/prebuilt-layout",
+        "documentintelligence/documentModels/prebuilt-read:analyze"
+    )]
+    fn passthrough_response_skips_other_routes(#[case] model: &str, #[case] endpoint: &str) {
+        assert!(
+            passthrough_response(model, endpoint, b"not json")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn passthrough_response_normalizes_the_mistral_body() {
+        let body = br#"{
+            "pages": [{"index": 0, "markdown": "page one"}, {"index": 1, "markdown": "page two"}],
+            "model": "mistral-document-ai-2512",
+            "usage_info": {"pages_processed": 2}
+        }"#;
+        let json = passthrough_response(
+            "azure_ai/mistral-document-ai-2512",
+            "providers/mistral/azure/ocr",
+            body,
+        )
+        .unwrap()
+        .unwrap()
+        .into_json();
+        assert_eq!(json["usage_info"]["pages_processed"], 2);
+        assert_eq!(json["pages"][0]["markdown"], "page one");
+    }
+
+    #[test]
+    fn passthrough_response_counts_cohere_billed_pages() {
+        let body = br#"{"id": "parse-1", "pages": [], "meta": {"billed_units": {"pages": 3}}}"#;
+        let json = passthrough_response(
+            "azure_ai/Cohere-parse-v5",
+            "providers/cohere/v2/parse",
+            body,
+        )
+        .unwrap()
+        .unwrap()
+        .into_json();
+        assert_eq!(json["usage_info"]["pages_processed"], 3);
     }
 }

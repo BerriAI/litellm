@@ -1361,16 +1361,14 @@ def test_ollama_image():
 
     from PIL import Image
 
+    sent_images = []
+
     def mock_post(url, **kwargs):
+        sent_images.append(json.loads(kwargs["data"])["images"])
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
-        data_json = json.loads(kwargs["data"])
-        mock_response.json.return_value = {
-            # return the image in the response so that it can be tested
-            # against the original
-            "response": data_json["images"]
-        }
+        mock_response.json.return_value = {"response": "a black pixel"}
         return mock_response
 
     def make_b64image(format):
@@ -1399,9 +1397,10 @@ def test_ollama_image():
 
     client = HTTPHandler()
     for test in tests:
+        sent_images.clear()
         try:
             with patch.object(client, "post", side_effect=mock_post):
-                response = completion(
+                completion(
                     model="ollama/llava",
                     messages=[
                         {
@@ -1417,14 +1416,14 @@ def test_ollama_image():
                     ],
                     client=client,
                 )
+                (image_data,) = sent_images[0]
                 if not test[1]:
                     # the conversion process may not always generate the same image,
                     # so just check for a JPEG image when a conversion was done.
-                    image_data = response["choices"][0]["message"]["content"][0]
                     image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                     assert image.format == "JPEG"
                 else:
-                    assert response["choices"][0]["message"]["content"][0] == test[1]
+                    assert image_data == test[1]
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 

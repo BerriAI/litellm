@@ -5,7 +5,12 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.rust_bridge import catalog
+from litellm.rust_bridge.catalog import Route, RouteRule
+from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     MESSAGES,
@@ -18,6 +23,12 @@ from tests.test_litellm_rust.support.requests import (
 pytestmark = pytest.mark.requires_rust_extension
 
 STREAM: Final = ResponseSpec(body=None, events=MESSAGES_EVENTS)
+
+
+@pytest.fixture(autouse=True)
+def opt_messages_into_rust() -> Iterator[None]:
+    with rebound(catalog, "RULES", (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN), *catalog.RULES)):
+        yield
 
 
 @pytest.fixture
@@ -116,6 +127,7 @@ async def test_native_messages_stream_relays_provider_events_and_logs_success_on
         **arguments(messages_server, stream=True, callbacks=[recorder])
     )
     assert isinstance(stream, AsyncIterator)
+    assert get_hidden_params_dict(stream) == {"additional_headers": {"x-litellm-rust": "true"}}
     first: Final = await anext(stream)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names
@@ -159,6 +171,7 @@ def test_native_sync_messages_stream_relays_provider_events_and_logs_success_onc
 
     stream: Final = litellm.anthropic.messages.create(**arguments(messages_server, stream=True, callbacks=[recorder]))
     assert isinstance(stream, Iterator)
+    assert get_hidden_params_dict(stream) == {"additional_headers": {"x-litellm-rust": "true"}}
 
     assert b"".join(stream) == sse_payload()
     assert_served_natively(messages_server)

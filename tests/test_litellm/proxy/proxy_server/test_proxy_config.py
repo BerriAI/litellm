@@ -16,6 +16,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -32,6 +33,7 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_deployment_access_windows,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
     validate_auto_router_capability_limits,
@@ -874,9 +876,7 @@ class _ConfigTable:
         await asyncio.sleep(0)
         return _ConfigRow(param_value=value) if value is not None else None
 
-    async def upsert(
-        self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]
-    ) -> _ConfigRow:
+    async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _ConfigRow:
         param_name: Final = where["param_name"]
         value: Final = _CONFIG_VALUE.validate_json(data["update"]["param_value"])
         self.rows[param_name] = value
@@ -925,7 +925,9 @@ class _ConfigPrisma:
             self.db.litellm_config.upserted_param_names.append(param_name)
 
 
-def _db_backed_proxy_config(monkeypatch, rows: Mapping[str, Mapping[str, JsonValue]]) -> tuple[ProxyConfig, _ConfigTable]:
+def _db_backed_proxy_config(
+    monkeypatch, rows: Mapping[str, Mapping[str, JsonValue]]
+) -> tuple[ProxyConfig, _ConfigTable]:
     table: Final = _ConfigTable(rows)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _ConfigPrisma(db=_ConfigDb(litellm_config=table)))
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
@@ -2072,6 +2074,88 @@ def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flag", "system"), (("use_google_kms", "google_kms"), ("use_azure_key_vault", "azure_key_vault"))
+)
+async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, system: str
+) -> None:
+    if system == "azure_key_vault":
+        client_type: Final = pytest.importorskip("azure.keyvault.secrets").SecretClient
+    else:
+        client_type: Final = pytest.importorskip("google.cloud.kms_v1").KeyManagementServiceClient
+
+    from litellm.rust_bridge.secret_manager import native_secret_manager_config
+
+    credentials_file: Final = tmp_path / "credentials.json"
+    credentials_file.write_text(
+        json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "test-client",
+                "client_secret": "test-secret",
+                "refresh_token": "test",
+            }
+        )
+    )
+    config_file: Final = tmp_path / "legacy-secret-manager.yaml"
+    config_file.write_text(
+        f"model_list: []\ngeneral_settings:\n  {flag}: true\n  key_management_settings:\n    access_mode: write_only\n"
+    )
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials_file))
+    monkeypatch.setenv("GOOGLE_KMS_RESOURCE_NAME", "projects/test/locations/global/keyRings/test/cryptoKeys/test")
+    monkeypatch.setenv("AZURE_KEY_VAULT_URI", "https://test.vault.azure.net")
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setattr(litellm, "_google_kms_resource_name", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", litellm._key_management_settings)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    client: Final = litellm.secret_manager_client
+    assert isinstance(client, client_type)
+    try:
+        captured: Final = native_secret_manager_config(client)
+        assert captured is not None
+        assert captured.system == system
+        assert dict(captured.environment)["GOOGLE_APPLICATION_CREDENTIALS"] == str(credentials_file)
+        assert litellm._key_management_system is not None
+        assert litellm._key_management_system.value == system
+    finally:
+        if system == "azure_key_vault":
+            client.close()
+        else:
+            client.transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ("null", "false"))
+async def test_load_config_disabled_google_kms_does_not_initialize_a_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    config_file: Final = tmp_path / "disabled-kms.yaml"
+    config_file.write_text(f"model_list: []\ngeneral_settings:\n  use_google_kms: {flag}\n")
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    _router, model_list, general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=str(config_file)
+    )
+
+    assert model_list == []
+    assert general_settings["use_google_kms"] is (None if flag == "null" else False)
+    assert litellm.secret_manager_client is None
+    assert litellm._key_management_system is None
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
     f = tmp_path / "c.yaml"
     f.write_text("model_list: []\ngeneral_settings: {}\nlitellm_settings: {}\n")
@@ -2195,6 +2279,34 @@ async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp
         litellm.user_url_validation = original_validation
         litellm.user_url_allowed_hosts = original_hosts
         litellm.provider_url_destination_allowed_hosts = original_provider_hosts
+
+
+@pytest.mark.asyncio
+async def test_ssrf_block_message_names_a_config_section_load_config_honors(tmp_path, monkeypatch):
+    """Regression for LIT-8349: the remediation in the SSRF block message must point at a section that works."""
+    from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    with pytest.raises(SSRFError) as blocked:
+        validate_url("http://10.96.3.245:10002/agent.json")
+    section_match = re.search(r"add the host to `user_url_allowed_hosts` in (\w+)\.", str(blocked.value))
+    assert section_match is not None, str(blocked.value)
+    section: Final = section_match.group(1)
+    assert section == "litellm_settings", f"block message points admins at {section}, which the docs contradict"
+
+    f = tmp_path / "c.yaml"
+    f.write_text(f"model_list: []\n{section}:\n  user_url_allowed_hosts:\n    - '10.96.3.245:10002'\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.user_url_allowed_hosts == ["10.96.3.245:10002"], f"{section} did not apply the allowlist"
+    assert validate_url("http://10.96.3.245:10002/agent.json") == (
+        "http://10.96.3.245:10002/agent.json",
+        "10.96.3.245:10002",
+    )
 
 
 @pytest.mark.asyncio
@@ -4526,3 +4638,268 @@ async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fa
     await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
 
     assert general_settings["allow_agents_for_team_admins"] is True
+
+
+def _websearch_logger_cls():
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    return WebSearchInterceptionLogger
+
+
+def _run_websearch_init(monkeypatch, stored_params, starting_callbacks):
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "callbacks", list(starting_callbacks))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"websearch_interception_params": stored_params}))
+        if stored_params is not None
+        else AsyncMock(return_value=SimpleNamespace(param_value={})),
+    )
+    asyncio.run(pc.init_websearch_interception_settings_in_db(prisma_client=MagicMock()))
+    return pc
+
+
+def _poll_websearch_init(pc, monkeypatch, stored_params):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"websearch_interception_params": stored_params})),
+    )
+    asyncio.run(pc.init_websearch_interception_settings_in_db(prisma_client=MagicMock()))
+
+
+def test_init_websearch_interception_resyncs_after_a_write_drops_the_enabled_flag(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    _poll_websearch_init(pc, monkeypatch, {"enabled": True, "search_tool_name": "old-tool"})
+    _poll_websearch_init(pc, monkeypatch, {"search_tool_name": "new-tool"})
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].search_tool_name == "new-tool"
+
+
+def test_init_websearch_interception_ignores_a_non_list_providers_value(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": "bedrock", "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock"]
+
+
+def test_init_websearch_interception_absent_key_leaves_callbacks_untouched(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    config_registered = logger_cls(search_tool_name="from-config-yaml")
+
+    _run_websearch_init(monkeypatch, stored_params=None, starting_callbacks=[config_registered])
+
+    assert litellm.callbacks == [config_registered]
+
+
+def test_init_websearch_interception_without_enabled_key_leaves_callbacks_untouched(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    config_registered = logger_cls(search_tool_name="from-config-yaml")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"search_tool_name": "stored-tool"},
+        starting_callbacks=[config_registered],
+    )
+
+    assert litellm.callbacks == [config_registered]
+
+
+def test_init_websearch_interception_registers_when_explicitly_enabled(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].search_tool_name == "stored-tool"
+
+
+def test_init_websearch_interception_treats_string_false_as_disabled(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    existing = logger_cls(search_tool_name="stored-tool")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": "false", "search_tool_name": "stored-tool"},
+        starting_callbacks=[existing],
+    )
+
+    assert [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)] == []
+
+
+def test_init_websearch_interception_empty_providers_falls_back_to_handler_default(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": [], "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock"]
+
+
+def test_init_websearch_interception_keeps_working_callback_when_new_one_cannot_be_built(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    working = logger_cls(search_tool_name="stored-tool", max_agentic_loops=3)
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "stored-tool", "max_agentic_loops": 0},
+        starting_callbacks=[working],
+    )
+
+    assert litellm.callbacks == [working]
+
+
+def test_init_websearch_interception_disabled_removes_the_callback(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    existing = logger_cls(search_tool_name="stored-tool")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": False, "search_tool_name": "stored-tool"},
+        starting_callbacks=[existing],
+    )
+
+    assert [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)] == []
+
+
+def test_init_websearch_interception_replaces_stale_instance_on_param_change(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    stale = logger_cls(search_tool_name="old-tool", max_agentic_loops=2)
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "new-tool", "max_agentic_loops": 7},
+        starting_callbacks=[stale],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert (registered[0].search_tool_name, registered[0].max_agentic_loops) == ("new-tool", 7)
+
+
+def test_init_websearch_interception_honors_enabled_providers(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": ["bedrock", "vertex_ai"]},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock", "vertex_ai"]
+
+
+def test_websearch_interception_settings_can_be_named_in_supported_db_objects(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    allowlist = ConfigGeneralSettings(supported_db_objects=["websearch_interception_settings"]).supported_db_objects
+    assert allowlist
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": allowlist})
+    assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is True
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is False
+
+
+def test_validate_deployment_access_windows_rejects_malformed_time():
+    model = {
+        "model_name": "gpt-4o-shared",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {
+            "access_windows": [{"start": "25:00", "end": "06:00", "timezone": "America/New_York", "team_ids": ["t"]}]
+        },
+    }
+
+    with pytest.raises(ValueError, match="access_windows") as exc_info:
+        validate_deployment_access_windows(model)
+
+    assert "gpt-4o-shared" in str(exc_info.value)
+
+
+def test_validate_deployment_access_windows_rejects_unknown_timezone():
+    model = {
+        "model_name": "gpt-4o-shared",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {
+            "access_windows": [{"start": "22:00", "end": "06:00", "timezone": "Mars/Olympus", "team_ids": ["t"]}]
+        },
+    }
+
+    with pytest.raises(ValueError, match="Mars/Olympus"):
+        validate_deployment_access_windows(model)
+
+
+def test_validate_deployment_access_windows_accepts_valid_and_absent():
+    assert (
+        validate_deployment_access_windows(
+            {
+                "model_name": "gpt-4o-shared",
+                "litellm_params": {"model": "gpt-4o"},
+                "model_info": {
+                    "access_windows": [
+                        {"start": "22:00", "end": "06:00", "timezone": "America/New_York", "team_ids": ["t"]}
+                    ]
+                },
+            }
+        )
+        is None
+    )
+    assert validate_deployment_access_windows({"model_name": "m", "litellm_params": {"model": "m"}}) is None
+    assert (
+        validate_deployment_access_windows(
+            {"model_name": "m", "litellm_params": {"model": "m"}, "model_info": {"id": "x"}}
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_failure():
+    pc = ProxyConfig()
+    row = SimpleNamespace(
+        model_id="gated",
+        created_by="owner",
+        model_info={},
+        litellm_params={
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"classifier_type": "heuristic_v2"},
+        },
+    )
+    find_many = AsyncMock(side_effect=[[row], RuntimeError("database unavailable"), []])
+    client = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many)))
+    assert pc.auto_router_db_catalog is None
+    assert await pc._get_models_from_db(client) == [row]
+    loaded = pc.auto_router_db_catalog
+    assert loaded is not None and loaded[0].model_id == "gated"
+    assert await pc._get_models_from_db(client) is None
+    assert pc.auto_router_db_catalog == loaded
+    assert await pc._get_models_from_db(client) == []
+    assert pc.auto_router_db_catalog == ()
+    assert find_many.await_count == 3

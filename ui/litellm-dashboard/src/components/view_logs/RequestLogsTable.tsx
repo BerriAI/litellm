@@ -9,7 +9,8 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
+import { SPAN_TYPE_LABELS } from "./constants";
+import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
@@ -34,6 +35,13 @@ interface RequestLogsTableProps {
   logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;
 }
+
+const formatFilterValue = (columnId: string, value: unknown): string => {
+  if (columnId === LOG_FILTER_IDS.SPAN_TYPE) {
+    return SPAN_TYPE_LABELS[String(value)] ?? String(value);
+  }
+  return Array.isArray(value) ? value.join(", ") : String(value);
+};
 
 function RequestLogsEmptyState({ filtered }: { filtered: boolean }) {
   return (
@@ -116,6 +124,7 @@ export function RequestLogsTable({
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
             filterLabels={LOG_FILTER_LABELS}
+            formatFilterValue={formatFilterValue}
             showViewOptions={false}
           >
             {toolbarChildren}

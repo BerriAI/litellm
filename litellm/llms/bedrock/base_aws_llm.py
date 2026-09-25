@@ -524,6 +524,17 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_session_tags=_canonical_aws_session_tags(auth_params.aws_session_tags),
         )
 
+    def resolve_s3_credentials(self, params: Mapping[str, object], aws_region_name: str | None) -> Credentials:
+        """S3 signing identity: the s3_* static pair as-is when both are set, otherwise the resolved aws_* params."""
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+        s3_pair: Final = s3_static_key_pair(params)
+        if s3_pair is None:
+            return self.resolve_credentials(AwsAuthParams.model_validate(params), aws_region_name)
+        return Credentials(access_key=s3_pair[0], secret_key=s3_pair[1])
+
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
             # First check if the string contains the expected prefix

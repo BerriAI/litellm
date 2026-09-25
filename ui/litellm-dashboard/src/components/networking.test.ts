@@ -913,3 +913,26 @@ describe("fetchMemoryList search serialization", () => {
     expect(lastParams(mockFetch).has("search")).toBe(false);
   });
 });
+
+describe("userFilterUICall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("forwards the search param to /user/filter/ui", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => "[]" } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userFilterUICall("sk-test", new URLSearchParams({ search: "svc" }));
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://localhost");
+    expect(parsed.pathname).toContain("/user/filter/ui");
+    expect(parsed.searchParams.get("search")).toBe("svc");
+  });
+});

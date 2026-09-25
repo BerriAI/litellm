@@ -146,12 +146,17 @@ def _validate_push_notification_url(url: str) -> None:
 
 
 def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
+    """The human behind this call. An agent key acting for an invoking user forwards that user, not
+    itself, so a chain of agents stays capped at what the original caller may reach."""
+    caller: Final = user_api_key_dict.agent_caller
+    user_id: Final = caller.user_id if caller is not None else user_api_key_dict.user_id
+    team_id: Final = caller.team_id if caller is not None else user_api_key_dict.team_id
     return MappingProxyType(
         {
             name: value
             for name, value in (
-                ("X-LiteLLM-User-Id", user_api_key_dict.user_id),
-                ("X-LiteLLM-Team-Id", user_api_key_dict.team_id),
+                ("X-LiteLLM-User-Id", user_id),
+                ("X-LiteLLM-Team-Id", team_id),
             )
             if value
         }

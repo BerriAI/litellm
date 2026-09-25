@@ -35,6 +35,7 @@ const retryPolicyMap: Record<string, string> = {
   "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
   "InternalServerError (500)": "InternalServerErrorRetries",
   "ServiceUnavailableError (503)": "ServiceUnavailableErrorRetries",
+  "NotFoundError (404)": "NotFoundErrorRetries",
   "All other errors": "DefaultRetries",
 };
 

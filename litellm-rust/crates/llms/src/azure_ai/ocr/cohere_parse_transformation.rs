@@ -16,6 +16,8 @@ use crate::{
     },
 };
 
+pub const AZURE_COHERE_PARSE_PATH: [&str; 4] = ["providers", "cohere", "v2", "parse"];
+
 #[derive(Default)]
 pub struct AzureAICohereParseConfig;
 
@@ -26,6 +28,10 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         super::transformation::AzureAiOcrConfig.get_api_key_env_var()
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        super::transformation::AzureAiOcrConfig.secret_names()
     }
 
     fn get_health_check_document(&self) -> OcrDocument {
@@ -127,7 +133,7 @@ impl AzureAICohereParseConfig {
         }
         url.set_path(path.strip_suffix("/models").unwrap_or(&path));
         ApiUrl::parse(url.as_str())
-            .and_then(|url| url.complete_path(&["providers", "cohere", "v2", "parse"]))
+            .and_then(|url| url.complete_path(&AZURE_COHERE_PARSE_PATH))
             .map(|url| url.into_string())
             .map_err(|_| invalid_api_base())
     }

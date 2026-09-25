@@ -60,9 +60,7 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def rejected_writes(self, incoming: Mapping[str, JsonValue]) -> tuple[str, ...]:
         return tuple(
-            sorted(
-                key for key, value in incoming.items() if self.owned_by_config(key) and value != self._yaml_values[key]
-            )
+            sorted(key for key, value in incoming.items() if self.owned_by_config(key) and value != self.get(key))
         )
 
     def shadowed_db_keys(self) -> tuple[str, ...]:
@@ -74,8 +72,13 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def apply_db_row(self, row: DbRow, db_row: Mapping[str, JsonValue]) -> None:
         previous_row: Final = self._database_rows.get(row, _EMPTY_VALUES)
+        changed: Final = frozenset(
+            key
+            for key in (*previous_row, *db_row)
+            if previous_row.get(key, ABSENT) != db_row.get(key, ABSENT)  # pyright: ignore[reportUnknownArgumentType]  # JsonValue vs Absent compare
+        )
         self._database_rows = MappingProxyType({**self._database_rows, row: MappingProxyType(dict(db_row))})
-        self._clear_runtime_keys(frozenset((*previous_row, *db_row)))
+        self._clear_runtime_keys(changed)
 
     def resolved(self) -> Mapping[str, JsonValue]:
         return MappingProxyType(dict(self))
@@ -130,6 +133,9 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def __len__(self) -> int:
         return sum(1 for _ in self)
 
+    def __bool__(self) -> bool:
+        return any(True for _ in self)
+
     def _clear_runtime(self) -> None:
         self._runtime_values = _EMPTY_VALUES
         self._deleted_runtime_keys = frozenset()
@@ -160,8 +166,20 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def _db_value_is_shadowed(self, key: str) -> bool:
         db_value: Final = self._db_value(key)
-        return not isinstance(db_value, Absent) and db_value is not None and db_value != self.get(key)
+        return (
+            not isinstance(db_value, Absent)
+            and db_value is not None
+            and db_value != self.get(key)
+            and db_value != self.config_value(key)
+        )
 
     def _resolution_for(self, key: str) -> Resolved:
         yaml_value: Final[SettingValue] = self._yaml_values.get(key, ABSENT)
         return resolve(yaml_value, self._db_value(key))
+
+
+def source_for(settings: SettingsStore, key: str, default: object = None) -> FieldSource:
+    source: Final = settings.source(key)
+    if source == "unset":
+        return "default" if default is not None else "unset"
+    return source

@@ -998,29 +998,31 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             />
                           )}
                         </FormField>
-                        <FormField
-                          control={form.control}
-                          name="disable_global_guardrails"
-                          className="mt-4"
-                          label={labelWithHint(
-                            "Disable Global Guardrails",
-                            "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
-                          )}
-                          description={
-                            premiumUser
-                              ? "Bypass global guardrails for this team"
-                              : "Premium feature - Upgrade to disable global guardrails by team"
-                          }
-                        >
-                          {({ id, value, onChange }) => (
-                            <Switch
-                              id={id}
-                              disabled={!premiumUser}
-                              checked={value === true}
-                              onCheckedChange={onChange}
-                            />
-                          )}
-                        </FormField>
+                        {isProxyAdminRole(userRole || "") && (
+                          <FormField
+                            control={form.control}
+                            name="disable_global_guardrails"
+                            className="mt-4"
+                            label={labelWithHint(
+                              "Disable Global Guardrails",
+                              "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
+                            )}
+                            description={
+                              premiumUser
+                                ? "Bypass global guardrails for this team"
+                                : "Premium feature - Upgrade to disable global guardrails by team"
+                            }
+                          >
+                            {({ id, value, onChange }) => (
+                              <Switch
+                                id={id}
+                                disabled={!premiumUser}
+                                checked={value === true}
+                                onCheckedChange={onChange}
+                              />
+                            )}
+                          </FormField>
+                        )}
                         {canViewPolicies && (
                           <FormField
                             control={form.control}

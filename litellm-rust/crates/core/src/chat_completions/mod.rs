@@ -51,6 +51,3 @@ pub fn chat_completions_decline_reason(
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
 }
-
-#[cfg(test)]
-mod tests;

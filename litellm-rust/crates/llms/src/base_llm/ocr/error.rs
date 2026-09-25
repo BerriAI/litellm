@@ -98,6 +98,8 @@ pub enum Error {
         "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
     )]
     MissingReductoApiKey,
+    #[error("secret resolution failed: {0}")]
+    Secret(#[source] std::sync::Arc<litellm_secrets::Error>),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
@@ -116,7 +118,6 @@ impl From<litellm_host::machine::MachineFault> for Error {
         Self::InvalidRequest(match fault {
             MachineFault::Abandoned => "OCR host driver was abandoned".into(),
             MachineFault::Protocol(message) => format!("OCR {message}"),
-            MachineFault::Mismatch => "invalid OCR host operation result".into(),
         })
     }
 }

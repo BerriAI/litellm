@@ -21,6 +21,7 @@ interface MCPServerCardProps {
   // Computed by the parent from the bulk /user-env-vars/status response, so
   // the card never issues a per-row request (no N+1).
   missingUserFields?: string[];
+  hasUserFields?: boolean;
   isLoadingHealth?: boolean;
   isRechecking?: boolean;
   onClick: () => void;
@@ -42,6 +43,7 @@ const stop = (e: MouseEvent | KeyboardEvent) => e.stopPropagation();
 const MCPServerCard: FC<MCPServerCardProps> = ({
   server,
   missingUserFields,
+  hasUserFields,
   isLoadingHealth,
   isRechecking,
   onClick,
@@ -100,6 +102,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onClick();
@@ -256,9 +259,10 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
           )}
         </div>
 
-        {(server.is_byok || needsAttention) && (
+        {(server.is_byok || hasUserFields || needsAttention) && (
           <div className="mt-auto flex flex-col gap-2">
             {server.is_byok && <ByokRow connected={!!server.has_user_credential} onConnect={onByokConnect} />}
+            {hasUserFields && !needsAttention && <UserFieldsRow onUpdate={onOpenFillFields} />}
             {needsAttention && (
               <div className="flex items-center justify-between gap-2 text-xs">
                 <Tooltip>
@@ -364,6 +368,29 @@ const HealthChip: FC<HealthChipProps> = ({
     </Tooltip>
   );
 };
+
+const UserFieldsRow: FC<{ onUpdate?: () => void }> = ({ onUpdate }) => (
+  <div className="flex items-center justify-between gap-2 text-xs">
+    <span className="text-muted-foreground">Per-user credentials</span>
+    <div className="flex items-center gap-2">
+      <Badge variant="outline">
+        <Check /> Set
+      </Badge>
+      {onUpdate && (
+        <Button
+          variant="link"
+          size="sm"
+          onClick={(e) => {
+            stop(e);
+            onUpdate();
+          }}
+        >
+          Update
+        </Button>
+      )}
+    </div>
+  </div>
+);
 
 interface ByokRowProps {
   connected: boolean;

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, create_autospec, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
 import click
 import fastapi.routing
@@ -1628,6 +1628,219 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_resolved_key
 
 
+def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
+    import yaml
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"general_settings": general_settings}))
+    for name in (
+        "LITELLM_MASTER_KEY",
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY",
+        "LITELLM_MIGRATE_FROM_MASTER_KEY",
+        "LITELLM_SALT_KEY",
+        "WORKER_CONFIG",
+        "DATABASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    scheduler_left_on_a_closed_event_loop_by_an_earlier_test = "litellm.proxy.proxy_server.scheduler"
+    monkeypatch.setattr(scheduler_left_on_a_closed_event_loop_by_an_earlier_test, None)
+    announced = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.announce_on_stderr_at_exit", announced.append)
+    return config_path, announced
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{"master_key": "sk-1234"}, {"master_key": ""}, {"master_key": None}, {}],
+    ids=["publicly-known", "empty", "yaml-null", "no-general-settings"],
+)
+async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database_is_unreachable(
+    monkeypatch, tmp_path, general_settings
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    async def unreachable():
+        raise ConnectionError("database is down")
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", unreachable)
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert len(announced) == 1
+    assert "sk-$(openssl rand -hex 32)" in announced[0]
+    key_can_have_encrypted_the_database = general_settings.get("master_key") is not None
+    assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
+
+
+class _DatabaseWithOneStoredCredential:
+    def __init__(self, ciphertext):
+        self._ciphertext = ciphertext
+
+    async def query_raw(self, query, *args):
+        if "information_schema.columns" in query:
+            return [{"table_name": "LiteLLM_CredentialsTable", "column_name": "credential_values"}]
+        return [{"credential_id": "cred-1", "credential_values": {"api_key": self._ciphertext}}]
+
+    async def execute_raw(self, query, *args):
+        raise AssertionError("a refused boot must not write to the database")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [("sk-1234", True), ("sk-some-other-key", False)])
+async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
+    monkeypatch, tmp_path, encrypted_with, asks_to_migrate
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    database = _DatabaseWithOneStoredCredential(encrypt_value_helper("sk-provider", new_encryption_key=encrypted_with))
+
+    async def connected():
+        return database
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", connected)
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert ("LITELLM_MIGRATE_FROM_MASTER_KEY=sk-1234" in announced[0]) == asks_to_migrate
+    assert ("holds 1 value(s) encrypted with this master key" in announced[0]) == asks_to_migrate
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_deleted(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "you may now delete LITELLM_MIGRATE_FROM_MASTER_KEY" in notices[0]
+
+
+class _PrismaClientWhoseDatabaseRejectsQueries:
+    class _Database:
+        async def query_raw(self, query, *args):
+            raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
+
+    writer_db = _Database()
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "sk-1234")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        pytest.raises(RuntimeError, match="permission denied"),
+    ):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "Could not migrate stored values" in notices[0]
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert str(config_path) in announced[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", ["yaml", "env"])
+async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monkeypatch, tmp_path, override):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    general_settings = {
+        "master_key": "sk-1234",
+        **({"dangerously_permit_weak_or_unset_master_key": True} if override == "yaml" else {}),
+    }
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    if override == "env":
+        monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+
+    async with proxy_startup_event(FastAPI()):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == "sk-1234"
+
+    assert announced == []
+
+
+class _ShutdownAwarePrisma(MockPrisma):
+    def __init__(self):
+        super().__init__()
+        self.stop_view_setup_task = AsyncMock()
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
+    import yaml
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    fake_prisma = _ShutdownAwarePrisma()
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump({"general_settings": {"master_key": "sk-12345"}}, f)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
+
+    async with proxy_startup_event(FastAPI()):
+        stopped_while_serving = fake_prisma.stop_view_setup_task.await_count
+
+    actual = {
+        "stopped_while_serving": stopped_while_serving,
+        "stopped_after_shutdown": fake_prisma.stop_view_setup_task.await_count,
+    }
+    assert actual == {"stopped_while_serving": 0, "stopped_after_shutdown": 1}
+
+
 def test_team_info_masking():
     """
     Test that sensitive team information is properly masked
@@ -2987,7 +3200,7 @@ def test_normalize_datetime_for_sorting():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch: pytest.MonkeyPatch):
     """
     Test that _add_proxy_budget_to_db only creates a user and no keys are added.
 
@@ -3005,8 +3218,8 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
     # Set up required litellm settings
-    litellm.budget_duration = "30d"
-    litellm.max_budget = 100.0
+    monkeypatch.setattr(litellm, "budget_duration", "30d")
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
@@ -3045,7 +3258,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
+async def test_add_proxy_budget_to_db_backfills_budget_reset_at(monkeypatch: pytest.MonkeyPatch):
     """
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
@@ -3063,8 +3276,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     import litellm
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
-    litellm.budget_duration = "30d"
-    litellm.max_budget = 100.0
+    monkeypatch.setattr(litellm, "budget_duration", "30d")
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
     mock_prisma = MagicMock()
@@ -3311,9 +3524,7 @@ async def test_load_config_without_role_permissions_leaves_every_role_unrestrict
     from litellm.proxy.proxy_server import ProxyConfig
 
     config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(
-        yaml.dump({"model_list": [], "general_settings": {"max_parallel_requests": 7}})
-    )
+    config_file.write_text(yaml.dump({"model_list": [], "general_settings": {"max_parallel_requests": 7}}))
 
     _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
 
@@ -3342,6 +3553,25 @@ async def test_load_config_rejects_malformed_role_permissions(tmp_path):
         await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
 
 
+@pytest.mark.asyncio
+async def test_load_config_compiles_key_alias_pattern_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "key_alias_pattern", None)
+    config_file: Final = tmp_path / "config.yaml"
+
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": {"key_alias_pattern": "^team-("}}))
+    with pytest.raises(Exception, match=r"litellm_settings\.key_alias_pattern"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert litellm.key_alias_pattern is None
+
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": {"key_alias_pattern": "^team-[a-z]+$"}}))
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert litellm.key_alias_pattern == "^team-[a-z]+$"
+
+
 def test_os_environ_resolution_leaves_the_config_layer_holding_the_reference(monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -3362,9 +3592,7 @@ def test_os_environ_resolution_leaves_the_config_layer_holding_the_reference(mon
     assert resolved["general_settings"]["coordination_redis"]["password"] == "sk-nested-value"
     assert resolved["general_settings"]["master_key"] == "sk-nested-value"
     assert proxy_config.settings.config_value("master_key") == "os.environ/PROOF_NESTED_SECRET"
-    assert proxy_config.settings.config_value("coordination_redis") == {
-        "password": "os.environ/PROOF_NESTED_SECRET"
-    }
+    assert proxy_config.settings.config_value("coordination_redis") == {"password": "os.environ/PROOF_NESTED_SECRET"}
 
 
 def test_os_environ_resolution_reaches_dicts_nested_in_a_list(monkeypatch):
@@ -5524,7 +5752,9 @@ async def test_boot_warns_that_a_shadowed_database_value_will_never_apply(tmp_pa
     config_path.write_text(
         yaml.safe_dump({"model_list": [], "general_settings": {"allowed_ips": ["1.2.3.4"], "max_file_size_mb": 5}})
     )
-    db_row: Final = types.SimpleNamespace(param_value={"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7})
+    db_row: Final = types.SimpleNamespace(
+        param_value={"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7}
+    )
 
     async def read_config_row(_prisma_client, param_name):
         return db_row if param_name == "general_settings" else None
@@ -5557,12 +5787,9 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import model_info_v1
 
-    # Mock user authentication
-    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
-    mock_user_api_key_dict.user_id = "test-user"
-    mock_user_api_key_dict.api_key = "test-key"
-    mock_user_api_key_dict.team_models = []
-    mock_user_api_key_dict.models = ["oci-grok-test"]
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user", api_key="test-key", team_models=[], models=["oci-grok-test"]
+    )
 
     # Mock model data with OCI sensitive information
     mock_model_data = {
@@ -7730,7 +7957,9 @@ async def test_update_general_settings_clearing_a_db_override_falls_back_to_the_
     proxy_config.settings.load_yaml({"maximum_spend_logs_cleanup_run_budget": "90s"})
 
     with patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
-        await proxy_config._update_general_settings(db_general_settings={"maximum_spend_logs_cleanup_run_budget": "30s"})
+        await proxy_config._update_general_settings(
+            db_general_settings={"maximum_spend_logs_cleanup_run_budget": "30s"}
+        )
         await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
 
         import litellm.proxy.proxy_server as ps
@@ -7773,10 +8002,18 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
         request.query_params = {}
         return request
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", "sk-master"
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -7823,10 +8060,18 @@ async def test_update_general_settings_db_pass_through_endpoint_cannot_override_
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", "sk-master"
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -7860,11 +8105,19 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
     prior_registry: Final = dict(_registered_pass_through_routes)
 
     def live_routes() -> set[str]:
-        return {route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route}
+        return {
+            route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route
+        }
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None)  # test-quality-ok: module global holding the YAML endpoints; this case has none
-    app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", None
+    )  # test-quality-ok: module global holding the YAML endpoints; this case has none
+    app_routes: Final = patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists"
+    )  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
     try:
         with settings, yaml_endpoints, app_routes:
             pc = ProxyConfig()
@@ -7905,9 +8158,15 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
         registered: Final = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
         return {path for path in (config_path, db_path) if any(path in route for route in registered)}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint])  # test-quality-ok: module global holding the YAML endpoints the reload merges in
-    app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the reload merges in
+    app_routes: Final = patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists"
+    )  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
     try:
         with settings, yaml_endpoints, app_routes:
             await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
@@ -9036,9 +9295,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
-        return ps.PendingSpendIncrement(
-            counter_key=kwargs["counter_key"], increment=kwargs["increment"]
-        )
+        return ps.PendingSpendIncrement(counter_key=kwargs["counter_key"], increment=kwargs["increment"])
 
     import litellm.proxy.proxy_server as ps
 
@@ -10627,9 +10884,15 @@ async def _lit6973_drive_realtime_session(
         side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
     )
     ws: Final = websocket if websocket is not None else _lit6973_fake_realtime_ws()
-    can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error))  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
-    pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
-    route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
+    can_call = patch.object(
+        ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error)
+    )  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
+    pre = patch.object(
+        ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call
+    )  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
+    route = patch.object(
+        ps, "route_request", new=AsyncMock(return_value=fake_llm_call())
+    )  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
     with can_call, pre, route:
         await ps.realtime_websocket_endpoint(
             websocket=ws,
@@ -10659,7 +10922,7 @@ async def test_realtime_session_rejected_in_pre_call_releases_the_budget_reserva
     """A rate-limit or guardrail rejection happens before route_request, so the
     relay never runs and no success log can own the reservation. The endpoint
     must release it on that exit too, or the key stays pinned at the reserved
-    amount and its next requests 429 with budget_exceeded while /key/info shows
+    amount and its next requests 422 with budget_exceeded while /key/info shows
     spend 0 (reproduced live with rpm_limit=1). The client still gets the
     pre-call error event and the 1011 close it got before."""
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
@@ -10761,13 +11024,9 @@ async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
     from litellm.proxy.utils import InternalUsageCache
 
     dual_cache: Final = DualCache()
-    await dual_cache.async_set_cache(
-        key=_LIT6463_COUNTER_KEY, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True
-    )
+    await dual_cache.async_set_cache(key=_LIT6463_COUNTER_KEY, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True)
     limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
-    stash: Final = RequestRateLimiterStash(
-        parallel_slot={"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]}
-    )
+    stash: Final = RequestRateLimiterStash(parallel_slot={"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]})
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
 
     stash_token: Final = _request_stash.set(stash)
@@ -10819,9 +11078,7 @@ async def test_successful_realtime_session_leaves_the_max_parallel_slot_for_the_
     limiter's integer in-memory fallback, double-decrement the counter so the key
     admits more sessions than max_parallel_requests allows. With the success stamp
     present the route leaves the slot and the stash alone."""
-    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
-        backend_logged_success=True
-    )
+    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(backend_logged_success=True)
 
     assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {
         "slot-1": 1.0,
@@ -10867,8 +11124,12 @@ async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
     async def _record(counter_key: str) -> None:
         invalidated.append(counter_key)
 
-    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
-    sink = patch.object(ps, "_invalidate_spend_counter", new=_record)  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
+    failing_release = patch.object(
+        br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down"))
+    )  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
+    sink = patch.object(
+        ps, "_invalidate_spend_counter", new=_record
+    )  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
     with failing_release, sink:
         await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
 
@@ -10884,8 +11145,12 @@ async def test_release_or_invalidate_finalizes_even_when_the_invalidate_fallback
     from litellm.proxy.spend_tracking import budget_reservation as br
 
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
-    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the fallback branch
-    failing_invalidate = patch.object(br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down")))  # test-quality-ok: forces the fallback itself to fail
+    failing_release = patch.object(
+        br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down"))
+    )  # test-quality-ok: forces the fallback branch
+    failing_invalidate = patch.object(
+        br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down"))
+    )  # test-quality-ok: forces the fallback itself to fail
 
     with failing_release, failing_invalidate:
         await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
@@ -10939,6 +11204,49 @@ class TestTransformRequestBannedParams:
         assert response.status_code == 400, (
             f"Expected 400 for banned param '{banned}', got {response.status_code}: {response.json()}"
         )
+
+
+class TestTransformRequestOffEventLoop:
+    @pytest.fixture
+    def client(self):
+        mock_auth = UserAPIKeyAuth(user_id="test-internal", user_role=LitellmUserRoles.INTERNAL_USER)
+        original = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides = original
+
+    def test_transform_request_runs_return_raw_request_off_the_event_loop(self, client, monkeypatch):
+        import litellm.utils
+        from litellm.types.utils import RawRequestTypedDict
+
+        seen: dict[str, bool] = {}
+
+        def fake_return_raw_request(endpoint, kwargs):
+            try:
+                asyncio.get_running_loop()
+                seen["on_event_loop"] = True
+            except RuntimeError:
+                seen["on_event_loop"] = False
+            return RawRequestTypedDict(
+                raw_request_api_base="https://api.openai.com/v1/",
+                raw_request_body=kwargs,
+                raw_request_headers={},
+                error=None,
+            )
+
+        monkeypatch.setattr(litellm.utils, "return_raw_request", fake_return_raw_request)
+        response = client.post(
+            "/utils/transform_request",
+            json={
+                "call_type": "completion",
+                "request_body": {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["raw_request_body"]["model"] == "gpt-5.6-sol"
+        assert seen == {"on_event_loop": False}, "return_raw_request ran on the event loop thread"
 
 
 class TestSortModelsByDisplayName:
@@ -11602,6 +11910,66 @@ def test_invalid_fairness_settings_row_is_ignored_on_config_reload(monkeypatch):
     assert litellm.priority_reservation is None
 
 
+@pytest.mark.asyncio
+async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
+    """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
+    datadog_params.turn_off_message_logging: true must build the DataDogLogger redacted, the
+    same as the identical block in YAML. Regression for the redaction keys being absent from
+    the safe-override allowlist while the callback half of the row was honoured."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.datadog.datadog import DataDogLogger
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setenv("DD_API_KEY", "test-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    monkeypatch.setattr(litellm, "datadog_params", None)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    db_row = {
+        "success_callback": ["datadog"],
+        "datadog_params": {"turn_off_message_logging": True},
+        "turn_off_message_logging": True,
+    }
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", db_row))
+    pc._add_callbacks_from_db_config({"litellm_settings": db_row})
+
+    datadog_loggers = [cb for cb in litellm.success_callback if isinstance(cb, DataDogLogger)]
+    assert len(datadog_loggers) == 1
+    assert datadog_loggers[0].turn_off_message_logging is True
+    assert litellm.turn_off_message_logging is True
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "datadog_params",
+        "datadog_llm_observability_params",
+        "newrelic_params",
+        "pointfive_params",
+        "aws_sqs_callback_params",
+    ],
+)
+def test_db_stored_callback_params_propagate_to_litellm_module(monkeypatch: pytest.MonkeyPatch, field_name: str):
+    """Every callback init params block stored in the DB litellm_settings row must land on the
+    litellm module before the matching logger is built, so the DB row behaves like YAML."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, field_name, None)
+    db_value = {"turn_off_message_logging": True}
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", {field_name: db_value}))
+
+    assert getattr(litellm, field_name) == db_value
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""
@@ -12189,9 +12557,7 @@ async def test_update_config_general_settings_refuses_a_key_the_config_file_decl
     admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
     with pytest.raises(HTTPException) as excinfo:
         await update_config_general_settings(
-            data=ConfigFieldUpdate(
-                field_name="max_parallel_requests", field_value=999, config_type="general_settings"
-            ),
+            data=ConfigFieldUpdate(field_name="max_parallel_requests", field_value=999, config_type="general_settings"),
             user_api_key_dict=admin,
         )
 
@@ -13475,6 +13841,7 @@ def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client.db.start_token_refresh_task = AsyncMock()
     client.check_view_exists = AsyncMock()
     client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    client.start_view_setup_task = MagicMock()
     client.start_db_health_watchdog_task = AsyncMock()
     client.health_check = AsyncMock(side_effect=health_check_error)
     return client
@@ -13536,13 +13903,35 @@ async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_ch
 
     mock_client = _mock_startup_prisma_client(health_check_error=httpx.ReadTimeout("startup health check timed out"))
     call_order = MagicMock()
+    call_order.attach_mock(mock_client.start_view_setup_task, "view_setup")
     call_order.attach_mock(mock_client.start_db_health_watchdog_task, "watchdog")
     call_order.attach_mock(mock_client.health_check, "health_check")
 
     await _run_setup_prisma_client(mock_client)
 
     assert mock_client.start_db_health_watchdog_task.await_count == 1
-    assert [call[0] for call in call_order.mock_calls] == ["watchdog", "health_check"]
+    assert [call[0] for call in call_order.mock_calls] == ["view_setup", "watchdog", "health_check"]
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_hands_view_creation_to_the_held_task(monkeypatch):
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
+
+    mock_client = _mock_startup_prisma_client()
+    result = await _run_setup_prisma_client(mock_client)
+
+    actual = {
+        "result": result,
+        "view_setup_started": mock_client.start_view_setup_task.call_count,
+        "direct_view_creation": mock_client.check_view_exists.await_count,
+        "direct_row_count": mock_client._set_spend_logs_row_count_in_proxy_state.await_count,
+    }
+    assert actual == {
+        "result": mock_client,
+        "view_setup_started": 1,
+        "direct_view_creation": 0,
+        "direct_row_count": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -13734,9 +14123,15 @@ async def test_moderations_response_carries_litellm_call_id_header():
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", spend=0.0)
 
     with (
-        patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
-        patch.object(proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
-        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global, no injection point
+        patch.object(
+            proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data
+        ),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(
+            proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())
+        ),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
+        patch.object(
+            proxy_server_module, "proxy_logging_obj"
+        ) as mock_logging,  # test-quality-ok: module global, no injection point
     ):
         mock_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
         mock_logging.update_request_status = AsyncMock()
@@ -13773,9 +14168,15 @@ async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplo
     verbose_proxy_logger.propagate = True
     try:
         with (
-            patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
-            patch.object(proxy_server_module, "route_request", new=AsyncMock(side_effect=Exception("bad key"))),  # test-quality-ok: fakes the provider failure so the real route's error log is observable
-            patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+            patch.object(
+                proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data
+            ),  # test-quality-ok: the route reads this module global, no injection point
+            patch.object(
+                proxy_server_module, "route_request", new=AsyncMock(side_effect=Exception("bad key"))
+            ),  # test-quality-ok: fakes the provider failure so the real route's error log is observable
+            patch.object(
+                proxy_server_module, "proxy_logging_obj", new=fake_logging
+            ),  # test-quality-ok: module global, no injection point
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
             pytest.raises(ProxyException) as raised,
         ):
@@ -13808,7 +14209,9 @@ async def test_moderations_unparseable_body_bills_the_callers_litellm_call_id():
     fake_logging.post_call_failure_hook = AsyncMock()
 
     with (
-        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        patch.object(
+            proxy_server_module, "proxy_logging_obj", new=fake_logging
+        ),  # test-quality-ok: module global, no injection point
         pytest.raises(ProxyException) as raised,
     ):
         await proxy_server_module.moderations(
@@ -13836,8 +14239,12 @@ async def test_moderations_already_shaped_failure_answers_with_the_callers_litel
     fake_logging.post_call_failure_hook = AsyncMock()
 
     with (
-        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
-        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        patch.object(
+            proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)
+        ),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(
+            proxy_server_module, "proxy_logging_obj", new=fake_logging
+        ),  # test-quality-ok: module global, no injection point
         pytest.raises(ProxyException) as raised,
     ):
         await proxy_server_module.moderations(
@@ -13872,8 +14279,12 @@ async def test_audio_speech_already_shaped_failure_answers_with_the_callers_lite
     fake_logging.post_call_failure_hook = AsyncMock()
 
     with (
-        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
-        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        patch.object(
+            proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)
+        ),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(
+            proxy_server_module, "proxy_logging_obj", new=fake_logging
+        ),  # test-quality-ok: module global, no injection point
         pytest.raises(type(exc)) as raised,
     ):
         await proxy_server_module.audio_speech(
@@ -14630,7 +15041,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
@@ -14643,7 +15054,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
             time.sleep(0.3)
             return claude_tokenizer
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer)
+    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", SlowHubTokenizer.from_pretrained)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -14651,14 +15062,18 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
                 {
                     "model_name": "self-hosted",
                     "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
-                    "model_info": {"custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": "main", "auth_token": None}},
+                    "model_info": {
+                        "custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": "main", "auth_token": None}
+                    },
                 }
             ]
         ),
     )
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me off the loop"))
+        lambda: proxy_server_module.token_counter(
+            TokenCountRequest(model="self-hosted", prompt="count me off the loop")
+        )
     )
 
     assert response.tokenizer_type == "huggingface_tokenizer"
@@ -14667,7 +15082,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict
@@ -14684,7 +15099,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
             },
         }
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", from_pretrained)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -14761,7 +15176,7 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
         def __init__(self, client: object) -> None:
             self._client = client
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return self._client
 
     byok_credential_cache.flush_cache()
@@ -14786,3 +15201,219 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
         byok_credential_cache.flush_cache()
 
     assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_refuses_a_key_the_config_file_owns(monkeypatch):
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"max_request_size_mb": 42}})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({"max_request_size_mb": 99}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as refused:
+        await delete_config_general_settings(
+            data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+            user_api_key_dict=admin,
+        )
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["max_request_size_mb"]
+    assert "config file" in refused.value.detail["error"]
+    assert pc.settings["max_request_size_mb"] == 42
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_still_removes_a_key_the_database_owns(monkeypatch):
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    pc.settings.apply_db_row("general_settings", {"max_request_size_mb": 42})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({"max_request_size_mb": 42}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    assert "max_request_size_mb" not in pc.settings
+
+
+@pytest.mark.asyncio
+async def test_config_field_info_reports_the_declared_value_of_a_config_owned_secret(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig, get_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"master_key": "os.environ/PROXY_MASTER_KEY"}})
+    pc.settings.apply_runtime_values({"master_key": "sk-resolved-secret"})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    info = await get_config_general_settings(field_name="master_key", user_api_key_dict=admin)
+
+    assert info.field_value == "os.environ/PROXY_MASTER_KEY"
+    assert info.source == "config"
+    assert info.editable is False
+
+
+@pytest.mark.asyncio
+async def test_config_field_info_still_reports_a_database_owned_value(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig, get_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    pc.settings.apply_db_row("general_settings", {"max_request_size_mb": 42})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({"max_request_size_mb": 42}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    info = await get_config_general_settings(field_name="max_request_size_mb", user_api_key_dict=admin)
+
+    assert info.field_value == 42
+    assert info.source == "db"
+
+
+@pytest.mark.asyncio
+async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolved(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    declared = {"public_key_ttl": "600", "team_id_jwt_field": "os.environ/JWT_TEAM_FIELD"}
+    general_settings = {"litellm_jwtauth": declared}
+    monkeypatch.setattr(proxy_server_module, "get_secret", lambda value: "resolved-team-field")
+
+    ProxyStartupEvent._initialize_jwt_auth(
+        general_settings=general_settings,
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+    )
+
+    assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
+    assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+
+
+def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):
+    from pydantic import ValidationError
+
+    from litellm.constants import SPEND_CAPTURE_RATE_CHECK_JOB_ID
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    scheduler = MagicMock()
+    general_settings: dict[str, object] = {}
+    seen_settings = []
+
+    async def fake_scheduled_check(prisma_client, settings, *, pod_lock_manager, alert, publish):
+        seen_settings.append(settings)
+        return ()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.run_scheduled_spend_capture_rate_check", fake_scheduled_check)
+    ProxyStartupEvent._initialize_spend_capture_rate_check_job(
+        scheduler=scheduler,
+        proxy_logging_obj=MagicMock(),
+        prisma_client=MagicMock(),
+        read_general_settings=lambda: general_settings,
+    )
+    scheduler.add_job.assert_called_once()
+    assert scheduler.add_job.call_args.kwargs["id"] == SPEND_CAPTURE_RATE_CHECK_JOB_ID
+    check = scheduler.add_job.call_args.args[0]
+
+    asyncio.run(check())
+    assert seen_settings == []
+
+    general_settings["spend_capture_rate_check"] = {"providers": ["openai"], "threshold": 0.85}
+    asyncio.run(check())
+    general_settings["spend_capture_rate_check"] = {"threshold": 0.7, "lookback_days": 3}
+    asyncio.run(check())
+    assert [(s.threshold, s.lookback_days) for s in seen_settings] == [(0.85, 7), (0.7, 3)]
+
+    with pytest.raises(ValidationError, match="threshhold"):
+        ProxyStartupEvent._initialize_spend_capture_rate_check_job(
+            scheduler=scheduler,
+            proxy_logging_obj=MagicMock(),
+            prisma_client=MagicMock(),
+            read_general_settings=lambda: {"spend_capture_rate_check": {"threshhold": 0.85}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_spend_capture_rate_check_job_publishes_to_prometheus_and_alerts(monkeypatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    scheduler = MagicMock()
+    proxy_logging = MagicMock()
+    proxy_logging.alerting_handler = AsyncMock()
+    proxy_logging.db_spend_update_writer.pod_lock_manager = None
+    prometheus = MagicMock(spec=PrometheusLogger)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda callback_type: [prometheus]
+    )
+
+    async def fake_scheduled_check(prisma_client, settings, *, pod_lock_manager, alert, publish):
+        publish("openai", 0.42)
+        publish("openai", None)
+        await alert("under the threshold")
+        return ()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.run_scheduled_spend_capture_rate_check", fake_scheduled_check)
+    ProxyStartupEvent._initialize_spend_capture_rate_check_job(
+        scheduler=scheduler,
+        proxy_logging_obj=proxy_logging,
+        prisma_client=MagicMock(),
+        read_general_settings=lambda: {"spend_capture_rate_check": {}},
+    )
+
+    await scheduler.add_job.call_args.args[0]()
+
+    assert prometheus.set_spend_capture_rate.call_args_list == [
+        call(api_provider="openai", capture_rate=0.42),
+        call(api_provider="openai", capture_rate=None),
+    ]
+    proxy_logging.alerting_handler.assert_awaited_once()
+    assert proxy_logging.alerting_handler.await_args.kwargs["message"] == "under the threshold"
+    assert proxy_logging.alerting_handler.await_args.kwargs["level"] == "High"
+
+
+@pytest.mark.asyncio
+async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is_removed(monkeypatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    scheduler = MagicMock()
+    general_settings: dict[str, object] = {"spend_capture_rate_check": {}}
+    prometheus = MagicMock(spec=PrometheusLogger)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda callback_type: [prometheus]
+    )
+    scheduled_checks = []
+
+    async def fake_scheduled_check(prisma_client, settings, *, pod_lock_manager, alert, publish):
+        scheduled_checks.append(settings)
+        publish("openai", 0.97)
+        return ()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.run_scheduled_spend_capture_rate_check", fake_scheduled_check)
+    ProxyStartupEvent._initialize_spend_capture_rate_check_job(
+        scheduler=scheduler,
+        proxy_logging_obj=MagicMock(),
+        prisma_client=MagicMock(),
+        read_general_settings=lambda: general_settings,
+    )
+    check = scheduler.add_job.call_args.args[0]
+
+    await check()
+    del general_settings["spend_capture_rate_check"]
+    await check()
+
+    assert len(scheduled_checks) == 1
+    assert prometheus.set_spend_capture_rate.call_args_list == [
+        call(api_provider="openai", capture_rate=0.97),
+        call(api_provider="openai", capture_rate=None),
+    ]
