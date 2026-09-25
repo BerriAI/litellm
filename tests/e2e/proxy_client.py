@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import reduce
@@ -675,18 +675,7 @@ class ProxyClient:
         balancer address is configured (every request opens a fresh connection, so
         the caller's next request re-rolls), so waiting out PROPAGATION_TIMEOUT is
         what makes the model safe to use anywhere."""
-        model_id = unwrap(
-            self.transport.post(
-                "/model/new",
-                headers=self.management_headers(),
-                json=body.model_copy(update={"litellm_params": route_cache_model(
-                    body.litellm_params, provider_edge_base,
-                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
-                    mode=body.model_info.mode,
-                )}),
-                response_type=ModelNewResponse,
-            )
-        ).model_id
+        model_id = unwrap(self._write_model(body, provider_live=provider_live)).model_id
         written_at = time.monotonic()
         try:
             self._await_model_servable(body.model_name, listed_for)
@@ -695,6 +684,34 @@ class ProxyClient:
             raise
         settle_propagation(written_at)
         return model_id
+
+    def register_models(self, bodies: Sequence[ModelNewBody]) -> tuple[str, ...]:
+        """`register_model` for a batch, paying the propagation wait once; a failure deletes the whole batch."""
+        results: Final = tuple(self._write_model(body) for body in bodies)
+        written_at = time.monotonic()
+        model_ids: Final = tuple(result.data.model_id for result in results if isinstance(result, Success))
+        try:
+            for body, result in zip(bodies, results, strict=True):
+                _ = unwrap(result)
+                self._await_model_servable(body.model_name)
+        except BaseException:
+            for model_id in model_ids:
+                self.delete_model(model_id)
+            raise
+        settle_propagation(written_at)
+        return model_ids
+
+    def _write_model(self, body: ModelNewBody, *, provider_live: bool = False) -> Result[ModelNewResponse]:
+        return self.transport.post(
+            "/model/new",
+            headers=self.management_headers(),
+            json=body.model_copy(update={"litellm_params": route_cache_model(
+                body.litellm_params, provider_edge_base,
+                enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                mode=body.model_info.mode,
+            )}),
+            response_type=ModelNewResponse,
+        )
 
     def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until every replica lists `model_name`, or fail at model_servable_timeout."""

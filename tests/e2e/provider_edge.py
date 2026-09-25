@@ -140,6 +140,15 @@ def resolve_mount(path: str, mounts: Mapping[str, str]) -> ResolvedMount | None:
 
 REPLAY_MISS_STATUS: Final = 599
 
+# The proxy's `refresh_model_info` job lists `{api_base}/v1/models` on its own wall clock and
+# swallows failures, so whether it lands inside a test is chance: never record it, never owe it.
+_SCHEDULED_DISCOVERY: Final = ("get", "v1/models", "")
+
+
+def is_scheduled_discovery(method: str, upstream_path: str, query: str) -> bool:
+    return (method.lower(), upstream_path.strip("/"), query) == _SCHEDULED_DISCOVERY
+
+
 _HOP_BY_HOP_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "connection",
@@ -842,6 +851,12 @@ def handle_edge_request(
     mount: Final = resolved.mount
     upstream_base: Final = resolved.upstream_base
     test_key, upstream_path = split_test_segment(resolved.upstream_path)
+    if isinstance(backend, RecordEdge | ReplayEdge) and is_scheduled_discovery(method, upstream_path, split.query):
+        return _text_reply(
+            REPLAY_MISS_STATUS,
+            f"{method.upper()} /{upstream_path} is the proxy's scheduled model discovery, not test traffic; "
+            "the edge neither records nor replays it",
+        )
     profile: Final = (
         backend.recorder.profile
         if isinstance(backend, RecordEdge)
