@@ -132,12 +132,6 @@ _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyTyp
         "input_audio": "input_audio",
     }
 )
-_TOOL_OUTPUT_ATTACHMENT_TYPES: Final[frozenset[str]] = frozenset(
-    ("input_file", "file", "document", "input_image", "image", "image_url", "video_url", "input_audio")
-)
-_TOOL_OUTPUT_PAYLOAD_KEYS: Final[frozenset[str]] = frozenset(
-    ("file", "file_data", "file_id", "file_url", "image_url", "url", "source", "data", "video_url", "input_audio")
-)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -263,18 +257,6 @@ _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.are
 _RESPONSES_API_CALL_TYPE_VALUES: Final[frozenset[str]] = frozenset(
     call_type.value for call_type in _RESPONSES_API_CALL_TYPES
 )
-_TOOL_OUTPUT_REFERENCE_KEYS: Final[frozenset[str]] = frozenset(("file_id", "file_url", "file_data", "image_url"))
-
-
-def _is_attachment_payload(key: str, value: object) -> bool:
-    """Inline bytes or an attachment reference, never a plain metadata string."""
-    if isinstance(value, Mapping):
-        return bool(value)
-    if not isinstance(value, str) or not value:
-        return False
-    if key in _TOOL_OUTPUT_REFERENCE_KEYS:
-        return True
-    return value.startswith("data:")
 
 
 def _decoded_base64_length(encoded: str) -> int:
@@ -282,20 +264,19 @@ def _decoded_base64_length(encoded: str) -> int:
     return len(encoded) * 3 // 4 - encoded[-2:].count("=")
 
 
-def _serialized_tool_output_parts(content: str) -> tuple[Mapping[str, object], ...]:
-    """Attachment-shaped members of a ``tool`` message's JSON-serialized output."""
-    if not content.lstrip().startswith("["):
-        return ()
-    try:
-        decoded: Final = json.loads(content)
-    except ValueError:
-        return ()
-    if not isinstance(decoded, list):
+def _function_call_output_parts(data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Mapping members of every ``function_call_output`` item's list-typed output."""
+    request_input: Final = data.get("input")
+    if not isinstance(request_input, list):
         return ()
     return tuple(
-        cast(Mapping[str, object], item)  # cast-ok: narrowed to dict in the generator's condition
-        for item in decoded
+        cast(Mapping[str, object], part)  # cast-ok: narrowed to dict in the generator's condition
+        for item in request_input
         if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and isinstance(item.get("output"), list)
+        for part in item["output"]
+        if isinstance(part, dict)
     )
 
 
@@ -730,9 +711,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             self._refuse_unscannable_image_ref(image_url=image_ref)
 
-    def _refuse_unscannable_leaf_parts(
-        self, messages: "Sequence[AllMessageValues]", *, bridged_tool_output: bool
-    ) -> None:
+    def _refuse_unscannable_leaf_parts(self, messages: "Sequence[AllMessageValues]") -> None:
         """Raise the attachment refusal for any leaf part the guardrail cannot scan.
 
         Runs on the unscoped message list so an attachment hiding in a message role
@@ -742,25 +721,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         for message in messages:
             for leaf in _content_leaf_parts(message.get("content")):
                 self._refuse_unscannable_part(part=leaf)
-            if bridged_tool_output:
-                self._refuse_serialized_tool_output(message=message)
-
-    def _refuse_serialized_tool_output(self, message: Mapping[str, object]) -> None:
-        """Refuse an attachment hiding in a ``tool`` message's serialized output.
-
-        A chat tool string reaches the model as text and is scanned as text; only the
-        Responses to chat bridge serializes attachment parts into a string.
-        """
-        if message.get("role") != "tool":
-            return
-        content: Final = message.get("content")
-        if not isinstance(content, str):
-            return
-        for part in _serialized_tool_output_parts(content):
-            if part.get("type") in _TOOL_OUTPUT_ATTACHMENT_TYPES and any(
-                _is_attachment_payload(key, part.get(key)) for key in _TOOL_OUTPUT_PAYLOAD_KEYS
-            ):
-                self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
         """Refuse remote urls with the same substring test
@@ -2992,9 +2952,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # A file or unscannable image is refused even when role scoping below drops
         # its message from the scan set; the ApplyGuardrail call itself stays scoped
-        self._refuse_unscannable_leaf_parts(
-            messages=new_messages, bridged_tool_output=call_type in _RESPONSES_API_CALL_TYPE_VALUES
-        )
+        self._refuse_unscannable_leaf_parts(messages=new_messages)
+        if call_type in _RESPONSES_API_CALL_TYPE_VALUES:
+            for part in _function_call_output_parts(data=data):
+                self._refuse_unscannable_part(part=part)
 
         filter_result: Final = self._prepare_guardrail_messages_for_role(messages=new_messages)
         filtered_messages: Final = filter_result.payload_messages

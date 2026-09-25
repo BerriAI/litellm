@@ -6790,7 +6790,7 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         UnifiedLLMGuardrails,
     )
-    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.types.utils import ModelResponseStream, StreamingChoices
 
     guardrail = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
@@ -7648,24 +7648,8 @@ async def test_during_call_hook_chat_tool_output_metadata_members_scan_as_text(m
     assert json.dumps([member]) in sent_texts
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "member",
-    [
-        {"type": "document", "id": "kb-17", "source": "confluence"},
-        {"type": "file", "name": "README.md", "url": "https://api.github.com/repos/o/r/contents/README.md"},
-    ],
-)
-async def test_during_call_hook_responses_tool_output_metadata_members_scan_as_text(member):
-    """On the Responses bridge only structural payloads refuse; plain metadata strings
-    in a serialized tool output are still scanned as text."""
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-resp-tool-metadata",
-        guardrailIdentifier="test-guardrail",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.during_call,
-        default_on=True,
-    )
+async def _run_responses_during_call(guardrail, output):
+    """Drive async_moderation_hook on a Responses input with one function_call_output."""
     mock_credentials = MagicMock()
     mock_credentials.access_key = "test-access-key"
     mock_credentials.secret_key = "test-secret-key"
@@ -7676,11 +7660,10 @@ async def test_during_call_hook_responses_tool_output_metadata_members_scan_as_t
     data = {
         "input": [
             {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "c1", "output": [member]},
+            {"type": "function_call_output", "call_id": "c1", "output": output},
             {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
         ]
     }
-
     with (
         patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
         patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
@@ -7691,50 +7674,98 @@ async def test_during_call_hook_responses_tool_output_metadata_members_scan_as_t
             user_api_key_dict=UserAPIKeyAuth(),
             call_type=CallTypes.aresponses.value,
         )
-
-    mock_post.assert_called_once()
-    sent_body = json.loads(mock_post.call_args.kwargs["data"])
-    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
-    assert json.dumps([member]) in sent_texts
+    return mock_post
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "member",
-    [
-        {"type": "document", "id": "kb-17", "source": {"type": "base64", "data": "x"}},
-        {"type": "input_file", "filename": "a.pdf", "file_data": "data:application/pdf;base64,AA=="},
-        {"type": "input_image", "file_id": "f1"},
-        {"type": "file", "name": "clip", "url": "data:video/mp4;base64,AA=="},
-    ],
-)
-async def test_during_call_hook_responses_tool_output_payload_members_refused(member):
-    """Structural attachment payloads in a serialized tool output refuse on the
-    Responses bridge: a mapping source, inline file bytes, or a file reference."""
+async def test_during_call_hook_responses_tool_output_client_string_scans_as_text():
+    """A client-sent string output is never re-parsed: it is scanned as text, so a
+    file_id hiding inside client JSON is left to the model's own serialization."""
     guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-resp-tool-payloads",
+        guardrail_name="bedrock-resp-tool-string",
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.during_call,
         default_on=True,
     )
-    data = {
-        "input": [
-            {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "c1", "output": [member]},
-            {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
-        ]
-    }
+    tool_output = json.dumps([{"type": "file", "name": "q3.pdf", "file_id": "file-abc"}])
+
+    mock_post = await _run_responses_during_call(guardrail, tool_output)
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_input_text_string_scans_as_text():
+    """The same client string wrapped in an input_text part scans as text too."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-wrapped",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    tool_output = json.dumps([{"type": "file", "name": "q3.pdf", "file_id": "file-abc"}])
+
+    mock_post = await _run_responses_during_call(guardrail, [{"type": "input_text", "text": tool_output}])
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_input_file_member_refused():
+    """A real input_file member of the output list is refused before any scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-file",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
 
     with (
         patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
         pytest.raises(HTTPException) as exc_info,
     ):
-        await guardrail.async_moderation_hook(
-            data=data,
-            user_api_key_dict=UserAPIKeyAuth(),
-            call_type=CallTypes.aresponses.value,
+        await _run_responses_during_call(
+            guardrail,
+            [
+                {"type": "input_text", "text": "see file"},
+                {
+                    "type": "input_file",
+                    "filename": "ssn.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            ],
         )
 
     assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_input_image_member_refused():
+    """A real input_image member of the output list is refused before any scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-image",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _run_responses_during_call(guardrail, [{"type": "input_image", "file_id": "file-1"}])
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
     mock_post.assert_not_called()

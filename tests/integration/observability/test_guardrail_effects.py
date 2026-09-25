@@ -1390,3 +1390,69 @@ def test_bedrock_during_call_tool_output_url_members_scan_as_text(gateway: Gatew
             assert response.status_code == 200, response.text
             eventually(lambda: policy.drain(), lambda values: len(values) == 1, seconds=10)
             assert len(upstream.drain()) == 1
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_responses_tool_output_string_scans_as_text")
+def test_bedrock_during_call_responses_function_call_output_string_scans_as_text(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    tool_output: Final = json.dumps([{"type": "file", "name": "q3.pdf", "file_id": "file-abc"}])
+
+    def guardrail(request: Request) -> Reply:
+        body: Final = json.loads(request.body)
+        texts: Final = [item["text"]["text"] for item in body["content"] if "text" in item]
+        assert tool_output in texts, body
+        return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+    def responses_reply(request: Request) -> Reply:
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp-wire",
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "gpt-4o-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg-wire",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(responses_reply) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        bedrock_params: Final = _bedrock_policy(policy.url)
+        bedrock_params["mode"] = "during_call"
+        config["guardrails"] = [
+            {"guardrail_name": "bedrock-during-" + uuid.uuid4().hex, "litellm_params": bedrock_params}
+        ]
+        path: Final = tmp_path / "bedrock-resp-tool-string.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url)
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {
+                    "model": model,
+                    "input": [
+                        {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+                        {"type": "function_call_output", "call_id": "c1", "output": tool_output},
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "summarize"}],
+                        },
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+            eventually(lambda: policy.drain(), lambda values: len(values) == 1, seconds=10)
+            assert len(upstream.drain()) == 1
