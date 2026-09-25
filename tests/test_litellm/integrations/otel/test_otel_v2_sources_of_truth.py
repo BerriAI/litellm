@@ -209,6 +209,7 @@ def test_provider_resolution():
     assert resolve_provider("openai") == "openai"
     assert resolve_provider("bedrock") == "aws.bedrock"
     assert resolve_provider("vertex_ai") == "gcp.vertex_ai"
+    assert resolve_provider("oci") == "oracle_cloud.generative_ai"
     # unknown providers pass through verbatim (semconv allows provider-specific)
     assert resolve_provider("my_custom_llm") == "my_custom_llm"
     assert resolve_provider(None) == ""

@@ -67,6 +67,7 @@ class GenAIProvider(str, Enum):
     PERPLEXITY = "perplexity"
     X_AI = "x_ai"
     IBM_WATSONX_AI = "ibm.watsonx.ai"
+    ORACLE_CLOUD_GENERATIVE_AI = "oracle_cloud.generative_ai"
 
 
 class MCPMethod(str, Enum):
@@ -378,6 +379,7 @@ _PROVIDER_BY_LITELLM: Final[dict[str, GenAIProvider]] = {
     "perplexity": GenAIProvider.PERPLEXITY,
     "xai": GenAIProvider.X_AI,
     "watsonx": GenAIProvider.IBM_WATSONX_AI,
+    "oci": GenAIProvider.ORACLE_CLOUD_GENERATIVE_AI,
 }
 
 # litellm ``call_type`` -> ``gen_ai.operation.name``.
