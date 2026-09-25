@@ -504,8 +504,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         message_content: Final = message.get("content", None)
 
-        # 1. if string, insert cache control in the message
-        if isinstance(message_content, str):
+        # 1. string content, or a tool message: insert cache control at message level.
+        #    Anthropic only accepts cache_control on the tool_result block itself, never
+        #    inside tool_result.content; the message-level marker maps onto that block.
+        if message.get("role") == "tool" or isinstance(message_content, str):
             message["cache_control"] = control
         # 2. list of objects - only apply to last item per Anthropic spec
         elif isinstance(message_content, list):

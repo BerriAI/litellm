@@ -3606,3 +3606,59 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+def test_tool_message_injection_lands_on_tool_result_not_inside_its_content():
+    """
+    Anthropic rejects cache_control inside tool_result.content
+    ("cache_control may not be specified within `tool_result.content`").
+    The default trailing-turn breakpoint must therefore mark a tool message
+    at message level, which the Anthropic transformation maps onto the
+    tool_result block.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    hook = AnthropicCacheControlHook()
+    messages: List[AllMessageValues] = [
+        {"role": "user", "content": [{"type": "text", "text": "list files"}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {"type": "text", "text": "file1"},
+                {"type": "text", "text": "file2"},
+            ],
+        },
+    ]
+
+    hook._safe_insert_cache_control_in_message(
+        message=messages[-1],
+        control={"type": "ephemeral"},
+    )
+
+    assert messages[-1]["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in messages[-1]["content"])
+    assert hook._message_has_cache_control(messages[-1]) is True
+
+    anthropic_messages = anthropic_messages_pt(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        llm_provider="anthropic",
+    )
+    tool_result = anthropic_messages[-1]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert tool_result["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in tool_result["content"])
