@@ -87,7 +87,13 @@ def handle_messages_with_content_list_to_str_conversion(
     """
     for message in messages:
         texts = convert_content_list_to_str(message=message)
-        if texts:
+        content = message.get("content")
+        is_text_only_list = (
+            isinstance(content, list)
+            and bool(content)
+            and all(isinstance(part, dict) and part.get("type") == "text" for part in content)
+        )
+        if texts or is_text_only_list:
             message["content"] = texts
     return messages
 
