@@ -7546,7 +7546,7 @@ class TestTeamMemberAutoRouterWrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
-    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
+    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic", "laya"])
     async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
         original: Final = self._row()
         transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
@@ -7571,6 +7571,7 @@ class TestTeamMemberAutoRouterWrites:
             "move-without-key": {"api_base": "https://new-jev.example.com"},
             "reset": {"api_key": None, "api_base": None},
             "heuristic": {},
+            "laya": {"provider": "laya", "model": "multilingual"},
         }[change]
         config: Final = {
             "tiers": {"SIMPLE": "allowed"},
@@ -7596,7 +7597,7 @@ class TestTeamMemberAutoRouterWrites:
         saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
         expected: Final = (
             config
-            if change == "heuristic"
+            if change in ("heuristic", "laya")
             else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
         )
         assert saved == expected

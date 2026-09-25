@@ -1273,6 +1273,19 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+        if config.provider == "laya":
+            laya_base: Final = config.api_base or get_secret_str("LAYA_API_BASE")
+            if not laya_base:
+                raise ValueError("jev_classifier_config.api_base or LAYA_API_BASE is required for Laya")
+            laya_key: Final = (
+                config.api_key if config.api_base is not None else config.api_key or get_secret_str("LAYA_API_KEY")
+            )
+            return HttpJevClassifierClient(
+                api_key=laya_key,
+                api_base=laya_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                custom_llm_provider="laya",
+            )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
             raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
@@ -2181,7 +2194,8 @@ class ComplexityRouter(CustomLogger):
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model),
+                cost=jev_classifier_cost(response, config.model, config.provider),
+                provider=config.provider,
             )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
@@ -2189,8 +2203,8 @@ class ComplexityRouter(CustomLogger):
                 tier=tier,
                 score=None,
                 signals=(
-                    f"jev-classifier:{tier_name}",
-                    f"jev-confidence={answer.confidence:.6f}",
+                    f"{'laya' if config.provider == 'laya' else 'jev'}-classifier:{tier_name}",
+                    f"{'laya' if config.provider == 'laya' else 'jev'}-confidence={answer.confidence:.6f}",
                     *(
                         f"tier-probability:{label}={probability:.6f}"
                         for label, probability in answer.probabilities.items()
@@ -4670,7 +4684,7 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            f"typesafe/{outcome.jev_verdict.model}"
+            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
             if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
             else self.config.classifier_llm_config.model
             if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")

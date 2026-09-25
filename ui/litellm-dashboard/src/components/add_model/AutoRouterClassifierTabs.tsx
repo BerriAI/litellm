@@ -164,7 +164,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
-            { value: "jev", label: "Jev", description: "Use TypeSafe System One Choice to choose a tier" },
+            { value: "jev", label: "Decision Model", description: "Use Jev or Laya to choose a tier" },
           ].map((option) => (
             <Label
               key={option.value}

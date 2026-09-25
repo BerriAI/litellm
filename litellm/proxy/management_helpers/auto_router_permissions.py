@@ -71,6 +71,7 @@ class _MemberJevClassifierConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    provider: Literal["typesafe", "laya"] = "typesafe"
     model: str
     api_key: None = None
     api_base: None = None

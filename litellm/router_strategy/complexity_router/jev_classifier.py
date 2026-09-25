@@ -78,10 +78,17 @@ class JevClassifierClient(Protocol):
 
 
 class HttpJevClassifierClient:
-    def __init__(self, api_key: str, api_base: str, http_client: AsyncHTTPHandler) -> None:
+    def __init__(
+        self,
+        api_key: str | None,
+        api_base: str,
+        http_client: AsyncHTTPHandler,
+        custom_llm_provider: Literal["typesafe", "laya"] = "typesafe",
+    ) -> None:
         self._api_key = api_key
         self._api_base = api_base.rstrip("/")
         self._http_client = http_client
+        self._provider = custom_llm_provider
 
     async def evaluate(
         self,
@@ -95,7 +102,7 @@ class HttpJevClassifierClient:
             json=request.model_dump(mode="json"),
             headers=MappingProxyType(
                 {
-                    "Authorization": f"Bearer {self._api_key}",
+                    **({"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}),
                     "Content-Type": "application/json",
                 }
             ),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
@@ -106,10 +113,11 @@ class HttpJevClassifierClient:
             self._log_response(request, response, request_kwargs, start_time)
         except Exception as exc:  # noqa: BLE001  # logging integrations must not discard a provider verdict
             verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
-        return TypeAdapter(JevSystemOneResponse).validate_python(response.json())
+        parsed: Final = TypeAdapter(JevSystemOneResponse).validate_python(response.json())
+        return parsed.model_copy(update={"model": request.model}) if self._provider == "laya" else parsed
 
-    @staticmethod
     def _log_response(
+        self,
         request: JevSystemOneRequest,
         response: httpx.Response,
         request_kwargs: Mapping[str, object] | None,
@@ -139,7 +147,7 @@ class HttpJevClassifierClient:
             "turn_off_message_logging": effective_turn_off_message_logging(request_kwargs),
         }
         logging_obj: Final = Logging(
-            model=f"typesafe/{request.model}",
+            model=f"{self._provider}/{request.model}",
             messages=[{"role": "user", "content": request.state}],  # mutable-ok: callbacks require JSON message lists
             stream=False,
             call_type="pass_through_endpoint",
@@ -150,14 +158,14 @@ class HttpJevClassifierClient:
             kwargs=params,
         )
         logging_obj.update_environment_variables(
-            model=f"typesafe/{request.model}",
+            model=f"{self._provider}/{request.model}",
             user=parent_user if isinstance(parent_user := parent.get("user"), str) else None,
             optional_params={},  # mutable-ok: Logging's optional_params contract requires a dict
             litellm_params=params,
         )
         normalized: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
             httpx_response=response,
-            response_body=body,
+            response_body={**body, "model": request.model} if self._provider == "laya" else body,
             logging_obj=logging_obj,
             url_route=str(response.request.url),
             result="",
@@ -165,7 +173,7 @@ class HttpJevClassifierClient:
             end_time=end_time,
             cache_hit=False,
             request_body=MappingProxyType({"model": request.model}),
-            custom_llm_provider="typesafe",
+            custom_llm_provider=self._provider,
             litellm_params=params,
         )
         success_handlers: Final = logging_obj.dispatch_success_handlers(
@@ -189,6 +197,7 @@ class JevVerdict(NamedTuple):
     confidence: float
     model: str
     cost: float | None
+    provider: str = "typesafe"
 
 
 class _RegistryPricing(BaseModel):
@@ -211,12 +220,14 @@ def build_jev_request(
     return JevSystemOneRequest(state=state, model=model, questions=MappingProxyType({"tier": question}))
 
 
-def jev_classifier_cost(response: JevSystemOneResponse, configured_model: str) -> float | None:
+def jev_classifier_cost(
+    response: JevSystemOneResponse, configured_model: str, provider: str = "typesafe"
+) -> float | None:
     usage: Final = response.usage
     if usage is None:
         return None
     model: Final = response.model or configured_model
-    model_key: Final = f"typesafe/{model}"
+    model_key: Final = f"{provider}/{model}"
     if model_key not in litellm.model_cost:  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
         return None
     try:
