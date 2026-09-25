@@ -193,6 +193,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPStdioConfig,
     MCPTokenEndpointAuthMethod,
+    MCPToolOverrideEntry,
     has_header,
     without_header,
 )
@@ -1929,6 +1930,12 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        # Bare tool name -> description per server_id, replaced wholesale each
+        # time _create_prefixed_tools runs for that server. Feeds the
+        # tool-permission convention (allow non-deletes, deny deletes).
+        self.discovered_tool_inventory: dict[  # mutable-ok: inventory entries are populated per server as tools are discovered
+            str, Mapping[str, str | None]
+        ] = {}  # mutable-ok: inventory entries are populated per server as tools are discovered
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -2829,6 +2836,8 @@ class MCPServerManager:
         )
 
         self._invalidate_discovery_lists(server.server_id)
+        if server.server_id:
+            self.discovered_tool_inventory.pop(server.server_id, None)
         prefix_root: Final = normalize_server_name(get_server_prefix(server))
         if server.spec_path and prefix_root:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
@@ -5379,7 +5388,41 @@ class MCPServerManager:
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
+        if server.server_id:
+            self.discovered_tool_inventory[server.server_id] = MappingProxyType(
+                {tool.name: tool.description for tool in tools}
+            )
         return prefixed_tools
+
+    def discovered_inventory(self, server_id: str) -> Mapping[str, str | None]:
+        """The last tool catalog discovered for ``server_id``, bare names to
+        descriptions; empty when the server is unknown or never listed."""
+        return self.discovered_tool_inventory.get(server_id) or MappingProxyType({})
+
+    async def fetch_unfiltered_inventory(self, server_id: str) -> Mapping[str, str | None] | None:
+        """List ``server_id``'s tools unfiltered by any caller's permissions.
+
+        Returns ``None`` when the server is unknown, when its auth mode needs a
+        per-user credential the proxy does not hold, or when discovery fails;
+        an empty mapping means the server answered tools/list with no tools."""
+        server: Final = self.get_mcp_server_by_id(server_id)
+        if server is None:
+            return None
+        if server.auth_type in frozenset(
+            {
+                MCPAuth.oauth2_token_exchange,
+                MCPAuth.oauth_delegate,
+                MCPAuth.oauth2_id_jag,
+                MCPAuth.true_passthrough,
+            }
+        ):
+            return None
+        try:
+            await self._get_tools_from_server(server)
+        except Exception as e:  # noqa: BLE001  # any discovery failure means "inventory unavailable", never a partial empty
+            verbose_logger.warning("Backfill inventory fetch failed for server %s: %s", server_id, e)
+            return None
+        return self.discovered_inventory(server_id)
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
@@ -6779,7 +6822,9 @@ class MCPServerManager:
             if server.available_on_public_internet or server.server_id in public_ids
         ]
 
-    def expand_permission_list(self, identifiers: list[str]) -> list[str]:
+    def expand_permission_list(
+        self, identifiers: Sequence[str]
+    ) -> list[str]:  # mutable-ok: callers concatenate the returned list
         """
         Expand a permission list of server_ids/names/aliases into concrete
         server_ids against the current region's config + DB registry union.
@@ -6848,6 +6893,47 @@ class MCPServerManager:
             server_id: list(dict.fromkeys(tool for _, tools in group for tool in tools))
             for server_id, group in groupby(sorted(expanded, key=itemgetter(0)), key=itemgetter(0))
         }
+
+    def expand_tool_overrides(
+        self,
+        tool_overrides: Mapping[str, MCPToolOverrideEntry] | None,
+    ) -> Mapping[str, MCPToolOverrideEntry]:
+        """
+        Rewrite an ``mcp_tool_overrides`` dict keyed by id/name/alias so every
+        key is a concrete server_id, same expansion as
+        ``expand_tool_permissions``. Entries resolving to the same server
+        merge their allow/deny lists (deny still wins at evaluation time).
+        """
+        if not tool_overrides:
+            return MappingProxyType({})
+        expanded: Final[tuple[tuple[str, MCPToolOverrideEntry], ...]] = tuple(
+            chain.from_iterable(
+                ((server_id, entry) for server_id in self.expand_permission_list((key,)))
+                for key, entry in tool_overrides.items()
+                if entry is not None
+            )
+        )
+        return MappingProxyType(
+            {
+                server_id: MCPToolOverrideEntry(
+                    allow=sorted(
+                        frozenset(
+                            chain.from_iterable(
+                                (entry.get("allow") or ()) for sid, entry in expanded if sid == server_id
+                            )
+                        )
+                    ),
+                    deny=sorted(
+                        frozenset(
+                            chain.from_iterable(
+                                (entry.get("deny") or ()) for sid, entry in expanded if sid == server_id
+                            )
+                        )
+                    ),
+                )
+                for server_id in frozenset(sid for sid, _ in expanded)
+            }
+        )
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         """

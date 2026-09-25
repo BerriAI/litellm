@@ -2856,6 +2856,20 @@
               ],
               "title": "Mcp Servers"
             },
+            "mcp_tool_overrides": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MCPToolOverrideEntry"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Overrides"
+            },
             "mcp_tool_permissions": {
               "anyOf": [
                 {
@@ -3572,6 +3586,27 @@
             "metrics"
           ],
           "title": "KeyMetricWithMetadata",
+          "type": "object"
+        },
+        "MCPToolOverrideEntry": {
+          "description": "Per-server tool overrides stored on an object permission row's\n``mcp_tool_overrides``: ``allow`` re-arms names the convention denies,\n``deny`` disables names the convention or an allowlist would permit.",
+          "properties": {
+            "allow": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Allow",
+              "type": "array"
+            },
+            "deny": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Deny",
+              "type": "array"
+            }
+          },
+          "title": "MCPToolOverrideEntry",
           "type": "object"
         },
         "MakeAgentsPublicRequest": {

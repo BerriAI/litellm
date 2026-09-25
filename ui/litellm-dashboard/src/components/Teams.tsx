@@ -40,6 +40,9 @@ import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_avail
 import type { Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
+import { extractMcpEntitlement } from "./mcp_server_management/mcpEntitlement";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { toast } from "@/lib/toast";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import BudgetDurationDropdown, {
@@ -100,6 +103,9 @@ const teamCreateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_overrides: z
+    .record(z.string(), z.object({ allow: z.array(z.string()), deny: z.array(z.string()) }))
+    .optional(),
   allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -131,6 +137,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   allowed_passthrough_routes: undefined,
   allowed_mcp_servers_and_groups: undefined,
   mcp_tool_permissions: {},
+  mcp_tool_overrides: {},
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
   object_permission_skills: undefined,
@@ -256,6 +263,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const watchedOrganizationId = form.watch("organization_id");
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const watchedToolOverrides = form.watch("mcp_tool_overrides");
+  const { data: allMcpServers = [] } = useMCPServers();
+  const { data: allMcpToolsets = [] } = useMCPToolsets();
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
@@ -474,13 +484,27 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             if (toolsets && toolsets.length > 0) {
               formValues.object_permission.mcp_toolsets = toolsets;
             }
-            delete formValues.allowed_mcp_servers_and_groups;
           }
 
           if (formValues.mcp_tool_permissions && Object.keys(formValues.mcp_tool_permissions).length > 0) {
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
           }
+          if (formValues.mcp_tool_overrides && Object.keys(formValues.mcp_tool_overrides).length > 0) {
+            const entitlement = extractMcpEntitlement(
+              {
+                mcp_servers_and_groups: formValues.allowed_mcp_servers_and_groups,
+                mcp_tool_overrides: formValues.mcp_tool_overrides,
+              },
+              allMcpServers,
+              allMcpToolsets,
+            );
+            if (entitlement && Object.keys(entitlement.mcp_tool_overrides).length > 0) {
+              formValues.object_permission.mcp_tool_overrides = entitlement.mcp_tool_overrides;
+            }
+            delete formValues.mcp_tool_overrides;
+          }
+          delete formValues.allowed_mcp_servers_and_groups;
         }
 
         // Transform allowed_mcp_access_groups into object_permission
@@ -1139,6 +1163,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           selectedToolsets={watchedMcpSelection?.toolsets || []}
                           toolPermissions={watchedToolPermissions || {}}
                           onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                          toolOverrides={watchedToolOverrides || {}}
+                          onOverridesChange={(overrides) => form.setValue("mcp_tool_overrides", overrides)}
                         />
                       </div>
                     </CollapsibleContent>

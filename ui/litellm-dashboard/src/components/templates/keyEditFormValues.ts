@@ -1,10 +1,12 @@
 import { z } from "zod/v4";
+import type { UseFormReturn } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
 import { canonicalBudgetDuration } from "./keyEditFieldNormalizers";
+import { normalizeMcpToolOverrides } from "../mcp_server_management/effectiveMcpServers";
 
 export interface McpServersAndGroups {
   servers: string[];
@@ -46,6 +48,7 @@ export interface KeyEditFormValues {
   vector_stores?: string[];
   mcp_servers_and_groups?: McpServersAndGroups;
   mcp_tool_permissions?: Record<string, string[]>;
+  mcp_tool_overrides?: Record<string, { allow: string[]; deny: string[] }>;
   agents_and_groups?: AgentsAndGroups;
   skills?: string[];
   organization_id?: string | null;
@@ -102,6 +105,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     toolsets: keyData.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+  mcp_tool_overrides: normalizeMcpToolOverrides(keyData.object_permission?.mcp_tool_overrides),
   agents_and_groups: {
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
@@ -154,6 +158,7 @@ export const keyEditFormSchema = z.object({
   vector_stores: z.custom<string[] | undefined>(),
   mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
   mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
+  mcp_tool_overrides: z.custom<Record<string, { allow: string[]; deny: string[] }> | undefined>(),
   agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
   skills: z.custom<string[] | undefined>(),
   organization_id: z.custom<string | null | undefined>(),
@@ -172,6 +177,14 @@ export interface MountedFieldGates {
   canViewPolicies: boolean;
   canViewPrompts: boolean;
 }
+
+export const mcpToolFieldProps = (form: Pick<UseFormReturn<KeyEditFormValues>, "watch" | "setValue">) => ({
+  toolPermissions: form.watch("mcp_tool_permissions") || {},
+  onChange: (permissions: Record<string, string[]>) => form.setValue("mcp_tool_permissions", permissions),
+  toolOverrides: form.watch("mcp_tool_overrides") || {},
+  onOverridesChange: (overrides: Record<string, { allow: string[]; deny: string[] }>) =>
+    form.setValue("mcp_tool_overrides", overrides),
+});
 
 export const toSubmittedValues = (
   values: KeyEditFormValues,
@@ -205,6 +218,7 @@ export const toSubmittedValues = (
   vector_stores: values.vector_stores,
   mcp_servers_and_groups: values.mcp_servers_and_groups,
   mcp_tool_permissions: values.mcp_tool_permissions,
+  mcp_tool_overrides: values.mcp_tool_overrides,
   agents_and_groups: values.agents_and_groups,
   skills: values.skills,
   organization_id: values.organization_id,

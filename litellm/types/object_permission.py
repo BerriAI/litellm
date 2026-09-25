@@ -8,13 +8,18 @@ can adopt the type without violating the SDK-must-not-import-from-proxy
 layering rule.
 """
 
+from collections.abc import Mapping
+
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.mcp import MCPToolOverrideEntry
 
 
 class ObjectPermissionDict(TypedDict, total=False):
     mcp_servers: list[str] | None
     mcp_access_groups: list[str] | None
     mcp_tool_permissions: dict[str, list[str]] | None
+    mcp_tool_overrides: Mapping[str, MCPToolOverrideEntry] | None  # writable-ok: stale keys pruned in place
     mcp_toolsets: list[str] | None
     blocked_tools: list[str] | None
     vector_stores: list[str] | None

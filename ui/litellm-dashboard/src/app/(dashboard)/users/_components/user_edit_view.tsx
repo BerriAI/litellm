@@ -8,6 +8,7 @@ import { useSeededState } from "@/components/key_team_helpers/useSeededState";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
+import { normalizeMcpToolOverrides } from "@/components/mcp_server_management/effectiveMcpServers";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
@@ -55,6 +56,9 @@ const userEditShape = {
   metadata: z.string().nullish(),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_overrides: z
+    .record(z.string(), z.object({ allow: z.array(z.string()), deny: z.array(z.string()) }))
+    .optional(),
 };
 
 const budgetSchema = (unlimitedBudget: boolean) =>
@@ -78,6 +82,7 @@ const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefin
     toolsets: objectPermission?.mcp_toolsets ?? [],
   },
   mcp_tool_permissions: objectPermission?.mcp_tool_permissions ?? {},
+  mcp_tool_overrides: normalizeMcpToolOverrides(objectPermission?.mcp_tool_overrides),
 });
 
 // antd only reported the fields that were actually mounted, so the identity and
@@ -340,6 +345,8 @@ export function UserEditView({
                 selectedToolsets={form.watch("mcp_servers_and_groups")?.toolsets || []}
                 toolPermissions={form.watch("mcp_tool_permissions") || {}}
                 onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                toolOverrides={form.watch("mcp_tool_overrides") || {}}
+                onOverridesChange={(overrides) => form.setValue("mcp_tool_overrides", overrides)}
               />
             </>
           )}

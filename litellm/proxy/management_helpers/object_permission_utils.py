@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
@@ -22,6 +23,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, objec
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
+from litellm.types.mcp import MCPToolOverrideEntry
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -79,6 +81,65 @@ class ObjectPermissionUpsert:
     record: dict[str, object]
 
 
+_MCP_GRANT_FIELDS: Final = frozenset(
+    {"mcp_tool_permissions", "mcp_tool_overrides", "mcp_servers", "mcp_access_groups", "mcp_toolsets"}
+)
+
+
+async def _convert_unversioned_object_permission(
+    existing_object_permission: "LiteLLM_ObjectPermissionTable | None",
+    new_object_permission: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Manual conversion path: a save over a stored v0 row that edits MCP
+    grant fields first converts its residual grants against discovered
+    inventory, then applies the update on top. Servers whose catalog cannot
+    be discovered reject the save with 503 rather than silently dropping the
+    tools admins had granted. A save that touches no MCP field leaves the row
+    v0, and a server the update revokes needs no inventory: only the grants
+    that remain afterwards are resolved."""
+    if existing_object_permission is None or existing_object_permission.mcp_permission_version:
+        return MappingProxyType({})
+    if not _MCP_GRANT_FIELDS & frozenset(new_object_permission):
+        return MappingProxyType({})
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.tool_permission_backfill import (
+        Unavailable,
+        convert_row,
+        converted_row_record,
+        gather_inventories,
+        resolve_granted_server_ids,
+    )
+
+    post_update_row: Final = existing_object_permission.model_copy(
+        update={field: new_object_permission[field] for field in _MCP_GRANT_FIELDS if field in new_object_permission}
+    )
+    remaining_grants: Final = await resolve_granted_server_ids(post_update_row, global_mcp_server_manager)
+    if not remaining_grants:
+        return MappingProxyType({})
+    wildcard_servers: Final[frozenset[str]] = frozenset(
+        server_id
+        for server_id, tools in global_mcp_server_manager.expand_tool_permissions(
+            post_update_row.mcp_tool_permissions
+        ).items()
+        if tools and MCP_ALL_TOOLS_WILDCARD in tools
+    )
+    conversion: Final = convert_row(
+        existing_object_permission,
+        await gather_inventories(remaining_grants - wildcard_servers, global_mcp_server_manager),
+    )
+    if isinstance(conversion, Unavailable):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={  # mutable-ok: HTTPException detail must be a JSON-serializable dict
+                "error": "Could not discover tools for servers granted by this permission; retry once the MCP servers are reachable.",
+                "server_ids": sorted(conversion.server_ids),
+            },
+        )
+    return converted_row_record(conversion)
+
+
 async def prepare_object_permission_upsert(
     new_object_permission: Mapping[str, object],
     existing_object_permission_id: str | None,
@@ -103,29 +164,52 @@ async def prepare_object_permission_upsert(
     existing_object_permission: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
         where={"object_permission_id": object_permission_id},
     )
-    existing_fields: Final[dict[str, object]] = (
+    existing_fields_raw: Final[Mapping[str, object]] = (
         existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
         if existing_object_permission is not None
-        else {}
+        else MappingProxyType({})
+    )
+    converted_fields: Final = await _convert_unversioned_object_permission(
+        existing_object_permission, new_object_permission
+    )
+    existing_fields: Final = MappingProxyType(
+        {
+            **existing_fields_raw,
+            **converted_fields,
+        }
     )
     await reject_ambiguous_mcp_tool_permission_keys(
         new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
         existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
         prisma_client=prisma_client,
     )
-    merged: Final[dict[str, object]] = {
-        **existing_fields,
-        **new_object_permission,
-        "object_permission_id": object_permission_id,
-    }
-    record: Final[dict[str, object]] = {
-        **merged,
-        **(
-            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
-            if "mcp_tool_permissions" in merged
-            else {}
-        ),
-    }
+    await reject_ambiguous_mcp_tool_override_keys(
+        new_mcp_tool_overrides=new_object_permission.get("mcp_tool_overrides"),
+        existing_mcp_tool_overrides=existing_fields.get("mcp_tool_overrides"),
+        prisma_client=prisma_client,
+    )
+    merged: Final = MappingProxyType(
+        {
+            **existing_fields,
+            **new_object_permission,
+            "object_permission_id": object_permission_id,
+            "mcp_permission_version": (
+                0
+                if existing_object_permission is not None
+                and not existing_object_permission.mcp_permission_version
+                and not converted_fields
+                else 1
+            ),
+        }
+    )
+    json_fields: Final = MappingProxyType(
+        {
+            field: safe_dumps(merged[field])
+            for field in ("mcp_tool_permissions", "mcp_tool_overrides", "mcp_tool_permissions_archive")
+            if field in merged
+        }
+    )
+    record: Final[dict[str, object]] = {**merged, **json_fields}  # mutable-ok: prisma upsert payload
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
 
@@ -225,10 +309,18 @@ async def _set_object_permission(
         existing_mcp_tool_permissions=None,
         prisma_client=prisma_client,
     )
+    await reject_ambiguous_mcp_tool_override_keys(
+        new_mcp_tool_overrides=clean_data.get("mcp_tool_overrides"),
+        existing_mcp_tool_overrides=None,
+        prisma_client=prisma_client,
+    )
 
-    # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
+    # Serialize mcp_tool_permissions / mcp_tool_overrides to JSON strings for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
         clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
+    if "mcp_tool_overrides" in clean_data:
+        clean_data["mcp_tool_overrides"] = safe_dumps(clean_data["mcp_tool_overrides"])
+    clean_data["mcp_permission_version"] = 1
 
     created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
 
@@ -332,6 +424,69 @@ def _mcp_tool_permission_entries(raw: object) -> Mapping[str, frozenset[str]]:
     return MappingProxyType({identifier: frozenset(tools or ()) for identifier, tools in parsed.items()})
 
 
+_MCP_TOOL_OVERRIDES_ADAPTER: Final = TypeAdapter(dict[str, MCPToolOverrideEntry | None])
+
+
+def _mcp_tool_override_entries(raw: object) -> Mapping[str, object]:
+    parsed: Final[Mapping[str, MCPToolOverrideEntry | None]] = (
+        _MCP_TOOL_OVERRIDES_ADAPTER.validate_json(raw)
+        if isinstance(raw, str)
+        else _MCP_TOOL_OVERRIDES_ADAPTER.validate_python(raw)
+        if isinstance(raw, Mapping)
+        else MappingProxyType({})
+    )
+    return parsed
+
+
+async def reject_ambiguous_mcp_tool_override_keys(
+    new_mcp_tool_overrides: object,
+    existing_mcp_tool_overrides: object,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """
+    Same ambiguity rule as ``reject_ambiguous_mcp_tool_permission_keys`` for
+    ``mcp_tool_overrides`` keys: a name or alias matching several servers
+    cannot key an override entry. Raises HTTPException(400) on collision.
+    """
+    requested: Final = _mcp_tool_override_entries(new_mcp_tool_overrides)
+    stored: Final = _mcp_tool_override_entries(existing_mcp_tool_overrides)
+    wildcard_servers: Final = sorted(
+        identifier
+        for identifier, entry in requested.items()
+        if MCP_ALL_TOOLS_WILDCARD in (entry.get("allow") or ()) or MCP_ALL_TOOLS_WILDCARD in (entry.get("deny") or ())
+    )
+    if wildcard_servers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+                "error": (
+                    f"mcp_tool_overrides entries for {wildcard_servers} may not contain '{MCP_ALL_TOOLS_WILDCARD}': "
+                    "the wildcard belongs in mcp_tool_permissions, where it grants every current and future tool."
+                )
+            },
+        )
+    resolved: Final = await _resolve_mcp_server_identifiers_to_ids(
+        identifiers=frozenset(identifier for identifier, entry in requested.items() if stored.get(identifier) != entry),
+        prisma_client=prisma_client,
+    )
+    collisions: Final = "; ".join(
+        f"'{identifier}' matches MCP servers {sorted(server_ids)}"
+        for identifier, server_ids in sorted(resolved.items())
+        if identifier not in server_ids and len(server_ids) > 1
+    )
+    if not collisions:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+            "error": (
+                f"Ambiguous mcp_tool_overrides key: {collisions}. "
+                "Key tool overrides by server_id when servers share a name or alias."
+            )
+        },
+    )
+
+
 async def reject_ambiguous_mcp_tool_permission_keys(
     new_mcp_tool_permissions: object,
     existing_mcp_tool_permissions: object,
@@ -373,7 +528,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
 
 def _drop_stale_object_permission_mcp_servers(
     object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
+    identifier_to_server_ids: Mapping[str, AbstractSet[str]],
 ) -> None:
     mcp_servers: Final = object_permission.get("mcp_servers")
     if not isinstance(mcp_servers, list):
@@ -392,7 +547,7 @@ def _drop_stale_object_permission_mcp_servers(
 
 def _drop_stale_object_permission_mcp_tool_permissions(
     object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
+    identifier_to_server_ids: Mapping[str, AbstractSet[str]],
 ) -> None:
     mcp_tool_permissions: Final = object_permission.get("mcp_tool_permissions")
     if not isinstance(mcp_tool_permissions, dict):
@@ -401,6 +556,23 @@ def _drop_stale_object_permission_mcp_tool_permissions(
     object_permission["mcp_tool_permissions"] = {
         identifier: _dedupe_preserving_order(tools if isinstance(tools, list) else [])
         for identifier, tools in mcp_tool_permissions.items()
+        if identifier_to_server_ids.get(identifier)
+    }
+
+
+def _drop_stale_object_permission_mcp_tool_overrides(
+    object_permission: ObjectPermissionDict,
+    identifier_to_server_ids: Mapping[str, AbstractSet[str]],
+) -> None:
+    mcp_tool_overrides: Final = object_permission.get("mcp_tool_overrides")
+    if not isinstance(mcp_tool_overrides, dict):
+        return
+
+    object_permission[  # rebind-ok: in-place prune of stale keys is this helper's contract
+        "mcp_tool_overrides"
+    ] = {  # mutable-ok: dict stored into the permission field
+        identifier: entry
+        for identifier, entry in mcp_tool_overrides.items()
         if identifier_to_server_ids.get(identifier)
     }
 
@@ -417,6 +589,10 @@ def _drop_stale_object_permission_mcp_identifiers(
         identifier_to_server_ids=identifier_to_server_ids,
     )
     _drop_stale_object_permission_mcp_tool_permissions(
+        object_permission=object_permission,
+        identifier_to_server_ids=identifier_to_server_ids,
+    )
+    _drop_stale_object_permission_mcp_tool_overrides(
         object_permission=object_permission,
         identifier_to_server_ids=identifier_to_server_ids,
     )
@@ -450,16 +626,20 @@ async def _resolve_team_allowed_mcp_servers(
     access_group_servers: Final[list[str]] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
-    raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
-    if isinstance(raw_tool_perms, str):
-        raw_tool_perms = json.loads(raw_tool_perms)
-    tool_perm_servers: Final[list[str]] = list(raw_tool_perms.keys())
-    raw_servers: Final = set(direct_servers + access_group_servers + tool_perm_servers)
+    stored_tool_perms: Final[Mapping[str, Sequence[str]]] = (
+        team_object_permission.mcp_tool_permissions or MappingProxyType({})
+    )
+    raw_tool_perms: Final[Mapping[str, Sequence[str]]] = (
+        json.loads(stored_tool_perms) if isinstance(stored_tool_perms, str) else stored_tool_perms
+    )
+    raw_tool_overrides: Final = _mcp_tool_override_entries(team_object_permission.mcp_tool_overrides)
+    tool_perm_servers: Final[tuple[str, ...]] = tuple(raw_tool_perms.keys()) + tuple(raw_tool_overrides.keys())
+    raw_servers: Final = frozenset((*direct_servers, *access_group_servers, *tool_perm_servers))
     resolved_servers: Final = await _resolve_mcp_server_identifiers_to_ids(
         identifiers=raw_servers,
         prisma_client=prisma_client,
     )
-    unresolved_servers: Final = {server_id for server_id in raw_servers if not resolved_servers.get(server_id)}
+    unresolved_servers: Final = frozenset(server_id for server_id in raw_servers if not resolved_servers.get(server_id))
     return _flatten_resolved_mcp_server_ids(resolved_servers) | unresolved_servers
 
 
@@ -541,9 +721,10 @@ async def _get_grandfathered_key_mcp_server_ids(
     if existing_object_permission is None or prisma_client is None:
         return frozenset()
     raw_tool_perms: Final = existing_object_permission.mcp_tool_permissions or {}
+    raw_tool_overrides: Final = _mcp_tool_override_entries(existing_object_permission.mcp_tool_overrides)
     tool_perm_keys: Final[frozenset[str]] = frozenset(
         json.loads(raw_tool_perms).keys() if isinstance(raw_tool_perms, str) else raw_tool_perms.keys()
-    )
+    ) | frozenset(raw_tool_overrides.keys())
     identifiers: Final = (frozenset(existing_object_permission.mcp_servers or []) | tool_perm_keys) - {
         SpecialMCPServerNames.no_mcp_servers.value,
         SpecialMCPServerName.all_proxy_servers.value,
@@ -621,6 +802,10 @@ def _extract_requested_mcp_server_ids(
     mcp_tool_permissions: Final = object_permission.get("mcp_tool_permissions")
     if isinstance(mcp_tool_permissions, dict):
         server_ids.update(mcp_tool_permissions.keys())
+
+    mcp_tool_overrides: Final = object_permission.get("mcp_tool_overrides")
+    if isinstance(mcp_tool_overrides, dict):
+        server_ids.update(mcp_tool_overrides.keys())
 
     return server_ids
 

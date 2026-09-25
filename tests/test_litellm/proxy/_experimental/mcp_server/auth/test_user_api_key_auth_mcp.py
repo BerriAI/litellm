@@ -332,14 +332,18 @@ class TestMCPRequestHandler:
         key_object_permission.mcp_servers = []
         key_object_permission.mcp_access_groups = []
         key_object_permission.mcp_tool_permissions = None
+        key_object_permission.mcp_tool_overrides = None
+        key_object_permission.mcp_permission_version = None
         key_object_permission.mcp_toolsets = toolset_ids
         return key_object_permission
 
-    def _mock_manager_with_toolsets(self, toolset_perms):
+    def _mock_manager_with_toolsets(self, toolset_perms, inventory=None):
         mock_manager = MagicMock()
         mock_manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
         mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.expand_tool_overrides = MagicMock(side_effect=lambda overrides: overrides or {})
         mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
+        mock_manager.discovered_inventory = MagicMock(return_value=inventory or {})
         return mock_manager
 
     def _real_manager_with_toolsets(self, toolset_perms):
@@ -370,6 +374,29 @@ class TestMCPRequestHandler:
 
         assert result == ["server-a"]
         mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+
+    async def test_get_allowed_mcp_servers_for_key_ignores_tool_overrides(self):
+        """Override entries modify a grant, they are not one: a key whose only
+        reference to a server is an mcp_tool_overrides entry cannot list or
+        call that server."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission(None)
+        key_object_permission.mcp_tool_overrides = {"server-a": {"allow": ["list_items"], "deny": []}}
+        key_object_permission.mcp_permission_version = 1
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
+
+        assert "server-a" not in result
+        assert MCPRequestHandler.is_tool_allowed(result, "server-a") is False
 
     async def test_get_allowed_mcp_servers_for_key_skips_toolset_resolution_when_none_granted(self):
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
@@ -444,6 +471,9 @@ class TestMCPRequestHandler:
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
         key_object_permission = self._toolset_only_object_permission(["toolset-1"])
         key_object_permission.mcp_tool_permissions = {"server-a": ["direct_tool"]}
+        key_object_permission.mcp_tool_overrides = None
+        key_object_permission.mcp_permission_version = None
+        key_object_permission.mcp_access_groups = []
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
 
         with (
@@ -663,6 +693,9 @@ class TestMCPRequestHandler:
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1")
         team_object_permission = self._toolset_only_object_permission(["toolset-1"])
         team_object_permission.mcp_tool_permissions = {"server-a": ["direct_tool"]}
+        team_object_permission.mcp_tool_overrides = None
+        team_object_permission.mcp_permission_version = None
+        team_object_permission.mcp_access_groups = []
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["search_channels", "read_thread"]})
 
         with (
@@ -4062,6 +4095,10 @@ async def test_get_allowed_tools_for_server_ui_session_team_keeps_key_restrictio
     )
     key_perm = MagicMock()
     key_perm.mcp_tool_permissions = {"server_1": ["tool_a"]}
+    key_perm.mcp_tool_overrides = None
+    key_perm.mcp_permission_version = None
+    key_perm.mcp_toolsets = None
+    key_perm.mcp_access_groups = []
 
     mock_prisma = MagicMock()
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
@@ -4480,7 +4517,7 @@ class TestAgentMCPPermissions:
         agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
 
         with self._caller_tool_levels(team_grants={}, user_grants={}):
-            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == []
 
     async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_tools_on_the_server(self):
         agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
@@ -4489,7 +4526,49 @@ class TestAgentMCPPermissions:
             team_grants={"callers": {"server-a": ["ask_wiki_question"], "server-b": ["other"]}}, user_grants={}
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == ["ask_wiki_question"]
-            assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) is None
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) == []
+
+    async def test_agent_key_acting_for_a_user_is_capped_at_the_callers_convention_tools(self):
+        """A converted caller team granting server-a with no tool list still caps the agent to the
+        convention set: inventory non-deletes minus explicit denies."""
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        async def caller_team_permission(
+            user_api_key_auth: UserAPIKeyAuth | None = None,
+        ) -> LiteLLM_ObjectPermissionTable | None:
+            assert user_api_key_auth is not None
+            if user_api_key_auth.team_id != "callers":
+                return None
+            return LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-callers",
+                mcp_servers=["server-a"],
+                mcp_permission_version=1,
+            )
+
+        with (
+            patch.object(  # test-quality-ok: the level loaders read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which team is being asked about
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(side_effect=caller_team_permission)
+            ),
+            patch.object(  # test-quality-ok: same seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: the discovered catalog is process state with no injection seam
+                MCPRequestHandler,
+                "_manager_inventory",
+                AsyncMock(
+                    return_value={"read_wiki_structure": "reads a page", "delete_wiki_page": "deletes a page"}
+                ),
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == [
+                "read_wiki_structure"
+            ]
 
     async def test_agent_key_not_acting_for_anyone_ignores_the_caller_tool_ceiling(self):
         agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
@@ -4498,7 +4577,7 @@ class TestAgentMCPPermissions:
             team_grants={"callers": {"server-a": ["ask_wiki_question"]}},
             user_grants={"alice": {"server-a": ["read_wiki_structure"]}},
         ):
-            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == []
 
     async def test_agent_key_acting_for_a_caller_whose_team_is_unreadable_gets_no_tools(self):
         agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
@@ -4627,6 +4706,10 @@ class TestAgentMCPPermissions:
         )
         key_perm = MagicMock()
         key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        key_perm.mcp_tool_overrides = None
+        key_perm.mcp_permission_version = None
+        key_perm.mcp_toolsets = None
+        key_perm.mcp_access_groups = []
         team_perm = None
         with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
             with patch.object(
@@ -4660,6 +4743,10 @@ class TestAgentMCPPermissions:
         )
         key_perm = MagicMock()
         key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        key_perm.mcp_tool_overrides = None
+        key_perm.mcp_permission_version = None
+        key_perm.mcp_toolsets = None
+        key_perm.mcp_access_groups = []
         with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
             with patch.object(
                 MCPRequestHandler,
@@ -4930,6 +5017,10 @@ async def test_tool_permission_servers_included_in_allowed_servers():
         perm.mcp_servers = []
         perm.mcp_access_groups = []
         perm.mcp_tool_permissions = {"server_id_123": ["tool_a", "tool_b"]}
+        perm.mcp_tool_overrides = None
+        perm.mcp_permission_version = None
+        perm.mcp_toolsets = None
+        perm.mcp_access_groups = []
 
         user_api_key_auth = UserAPIKeyAuth(
             api_key="test-key",
@@ -5081,6 +5172,10 @@ class TestOrgMCPPermissions:
         mock_perm.mcp_servers = ["org_server_1", "org_server_2"]
         mock_perm.mcp_access_groups = []
         mock_perm.mcp_tool_permissions = {}
+        mock_perm.mcp_tool_overrides = None
+        mock_perm.mcp_permission_version = None
+        mock_perm.mcp_toolsets = None
+        mock_perm.mcp_access_groups = []
 
         with (
             patch.object(
@@ -5107,6 +5202,10 @@ class TestOrgMCPPermissions:
         mock_perm.mcp_servers = []
         mock_perm.mcp_access_groups = ["group-a"]
         mock_perm.mcp_tool_permissions = {}
+        mock_perm.mcp_tool_overrides = None
+        mock_perm.mcp_permission_version = None
+        mock_perm.mcp_toolsets = None
+        mock_perm.mcp_access_groups = []
 
         with (
             patch.object(
@@ -5133,6 +5232,10 @@ class TestOrgMCPPermissions:
         mock_perm.mcp_servers = []
         mock_perm.mcp_access_groups = []
         mock_perm.mcp_tool_permissions = {"tool_only_server": ["tool_x"]}
+        mock_perm.mcp_tool_overrides = None
+        mock_perm.mcp_permission_version = None
+        mock_perm.mcp_toolsets = None
+        mock_perm.mcp_access_groups = []
 
         with (
             patch.object(
@@ -5168,10 +5271,18 @@ class TestOrgMCPPermissions:
 
         key_perm = MagicMock()
         key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b", "tool_c"]}
+        key_perm.mcp_tool_overrides = None
+        key_perm.mcp_permission_version = None
+        key_perm.mcp_toolsets = None
+        key_perm.mcp_access_groups = []
 
         org_perm = MagicMock()
         org_perm.mcp_toolsets = None  # a bare MagicMock attr reads as a DECLARED toolset and now denies
         org_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        org_perm.mcp_tool_overrides = None
+        org_perm.mcp_permission_version = None
+        org_perm.mcp_toolsets = None
+        org_perm.mcp_access_groups = []
 
         with (
             patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm),
@@ -5199,10 +5310,18 @@ class TestOrgMCPPermissions:
 
         key_perm = MagicMock()
         key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        key_perm.mcp_tool_overrides = None
+        key_perm.mcp_permission_version = None
+        key_perm.mcp_toolsets = None
+        key_perm.mcp_access_groups = []
 
         org_perm = MagicMock()
         org_perm.mcp_toolsets = None  # a bare MagicMock attr reads as a DECLARED toolset and now denies
         org_perm.mcp_tool_permissions = {}
+        org_perm.mcp_tool_overrides = None
+        org_perm.mcp_permission_version = None
+        org_perm.mcp_toolsets = None
+        org_perm.mcp_access_groups = []
 
         with (
             patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm),
@@ -10085,3 +10204,168 @@ class TestScopedSessionAdmission:
     def test_scope_field_cannot_be_forged_through_construction(self):
         forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
         assert forged.mcp_session_resource_server_id is None
+
+
+def _converted_row(
+    mcp_servers,
+    mcp_tool_permissions=None,
+    mcp_tool_overrides=None,
+    mcp_toolsets=None,
+    mcp_access_groups=None,
+):
+    row = MagicMock()
+    row.mcp_servers = mcp_servers
+    row.mcp_access_groups = mcp_access_groups or []
+    row.mcp_tool_permissions = mcp_tool_permissions
+    row.mcp_tool_overrides = mcp_tool_overrides
+    row.mcp_permission_version = 1
+    row.mcp_toolsets = mcp_toolsets
+    return row
+
+
+def _manager(toolset_perms=None, inventory=None):
+    manager = MagicMock()
+    manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
+    manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+    manager.expand_tool_overrides = MagicMock(side_effect=lambda overrides: overrides or {})
+    manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms or {})
+    manager.discovered_inventory = MagicMock(return_value=inventory or {})
+    return manager
+
+
+@pytest.mark.asyncio
+class TestLevelAllowedToolsConvention:
+    """Convention semantics for converted rows: non-delete inventory tools are
+    allowed by default, deletes are denied, overrides adjust on top"""
+
+    _INVENTORY = {"list_items": "list things", "delete_item": "remove one", "search_notes": None}
+
+    async def _allowed(self, key_row, team_row=None, inventory=_INVENTORY, toolset_perms=None):
+        manager = _manager(toolset_perms=toolset_perms, inventory=inventory)
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_row),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_row)),
+            patch.object(MCPRequestHandler, "_toolset_tool_permissions", AsyncMock(return_value=toolset_perms or {})),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(
+                MCPRequestHandler,
+                "_apply_end_user_tool_ceiling",
+                AsyncMock(side_effect=lambda allowed, *_a, **_k: allowed),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_apply_user_tool_ceiling",
+                AsyncMock(side_effect=lambda allowed, *_a, **_k: allowed),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_apply_agent_and_org_tool_ceilings",
+                AsyncMock(side_effect=lambda allowed, *_a, **_k: allowed),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+            return await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a",
+                user_api_key_auth=auth,
+            )
+
+    async def test_converted_empty_overrides_allows_new_nondelete_denies_delete(self):
+        result = await self._allowed(_converted_row(["server-a"]))
+        assert result is not None
+        assert set(result) == {"list_items", "search_notes"}
+
+    async def test_explicit_allow_of_delete_tool(self):
+        row = _converted_row(["server-a"], mcp_tool_overrides={"server-a": {"allow": ["delete_item"]}})
+        result = await self._allowed(row)
+        assert set(result) == {"list_items", "search_notes", "delete_item"}
+
+    async def test_explicit_deny_of_nondelete_tool(self):
+        row = _converted_row(["server-a"], mcp_tool_overrides={"server-a": {"deny": ["search_notes"]}})
+        result = await self._allowed(row)
+        assert set(result) == {"list_items"}
+
+    async def test_tool_in_allow_and_deny_is_denied(self):
+        row = _converted_row(
+            ["server-a"],
+            mcp_tool_overrides={"server-a": {"allow": ["list_items"], "deny": ["list_items"]}},
+        )
+        result = await self._allowed(row)
+        assert "list_items" not in (result or [])
+
+    async def test_legacy_entry_stays_closed_allowlist(self):
+        row = _converted_row(["server-a"], mcp_tool_permissions={"server-a": ["list_items"]})
+        result = await self._allowed(row)
+        assert set(result) == {"list_items"}
+
+    async def test_legacy_empty_list_denies_all(self):
+        row = _converted_row(["server-a"], mcp_tool_permissions={"server-a": []})
+        result = await self._allowed(row)
+        assert result == []
+
+    async def test_unconverted_row_places_no_restriction(self):
+        row = _converted_row(["server-a"])
+        row.mcp_permission_version = 0
+        result = await self._allowed(row)
+        assert result is None
+
+    async def test_converted_row_not_granting_server_places_no_restriction(self):
+        row = _converted_row(["other-server"])
+        result = await self._allowed(row)
+        assert result is None
+
+    async def test_no_rows_anywhere_uses_convention_over_inventory(self):
+        result = await self._allowed(None, team_row=None)
+        assert result is not None
+        assert set(result) == {"list_items", "search_notes"}
+
+    async def test_empty_inventory_only_explicit_names(self):
+        row = _converted_row(["server-a"], mcp_tool_overrides={"server-a": {"allow": ["pinned_tool"]}})
+        result = await self._allowed(row, inventory={})
+        assert set(result) == {"pinned_tool"}
+
+    async def test_empty_inventory_converted_no_overrides_allows_nothing(self):
+        result = await self._allowed(_converted_row(["server-a"]), inventory={})
+        assert result == []
+
+    async def test_team_convention_deny_intersects_with_key_allow(self):
+        key_row = _converted_row(["server-a"], mcp_tool_overrides={"server-a": {"allow": ["delete_item"]}})
+        team_row = _converted_row(["server-a"])
+        result = await self._allowed(key_row, team_row=team_row)
+        assert "delete_item" not in (result or [])
+        assert set(result) == {"list_items", "search_notes"}
+
+    async def test_toolset_tools_allowed_even_if_delete_classified(self):
+        row = _converted_row([], mcp_toolsets=["toolset-1"])
+        result = await self._allowed(row, toolset_perms={"server-a": ["delete_item"]})
+        assert "delete_item" in (result or [])
+
+    async def test_legacy_entry_ignores_overrides(self):
+        row = _converted_row(
+            ["server-a"],
+            mcp_tool_permissions={"server-a": ["list_items"]},
+            mcp_tool_overrides={"server-a": {"allow": ["delete_item"]}},
+        )
+        result = await self._allowed(row)
+        assert set(result) == {"list_items"}
+
+    async def test_toolset_grant_stays_closed_does_not_widen_to_convention(self):
+        row = _converted_row(
+            ["server-a"],
+            mcp_toolsets=["toolset-1"],
+            mcp_tool_overrides={"server-a": {"allow": ["delete_item"]}},
+        )
+        result = await self._allowed(row, toolset_perms={"server-a": ["list_items"]})
+        assert set(result) == {"list_items"}
+
+    async def test_toolset_grant_deny_narrows_to_empty(self):
+        row = _converted_row(
+            ["server-a"],
+            mcp_toolsets=["toolset-1"],
+            mcp_tool_overrides={"server-a": {"deny": ["list_items"]}},
+        )
+        result = await self._allowed(row, toolset_perms={"server-a": ["list_items"]})
+        assert set(result) == set()

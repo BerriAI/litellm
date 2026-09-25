@@ -164,6 +164,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const watchedFormValues = useWatch({ control: form.control });
   const mcpSelection = useWatch({ control: form.control, name: "allowed_mcp_servers_and_groups" });
   const mcpToolPermissions = useWatch({ control: form.control, name: "mcp_tool_permissions" });
+  const mcpToolOverrides = useWatch({ control: form.control, name: "mcp_tool_overrides" });
   const { data: mcpServers = [] } = useMCPServers();
   const { data: accessGroups = [] } = useAccessGroups();
 
@@ -579,6 +580,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                             onChange={(toolPerms: Record<string, string[]>) =>
                               form.setValue("mcp_tool_permissions", toolPerms)
                             }
+                            toolOverrides={mcpToolOverrides ?? {}}
+                            onOverridesChange={(overrides) => form.setValue("mcp_tool_overrides", overrides)}
                           />
                         </div>
 

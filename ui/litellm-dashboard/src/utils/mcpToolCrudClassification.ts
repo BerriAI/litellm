@@ -1,41 +1,128 @@
 export type CrudOp = "read" | "create" | "update" | "delete" | "unknown";
 
-const DELETE_RE = /\b(delete|remove|destroy|purge|drop|erase|unlink)\b/i;
-const CREATE_RE = /\b(create|add|insert|new|post|submit|register|make|generate|write|upload)\b/i;
-const UPDATE_RE = /\b(update|edit|modify|change|patch|put|set|rename|move|transform)\b/i;
-const READ_RE = /\b(get|read|list|fetch|search|find|query|retrieve|show|view|check|describe|info)\b/i;
+const READ_TOKENS = new Set([
+  "get",
+  "read",
+  "list",
+  "fetch",
+  "search",
+  "find",
+  "query",
+  "retrieve",
+  "show",
+  "view",
+  "check",
+  "describe",
+  "info",
+  "lookup",
+  "count",
+  "export",
+  "download",
+]);
+const DELETE_TOKENS = new Set([
+  "delete",
+  "remove",
+  "destroy",
+  "purge",
+  "drop",
+  "erase",
+  "unlink",
+  "wipe",
+  "clear",
+  "revoke",
+  "uninstall",
+  "trash",
+  "truncate",
+  "rm",
+  "del",
+]);
+const UPDATE_TOKENS = new Set([
+  "update",
+  "edit",
+  "modify",
+  "change",
+  "patch",
+  "put",
+  "set",
+  "rename",
+  "move",
+  "transform",
+  "toggle",
+  "enable",
+  "disable",
+  "archive",
+  "restore",
+]);
+const CREATE_TOKENS = new Set([
+  "create",
+  "add",
+  "insert",
+  "new",
+  "post",
+  "submit",
+  "register",
+  "make",
+  "generate",
+  "write",
+  "upload",
+  "send",
+  "publish",
+]);
+
+const SPLIT_RE = /[_\-./\s]+/;
+const CAMEL_BOUNDARY_RE = /(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/;
+const NON_WORD_RE = /[^\w]+/;
 
 export interface MCPToolEntry {
   name: string;
   description?: string;
 }
 
-/**
- * Classifies a tool by its name first; falls back to description only when
- * the name alone yields no match. This prevents incidental phrasing in
- * free-form descriptions (e.g. "removes noise from…") from promoting a safe
- * tool into a high-risk bucket.
- *
- * READ is checked before DELETE/UPDATE so that tools like `get_removed_entries`
- * or `list_deleted_items` — where the primary verb is a read operation — are
- * not silently blocked by the delete-by-default policy for new servers.
- */
+const nameTokens = (name: string): string[] =>
+  name
+    .split(SPLIT_RE)
+    .flatMap((chunk) => chunk.split(CAMEL_BOUNDARY_RE))
+    .filter((token) => token.length > 0)
+    .map((token) => token.toLowerCase());
+
+const descriptionTokens = (description: string): string[] =>
+  description
+    .split(NON_WORD_RE)
+    .filter((token) => token.length > 0)
+    .map((token) => token.toLowerCase());
+
+const stripSuffix = (token: string, suffix: string): string =>
+  token.endsWith(suffix) ? token.slice(0, -suffix.length) : token;
+
+const tokenVariants = (token: string): string[] =>
+  [
+    token,
+    stripSuffix(token, "es"),
+    stripSuffix(token, "s"),
+    stripSuffix(token, "ed"),
+    stripSuffix(token, "ing"),
+  ].filter((variant) => variant.length > 0);
+
+const CONJUNCTION_TOKENS = new Set(["and", "then", "or", "n"]);
+
+// Matches litellm/proxy/_experimental/mcp_server/tool_classification.py, fixture-pinned.
+const classifyTokens = (tokens: string[]): CrudOp => {
+  const hasBareDeleteVerb = tokens.some(
+    (token, index) => DELETE_TOKENS.has(token) && (index === 0 || CONJUNCTION_TOKENS.has(tokens[index - 1])),
+  );
+  if (hasBareDeleteVerb) return "delete";
+  const variants = new Set(tokens.flatMap((token) => tokenVariants(token)));
+  if ([...variants].some((variant) => READ_TOKENS.has(variant))) return "read";
+  if ([...variants].some((variant) => DELETE_TOKENS.has(variant))) return "delete";
+  if ([...variants].some((variant) => UPDATE_TOKENS.has(variant))) return "update";
+  if ([...variants].some((variant) => CREATE_TOKENS.has(variant))) return "create";
+  return "unknown";
+};
+
 export function classifyToolOp(name: string, description = ""): CrudOp {
-  const nameLower = name.toLowerCase();
-  if (READ_RE.test(nameLower)) return "read";
-  if (DELETE_RE.test(nameLower)) return "delete";
-  if (UPDATE_RE.test(nameLower)) return "update";
-  if (CREATE_RE.test(nameLower)) return "create";
-
-  // Only consult description when the name is unrecognised.
-  if (description) {
-    const descLower = description.toLowerCase();
-    if (READ_RE.test(descLower)) return "read";
-    if (DELETE_RE.test(descLower)) return "delete";
-    if (UPDATE_RE.test(descLower)) return "update";
-    if (CREATE_RE.test(descLower)) return "create";
-  }
-
+  const byName = classifyTokens(nameTokens(name));
+  if (byName !== "unknown") return byName;
+  if (description) return classifyTokens(descriptionTokens(description));
   return "unknown";
 }
 

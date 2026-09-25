@@ -2,11 +2,13 @@
 ObjectPermission repository for database operations on LiteLLM_ObjectPermissionTable.
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.mcp import MCPToolOverrideEntry
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -33,6 +35,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         mcp_servers: list[str] | None = None,
         mcp_access_groups: list[str] | None = None,
         mcp_tool_permissions: dict[str, list[str]] | None = None,
+        mcp_tool_overrides: Mapping[str, MCPToolOverrideEntry] | None = None,
         vector_stores: list[str] | None = None,
         agents: list[str] | None = None,
         agent_access_groups: list[str] | None = None,
@@ -43,13 +46,17 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         skills: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable:
         """Create a new object permission record."""
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, Any]] = {  # mutable-ok: prisma payload fields assigned conditionally
+            "mcp_permission_version": 1
+        }
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         if mcp_access_groups is not None:
             data["mcp_access_groups"] = mcp_access_groups
         if mcp_tool_permissions is not None:
             data["mcp_tool_permissions"] = mcp_tool_permissions
+        if mcp_tool_overrides is not None:
+            data["mcp_tool_overrides"] = mcp_tool_overrides
         if vector_stores is not None:
             data["vector_stores"] = vector_stores
         if agents is not None:
@@ -75,6 +82,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         mcp_servers: list[str] | None = None,
         mcp_access_groups: list[str] | None = None,
         mcp_tool_permissions: dict[str, list[str]] | None = None,
+        mcp_tool_overrides: Mapping[str, MCPToolOverrideEntry] | None = None,
         vector_stores: list[str] | None = None,
         agents: list[str] | None = None,
         agent_access_groups: list[str] | None = None,
@@ -85,13 +93,17 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         skills: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:
         """Update an object permission record."""
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, Any]] = {  # mutable-ok: prisma payload fields assigned conditionally
+            "mcp_permission_version": 1
+        }
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         if mcp_access_groups is not None:
             data["mcp_access_groups"] = mcp_access_groups
         if mcp_tool_permissions is not None:
             data["mcp_tool_permissions"] = mcp_tool_permissions
+        if mcp_tool_overrides is not None:
+            data["mcp_tool_overrides"] = mcp_tool_overrides
         if vector_stores is not None:
             data["vector_stores"] = vector_stores
         if agents is not None:

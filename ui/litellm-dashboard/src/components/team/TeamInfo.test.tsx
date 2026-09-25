@@ -2554,6 +2554,7 @@ describe("TeamInfo MCP permission retention", () => {
       keyedTools: undefined,
       toolsetTools: undefined,
       allowedTools: undefined,
+      overrides: undefined,
       source: kind === "accessGroup" ? { kind, name: "ops_readonly" } : { kind },
     }) as EffectiveMcpServer;
 

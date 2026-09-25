@@ -1,7 +1,31 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { classifyToolOp, groupToolsByCrud } from "./mcpToolCrudClassification";
 
+interface FixtureCase {
+  name: string;
+  description: string | null;
+  expected: string;
+}
+
+const fixture: FixtureCase[] = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../../../tests/test_litellm/proxy/_experimental/mcp_server/fixtures/mcp_tool_classification_cases.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
+
 describe("classifyToolOp", () => {
+  it.each(fixture.map((fixtureCase) => [fixtureCase.name, fixtureCase.description, fixtureCase.expected] as const))(
+    "matches the backend classifier for (%s, %s) -> %s",
+    (name, description, expected) => {
+      expect(classifyToolOp(name, description ?? "")).toBe(expected);
+    },
+  );
+
   it("should classify read operations by name", () => {
     expect(classifyToolOp("get-users")).toBe("read");
     expect(classifyToolOp("list-items")).toBe("read");

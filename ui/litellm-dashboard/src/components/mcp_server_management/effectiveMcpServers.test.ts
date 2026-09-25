@@ -1,13 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import {
+  applyToolOverrideWrite,
+  applyToolOverrideWrites,
   applyToolPermissionWrite,
   emptyMcpAccessGroups,
+  isConventionServer,
   mcpAllowedToolsFor,
   mcpGrantsAllTools,
   mcpServersForIdentifier,
+  mcpToolOverridesFor,
   mcpToolPermissionKeyFor,
+  mcpToolState,
   resolveEffectiveMcpServers,
+  retainedMcpToolOverrides,
 } from "./effectiveMcpServers";
 
 const server = (overrides: Partial<MCPServer> & { server_id: string }): MCPServer =>
@@ -555,5 +561,211 @@ describe("tools a selected toolset grants", () => {
 
     expect(untouched.toolsetTools).toBeUndefined();
     expect(untouched.allowedTools).toBeUndefined();
+  });
+});
+
+describe("convention servers and tool overrides", () => {
+  const srv = server({ server_id: "srv-1", server_name: "wiki", alias: "Wiki" });
+
+  const resolveOne = (
+    toolPermissions: Readonly<Record<string, readonly string[]>>,
+    toolOverrides?: Readonly<Record<string, { allow: string[]; deny: string[] }>>,
+  ) => {
+    const input: Parameters<typeof resolveEffectiveMcpServers>[0] = {
+      ...emptyInput,
+      allServers: [srv],
+      selectedServers: ["srv-1"],
+      toolPermissions,
+      toolOverrides,
+    };
+    return resolveEffectiveMcpServers(input)[0];
+  };
+
+  it("checks non-delete tools and leaves deletes unchecked on a convention server", () => {
+    const entry = resolveOne({}, { "srv-1": { allow: [], deny: [] } });
+
+    expect(isConventionServer(entry)).toBe(true);
+    expect(mcpToolState(entry, "list_pages", false)).toEqual({ checked: true, locked: false });
+    expect(mcpToolState(entry, "delete_page", true)).toEqual({ checked: false, locked: false });
+  });
+
+  it("unchecks a non-delete tool a stored deny names", () => {
+    const entry = resolveOne({}, { "srv-1": { allow: [], deny: ["list_pages"] } });
+
+    expect(mcpToolState(entry, "list_pages", false)).toEqual({ checked: false, locked: false });
+  });
+
+  it("checks a delete tool a stored allow names", () => {
+    const entry = resolveOne({}, { "srv-1": { allow: ["delete_page"], deny: [] } });
+
+    expect(mcpToolState(entry, "delete_page", true)).toEqual({ checked: true, locked: false });
+  });
+
+  it("lets a deny win over an allow for the same tool", () => {
+    const entry = resolveOne({}, { "srv-1": { allow: ["delete_page"], deny: ["delete_page"] } });
+
+    expect(mcpToolState(entry, "delete_page", true)).toEqual({ checked: false, locked: false });
+  });
+
+  it("keeps a nonempty allowlist a closed editable list", () => {
+    const entry = resolveOne({ "srv-1": ["list_pages"] });
+
+    expect(isConventionServer(entry)).toBe(false);
+    expect(mcpToolState(entry, "list_pages", false)).toEqual({ checked: true, locked: false });
+    expect(mcpToolState(entry, "delete_page", true)).toEqual({ checked: false, locked: false });
+  });
+
+  it("keeps an empty allowlist deny-all but editable", () => {
+    const entry = resolveOne({ "srv-1": [] });
+
+    expect(isConventionServer(entry)).toBe(false);
+    expect(mcpToolState(entry, "list_pages", false)).toEqual({ checked: false, locked: false });
+  });
+
+  it("locks toolset tools as granted", () => {
+    const toolset = {
+      toolset_id: "ts-1",
+      toolset_name: "TS",
+      tools: [{ server_id: "srv-1", tool_name: "list_pages" }],
+    };
+    const input: Parameters<typeof resolveEffectiveMcpServers>[0] = {
+      ...emptyInput,
+      allServers: [srv],
+      selectedServers: [],
+      selectedToolsets: ["ts-1"],
+      toolsets: [toolset as unknown as MCPToolset],
+      toolPermissions: {},
+    };
+    const entry = resolveEffectiveMcpServers(input)[0];
+
+    expect(isConventionServer(entry)).toBe(false);
+    expect(mcpToolState(entry, "list_pages", false)).toEqual({ checked: true, locked: true });
+  });
+
+  it("merges override entries across keys that name the same server", () => {
+    expect(
+      mcpToolOverridesFor(
+        srv,
+        { "srv-1": { allow: ["delete_page"], deny: [] }, wiki: { allow: [], deny: ["list_pages"] } },
+        [srv],
+      ),
+    ).toEqual({ allow: ["delete_page"], deny: ["list_pages"] });
+  });
+
+  it("moves a delete tool in and out of allow on toggle", () => {
+    const overrides = { "srv-1": { allow: [], deny: ["list_pages"] } };
+
+    const grant = {
+      toolOverrides: overrides,
+      permissionKey: "srv-1",
+      toolName: "delete_page",
+      isDeleteTool: true,
+      checked: true,
+    };
+
+    expect(applyToolOverrideWrite(grant)).toEqual({ "srv-1": { allow: ["delete_page"], deny: ["list_pages"] } });
+
+    const revoke = {
+      toolOverrides: { "srv-1": { allow: ["delete_page"], deny: [] } },
+      permissionKey: "srv-1",
+      toolName: "delete_page",
+      isDeleteTool: true,
+      checked: false,
+    };
+
+    expect(applyToolOverrideWrite(revoke)).toEqual({ "srv-1": { allow: [], deny: [] } });
+  });
+
+  it("moves a non-delete tool in and out of deny on toggle without writing allows", () => {
+    const deny = {
+      toolOverrides: {},
+      permissionKey: "srv-1",
+      toolName: "list_pages",
+      isDeleteTool: false,
+      checked: false,
+    };
+
+    expect(applyToolOverrideWrite(deny)).toEqual({ "srv-1": { allow: [], deny: ["list_pages"] } });
+
+    const undeny = {
+      toolOverrides: { "srv-1": { allow: [], deny: ["list_pages"] } },
+      permissionKey: "srv-1",
+      toolName: "list_pages",
+      isDeleteTool: false,
+      checked: true,
+    };
+
+    expect(applyToolOverrideWrite(undeny)).toEqual({ "srv-1": { allow: [], deny: [] } });
+  });
+
+  it("preserves other servers' entries and tools not edited, byte for byte", () => {
+    const toolOverrides = {
+      "srv-1": { allow: ["drop_table"], deny: ["hidden_tool"] },
+      "srv-other": { allow: ["other_delete"], deny: [] },
+    };
+
+    const edit = {
+      toolOverrides,
+      permissionKey: "srv-1",
+      toolName: "list_pages",
+      isDeleteTool: false,
+      checked: false,
+    };
+    const written = applyToolOverrideWrite(edit);
+
+    expect(written["srv-other"]).toEqual({ allow: ["other_delete"], deny: [] });
+    expect(written["srv-1"]).toEqual({ allow: ["drop_table"], deny: ["hidden_tool", "list_pages"] });
+  });
+
+  it("bulk Select All approves deletes and clears denies; Deselect All denies non-deletes", () => {
+    const toolOverrides = { "srv-1": { allow: [], deny: ["list_pages"] } };
+
+    const selectAll = {
+      toolOverrides,
+      permissionKey: "srv-1",
+      edits: [
+        { toolName: "list_pages", isDeleteTool: false, checked: true },
+        { toolName: "delete_page", isDeleteTool: true, checked: true },
+      ],
+    };
+
+    expect(applyToolOverrideWrites(selectAll)).toEqual({ "srv-1": { allow: ["delete_page"], deny: [] } });
+
+    const deselectAll = {
+      toolOverrides,
+      permissionKey: "srv-1",
+      edits: [
+        { toolName: "list_pages", isDeleteTool: false, checked: false },
+        { toolName: "delete_page", isDeleteTool: true, checked: false },
+      ],
+    };
+
+    expect(applyToolOverrideWrites(deselectAll)).toEqual({ "srv-1": { allow: [], deny: ["list_pages"] } });
+  });
+});
+
+describe("retainedMcpToolOverrides", () => {
+  const catalog = [server({ server_id: "srv-1" }), server({ server_id: "srv-2", alias: "shared" })];
+
+  it("drops the override for a server the save no longer grants", () => {
+    expect(
+      retainedMcpToolOverrides(
+        { "srv-1": { allow: [], deny: ["list_pages"] }, "srv-2": { allow: ["delete_page"], deny: [] } },
+        new Set(["srv-2"]),
+        catalog,
+      ),
+    ).toEqual({ "srv-2": { allow: ["delete_page"], deny: [] } });
+  });
+
+  it("keeps an override while any server the key names stays granted", () => {
+    expect(retainedMcpToolOverrides({ shared: { allow: [], deny: ["t"] } }, new Set(["srv-2"]), catalog)).toEqual({
+      shared: { allow: [], deny: ["t"] },
+    });
+  });
+
+  it("keeps an override whose key resolves to nothing, so an unloaded catalog prunes nothing", () => {
+    expect(retainedMcpToolOverrides({ "not-yet-loaded": { allow: [], deny: ["t"] } }, new Set(), catalog)).toEqual({
+      "not-yet-loaded": { allow: [], deny: ["t"] },
+    });
   });
 });

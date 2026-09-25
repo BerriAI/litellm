@@ -346,6 +346,7 @@ export const parseMcpPermissionsForForm = (agent: any) => ({
     toolsets: agent.object_permission?.mcp_toolsets ?? [],
   },
   mcp_tool_permissions: agent.object_permission?.mcp_tool_permissions ?? {},
+  mcp_tool_overrides: agent.object_permission?.mcp_tool_overrides ?? {},
 });
 
 /**
@@ -357,6 +358,7 @@ export const buildMcpObjectPermission = (values: any) => ({
   mcp_access_groups: values.allowed_mcp_servers_and_groups?.accessGroups ?? [],
   mcp_toolsets: values.allowed_mcp_servers_and_groups?.toolsets ?? [],
   mcp_tool_permissions: values.mcp_tool_permissions ?? {},
+  mcp_tool_overrides: values.mcp_tool_overrides ?? {},
 });
 
 /**

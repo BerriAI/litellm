@@ -124,6 +124,9 @@ const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ acces
     | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
     | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
+  const toolOverrides = useWatch({ control, name: "mcp_tool_overrides" }) as
+    | Record<string, { allow: string[]; deny: string[] }>
+    | undefined;
 
   return (
     <div className="mt-6">
@@ -134,6 +137,8 @@ const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ acces
         selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
         onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
+        toolOverrides={toolOverrides || {}}
+        onOverridesChange={(overrides) => setValue("mcp_tool_overrides", overrides)}
       />
     </div>
   );
@@ -235,6 +240,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     tpm_limit_type: null,
     rpm_limit_type: null,
     mcp_tool_permissions: {},
+    mcp_tool_overrides: {},
     duration: "",
   }));
   const form = useForm<MountedFormValues>({
@@ -1570,6 +1576,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
                           {/* Hidden field to register mcp_tool_permissions with the form */}
                           <MountedFormField name="mcp_tool_permissions" bare>
+                            {(control) => <input type="hidden" id={control.id} name={control.name} />}
+                          </MountedFormField>
+
+                          <MountedFormField name="mcp_tool_overrides" bare>
                             {(control) => <input type="hidden" id={control.id} name={control.name} />}
                           </MountedFormField>
 

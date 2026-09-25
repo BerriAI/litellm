@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool } from "../mcp_tools/types";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -12,10 +12,14 @@ import { MCP_ALL_TOOLS_WILDCARD, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/co
 import {
   EffectiveMcpServer,
   McpGrantSource,
+  McpToolOverrideEntry,
+  applyToolOverrideWrite,
+  applyToolOverrideWrites,
   applyToolPermissionWrite,
   emptyMcpAccessGroups,
-  mcpAllowedToolsFor,
+  isConventionServer,
   mcpGrantsAllTools,
+  mcpToolState,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
 
@@ -26,6 +30,8 @@ interface MCPToolPermissionsProps {
   selectedToolsets?: readonly string[];
   toolPermissions: Record<string, string[]>;
   onChange: (toolPermissions: Record<string, string[]>) => void;
+  toolOverrides?: Record<string, McpToolOverrideEntry>;
+  onOverridesChange?: (toolOverrides: Record<string, { allow: string[]; deny: string[] }>) => void;
   disabled?: boolean;
 }
 
@@ -56,6 +62,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   selectedToolsets = NO_SELECTION,
   toolPermissions,
   onChange,
+  toolOverrides = {},
+  onOverridesChange,
   disabled = false,
 }) => {
   const {
@@ -71,14 +79,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
   const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
 
-  // Keep a ref to the latest toolPermissions so async fetch callbacks always
-  // read the current value and do not overwrite sibling servers' results when
-  // multiple fetches complete out-of-order (stale-closure race condition).
-  const toolPermissionsRef = useRef(toolPermissions);
-  useEffect(() => {
-    toolPermissionsRef.current = toolPermissions;
-  }, [toolPermissions]);
-
   // Every server this permission level reaches, not just the directly selected ones: a server
   // reached through an access group or a toolset needs its allowlist visible and editable too.
   const effectiveMcpInput = {
@@ -88,10 +88,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     selectedToolsets,
     toolsets,
     toolPermissions,
+    toolOverrides,
   };
   const servers = useMemo(
     () => resolveEffectiveMcpServers(effectiveMcpInput),
-    [allServers, selectedServers, selectedAccessGroups, selectedToolsets, toolsets, toolPermissions],
+    [allServers, selectedServers, selectedAccessGroups, selectedToolsets, toolsets, toolPermissions, toolOverrides],
   );
 
   // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
@@ -102,7 +103,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
 
     try {
-      const response = await listMCPTools(token, serverId);
+      const response = await listMCPTools(token, serverId, undefined, true);
 
       if (response.error) {
         setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
@@ -110,20 +111,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       } else {
         const fetchedTools: MCPTool[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
-
-        // Default only unrestricted direct servers to non-delete tools.
-        // Read latest permissions from the ref to avoid clobbering concurrent results.
-        const latestPermissions = toolPermissionsRef.current;
-        const isDirect = entry.source.kind === "direct";
-        const unrestricted =
-          mcpAllowedToolsFor(entry.server, latestPermissions, allServers) === undefined &&
-          entry.toolsetTools === undefined;
-        if (isDirect && unrestricted && (selectedToolsets.length === 0 || !toolsetsFailed) && fetchedTools.length > 0) {
-          const nonDeleteTools = fetchedTools
-            .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
-            .map((t) => t.name);
-          onChange(applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }));
-        }
       }
     } catch (err) {
       console.error(`Error fetching tools for server ${serverId}:`, err);
@@ -148,8 +135,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [servers, accessToken, toolsetsLoading]);
 
-  // Every write goes through here so an edit is authoritative for the SERVER, not for one of the
-  // equivalent keys that may name it.
   const writeAllowedTools = (entry: EffectiveMcpServer, allowed: string[]) => {
     const names = (serverTools[entry.server.server_id] ?? []).map((t) => t.name);
     const next =
@@ -159,12 +144,45 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }));
   };
 
-  const handleSelectAll = (entry: EffectiveMcpServer) => {
-    const tools = serverTools[entry.server.server_id] || [];
-    writeAllowedTools(
-      entry,
-      tools.map((t) => t.name),
+  const isDelete = (tool: MCPTool) => classifyToolOp(tool.name, tool.description || "") === "delete";
+
+  const writeToolToggle = (entry: EffectiveMcpServer, tool: MCPTool, checked: boolean) => {
+    if (isConventionServer(entry)) {
+      const write = {
+        toolOverrides,
+        permissionKey: entry.permissionKey,
+        toolName: tool.name,
+        isDeleteTool: isDelete(tool),
+        checked,
+      };
+      onOverridesChange?.(applyToolOverrideWrite(write));
+      return;
+    }
+    const current = mcpGrantsAllTools(entry.keyedTools)
+      ? (serverTools[entry.server.server_id] || []).map((t) => t.name)
+      : entry.allowedTools ?? (serverTools[entry.server.server_id] || []).map((t) => t.name);
+    writeAllowedTools(entry, checked ? [...current, tool.name] : current.filter((name) => name !== tool.name));
+  };
+
+  const writeConventionBulk = (entry: EffectiveMcpServer, tools: readonly MCPTool[], checked: boolean) => {
+    onOverridesChange?.(
+      applyToolOverrideWrites({
+        toolOverrides,
+        permissionKey: entry.permissionKey,
+        edits: tools
+          .filter((tool) => !mcpToolState(entry, tool.name, isDelete(tool)).locked)
+          .map((tool) => ({ toolName: tool.name, isDeleteTool: isDelete(tool), checked })),
+      }),
     );
+  };
+
+  const handleBulk = (entry: EffectiveMcpServer, checked: boolean) => {
+    const tools = serverTools[entry.server.server_id] || [];
+    if (isConventionServer(entry)) {
+      writeConventionBulk(entry, tools, checked);
+      return;
+    }
+    writeAllowedTools(entry, checked ? tools.map((t) => t.name) : []);
   };
 
   // The opt-out sentinel short-circuits the backend resolver to zero servers, so nothing stored
@@ -229,7 +247,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const serverName = server.server_name || server.alias || serverId;
         const tools = serverTools[serverId] || [];
         const grantsAll = mcpGrantsAllTools(entry.keyedTools);
-        const selectedTools = grantsAll ? tools.map((t) => t.name) : entry.allowedTools ?? tools.map((t) => t.name);
+        const stateFor = (tool: MCPTool) =>
+          mcpToolState(entry, tool.name, classifyToolOp(tool.name, tool.description || "") === "delete");
+        const selectedTools = grantsAll
+          ? tools.map((tool) => tool.name)
+          : tools.filter((tool) => stateFor(tool).checked).map((tool) => tool.name);
         const isLoading = loadingTools[serverId];
         const error = toolErrors[serverId];
         const viewMode = viewModes[serverId] ?? "crud";
@@ -294,7 +316,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     <button
                       type="button"
                       className="text-sm text-info hover:text-info/80 font-medium"
-                      onClick={() => handleSelectAll(entry)}
+                      onClick={() => handleBulk(entry, true)}
                       disabled={isLoading}
                     >
                       Select All
@@ -302,7 +324,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     <button
                       type="button"
                       className="text-sm text-info hover:text-info/80 font-medium"
-                      onClick={() => writeAllowedTools(entry, [])}
+                      onClick={() => handleBulk(entry, false)}
                       disabled={isLoading}
                     >
                       Deselect All
@@ -334,9 +356,28 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {!isLoading && !error && tools.length > 0 && viewMode === "crud" && (
                 <McpCrudPermissionPanel
                   tools={tools}
-                  value={entry.allowedTools === undefined ? undefined : [...selectedTools]}
+                  value={[...selectedTools]}
                   lockedTools={toolsetTools}
-                  onChange={(allowed) => writeAllowedTools(entry, allowed)}
+                  onChange={(allowed) =>
+                    isConventionServer(entry)
+                      ? onOverridesChange?.(
+                          applyToolOverrideWrites({
+                            toolOverrides,
+                            permissionKey: entry.permissionKey,
+                            edits: tools
+                              .filter(
+                                (tool) =>
+                                  allowed.includes(tool.name) !== stateFor(tool).checked && !stateFor(tool).locked,
+                              )
+                              .map((tool) => ({
+                                toolName: tool.name,
+                                isDeleteTool: isDelete(tool),
+                                checked: allowed.includes(tool.name),
+                              })),
+                          }),
+                        )
+                      : writeAllowedTools(entry, allowed)
+                  }
                   readOnly={disabled}
                 />
               )}
@@ -345,22 +386,18 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {!isLoading && !error && tools.length > 0 && viewMode === "flat" && (
                 <div className="space-y-2">
                   {tools.map((tool) => {
-                    const isSelected = selectedTools.includes(tool.name);
-                    const isLocked = toolsetTools.includes(tool.name);
+                    const state = stateFor(tool);
                     return (
                       <div key={tool.name} className="flex items-start gap-2">
                         <input
                           type="checkbox"
                           aria-label={tool.name}
-                          checked={isSelected}
+                          checked={grantsAll || state.checked}
                           onChange={() => {
-                            if (disabled || isLocked) return;
-                            const next = isSelected
-                              ? selectedTools.filter((n) => n !== tool.name)
-                              : [...selectedTools, tool.name];
-                            writeAllowedTools(entry, next);
+                            if (disabled || state.locked) return;
+                            writeToolToggle(entry, tool, !(grantsAll || state.checked));
                           }}
-                          disabled={disabled || isLocked}
+                          disabled={disabled || state.locked}
                           className="mt-0.5"
                         />
                         <div className="flex-1 min-w-0">

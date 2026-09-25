@@ -112,6 +112,7 @@ const StepProgress: React.FC<{ current: number }> = ({ current }) => (
 const SHARED_INITIAL_VALUES: AgentFormValues = {
   allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
   mcp_tool_permissions: {},
+  mcp_tool_overrides: {},
   entitlement_models: [],
   entitlement_agents: [],
   access_group_ids: [],
@@ -253,6 +254,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   const watchedFormValues = useWatch({ control: form.control });
   const mcpSelection = useWatch({ control: form.control, name: "allowed_mcp_servers_and_groups" });
   const mcpToolPermissions = useWatch({ control: form.control, name: "mcp_tool_permissions" });
+  const mcpToolOverrides = useWatch({ control: form.control, name: "mcp_tool_overrides" });
 
   // Build the discovery plan for the proxy. Different agent runtimes publish
   // their cards at different URL shapes:
@@ -363,6 +365,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       // Build object_permission from MCP Tools step (allowed_mcp_servers_and_groups, mcp_tool_permissions)
       const mcpServersAndGroups = values.allowed_mcp_servers_and_groups ?? {};
       const toolPermissions = values.mcp_tool_permissions ?? {};
+      const toolOverrides = values.mcp_tool_overrides ?? {};
       const entitlementModels = values.entitlement_models ?? [];
       const entitlementAgents = values.entitlement_agents ?? [];
       const objectPermission: Record<string, unknown> = {
@@ -370,6 +373,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         ...(mcpServersAndGroups.accessGroups?.length ? { mcp_access_groups: mcpServersAndGroups.accessGroups } : {}),
         ...(mcpServersAndGroups.toolsets?.length ? { mcp_toolsets: mcpServersAndGroups.toolsets } : {}),
         ...(Object.keys(toolPermissions).length ? { mcp_tool_permissions: toolPermissions } : {}),
+        ...(Object.keys(toolOverrides).length ? { mcp_tool_overrides: toolOverrides } : {}),
         ...(entitlementModels.length ? { models: entitlementModels } : {}),
         ...(entitlementAgents.length ? { agents: entitlementAgents } : {}),
       };
@@ -546,6 +550,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           selectedToolsets={mcpSelection?.toolsets ?? []}
           toolPermissions={mcpToolPermissions ?? {}}
           onChange={(toolPerms: Record<string, string[]>) => form.setValue("mcp_tool_permissions", toolPerms)}
+          toolOverrides={mcpToolOverrides ?? {}}
+          onOverridesChange={(overrides) => form.setValue("mcp_tool_overrides", overrides)}
         />
       </div>
     </div>

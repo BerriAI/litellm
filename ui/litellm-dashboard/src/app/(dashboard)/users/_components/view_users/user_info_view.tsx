@@ -324,7 +324,8 @@ export default function UserInfoView({
       const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
+          ([field]) =>
+            field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions" && field !== "mcp_tool_overrides",
         ),
       );
 
