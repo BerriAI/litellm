@@ -80,6 +80,8 @@ _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
 _CLAUDE_CODE_IDENTITY: Final = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
