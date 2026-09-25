@@ -78,7 +78,7 @@ proxy = [
     "litellm-proxy-extras==0.4.102",
     "litellm-enterprise==0.1.71",
     "RestrictedPython>=8.5,<9.0",
-    "rich>=13.9.4,<14.0",
+    "rich>=13.9.4,<16.0",
     "InquirerPy>=0.3.4,<1.0",
     "tomlkit>=0.13.3,<1.0",
     "polars>=1.38.1,<2.0",
@@ -92,7 +92,7 @@ proxy = [
 # keyring reaches the Secret Service through secretstorage, which brings
 # cryptography with it.
 cli = [
-    "rich>=13.9.4,<14.0",
+    "rich>=13.9.4,<16.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
     "InquirerPy>=0.3.4,<1.0",
