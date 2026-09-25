@@ -180,7 +180,7 @@ def caller_alias_maps(
     return CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, litellm.model_alias_map, key_aliases))
 
 
-def _alias_map(aliases: object) -> Mapping[str, str]:
+def alias_map(aliases: object) -> Mapping[str, str]:
     try:
         entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
     except ValidationError:
@@ -204,7 +204,7 @@ def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] =
     already `listed` keeps its own row, so it is never rewritten."""
     if model_id in listed:
         return None
-    return _rewrite(model_id, tuple(_alias_map(alias_map) for alias_map in aliases.rewrite))
+    return _rewrite(model_id, tuple(alias_map(raw) for raw in aliases.rewrite))
 
 
 def alias_listing_entries(
@@ -213,8 +213,8 @@ def alias_listing_entries(
 ) -> tuple[tuple[str, str], ...]:
     """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
     listed. An alias colliding with a listed id keeps the listed entry."""
-    maps: Final = tuple(_alias_map(alias_map) for alias_map in aliases.rewrite)
-    own: Final = tuple(_alias_map(alias_map) for alias_map in aliases.own)
+    maps: Final = tuple(alias_map(raw) for raw in aliases.rewrite)
+    own: Final = tuple(alias_map(raw) for raw in aliases.own)
     lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
     targets: Final = MappingProxyType(
