@@ -706,6 +706,7 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy.middleware.active_request_middleware import ActiveRequestMiddleware
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -2418,6 +2419,7 @@ app.add_middleware(
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
+app.add_middleware(ActiveRequestMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 

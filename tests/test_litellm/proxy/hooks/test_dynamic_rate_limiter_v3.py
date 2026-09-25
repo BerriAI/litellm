@@ -2128,6 +2128,40 @@ async def test_disabled_fairness_settings_keep_model_capacity_enforced(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_over_capacity_request_is_still_rejected_when_stats_counter_write_fails(monkeypatch):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.hooks.fairness_stats import FairnessStats
+    from litellm.proxy.utils import InternalUsageCache
+    from litellm.types.proxy.fairness import FairnessSettings
+
+    class BrokenCounterCache(InternalUsageCache):
+        async def async_increment_cache(self, key: str, value: float, litellm_parent_otel_span, **kwargs):
+            raise ConnectionError("redis unavailable")
+
+    model = "fairness-stats-outage-model"
+    monkeypatch.setattr(litellm, "fairness_settings", FairnessSettings(enabled=False))
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(
+        internal_usage_cache=dual_cache, fairness_stats=FairnessStats(cache=BrokenCounterCache(DualCache()))
+    )
+    handler.update_variables(llm_router=_fairness_router(model, rpm=1))
+
+    async def call(call_id: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=dual_cache,
+            data={"model": model, "litellm_call_id": call_id},
+            call_type="completion",
+        )
+
+    await asyncio.create_task(call("first"))
+    with pytest.raises(ProxyRateLimitError) as over_capacity:
+        await asyncio.create_task(call("second"))
+    assert over_capacity.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_failed_stream_settles_reservation_at_recovered_partial_usage(monkeypatch):
     from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
     from litellm.types.utils import Usage

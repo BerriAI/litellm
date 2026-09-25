@@ -9,6 +9,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import InternalUsageCache
 
 FairnessMetric = Literal[
@@ -81,12 +82,17 @@ class FairnessStats:
         return tuple(range(current - STATS_WINDOW_SECONDS // _BUCKET_SECONDS + 1, current + 1))
 
     async def record(self, model: str, class_name: str, metric: FairnessMetric, value: float = 1.0) -> None:
-        await self._cache.async_increment_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs untyped upstream
-            key=_bucket_key(model, class_name, metric, self._current_bucket()),
-            value=value,
-            litellm_parent_otel_span=None,
-            ttl=_BUCKET_TTL_SECONDS,
-        )
+        try:
+            await self._cache.async_increment_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs untyped upstream
+                key=_bucket_key(model, class_name, metric, self._current_bucket()),
+                value=value,
+                litellm_parent_otel_span=None,
+                ttl=_BUCKET_TTL_SECONDS,
+            )
+        except Exception as error:  # noqa: BLE001  # a lost counter must never change the admission decision
+            verbose_proxy_logger.warning(
+                "fairness stats %s for %s/%s not recorded: %s", metric, model, class_name, error
+            )
 
     async def read(self, model: str, class_names: Sequence[str]) -> Mapping[str, ClassStats]:
         buckets: Final = self._window_buckets()

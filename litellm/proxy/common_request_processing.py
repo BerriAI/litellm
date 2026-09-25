@@ -84,7 +84,6 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.bug_report_config import build_proxy_bug_report
-from litellm.proxy.common_utils.active_request import active_request
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -2185,16 +2184,12 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
-        active_request_token: Final = active_request.set(request)
-        try:
-            self.data = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=self.data,
-                call_type=route_type,
-                skip_guardrails=skip_guardrails,
-            )
-        finally:
-            active_request.reset(active_request_token)
+        self.data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+            call_type=route_type,
+            skip_guardrails=skip_guardrails,
+        )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,

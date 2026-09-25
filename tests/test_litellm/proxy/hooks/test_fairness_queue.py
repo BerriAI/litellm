@@ -28,6 +28,11 @@ async def _never_cancelled() -> bool:
     return False
 
 
+async def _never_cancelled_after_probing_the_client() -> bool:
+    await asyncio.sleep(0)
+    return False
+
+
 async def _always_cancelled() -> bool:
     return True
 
@@ -184,6 +189,69 @@ async def test_weighted_ordering_gives_reserved_share_of_turns_without_starving_
     first_four: Final = gate.admitted[:4]
     assert first_four.count("prod") == 3
     assert first_four.count("batch") == 1
+
+
+class PerClassGate:
+    """Admits per class while that class has slots, recording the class of each admission in order."""
+
+    def __init__(self, **slots: int) -> None:
+        self.slots = dict(slots)
+        self.attempts: dict[str, int] = {}
+        self.admitted: list[str] = []
+
+    def for_class(self, class_name: str):
+        async def try_admit() -> bool:
+            self.attempts[class_name] = self.attempts.get(class_name, 0) + 1
+            if self.slots.get(class_name, 0) <= 0:
+                return False
+            self.slots[class_name] -= 1
+            self.admitted.append(class_name)
+            return True
+
+        return try_admit
+
+
+def _waiter(queue: FairQueue, gate: PerClassGate, class_name: str, request_id: str, max_wait: float = 30.0):
+    return asyncio.create_task(
+        queue.wait_for_admission(
+            ticket=_ticket(class_name, request_id),
+            weights=WEIGHTS,
+            max_wait_seconds=max_wait,
+            max_depth=100,
+            poll_interval_seconds=0.001,
+            try_admit=gate.for_class(class_name),
+            is_cancelled=_never_cancelled_after_probing_the_client,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_newer_low_share_request_does_not_jump_a_class_that_waited_through_failed_admits():
+    queue: Final = FairQueue()
+    gate: Final = PerClassGate(prod=0, batch=0)
+    prod: Final = _waiter(queue, gate, "prod", "prod-1")
+    while gate.attempts.get("prod", 0) < 30:
+        await asyncio.sleep(0.001)
+    batch: Final = _waiter(queue, gate, "batch", "batch-1")
+    while queue.depths(MODEL).get("batch", 0) < 1:
+        await asyncio.sleep(0)
+    gate.slots["prod"] = 1
+    gate.slots["batch"] = 1
+    outcomes: Final = await asyncio.gather(prod, batch)
+    assert all(isinstance(outcome, QueueAdmitted) for outcome in outcomes)
+    assert gate.admitted == ["prod", "batch"]
+
+
+@pytest.mark.asyncio
+async def test_class_blocked_on_its_own_share_yields_the_slot_to_a_class_that_fits():
+    queue: Final = FairQueue()
+    gate: Final = PerClassGate(prod=0, batch=1)
+    prod: Final = _waiter(queue, gate, "prod", "prod-1", max_wait=5.0)
+    await asyncio.sleep(0.01)
+    batch_outcome: Final = await _waiter(queue, gate, "batch", "batch-1", max_wait=1.0)
+    assert isinstance(batch_outcome, QueueAdmitted)
+    assert gate.admitted == ["batch"]
+    prod.cancel()
 
 
 @pytest.mark.asyncio

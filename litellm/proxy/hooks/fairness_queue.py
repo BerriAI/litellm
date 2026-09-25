@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -18,8 +19,10 @@ class QueueTicket:
 @dataclass(frozen=True, slots=True)
 class ClassQueueState:
     head_request_id: str | None
+    head_enqueued_at: float
     depth: int
     pass_value: float
+    yielded: bool
 
 
 _ClassQueue = tuple[tuple[float, str], ...]
@@ -29,6 +32,7 @@ _ClassQueue = tuple[tuple[float, str], ...]
 class _ModelQueues:
     queues: dict[str, _ClassQueue] = field(default_factory=dict)
     passes: dict[str, float] = field(default_factory=dict)
+    yielded: frozenset[str] = frozenset()
     virtual_time: float = 0.0
 
 
@@ -63,8 +67,10 @@ class InMemoryFairQueueStore:
             {
                 class_name: ClassQueueState(
                     head_request_id=(queue[0][1] if (queue := state.queues.get(class_name)) else None),
+                    head_enqueued_at=(queue[0][0] if queue else math.inf),
                     depth=len(state.queues.get(class_name, ())),
                     pass_value=state.passes.get(class_name, 0.0),
+                    yielded=class_name in state.yielded,
                 )
                 for class_name in class_names
             }
@@ -75,6 +81,13 @@ class InMemoryFairQueueStore:
         new_pass: Final = state.passes.get(class_name, 0.0) + amount
         state.passes[class_name] = new_pass
         state.virtual_time = new_pass
+        state.yielded = frozenset()
+
+    def yield_turn(self, model: str, class_name: str) -> None:
+        state: Final = self._model(model)
+        waiting: Final = frozenset(name for name, queue in state.queues.items() if queue)
+        yielded: Final = state.yielded | {class_name}
+        state.yielded = frozenset() if waiting <= yielded else yielded
 
     def depths(self, model: str) -> Mapping[str, int]:
         state: Final = self._models.get(model)
@@ -150,10 +163,12 @@ class FairQueue:
         if elapsed >= max_wait_seconds:
             return QueueRejected(reason="queue_deadline_exceeded", waited_seconds=elapsed)
         if _has_turn(ticket, self._store.snapshot(ticket.model, tuple(weights))):
-            admitted: Final = await try_admit()
-            self._store.advance(ticket.model, ticket.class_name, 1.0 / max(weights.get(ticket.class_name, 0.0), 1e-6))
-            if admitted:
+            if await try_admit():
+                self._store.advance(
+                    ticket.model, ticket.class_name, 1.0 / max(weights.get(ticket.class_name, 0.0), 1e-6)
+                )
                 return QueueAdmitted(waited_seconds=self._clock() - started)
+            self._store.yield_turn(ticket.model, ticket.class_name)
         remaining: Final = max_wait_seconds - (self._clock() - started)
         await asyncio.sleep(max(0.0, min(poll_interval_seconds, remaining)))
         return None
@@ -163,5 +178,10 @@ def _has_turn(ticket: QueueTicket, snapshot: Mapping[str, ClassQueueState]) -> b
     own: Final = snapshot.get(ticket.class_name)
     if own is None or own.head_request_id != ticket.request_id:
         return False
-    active: Final = tuple((state.pass_value, name) for name, state in snapshot.items() if state.depth > 0)
-    return min(active) == (own.pass_value, ticket.class_name)
+    active: Final = tuple(_rank(name, state) for name, state in snapshot.items() if state.depth > 0)
+    eligible: Final = tuple(entry for entry in active if not snapshot[entry[2]].yielded) or active
+    return min(eligible) == _rank(ticket.class_name, own)
+
+
+def _rank(class_name: str, state: ClassQueueState) -> tuple[float, float, str]:
+    return (state.pass_value, state.head_enqueued_at, class_name)
