@@ -14,7 +14,6 @@ import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy.agent_endpoints.identity_store import forget_unbound_claims
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -635,7 +634,6 @@ class AgentRegistry:
                 data={**create_data, **_managed_fields(agent, None, created_by)},
                 include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
-            forget_unbound_claims()
 
             return AgentResponse.model_validate(created_agent.model_dump())
         except HTTPException:
@@ -753,7 +751,6 @@ class AgentRegistry:
             )
             if patched_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            forget_unbound_claims()
             return AgentResponse.model_validate(patched_agent.model_dump())
         except HTTPException:
             raise
@@ -853,7 +850,6 @@ class AgentRegistry:
 
             if updated_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            forget_unbound_claims()
             return AgentResponse.model_validate(updated_agent.model_dump())
         except HTTPException:
             raise
