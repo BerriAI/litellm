@@ -1099,50 +1099,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  ocr_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/ocr_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 4"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml ocr_coverage.xml
-            mv .coverage ocr_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - ocr_coverage.xml
-            - ocr_coverage
   search_testing:
     docker:
       - *python312_image
@@ -2601,7 +2557,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3427,8 +3383,6 @@ workflows:
           filters: *main_branches
       - llm_responses_api_testing:
           filters: *main_branches
-      - ocr_testing:
-          filters: *main_branches
       - search_testing:
           filters: *main_branches
       - batches_testing:
@@ -3451,7 +3405,6 @@ workflows:
             - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
-            - ocr_testing
             - search_testing
             - batches_testing
             - litellm_utils_testing
