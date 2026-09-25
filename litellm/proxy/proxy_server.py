@@ -7648,8 +7648,8 @@ class ProxyConfig:
         has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
         job_missing: Final = wants_job and not has_job and schedule != self._last_cleanup_schedule_attempt
         if previous_cleanup_schedule != schedule or job_missing or (has_job and not wants_job):
-            self._last_cleanup_schedule_attempt = schedule
             await self._reschedule_spend_log_cleanup_job()
+            self._last_cleanup_schedule_attempt = schedule
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         _apply_ssrf_general_settings(db_values)
