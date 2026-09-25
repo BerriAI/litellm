@@ -10276,7 +10276,8 @@ class TestLIT3974ResolutionCharacterization:
                 patch("litellm.proxy.proxy_server.prisma_client", prisma),
                 patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
             ):
-                with pytest.raises(HTTPException) as exc_info:
+
+                async def invoke_oauth_endpoint() -> None:
                     if endpoint == "authorize":
                         await mcp_authorize(
                             request=request,
@@ -10298,6 +10299,9 @@ class TestLIT3974ResolutionCharacterization:
                             server_id=server_id,
                             user_api_key_dict=auth,
                         )
+
+                with pytest.raises(HTTPException) as exc_info:
+                    await invoke_oauth_endpoint()
 
             expected_detail: Final = (
                 {"error": f"Access denied to MCP server {server_id}"}
@@ -10395,26 +10399,8 @@ class TestLIT3974ResolutionCharacterization:
             patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
-            if grant_route == "direct user object_permission":
-                effective_contexts: Final = await mgmt_endpoints.build_effective_auth_contexts(auth)
-                admitted_context: Final = next(
-                    (context for context in effective_contexts if getattr(context, "mcp_admitted_user_subject", False)),
-                    None,
-                )
-                assert admitted_context is not None, "direct user permission must resolve an admitted context"
-                assert server_id in await manager.get_allowed_mcp_servers(admitted_context)
-            else:
-                assert server_id in await manager.get_allowed_mcp_servers(auth), (
-                    f"{source}/{grant_route}: real grant resolution must include the server"
-                )
 
-            try:
-                result: Final = await mgmt_endpoints.fetch_mcp_server(
-                    request=_make_mock_request(),
-                    server_id=server_id,
-                    user_api_key_dict=auth,
-                )
-            except HTTPException as exc:
+            def assert_detail_denial(exc: HTTPException) -> None:
                 logging.warning(
                     "%s/%s: HTTP %s detail=%r",
                     source,
@@ -10439,6 +10425,28 @@ class TestLIT3974ResolutionCharacterization:
                 oauth_invalidate.assert_not_awaited()
                 env_invalidate.assert_not_called()
                 assert httpx_mock.calls.call_count == 0
+
+            if grant_route == "direct user object_permission":
+                effective_contexts: Final = await mgmt_endpoints.build_effective_auth_contexts(auth)
+                admitted_context: Final = next(
+                    (context for context in effective_contexts if getattr(context, "mcp_admitted_user_subject", False)),
+                    None,
+                )
+                assert admitted_context is not None, "direct user permission must resolve an admitted context"
+                assert server_id in await manager.get_allowed_mcp_servers(admitted_context)
+            else:
+                assert server_id in await manager.get_allowed_mcp_servers(auth), (
+                    f"{source}/{grant_route}: real grant resolution must include the server"
+                )
+
+            try:
+                result: Final = await mgmt_endpoints.fetch_mcp_server(
+                    request=_make_mock_request(),
+                    server_id=server_id,
+                    user_api_key_dict=auth,
+                )
+            except HTTPException as exc:
+                assert_detail_denial(exc)
                 raise
 
             assert result.server_id == server_id, f"{source}/{grant_route}: detail server ID"
