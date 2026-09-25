@@ -4390,10 +4390,13 @@ class ComplexityRouter(CustomLogger):
             resolved_messages=resolved_messages,
             context_fit=context_fit,
         )
+        cache_adjusted_response: Final = await self._apply_prompt_cache_routing(
+            routed_response, messages, request_kwargs, context_fit
+        )
         response: Final = (
             await self._gate_response_health(
                 await self._gate_response_modality(
-                    routed_response, messages, resolved_messages, request_kwargs, context_fit
+                    cache_adjusted_response, messages, resolved_messages, request_kwargs, context_fit
                 ),
                 messages,
                 input,
@@ -4401,7 +4404,7 @@ class ComplexityRouter(CustomLogger):
                 request_kwargs,
                 context_fit,
             )
-            if routed_response is not None
+            if cache_adjusted_response is not None
             else None
         )
         # Sentinel presence, not the plan_mode cause, gates the pin write: a plan-mode turn
@@ -4424,6 +4427,52 @@ class ComplexityRouter(CustomLogger):
                 ttl=self.config.session_affinity_ttl_seconds,
             )
         return self._with_session_deployment_affinity(response)
+
+    async def _apply_prompt_cache_routing(
+        self,
+        response: PreRoutingHookResponse | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: Mapping[str, object],
+        context_fit: _RequestContextFit,
+    ) -> PreRoutingHookResponse | None:
+        if not self.config.cache_aware_routing or response is None or response.routing_decision is None:
+            return response
+        from litellm.proxy.common_utils.cache_aware_routing import choose_cached_model
+
+        choice: Final = await choose_cached_model(
+            router=self.litellm_router_instance,
+            config=self.config,
+            response=response,
+            request_kwargs=request_kwargs,
+            messages=messages,
+        )
+        if choice is None or not context_fit.accepts(choice.model):
+            return response
+        params: Final = self._litellm_params_for_model(choice.tier, choice.model)
+        decision: Final[StandardLoggingRoutingDecision] = {
+            **response.routing_decision,
+            "routed_model": choice.model,
+            "cause": "prompt_cache_cost",
+            "tier": choice.tier,
+            "tier_label": (self.config.tier_labels or {}).get(choice.tier, choice.tier),
+            "tier_litellm_params": params,
+            "signals": (
+                *(response.routing_decision.get("signals") or ()),
+                f"cache-aware:classified-model={response.model}",
+                f"cache-aware:classification-cause={response.routing_decision.get('cause')}",
+                f"cache-aware:estimated-cost={choice.estimated_cost:.8f};original-cost={choice.original_cost:.8f}",
+            ),
+        }
+        verbose_router_logger.info(
+            "ComplexityRouter: cache-aware choice model=%s original=%s estimated_cost=%s original_cost=%s",
+            choice.model,
+            response.model,
+            choice.estimated_cost,
+            choice.original_cost,
+        )
+        return response.model_copy(
+            update=MappingProxyType({"model": choice.model, "litellm_params": params, "routing_decision": decision})
+        )
 
     async def _classify_and_route(
         self,

@@ -2965,6 +2965,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 
 RoutingDecisionCause = Literal[
+    "prompt_cache_cost",
     "heuristic_scorer",
     "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.

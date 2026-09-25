@@ -39465,6 +39465,24 @@ export interface components {
             adaptive_eligible: "all" | "classified_tier";
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /**
+             * Cache Aware Routing
+             * @description Compare observed prompt-cache costs after classification. On supported native Anthropic proxy requests, an already warm model in the same or a higher tier may replace the classified model when its estimated input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing.
+             * @default false
+             */
+            cache_aware_routing: boolean;
+            /**
+             * Cache Aware Routing Output Tokens
+             * @description Expected output tokens used in cache-aware cost comparisons; capped by the requested output limit.
+             * @default 1024
+             */
+            cache_aware_routing_output_tokens: number;
+            /**
+             * Cache Aware Routing Timeout Ms
+             * @description Total time budget for cache-aware predictions; expiry preserves the original routing decision.
+             * @default 2000
+             */
+            cache_aware_routing_timeout_ms: number;
             /** @description Probability threshold policy required when classifier_type is 'capability'. The classifier forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, and otherwise routes to capable_tier */
             capability_classifier_config?: components["schemas"]["CapabilityClassifierConfig"] | null;
             /**
@@ -42587,7 +42605,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
