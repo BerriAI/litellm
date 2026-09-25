@@ -33,7 +33,7 @@ class _AdminPolicy(BaseModel):
 
 def _require_source_admin(auth: UserAPIKeyAuth) -> None:
     policy: Final = _AdminPolicy.model_validate(auth, from_attributes=True)
-    if policy.user_role != LitellmUserRoles.PROXY_ADMIN or "/scim/*" in (policy.allowed_routes or ()):
+    if policy.user_role != LitellmUserRoles.PROXY_ADMIN or policy.allowed_routes:
         raise HTTPException(403, "Provisioning configuration requires an unrestricted proxy administrator")
 
 

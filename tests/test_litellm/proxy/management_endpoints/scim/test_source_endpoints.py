@@ -164,3 +164,18 @@ async def test_source_list_returns_public_configuration_without_credentials(monk
     assert len(result) == 1 and result[0].source_id == "source"
     assert "private-hash" not in str(result)
     assert "key_hash" not in result[0].model_dump()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list", "create", "update"])
+@pytest.mark.parametrize("routes", [["/user/*"], ["openai_routes"], ["/scim/v2/sources"]])
+async def test_any_scoped_administrator_is_denied_source_configuration(operation: str, routes: list[str]) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=routes)
+    with pytest.raises(HTTPException) as failure:
+        if operation == "list":
+            await list_sources(auth)
+        elif operation == "create":
+            await create_source(SCIMSourceCreate(display_name="Source", tenant_id=TENANT, provisioning_token="test-token"), auth)
+        else:
+            await update_source("source", SCIMSourceConfig(display_name="Source", tenant_id=TENANT), auth)
+    assert failure.value.status_code == 403
