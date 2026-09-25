@@ -34447,6 +34447,11 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Min Tokens
+             * @description Skip the compression round trip when the compressible messages total fewer than this many tokens. Falls back to the HEADROOM_MIN_TOKENS env var; when neither is set, every request is compressed.
+             */
+            min_tokens?: number | null;
+            /**
              * Mock Redacted Text
              * @description Mock redacted text for testing
              */
