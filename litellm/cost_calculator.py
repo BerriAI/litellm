@@ -1701,12 +1701,11 @@ def completion_cost(
                         results=completion_response.results,
                         combined_usage_object=cost_per_token_usage_object,
                         custom_llm_provider=custom_llm_provider,
-                        litellm_model_name=(
-                            selected_model if explicit_pricing and selected_model is not None else model
-                        ),
+                        litellm_model_name=model,
                         data_residency=data_residency,
                         litellm_logging_obj=litellm_logging_obj,
                         custom_pricing_model=selected_model if custom_pricing else None,
+                        base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2932,6 +2931,7 @@ def handle_realtime_stream_cost_calculation(
     data_residency: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
     custom_pricing_model: str | None = None,
+    base_pricing_model: str | None = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2942,9 +2942,11 @@ def handle_realtime_stream_cost_calculation(
         results: A list of OpenAIRealtimeStreamBaseObject objects
         custom_pricing_model: deployment-scoped pricing key from the deployment's
             custom rates, tried ahead of the session-reported model
+        base_pricing_model: the deployment's resolved base_model, tried ahead of the
+            session-reported model but after custom rates
     """
     received_model = None
-    potential_model_names: Final = [custom_pricing_model]
+    potential_model_names: Final = [custom_pricing_model, base_pricing_model]
     for result in results:
         if result["type"] == "session.created":
             received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"].get("model", None)
@@ -3038,7 +3040,6 @@ def _get_transcription_model_name_from_results(
 
 
 def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo | None:
-    """``get_model_info`` for a key that may not be in the cost map."""
     try:
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
@@ -3046,14 +3047,8 @@ def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo |
 
 
 def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) -> float | None:
-    """First of ``keys`` this entry actually prices, or ``None`` if it prices none of them.
-
-    Whether a rate was set is read off the raw ``litellm.model_cost`` entry rather than off
-    ``info``, because ``get_model_info`` defaults ``input_cost_per_token`` and
-    ``output_cost_per_token`` to 0 for entries that omit them. Those synthesized zeros are
-    indistinguishable from a deliberate zero, so reading presence off ``info`` bills an override
-    that prices only seconds at nothing instead of falling through to the public token rates.
-    """
+    """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
+    because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
     if info is None:
         return None
     declared: Final = litellm.model_cost.get(info.get("key"))
@@ -3066,14 +3061,6 @@ def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) 
 
 
 def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
-    """First rate set for any of ``keys``, resolving within one entry before the next.
-
-    The deployment override is consulted as a whole entry first, so an override that
-    prices only tokens applies its token rate to audio rather than reaching past itself
-    for the public audio rate, and a rate it deliberately sets to zero wins. Rates the
-    override leaves unset fall through to ``base``, because replacing it outright would
-    bill those at nothing.
-    """
     rates: Final = (_declared_transcription_rate(info, keys) for info in (override, base))
     return next((rate for rate in rates if rate is not None), 0.0)
 

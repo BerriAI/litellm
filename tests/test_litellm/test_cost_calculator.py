@@ -5127,22 +5127,11 @@ def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch: pytest.M
         results=[
             {
                 "type": "session.created",
-                "session": {
-                    "model": "my-voice-alias",
-                    "audio": {"input": {"transcription": {"model": base_model}}},
-                },
+                "session": {"model": "my-voice-alias"},
             },
             {
                 "type": "response.done",
                 "response": {"usage": {"input_tokens": 219, "output_tokens": 81, "total_tokens": 300}},
-            },
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "usage": {
-                    "type": "tokens",
-                    "input_token_details": {"audio_tokens": 40, "text_tokens": 4},
-                    "output_tokens": 3,
-                },
             },
         ],
     )
@@ -5165,13 +5154,6 @@ def test_realtime_session_falls_back_to_base_model_pricing(monkeypatch: pytest.M
 
 
 def test_base_model_does_not_override_transcription_rates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """base_model prices the session, never the ASR events inside it.
-
-    The deployment's resolved base model reaches realtime costing through the
-    session-model slot, not the pricing-override slot, so a transcription event
-    must keep billing the ASR model the session reports rather than the realtime
-    card's audio rates.
-    """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -5217,11 +5199,62 @@ def test_base_model_does_not_override_transcription_rates(monkeypatch: pytest.Mo
         + 12 * realtime_card["input_cost_per_token"]
         + 30 * realtime_card["output_cost_per_audio_token"]
     )
-    assert billed_at_realtime != pytest.approx(asr_priced, rel=1e-9), (
-        "control: the two cards must price this usage differently or the assertion below is vacuous"
-    )
+    assert billed_at_realtime != pytest.approx(asr_priced, rel=1e-9)
     assert with_base_model == pytest.approx(asr_priced, rel=1e-9)
     assert with_base_model > 0
+
+
+def test_realtime_base_model_outranks_the_session_reported_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    session_model = "gpt-realtime-mini"
+    base_model = "gpt-realtime-2"
+
+    def logging_object_for(session: str) -> LiteLLMRealtimeStreamLoggingObject:
+        return LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(
+                prompt_tokens=120,
+                completion_tokens=60,
+                total_tokens=180,
+                prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=20, audio_tokens=100),
+                completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10, audio_tokens=50),
+            ),
+            results=[
+                {
+                    "type": "session.created",
+                    "session": {"model": session},
+                },
+                {
+                    "type": "response.done",
+                    "response": {"usage": {"input_tokens": 120, "output_tokens": 60, "total_tokens": 180}},
+                },
+            ],
+        )
+
+    with_base_model = completion_cost(
+        completion_response=logging_object_for(session_model),
+        model=session_model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+        base_model=base_model,
+    )
+    base_priced = completion_cost(
+        completion_response=logging_object_for(base_model),
+        model=base_model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+    )
+    session_priced = completion_cost(
+        completion_response=logging_object_for(session_model),
+        model=session_model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+    )
+    assert base_priced != pytest.approx(session_priced, rel=1e-9)
+    assert with_base_model == pytest.approx(base_priced, rel=1e-9)
 
 
 def test_baseten_glm_5_3_fast_is_priced_from_registry(_local_model_cost_map: None) -> None:
