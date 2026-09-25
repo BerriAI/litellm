@@ -15,8 +15,8 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Annotated, Final, TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from typing_extensions import ReadOnly, Required, assert_never
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from typing_extensions import NamedTuple, ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -58,8 +58,22 @@ from litellm.proxy.agent_endpoints.kill_switch import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.utils import get_custom_url
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    DailyActivityExportLabels,
+    build_daily_activity_export_response,
+    search_daily_activity_key_tokens,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    aggregated_date_range_error as _aggregated_date_range_error,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    daily_activity_error as _daily_activity_error,
+)
+from litellm.proxy.utils import PrismaClient, get_custom_url
 from litellm.types.agents import (
     AgentCard,
     AgentConfig,
@@ -73,6 +87,9 @@ from litellm.types.agents import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportFormat,
+    DailyActivityExportResponse,
+    DailyActivityExportType,
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
@@ -1193,6 +1210,66 @@ async def get_agent_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    scope: Final = await _resolve_agent_daily_activity_scope(
+        prisma_client=prisma_client,
+        agent_ids=agent_ids,
+        exclude_agent_ids=exclude_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if scope.agent_ids == []:
+        return _empty_agent_daily_activity_response(page=page)
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=scope.agent_ids,
+        entity_metadata_field=scope.agent_metadata,
+        exclude_entity_ids=scope.exclude_agent_ids,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )
+
+
+class _AgentDailyActivityScope(NamedTuple):
+    agent_ids: list[str] | None  # mutable-ok: get_daily_activity's entity_id filter accepts list[str]
+    exclude_agent_ids: list[str] | None  # mutable-ok: exclude filter accepts list[str]
+    agent_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field accepts dict
+
+
+def _empty_agent_daily_activity_response(page: int) -> SpendAnalyticsPaginatedResponse:
+    return SpendAnalyticsPaginatedResponse(
+        results=[],
+        metadata=DailySpendMetadata(
+            total_spend=0.0,
+            total_prompt_tokens=0,
+            total_completion_tokens=0,
+            total_tokens=0,
+            total_api_requests=0,
+            total_successful_requests=0,
+            total_failed_requests=0,
+            total_cache_read_input_tokens=0,
+            total_cache_creation_input_tokens=0,
+            total_compression_saved_tokens=0,
+            page=page,
+            total_pages=0,
+            has_more=False,
+        ),
+    )
+
+
+async def _resolve_agent_daily_activity_scope(
+    prisma_client: PrismaClient,
+    agent_ids: str | None,
+    exclude_agent_ids: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _AgentDailyActivityScope:
+    """Shared scoping for all /agent/daily/activity routes: an empty agent_ids means a
+    restricted caller with no accessible agents, which every route answers empty."""
     agent_ids_list = agent_ids.split(",") if agent_ids else None
     exclude_agent_ids_list: list[str] | None = None
     if exclude_agent_ids:
@@ -1234,46 +1311,191 @@ async def get_agent_daily_activity(
         else:
             agent_ids_list = list(permitted_agent_ids)
 
-        # No accessible agents → return an empty page without querying.
-        if not agent_ids_list:
-            return SpendAnalyticsPaginatedResponse(
-                results=[],
-                metadata=DailySpendMetadata(
-                    total_spend=0.0,
-                    total_prompt_tokens=0,
-                    total_completion_tokens=0,
-                    total_tokens=0,
-                    total_api_requests=0,
-                    total_successful_requests=0,
-                    total_failed_requests=0,
-                    total_cache_read_input_tokens=0,
-                    total_cache_creation_input_tokens=0,
-                    total_compression_saved_tokens=0,
-                    page=page,
-                    total_pages=0,
-                    has_more=False,
-                ),
-            )
-
     if agent_ids_list:
         where_condition["agent_id"] = {"in": list(agent_ids_list)}
 
     agent_records: Final = await agents_table(prisma_client).find_many(where=where_condition)
-    agent_metadata: Final[Mapping[str, dict[str, object]]] = {
-        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
-    }
+    agent_metadata: Final = {agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records}
 
-    return await get_daily_activity(
+    return _AgentDailyActivityScope(
+        agent_ids=agent_ids_list,
+        exclude_agent_ids=exclude_agent_ids_list,
+        agent_metadata=agent_metadata,
+    )
+
+
+@router.get(
+    "/agent/daily/activity/aggregated",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_agent_daily_activity_aggregated(
+    agent_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    exclude_agent_ids: str | None = None,
+    timezone: int | None = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Aggregated daily activity for agents without pagination, including per-agent breakdown.
+    """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_agent_daily_activity_scope(
+        prisma_client=prisma_client,
+        agent_ids=agent_ids,
+        exclude_agent_ids=exclude_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if scope.agent_ids == []:
+        return _empty_agent_daily_activity_response(page=1)
+
+    return await get_daily_activity_aggregated(
         prisma_client=prisma_client,
         table_name="litellm_dailyagentspend",
         entity_id_field="agent_id",
-        entity_id=agent_ids_list,
-        entity_metadata_field=agent_metadata,
-        exclude_entity_ids=exclude_agent_ids_list,
+        entity_id=scope.agent_ids,
+        entity_metadata_field=scope.agent_metadata,
         start_date=start_date,
         end_date=end_date,
         model=model,
         api_key=api_key,
-        page=page,
-        page_size=page_size,
+        exclude_entity_ids=scope.exclude_agent_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/agent/daily/activity/aggregated/search",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def search_agent_daily_activity_keys(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    search: str = Query(..., description="Search term matching key hash, key alias or user id"),
+    agent_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_agent_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Key search over aggregated agent daily activity.
+    """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_agent_daily_activity_scope(
+        prisma_client=prisma_client,
+        agent_ids=agent_ids,
+        exclude_agent_ids=exclude_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if scope.agent_ids == []:
+        return _empty_agent_daily_activity_response(page=1)
+
+    key_filter: Final = await search_daily_activity_key_tokens(
+        prisma_client=prisma_client,
+        search=search,
+        own_keys=None,
+    )
+    if not key_filter:
+        return _empty_agent_daily_activity_response(page=1)
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=scope.agent_ids,
+        entity_metadata_field=scope.agent_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        model=None,
+        api_key=list(key_filter),  # mutable-ok: api_key filter accepts list[str]
+        exclude_entity_ids=scope.exclude_agent_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/agent/daily/activity/export",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=DailyActivityExportResponse,
+    responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
+)
+async def get_agent_daily_activity_export(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    start_date: str | None = None,
+    end_date: str | None = None,
+    export_type: DailyActivityExportType = "daily",
+    format: DailyActivityExportFormat = "csv",
+    agent_ids: str | None = None,
+    exclude_agent_ids: str | None = None,
+    timezone: int | None = Query(None, alias="timezone_offset_minutes"),
+) -> Response:
+    """
+    Export daily activity for agents as CSV or JSON, uncapped.
+    """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    if start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message="Please provide start_date and end_date")
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_agent_daily_activity_scope(
+        prisma_client=prisma_client,
+        agent_ids=agent_ids,
+        exclude_agent_ids=exclude_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    return await build_daily_activity_export_response(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=scope.agent_ids,
+        entity_metadata_field=scope.agent_metadata,
+        alias_metadata_key="agent_name",
+        api_key=None,
+        exclude_entity_ids=scope.exclude_agent_ids,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone,
+        export_type=export_type,
+        format=format,
+        labels=DailyActivityExportLabels(alias_header="Agent", id_header="Agent ID"),
+        filename_prefix="agent",
     )

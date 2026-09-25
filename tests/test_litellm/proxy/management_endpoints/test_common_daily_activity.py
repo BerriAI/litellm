@@ -3003,7 +3003,7 @@ async def test_export_keys_returns_every_key_beyond_the_top_n_cap(
 
     assert {row.api_key for row in rows} == {f"key-{i:03d}" for i in range(n_keys)}
     assert len(rows) == n_keys
-    assert all(row.team_id == "team-1" for row in rows)
+    assert all(row.entity_id == "team-1" for row in rows)
     by_key: Final = {row.api_key: row for row in rows}
     assert by_key["key-000"].spend == pytest.approx(1.0)
     assert sum(row.spend for row in rows) == pytest.approx(n_keys * (n_keys + 1) / 2)
@@ -3040,13 +3040,45 @@ async def test_export_daily_keeps_ptu_sentinel_in_the_team_rollup(
         exclude_entity_ids=None,
         timezone_offset_minutes=None,
         export_type="daily",
+        alias_metadata_key="team_alias",
     )
 
     assert len(rows) == 1
-    assert rows[0].team_id == "team-1"
-    assert rows[0].team_alias == "Alpha"
+    assert rows[0].entity_id == "team-1"
+    assert rows[0].entity_alias == "Alpha"
     assert rows[0].api_key is None
     assert rows[0].spend == pytest.approx(1002.0)
+
+
+@pytest.mark.asyncio
+async def test_export_daily_drops_alias_when_alias_metadata_key_is_none(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """Entities without a name lookup (tags) pass alias_metadata_key=None; the
+    metadata dict must then be ignored so no column leaks across entity types."""
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [_team_spend_row("row-1", "team-1", "key-1", 2.0)],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field={"team-1": {"team_alias": "Alpha"}},
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+        alias_metadata_key=None,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].entity_id == "team-1"
+    assert rows[0].entity_alias is None
 
 
 @pytest.mark.asyncio

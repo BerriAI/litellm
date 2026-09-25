@@ -18,18 +18,20 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Final,
+    NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but reads back plain python values
     overload,
 )
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     can_user_call_model,
@@ -45,7 +47,21 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    DailyActivityExportLabels,
+    build_daily_activity_export_response,
+    search_daily_activity_key_tokens,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    aggregated_date_range_error as _aggregated_date_range_error,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    daily_activity_error as _daily_activity_error,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
@@ -71,6 +87,10 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportFormat,
+    DailyActivityExportResponse,
+    DailyActivityExportType,
+    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.utils import _update_dictionary
@@ -583,6 +603,45 @@ async def get_organization_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    scope: Final = await _resolve_organization_daily_activity_scope(
+        prisma_client=prisma_client,
+        organization_ids=organization_ids,
+        exclude_organization_ids=exclude_organization_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Query daily activity for organizations
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=scope.organization_ids,
+        entity_metadata_field=scope.organization_alias_metadata,
+        exclude_entity_ids=scope.exclude_organization_ids,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )
+
+
+class _OrganizationDailyActivityScope(NamedTuple):
+    organization_ids: list[str] | None  # mutable-ok: get_daily_activity's entity_id filter accepts list[str]
+    exclude_organization_ids: list[str] | None  # mutable-ok: exclude filter accepts list[str]
+    organization_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field accepts dict
+
+
+async def _resolve_organization_daily_activity_scope(
+    prisma_client: PrismaClient,
+    organization_ids: str | None,
+    exclude_organization_ids: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _OrganizationDailyActivityScope:
+    """Shared scoping for all /organization/daily/activity routes so the ORG_ADMIN
+    restriction and 403 on foreign organizations apply identically to paginated,
+    aggregated, search and export."""
     # Parse comma-separated ids
     org_ids_list = organization_ids.split(",") if organization_ids else None
     exclude_org_ids_list: list[str] | None = None
@@ -613,20 +672,186 @@ async def get_organization_daily_activity(
         where_condition["organization_id"] = {"in": list(org_ids_list)}
     org_aliases: Final = await _table(OrganizationRepository(prisma_client)).find_many(where=where_condition)
 
-    # Query daily activity for organizations
-    return await get_daily_activity(
+    return _OrganizationDailyActivityScope(
+        organization_ids=org_ids_list,
+        exclude_organization_ids=exclude_org_ids_list,
+        organization_alias_metadata={
+            o.organization_id: {"organization_alias": o.organization_alias} for o in org_aliases
+        },
+    )
+
+
+@router.get(
+    "/organization/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["organization management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def get_organization_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    organization_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    exclude_organization_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Aggregated daily activity for organizations without pagination, including
+    per-organization breakdown.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_organization_daily_activity_scope(
+        prisma_client=prisma_client,
+        organization_ids=organization_ids,
+        exclude_organization_ids=exclude_organization_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    return await get_daily_activity_aggregated(
         prisma_client=prisma_client,
         table_name="litellm_dailyorganizationspend",
         entity_id_field="organization_id",
-        entity_id=org_ids_list,
-        entity_metadata_field={o.organization_id: {"organization_alias": o.organization_alias} for o in org_aliases},
-        exclude_entity_ids=exclude_org_ids_list,
+        entity_id=scope.organization_ids,
+        entity_metadata_field=scope.organization_alias_metadata,
         start_date=start_date,
         end_date=end_date,
         model=model,
         api_key=api_key,
-        page=page,
-        page_size=page_size,
+        exclude_entity_ids=scope.exclude_organization_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/organization/daily/activity/aggregated/search",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["organization management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def search_organization_daily_activity_keys(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    search: str = Query(..., description="Search term matching key hash, key alias or user id"),
+    organization_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_organization_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Key search over aggregated organization daily activity.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_organization_daily_activity_scope(
+        prisma_client=prisma_client,
+        organization_ids=organization_ids,
+        exclude_organization_ids=exclude_organization_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    key_filter: Final = await search_daily_activity_key_tokens(
+        prisma_client=prisma_client,
+        search=search,
+        own_keys=None,
+    )
+    if not key_filter:
+        return SpendAnalyticsPaginatedResponse(
+            results=[],
+            metadata=DailySpendMetadata(api_key_limit=USAGE_TOP_API_KEYS_LIMIT, total_api_keys=0),
+        )
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=scope.organization_ids,
+        entity_metadata_field=scope.organization_alias_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        model=None,
+        api_key=list(key_filter),  # mutable-ok: api_key filter accepts list[str]
+        exclude_entity_ids=scope.exclude_organization_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/organization/daily/activity/export",
+    response_model=DailyActivityExportResponse,
+    responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
+    tags=["organization management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def get_organization_daily_activity_export(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    export_type: DailyActivityExportType = "daily",
+    format: DailyActivityExportFormat = "csv",
+    organization_ids: str | None = None,
+    exclude_organization_ids: str | None = None,
+    timezone: int | None = Query(None, alias="timezone_offset_minutes"),
+) -> Response:
+    """
+    Export daily activity for organizations as CSV or JSON, uncapped.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    if start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message="Please provide start_date and end_date")
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_organization_daily_activity_scope(
+        prisma_client=prisma_client,
+        organization_ids=organization_ids,
+        exclude_organization_ids=exclude_organization_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    return await build_daily_activity_export_response(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=scope.organization_ids,
+        entity_metadata_field=scope.organization_alias_metadata,
+        alias_metadata_key="organization_alias",
+        api_key=None,
+        exclude_entity_ids=scope.exclude_organization_ids,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone,
+        export_type=export_type,
+        format=format,
+        labels=DailyActivityExportLabels(alias_header="Organization", id_header="Organization ID"),
+        filename_prefix="organization",
     )
 
 

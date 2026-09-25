@@ -1427,6 +1427,7 @@ _ORGANIZATION_ROUTE_REQUESTS: Final[Mapping[tuple[str, str], Mapping[str, object
         ("POST", "/organization/new"): {"json": {"organization_alias": "org-under-test"}},
         ("DELETE", "/organization/delete"): {"json": {"organization_ids": ["org-under-test"]}},
         ("GET", "/organization/info"): {"params": {"organization_id": "org-under-test"}},
+        ("GET", "/organization/daily/activity/aggregated/search"): {"params": {"search": "org-under-test"}},
         ("POST", "/organization/info"): {"json": {"organizations": ["org-under-test"]}},
         ("POST", "/organization/member_add"): {
             "json": {"organization_id": "org-under-test", "member": {"user_id": "user-1", "role": "internal_user"}}
@@ -1545,3 +1546,167 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_aggregated_non_admin_defaults_to_admin_orgs(
+    monkeypatch,
+):
+    """The aggregated route must apply the same ORG_ADMIN restriction as the
+    paginated one and request the per-organization breakdown."""
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value),
+        ]
+    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="orgA", organization_alias="Org A")]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+    aggregated_mock = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity_aggregated", aggregated_mock)
+
+    await get_organization_daily_activity_aggregated(
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"),
+        organization_ids=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+        exclude_organization_ids=None,
+        timezone=480,
+    )
+
+    kwargs = aggregated_mock.call_args.kwargs
+    assert kwargs["entity_id"] == ["orgA"]
+    assert kwargs["entity_metadata_field"] == {"orgA": {"organization_alias": "Org A"}}
+    assert kwargs["table_name"] == "litellm_dailyorganizationspend"
+    assert kwargs["include_entity_breakdown"] is True
+    assert kwargs["timezone_offset_minutes"] == 480
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_aggregated_non_admin_foreign_org_raises(
+    monkeypatch,
+):
+    """A non-admin asking the aggregated route for an org they are not ORG_ADMIN
+    of must get the same 403 the paginated route gives."""
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value)]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_organization_daily_activity_aggregated(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"),
+            organization_ids="orgA,orgX",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            exclude_organization_ids=None,
+            timezone=None,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_export_csv_headers(monkeypatch):
+    """The CSV uses the organization labels, and JSON rows carry the org alias
+    via the organization_alias metadata key."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity_export,
+    )
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        DailyActivityExportRow,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="orgA", organization_alias="Org A")]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    rows = (
+        DailyActivityExportRow(
+            date="2024-01-02",
+            entity_id="orgA",
+            entity_alias="Org A",
+            api_key="key-1",
+            key_alias=None,
+            user_id=None,
+            user_email=None,
+            keys=1,
+            model=None,
+            spend=1.5,
+            api_requests=2,
+            successful_requests=2,
+            failed_requests=0,
+            total_tokens=30,
+            prompt_tokens=20,
+            completion_tokens=10,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+        AsyncMock(return_value=rows),
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    csv_response = await get_organization_daily_activity_export(
+        user_api_key_dict=auth,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        export_type="daily",
+        format="csv",
+        organization_ids="orgA",
+        exclude_organization_ids=None,
+        timezone=None,
+    )
+    assert csv_response.body.decode().splitlines()[0].startswith("Date,Organization,Organization ID,")
+
+    json_response = await get_organization_daily_activity_export(
+        user_api_key_dict=auth,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        export_type="daily",
+        format="json",
+        organization_ids="orgA",
+        exclude_organization_ids=None,
+        timezone=None,
+    )
+    body = _json.loads(json_response.body)
+    assert body["data"][0]["entity_id"] == "orgA"
+    assert body["data"][0]["entity_alias"] == "Org A"
+    assert body["metadata"]["entity_ids"] == ["orgA"]

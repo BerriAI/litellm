@@ -1357,3 +1357,121 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
     assert internal.status_code == 200, internal.text
     assert internal.json()["kill_switch"] is None
     assert "tok-real" not in internal.text
+
+
+@pytest.mark.asyncio
+async def test_get_agent_daily_activity_aggregated_restricted_caller_only_sees_permitted_agents(
+    monkeypatch,
+):
+    """A non-admin with a restricted allowlist must get the intersection of the
+    explicit agent_ids with that allowlist, and the resolver must never query
+    agents by created_by=None, which would expose every ownerless agent."""
+    from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity_aggregated
+
+    mock_prisma = AsyncMock()
+    permitted_agent = MagicMock()
+    permitted_agent.agent_id = "agent-1"
+    permitted_agent.agent_name = "Permitted"
+    mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[permitted_agent])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(agent_endpoints, "check_feature_access_for_user", AsyncMock())
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+        AsyncMock(return_value=RestrictedAgentAccess(frozenset({"agent-1", "agent-2"}))),
+    )
+
+    aggregated_mock = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(agent_endpoints, "get_daily_activity_aggregated", aggregated_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user")
+    await get_agent_daily_activity_aggregated(
+        agent_ids="agent-1,agent-3",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+        exclude_agent_ids=None,
+        timezone=480,
+        user_api_key_dict=auth,
+    )
+
+    for call in mock_prisma.db.litellm_agentstable.find_many.call_args_list:
+        agent_where: Final = call.kwargs.get("where", {})
+        assert "created_by" not in agent_where or agent_where["created_by"] is not None
+
+    kwargs = aggregated_mock.call_args.kwargs
+    assert kwargs["entity_id"] == ["agent-1"]
+    assert kwargs["entity_metadata_field"] == {"agent-1": {"agent_name": "Permitted"}}
+    assert kwargs["table_name"] == "litellm_dailyagentspend"
+    assert kwargs["include_entity_breakdown"] is True
+    assert kwargs["timezone_offset_minutes"] == 480
+
+
+@pytest.mark.asyncio
+async def test_get_agent_daily_activity_export_csv_headers(monkeypatch):
+    """The agent CSV uses the agent labels and rows carry the agent_name alias."""
+    import json as _json
+
+    from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity_export
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        DailyActivityExportRow,
+    )
+
+    mock_prisma = AsyncMock()
+    mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(agent_endpoints, "check_feature_access_for_user", AsyncMock())
+
+    rows = (
+        DailyActivityExportRow(
+            date="2024-01-02",
+            entity_id="agent-1",
+            entity_alias="First Agent",
+            api_key="key-1",
+            key_alias=None,
+            user_id=None,
+            user_email=None,
+            keys=1,
+            model="gpt-4",
+            spend=1.5,
+            api_requests=2,
+            successful_requests=2,
+            failed_requests=0,
+            total_tokens=30,
+            prompt_tokens=20,
+            completion_tokens=10,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+        AsyncMock(return_value=rows),
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    csv_response = await get_agent_daily_activity_export(
+        user_api_key_dict=auth,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        export_type="daily",
+        format="csv",
+        agent_ids="agent-1",
+        exclude_agent_ids=None,
+        timezone=None,
+    )
+    assert csv_response.body.decode().splitlines()[0].startswith("Date,Agent,Agent ID,")
+
+    json_response = await get_agent_daily_activity_export(
+        user_api_key_dict=auth,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        export_type="daily",
+        format="json",
+        agent_ids="agent-1",
+        exclude_agent_ids=None,
+        timezone=None,
+    )
+    body = _json.loads(json_response.body)
+    assert body["data"][0]["entity_id"] == "agent-1"
+    assert body["data"][0]["entity_alias"] == "First Agent"
