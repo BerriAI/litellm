@@ -605,7 +605,6 @@ def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, m
 @pytest.mark.parametrize(
     "model,provider,adaptive,mid_conversation",
     [
-        ("us.anthropic.claude-opus-4-5", "bedrock", None, None),
         ("claude-haiku-4-6", "anthropic", True, None),
         ("claude-haiku-4-7", "anthropic", True, None),
         ("claude-haiku-4-8", "anthropic", True, True),
@@ -623,6 +622,23 @@ def test_shipped_version_boundaries(shipped_cost_map, model, provider, adaptive,
     assert not info.get("input_cost_per_token")
     assert info.get("supports_adaptive_thinking") is adaptive, model
     assert info.get("supports_mid_conversation_system") is mid_conversation, model
+
+
+def test_shipped_bedrock_vendor_id_prices_off_vendor_row_and_keeps_rule_baseline(shipped_cost_map):
+    """A Bedrock ``<vendor>.<model>`` id with no row of its own resolves the vendor's
+    catalog row for pricing while capability rules still fill Bedrock capabilities:
+    `us.anthropic.claude-opus-4-5` bills at the anthropic `claude-opus-4-5` price and
+    keeps the baseline function-calling flag it previously resolved from rules."""
+    model = "us.anthropic.claude-opus-4-5"
+    assert model not in litellm.model_cost
+    assert "claude-opus-4-5" in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="bedrock")
+    assert info["litellm_provider"] == "bedrock"
+    assert info["input_cost_per_token"] == litellm.model_cost["claude-opus-4-5"]["input_cost_per_token"]
+    assert info["input_cost_per_token"] > 0
+    assert info["supports_function_calling"] is True
+    assert info.get("supports_adaptive_thinking") is None
+    assert info.get("supports_mid_conversation_system") is None
 
 
 def test_shipped_claude_version_regex_excludes_undelimited_41(shipped_cost_map):

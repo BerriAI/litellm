@@ -6101,6 +6101,16 @@ def _get_model_info_helper(
                             },
                             "litellm_provider": custom_llm_provider,
                         }
+                        vendor_generalization: Final = _get_model_info_from_generalization(
+                            model=model,
+                            potential_model_names=potential_model_names,
+                            custom_llm_provider=custom_llm_provider,
+                        )
+                        if vendor_generalization is not None:
+                            _model_info = {
+                                **{k: v for k, v in vendor_generalization[1].items() if k not in _model_info},
+                                **_model_info,
+                            }
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
