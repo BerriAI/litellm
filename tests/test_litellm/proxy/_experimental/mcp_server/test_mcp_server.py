@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
+from mcp.server.models import InitializationOptions
 from mcp.types import (
     INVALID_REQUEST,
+    METHOD_NOT_FOUND,
     BlobResourceContents,
     CallToolResult,
     Prompt,
@@ -21,7 +23,7 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
 )
-from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION, MODERN_PROTOCOL_VERSIONS
 from pydantic import TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
@@ -6565,8 +6567,11 @@ class TestGatewayCreateInitializationOptions:
         async def connect_sse(scope, receive, send):
             yield (None, None)
 
-        async def record_request(read_stream, write_stream, options):
-            captured["server_name"] = server.create_initialization_options().server_name
+        async def record_request(
+            serving_server: object, read_stream: object, write_stream: object,
+            *, lifespan_state: object, init_options: InitializationOptions,
+        ) -> None:
+            captured["server_name"] = init_options.server_name
 
         scope = {
             "type": "http",
@@ -6612,8 +6617,8 @@ class TestGatewayCreateInitializationOptions:
                 True,
             ),
             patch.object(
-                mcp_server.server,
-                "run",
+                mcp_server,
+                "serve_loop",
                 side_effect=record_request,
             ),
         ):
@@ -8021,7 +8026,7 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=CallToolResult(content=[], is_error=False)),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
@@ -9255,6 +9260,152 @@ async def test_call_mcp_tool_skips_failure_hook_for_upstream_auth_error():
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
 
 
+def _interim_input_required_result():
+    from mcp.types import InputRequiredResult
+
+    return InputRequiredResult.model_validate(
+        {
+            "resultType": "input_required",
+            "inputRequests": {
+                "req-1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Pick one", "requestedSchema": {"type": "object", "properties": {}}},
+                }
+            },
+            "requestState": "state-1",
+        }
+    )
+
+
+@contextlib.contextmanager
+def _managed_tool_returning(server, upstream_result, proxy_logging_mock):
+    from litellm.proxy._experimental.mcp_server.server import global_mcp_server_manager
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[server.server_id],
+        ),
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
+        patch.object(global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(global_mcp_server_manager, "server_owning_tool_name_prefix", return_value=server),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[server],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._list_tools_before_first_call",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=upstream_result,
+        ) as managed_call,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock),
+    ):
+        yield managed_call
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_legacy_interim_result_is_rejected_into_failure_accounting():
+    """An upstream input_required interim on a legacy connection cannot be carried on the wire, so it
+    must come back as isError and go through the same failure accounting as any other errored call."""
+    from mcp.types import CallToolResult
+
+    from litellm.proxy._experimental.mcp_server.result_conversion import (
+        INPUT_REQUIRED_UNSUPPORTED_MESSAGE,
+        WireCompat,
+    )
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="server-interim",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    logging_obj = _mock_mcp_logging_obj()
+
+    with _managed_tool_returning(server, _interim_input_required_result(), proxy_logging_mock) as managed_call:
+        result = await call_mcp_tool(
+            name="test_server-any_tool",
+            arguments={"x": 1},
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            litellm_logging_obj=logging_obj,
+            wire_compat=WireCompat.LEGACY,
+        )
+
+    assert managed_call.await_args.kwargs["wire_compat"] is WireCompat.LEGACY
+    assert isinstance(result, CallToolResult) and result.is_error is True
+    assert result.content[0].text == INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.async_failure_handler.assert_awaited_once()
+    assert str(logging_obj.async_failure_handler.await_args.args[0]) == INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+    proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_modern_interim_result_passes_through_without_completed_accounting():
+    """On a modern connection the interim result is returned with its fields intact and is neither
+    logged as a completed success nor run through the post-call guardrail and success hooks."""
+    from mcp.types import InputRequiredResult
+
+    from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="server-interim",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    logging_obj = _mock_mcp_logging_obj()
+    interim = _interim_input_required_result()
+
+    with _managed_tool_returning(server, interim, proxy_logging_mock) as managed_call:
+        result = await call_mcp_tool(
+            name="test_server-any_tool",
+            arguments={"x": 1},
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            litellm_logging_obj=logging_obj,
+            wire_compat=WireCompat.MODERN,
+        )
+
+    assert managed_call.await_args.kwargs["wire_compat"] is WireCompat.MODERN
+    assert isinstance(result, InputRequiredResult)
+    assert result.request_state == "state-1"
+    assert result.input_requests is not None and set(result.input_requests) == {"req-1"}
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.async_failure_handler.assert_not_awaited()
+    logging_obj.async_post_mcp_tool_call_hook.assert_not_awaited()
+    proxy_logging_mock.post_mcp_call_hook.assert_not_awaited()
+    proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+    assert sorted(c.kwargs["event_type"] for c in logging_obj.has_run_logging.call_args_list) == [
+        "async_success",
+        "sync_success",
+    ], "the @client wrapper would otherwise log the interim result as a completed success on return"
+
+
 @pytest.mark.asyncio
 async def test_aggregate_listing_reports_per_server_outcomes():
     """A failed server must contribute a classified outcome, not just silently shrink the list:
@@ -10202,6 +10353,64 @@ async def test_active_request_ctx_var_feeds_get_current_session(_mcp_request_ctx
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "session_headers"),
+    (
+        ("POST", "/mcp", ()),
+        ("GET", "/mcp", (("mcp-session-id", "existing-session"),)),
+        ("DELETE", "/mcp", (("mcp-session-id", "existing-session"),)),
+        ("POST", "/server/mcp", ()),
+        ("GET", "/sse", ()),
+        ("POST", "/sse/messages", ()),
+    ),
+)
+@pytest.mark.parametrize(
+    ("allowed_origins", "origin_headers", "expected_status"),
+    (
+        (("https://allowed.example",), (("origin", "https://evil.example"),), 403),
+        (("https://allowed.example",), (("origin", "https://allowed.example.evil.example"),), 403),
+        (("https://allowed.example",), (("origin", "null"),), 403),
+        (("https://allowed.example",), (("origin", ""),), 403),
+        (
+            ("https://allowed.example",),
+            (("origin", "https://allowed.example"), ("origin", "https://evil.example")),
+            403,
+        ),
+        (("https://allowed.example",), (("origin", "https://allowed.example"),), 401),
+        (("https://allowed.example",), (), 401),
+        (("*",), (("origin", "https://another.example"),), 401),
+    ),
+)
+async def test_mcp_origin_admission_precedes_authentication(
+    method: str,
+    path: str,
+    session_headers: tuple[tuple[str, str], ...],
+    allowed_origins: tuple[str, ...],
+    origin_headers: tuple[tuple[str, str], ...],
+    expected_status: int,
+) -> None:
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server import server
+
+    authenticate: Final = AsyncMock(side_effect=HTTPException(status_code=401, detail="authentication required"))
+    with (
+        patch("litellm.proxy.proxy_server.origins", allowed_origins),
+        patch.object(server, "extract_mcp_auth_context", authenticate),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://gateway") as client:
+            response: Final = await client.request(method, path, headers=(*session_headers, *origin_headers))
+
+    assert response.status_code == expected_status
+    if expected_status == 403:
+        assert response.json() == {"detail": "Invalid Origin header"}
+        authenticate.assert_not_awaited()
+    else:
+        assert response.json() == {"detail": "authentication required"}
+        authenticate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_active_request_ctx_var_feeds_auth_resolution_recording(_mcp_request_ctx) -> None:
     from starlette.requests import Request
 
@@ -10313,7 +10522,10 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix,suffix", (("", ""), ("/gateway", "/")))
-async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str) -> None:
+@pytest.mark.parametrize("opening_protocol", (None, *MODERN_PROTOCOL_VERSIONS))
+async def test_legacy_sse_mount_emits_message_endpoint(
+    prefix: str, suffix: str, opening_protocol: str | None,
+) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
@@ -10375,6 +10587,23 @@ async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str)
                 }
                 await asyncio.wait_for(app(post_scope, requests.get, messages.put), 2)
                 return (await messages.get())["status"]
+
+            if opening_protocol is not None:
+                discover: Final = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "server/discover",
+                    "params": {"_meta": {
+                        "io.modelcontextprotocol/protocolVersion": opening_protocol,
+                        "io.modelcontextprotocol/clientInfo": {"name": "modern-client", "version": "1"},
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    }},
+                }).encode()
+                assert await post(discover) == 202
+                discovered_frame: Final = (await asyncio.wait_for(outgoing.get(), 2))["body"].decode()
+                discovered: Final = json.loads(discovered_frame.split("data: ", 1)[1].splitlines()[0])
+                assert discovered["id"] == 0
+                assert discovered["error"]["code"] == METHOD_NOT_FOUND
 
             initialization: Final = json.dumps(
                 {
