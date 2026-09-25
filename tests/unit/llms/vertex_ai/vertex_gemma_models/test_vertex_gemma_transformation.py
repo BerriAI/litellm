@@ -528,7 +528,9 @@ class TestVertexGemmaCompletion:
             async for chunk in response:
                 chunks.append(chunk)
 
-            assert chunks
+            assert len(chunks) == 2
+            assert chunks[1].choices[0].finish_reason == "stop"
+            assert all(getattr(chunk, "usage", None) is None for chunk in chunks)
 
             # Verify the chunk has the expected content
             chunk = chunks[0]
@@ -584,6 +586,51 @@ class TestVertexGemmaCompletion:
         assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
         assert isinstance(events[-1], ResponseCompletedEvent)
         assert events[-1].response.usage.total_tokens == 114
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_options", [None, {"include_usage": False}, {"include_usage": True}])
+    async def test_acompletion_stream_respects_usage_option_with_llm_tracing(self, stream_options):
+        pytest.importorskip("ddtrace")
+        from ddtrace.contrib.internal.litellm.patch import patch as patch_litellm
+        from ddtrace.contrib.internal.litellm.patch import unpatch as unpatch_litellm
+
+        reply = Mock(status_code=200)
+        reply.json.return_value = _make_gemma_vertex_response(content="READY")
+        client = Mock(post=AsyncMock(return_value=reply))
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client),
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            patch_litellm()
+            try:
+                stream = await litellm.acompletion(
+                    model="vertex_ai/gemma/test-model",
+                    messages=[{"role": "user", "content": "Reply exactly READY"}],
+                    stream=True,
+                    **({"stream_options": stream_options} if stream_options is not None else {}),
+                    api_base="https://example.invalid/v1/projects/test-project/locations/us-central1/endpoints/test:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+                chunks = [chunk async for chunk in stream]
+                span = stream.handler.primary_span
+                assert span.finished
+                assert span.get_tag("_dd.llmobs.span_kind") == "llm"
+            finally:
+                unpatch_litellm()
+
+        assert len(chunks) == (3 if stream_options and stream_options["include_usage"] else 2)
+        assert chunks[0].choices[0].delta.content == "READY"
+        assert chunks[1].choices[0].finish_reason == "stop"
+        if stream_options and stream_options["include_usage"]:
+            assert chunks[-1].choices[0].delta.content is None
+            assert chunks[-1].usage.total_tokens == 114
+            assert span.get_metric("_dd.llmobs.total_tokens") == 114
+        else:
+            assert all(getattr(chunk, "usage", None) is None for chunk in chunks)
 
     @pytest.mark.asyncio
     async def test_acompletion_filters_stream_and_stream_options(self):
