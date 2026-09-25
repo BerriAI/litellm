@@ -340,6 +340,80 @@ const seedDefaultMocks = () => {
     team_member_permissions: [],
   });
 };
+
+describe("TeamInfoView - pooled budget", () => {
+  beforeEach(seedDefaultMocks);
+  afterEach(() => vi.clearAllMocks());
+
+  const openEditor = async (maxBudget: number | null) => {
+    const overrides = {
+      max_budget: maxBudget,
+      spend: 12,
+      budget_duration: "30d",
+      team_member_budget_table: { max_budget: 10, budget_duration: "7d", tpm_limit: null, rpm_limit: null },
+    };
+    const data = createMockTeamData(overrides);
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
+    renderWithProviders(
+      <TeamInfoView
+        teamId="123"
+        accessToken="test-token"
+        is_team_admin
+        is_proxy_admin
+        userModels={[]}
+        editTeam={false}
+        onUpdate={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: /edit settings/i }));
+    return await screen.findByRole("switch", { name: "Pooled budget" });
+  };
+
+  const save = async () => {
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  it.each([0, 100])("keeps an existing pooled budget of %s enabled on an unrelated save", async (amount) => {
+    expect(await openEditor(amount)).toBeChecked();
+    expect(screen.getByLabelText("Pool amount (USD)")).toHaveValue(amount);
+    fireEvent.change(screen.getByLabelText("Team Name"), { target: { value: "Renamed Team" } });
+
+    expect(await save()).toMatchObject({ team_alias: "Renamed Team", max_budget: amount, budget_duration: "30d" });
+  });
+
+  it("removes the shared cap explicitly while retaining member limits and reset periods", async () => {
+    fireEvent.click(await openEditor(100));
+    fireEvent.click(screen.getByText("Team Member Settings"));
+    expect(await screen.findByLabelText("Default Budget (USD)")).toHaveValue(10);
+    expect(screen.queryByLabelText("Pool amount (USD)")).not.toBeInTheDocument();
+
+    const payload = await save();
+    const expected = {
+      max_budget: null,
+      budget_duration: "30d",
+      team_member_budget: 10,
+      team_member_budget_duration: "7d",
+    };
+    expect(payload).toMatchObject(expected);
+    expect(payload).not.toHaveProperty("spend");
+    expect(payload).not.toHaveProperty("budget_reset_at");
+  });
+
+  it("requires an amount when opting an uncapped team into a pooled budget", async () => {
+    fireEvent.click(await openEditor(null));
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(await screen.findByText("Enter a pooled budget amount")).toBeInTheDocument();
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Pool amount (USD)"), { target: { value: "25" } });
+    expect(await save()).toMatchObject({ max_budget: 25 });
+  });
+});
+
 describe("TeamInfoView - member budget reset prompt", () => {
   const props = {
     teamId: "123",

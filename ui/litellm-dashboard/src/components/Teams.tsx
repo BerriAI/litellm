@@ -64,6 +64,8 @@ interface TeamProps {
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
 import { normalizeTeamModelSelection } from "./team/teamModelAccess";
+import { PooledBudgetField } from "./team/PooledBudgetField";
+import { pooledBudgetSchema } from "./team/pooledBudget";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 const SUPPRESSED_BY_DESCRIPTION = "";
@@ -74,7 +76,7 @@ const teamCreateFieldsSchema = z.object({
   team_alias: z.string().min(1, "Please input a team name"),
   organization_id: z.string().nullish(),
   models: z.array(z.string()).optional(),
-  max_budget: numericInputSchema,
+  max_budget: pooledBudgetSchema,
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
@@ -276,7 +278,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
-  const { data: defaultTeamSettings } = useQuery({
+  const { data: defaultTeamSettings, status: defaultTeamSettingsStatus } = useQuery({
     queryKey: ["defaultTeamSettings"],
     queryFn: () => getDefaultTeamSettings(accessToken as string),
     enabled: isTeamModalVisible && accessToken != null,
@@ -804,9 +806,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     )}
                   </FormField>
 
-                  <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-                    {({ ref, value, ...field }) => (
-                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} width={200} />
+                  <FormField control={form.control} name="max_budget">
+                    {(field) => (
+                      <PooledBudgetField
+                        {...field}
+                        mode="create"
+                        defaultBudget={defaultTeamSettings?.values?.max_budget}
+                        defaultBudgetStatus={defaultTeamSettingsStatus}
+                      />
                     )}
                   </FormField>
                   <FormField control={form.control} name="budget_duration" className="mt-8" label="Reset Budget">
@@ -888,7 +895,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           name="team_member_budget"
                           label={labelWithHint(
                             "Team Member Budget (USD)",
-                            "This is the individual budget for a user in the team.",
+                            "Limits each member's spend within this team. Usage also counts toward the pooled budget.",
                           )}
                         >
                           {({ ref, value, onChange, ...field }) => (

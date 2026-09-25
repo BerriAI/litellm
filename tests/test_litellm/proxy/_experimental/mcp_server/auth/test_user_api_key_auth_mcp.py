@@ -8697,15 +8697,18 @@ class TestUserSubjectTeamUnion:
         assert open_tools is None, "open-channel server must be default-open for tools"
         assert closed_tools == [], "a server no source or channel grants stays deny-all"
 
-    async def test_over_budget_team_grants_nothing_and_healthy_team_stands(self):
+    @pytest.mark.parametrize("budget, spend", [(10.0, 11.0), (10.0, 10.0), (0.0, 0.0)])
+    async def test_over_budget_team_grants_nothing_and_healthy_team_stands(
+        self, budget: float, spend: float
+    ) -> None:
         """Budget ENFORCEMENT is the sibling of blocked: a team that has already exceeded its
         max_budget is rejected outright for a virtual key pinned to it (common_checks), so it must
         not keep granting servers, tools or throttle scope to a keyless union subject either.
         Enforced through the SAME owner the key path uses (_team_max_budget_check). Distinct from
         budget ATTRIBUTION of new spend, which stays with the user (documented deferral)."""
         t_over = _make_team("t-over", ["srv1"])
-        t_over.max_budget = 10.0
-        t_over.spend = 11.0
+        t_over.max_budget = budget
+        t_over.spend = spend
         t_ok = _make_team("t-ok", ["srv2"])
         t_ok.max_budget = 10.0
         t_ok.spend = 1.0

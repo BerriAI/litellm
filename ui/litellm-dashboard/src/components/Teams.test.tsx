@@ -1305,6 +1305,10 @@ describe("Teams - the exact bytes the create call sends", () => {
   it("sends three keys and nothing else when every section is left closed", async () => {
     await openCreateModal();
 
+    expect(
+      await screen.findByText("Leaving this off uses the deployment's default pooled budget, if configured"),
+    ).toBeInTheDocument();
+
     const payload = await submit();
 
     expect(payload).toStrictEqual({
@@ -1417,7 +1421,8 @@ describe("Teams - the exact bytes the create call sends", () => {
   it("carries every typed value to the payload at the type antd sends today", async () => {
     await openCreateModal();
 
-    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "150.75" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Pooled budget" }));
+    fireEvent.change(screen.getByLabelText("Pool amount (USD)"), { target: { value: "150.75" } });
     fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "900" } });
     fireEvent.change(screen.getByLabelText("Requests per minute Limit (RPM)"), { target: { value: "800" } });
 
@@ -1434,7 +1439,7 @@ describe("Teams - the exact bytes the create call sends", () => {
 
     const payload = await submit();
 
-    expect(payload.max_budget).toBe("150.75");
+    expect(payload.max_budget).toBe(150.75);
     expect(payload.tpm_limit).toBe("900");
     expect(payload.rpm_limit).toBe("800");
     expect(payload.team_id).toBe("tid-1");
@@ -1443,6 +1448,77 @@ describe("Teams - the exact bytes the create call sends", () => {
     expect(payload.team_member_rpm_limit).toBe("7");
     expect(payload.team_member_tpm_limit).toBe("8");
     expect(payload.secret_manager_settings).toStrictEqual({ namespace: "admin" });
+  });
+
+  it.each([0, 100])("inherits the default pooled budget of %s when the opt-in is left off", async (amount) => {
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: { max_budget: amount } });
+    await openCreateModal();
+
+    expect(screen.getByRole("switch", { name: "Pooled budget" })).not.toBeChecked();
+    expect(
+      await screen.findByText(`Leaving this off uses the deployment's default pooled budget of $${amount.toFixed(2)}`),
+    ).toBeInTheDocument();
+    expect(wireBody(await submit())).not.toHaveProperty("max_budget");
+  });
+
+  it.each([
+    { draft: "1.25", amount: 1.25 },
+    { draft: "0.001", amount: 0.001 },
+  ])("saves pooled budget $draft entered character by character", async ({ draft, amount }) => {
+    const user = userEvent.setup({ delay: null });
+    await openCreateModal();
+    await user.click(screen.getByRole("switch", { name: "Pooled budget" }));
+    const input = screen.getByLabelText("Pool amount (USD)");
+    await user.type(input, draft);
+    expect(input).toHaveValue(amount);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: /create team/i }));
+
+    await waitFor(() =>
+      expect(teamCreateCall).toHaveBeenCalledWith("test-token", expect.objectContaining({ max_budget: amount })),
+    );
+  });
+
+  it.each(["pending", "error"] as const)("keeps pooled budget inheritance when defaults are %s", async (status) => {
+    vi.mocked(getDefaultTeamSettings).mockImplementation(() =>
+      status === "pending" ? new Promise(() => {}) : Promise.reject(new Error("Defaults unavailable")),
+    );
+    await openCreateModal();
+
+    const notice =
+      status === "pending"
+        ? "Loading the deployment's default pooled budget"
+        : "Deployment defaults could not be loaded. Leaving this off uses those defaults";
+    expect(await screen.findByText(notice)).toBeInTheDocument();
+    expect(
+      screen.queryByText("Leaving this off uses the deployment's default pooled budget, if configured"),
+    ).not.toBeInTheDocument();
+    expect(wireBody(await submit())).not.toHaveProperty("max_budget");
+  });
+
+  it("requires a pooled budget amount and sends zero alongside a separate member limit", async () => {
+    await openCreateModal();
+    fireEvent.click(screen.getByRole("switch", { name: "Pooled budget" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /create team/i }));
+
+    expect(await screen.findByText("Enter a pooled budget amount")).toBeInTheDocument();
+    expect(teamCreateCall).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Pool amount (USD)"), { target: { value: "0" } });
+    await openSection("Additional Settings", /Team Member Key Duration/);
+    fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "12.5" } });
+
+    const payload = wireBody(await submit());
+    expect(payload.max_budget).toBe(0);
+    expect(payload.team_member_budget).toBe(12.5);
+  });
+
+  it("omits a pooled budget after the opt-in is turned off again", async () => {
+    await openCreateModal();
+    fireEvent.click(screen.getByRole("switch", { name: "Pooled budget" }));
+    fireEvent.change(screen.getByLabelText("Pool amount (USD)"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Pooled budget" }));
+
+    expect(screen.queryByLabelText("Pool amount (USD)")).not.toBeInTheDocument();
+    expect(wireBody(await submit())).not.toHaveProperty("max_budget");
   });
 
   it("blocks the create on an invalid secret manager config, with the rule message suppressed by help", async () => {

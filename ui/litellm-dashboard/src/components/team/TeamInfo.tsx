@@ -18,7 +18,6 @@ import {
 } from "@/components/networking";
 import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -57,6 +56,8 @@ import {
   type TeamAdminSettingsChanges,
 } from "./teamAdminEditAccess";
 import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
+import { PooledBudgetField } from "./PooledBudgetField";
+import { pooledBudgetSchema } from "./pooledBudget";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
@@ -346,7 +347,7 @@ const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 const teamUpdateFieldsSchema = z.object({
   team_alias: z.string().min(1, "Please input a team name"),
   models: z.array(z.string()).optional(),
-  max_budget: numericInputSchema,
+  max_budget: pooledBudgetSchema,
   soft_budget: numericInputSchema,
   soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
   default_team_member_models: z.array(z.string()).optional(),
@@ -1030,7 +1031,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
 
-      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
       const newTeamMemberBudget =
@@ -1266,15 +1266,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       children: (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <Card className="block p-6">
-            <p>Budget Status</p>
+            <p>Shared pool usage</p>
             <div className="mt-2">
               <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
-              <p>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}</p>
+              <p>
+                {info.max_budget === null ? "No pooled budget" : `of $${formatNumberWithCommas(info.max_budget, 2)}`}
+              </p>
               {info.budget_duration && <p className="text-muted-foreground">Reset: {info.budget_duration}</p>}
               <br />
               {info.team_member_budget_table && (
                 <p className="text-muted-foreground">
-                  Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
+                  Default member limit: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
                 </p>
               )}
             </div>
@@ -1496,10 +1498,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Field>
 
-                  <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-                    {({ ref, value, ...field }) => (
-                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                    )}
+                  <FormField control={form.control} name="max_budget">
+                    {(field) => <PooledBudgetField {...field} mode="edit" />}
                   </FormField>
 
                   <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
@@ -1566,7 +1566,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="team_member_budget"
                           label={labelWithHint(
                             "Default Budget (USD)",
-                            "Default spend budget for each member in this team.",
+                            "Limits each member's spend within this team. Usage also counts toward the pooled budget.",
                           )}
                         >
                           {({ ref, value, ...field }) => (
@@ -2164,7 +2164,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <div>
                 <p className="font-medium">Team Budget</p>
                 <div>
-                  Max Budget: {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
+                  Pooled budget: {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "Off"}
                 </div>
                 <div>
                   Soft Budget:{" "}

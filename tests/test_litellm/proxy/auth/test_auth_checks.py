@@ -5830,11 +5830,12 @@ async def test_side_effectful_info_route_still_enforces_budget(route: str) -> No
 
 
 @pytest.mark.asyncio
-async def test_inference_route_still_enforces_team_budget():
+@pytest.mark.parametrize("budget, spend", [(100.0, 150.0), (100.0, 100.0), (0.0, 0.0)])
+async def test_inference_route_still_enforces_team_budget(budget: float, spend: float) -> None:
     """Control for #27923: inference routes stay fully budget-enforced."""
     from litellm.proxy.auth.auth_checks import common_checks
 
-    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+    team_object: Final = LiteLLM_TeamTable(team_id="test-team", spend=spend, max_budget=budget)
 
     with pytest.raises(litellm.BudgetExceededError):
         await common_checks(
@@ -5850,6 +5851,28 @@ async def test_inference_route_still_enforces_team_budget():
             valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
             request=MagicMock(),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [None, 100.0])
+async def test_inference_route_allows_unspent_team_budget(budget: float | None) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    result: Final = await common_checks(
+        request_body={},
+        team_object=LiteLLM_TeamTable(team_id="test-team", spend=50.0, max_budget=budget),
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/v1/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+        request=MagicMock(),
+    )
+
+    assert result is True
 
 
 @pytest.mark.asyncio

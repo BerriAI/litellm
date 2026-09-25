@@ -477,7 +477,7 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Budget Status")).toBeInTheDocument();
+        expect(screen.getByText("Shared pool usage")).toBeInTheDocument();
       });
       expect(screen.getByText("$250.50")).toBeInTheDocument();
       expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
@@ -559,9 +559,9 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Budget Status")).toBeInTheDocument();
+        expect(screen.getByText("Shared pool usage")).toBeInTheDocument();
       });
-      expect(screen.getByText("Team Member Budget: $500.00")).toBeInTheDocument();
+      expect(screen.getByText("Default member limit: $500.00")).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {
@@ -619,7 +619,7 @@ describe("TeamInfoView", () => {
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
 
-      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Shared pool usage")).toBeInTheDocument();
     });
 
     it("should open Overview tab by default when editTeam is true but user cannot edit", async () => {
@@ -634,7 +634,7 @@ describe("TeamInfoView", () => {
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
 
-      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Shared pool usage")).toBeInTheDocument();
     });
   });
 
