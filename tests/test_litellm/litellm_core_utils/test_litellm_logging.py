@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import datetime
 import json
 import logging
@@ -24,6 +25,7 @@ from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
+    _extract_response_obj_and_hidden_params,
     _get_status_fields,
     set_callbacks,
 )
@@ -32,6 +34,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    ImageResponse,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     TextCompletionResponse,
@@ -8694,3 +8697,126 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert "smoke-failure" in payload["error_str"]
     assert payload["model"] == "openai/gpt-5.6"
     assert events.empty()
+
+
+def _image_logging_obj() -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gpt-image-2",
+        messages="a cat",
+        stream=False,
+        call_type="aimage_generation",
+        start_time=time.time(),
+        litellm_call_id="response-headers-test",
+        function_id="response-headers-test",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    logging_obj.optional_params = {}
+    return logging_obj
+
+
+def _image_result_with_headers(request_id: str) -> ImageResponse:
+    result = ImageResponse(created=1, data=[])
+    result._hidden_params = {"headers": {"x-request-id": request_id}}
+    return result
+
+
+def test_process_hidden_params_surfaces_response_headers_from_the_result():
+    logging_obj = _image_logging_obj()
+
+    logging_obj._process_hidden_params_and_response_cost(
+        _image_result_with_headers("req_img"), datetime.datetime.now(), datetime.datetime.now()
+    )
+
+    assert logging_obj.model_call_details["response_headers"] == {"x-request-id": "req_img"}
+
+
+def test_process_hidden_params_keeps_handler_set_response_headers():
+    logging_obj = _image_logging_obj()
+    logging_obj.model_call_details["response_headers"] = {"x-request-id": "from-handler"}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        _image_result_with_headers("from-result"), datetime.datetime.now(), datetime.datetime.now()
+    )
+
+    assert logging_obj.model_call_details["response_headers"] == {"x-request-id": "from-handler"}
+
+
+def _assembled_stream_result_with_headers() -> ModelResponse:
+    result = _assembled_stream_result()
+    result._hidden_params = {"headers": {"x-request-id": "req_stream"}}
+    return result
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_success_passes_result_headers_to_callback_kwargs():
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+
+    with patcher:
+        await logging_obj.async_success_handler(result=_assembled_stream_result_with_headers())
+
+    kwargs = releasing.async_log_success_event.await_args.kwargs["kwargs"]
+    assert kwargs["response_headers"] == {"x-request-id": "req_stream"}
+
+
+def test_sync_streaming_success_passes_result_headers_to_callback_kwargs():
+    releasing = CustomLogger()
+    releasing.log_success_event = MagicMock()
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+
+    with patcher:
+        logging_obj.success_handler(result=_assembled_stream_result_with_headers())
+
+    kwargs = releasing.log_success_event.call_args.kwargs["kwargs"]
+    assert kwargs["response_headers"] == {"x-request-id": "req_stream"}
+
+
+def test_extract_response_obj_and_hidden_params_reads_binary_content_hidden_params():
+    from litellm.types.llms.openai import HttpxBinaryResponseContent as LiteLLMBinaryResponseContent
+
+    result = LiteLLMBinaryResponseContent(response=httpx.Response(status_code=200, content=b"audio bytes"))
+    result._hidden_params = {"headers": {"x-request-id": "req_tts"}}
+
+    response_obj, hidden_params = _extract_response_obj_and_hidden_params(result, None)
+
+    assert hidden_params == {"headers": {"x-request-id": "req_tts"}}
+    assert response_obj["object"] == "binary"
+
+
+def _preserved_thinking_client_turns() -> tuple[list[dict], list[dict]]:
+    turn_n = [{"role": "user", "content": "First question"}]
+    reply = {
+        "role": "assistant",
+        "content": "First answer",
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": "sig-1"}],
+    }
+    return turn_n, [*turn_n, reply, {"role": "user", "content": "Second question"}]
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_with_unchanged_variables_replays_a_byte_identical_prefix(logging_obj, tmp_path):
+    """A prompt template rendered with the same variables on every turn must prepend the
+    same messages, or the signed thinking blocks in the history lose their binding."""
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+
+    (tmp_path / "greeting.prompt").write_text(
+        "---\nmodel: claude-fable-5-1\n---\nSystem: You are a {{persona}}. Answer in one sentence.\n"
+    )
+    manager = DotpromptManager(prompt_directory=str(tmp_path))
+    compiled = [
+        await logging_obj.async_get_chat_completion_prompt(
+            model="claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            non_default_params={},
+            prompt_variables={"persona": "pirate"},
+            prompt_id="greeting",
+            prompt_management_logger=manager,
+        )
+        for turn in _preserved_thinking_client_turns()
+    ]
+    (_, messages_n, _), (_, messages_n_plus_one, _) = compiled
+
+    assert json.dumps(messages_n_plus_one[: len(messages_n)], sort_keys=True) == json.dumps(messages_n, sort_keys=True)
+    assert messages_n[0] == {"role": "system", "content": "You are a pirate. Answer in one sentence."}
+    assert len(messages_n_plus_one) == len(messages_n) + 2

@@ -74,6 +74,7 @@ commands:
     steps:
       - run:
           name: Install Codecov CLI (pinned v11.3.1)
+          when: always
           command: |
             curl -sSLf -o /tmp/codecov https://cli.codecov.io/v11.3.1/linux/codecov
             curl -sSLf -o /tmp/codecov.SHA256SUM https://cli.codecov.io/v11.3.1/linux/codecov.SHA256SUM
@@ -90,7 +91,6 @@ commands:
             uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
   setup_test_deps:
     steps:
-      - checkout
       - install_uv
       - install_rust
       - restore_cache:
@@ -165,42 +165,72 @@ commands:
 jobs:
   unit:
     parameters:
-      tests_path:
-        type: string
-        default: tests/unit
       flag:
         type: string
         default: unit
       shards:
         type: integer
         default: 6
+      workers:
+        type: integer
+        default: 4
+      dist:
+        type: string
+        default: loadscope
       base_ref:
         type: string
         default: ""
       pull_request_url:
         type: string
         default: ""
+      legacy_mcp_peer:
+        type: boolean
+        default: false
+      reruns:
+        type: integer
+        default: 0
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
     parallelism: << parameters.shards >>
     environment:
+      COVERAGE_CORE: sysmon
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
-      - setup_test_deps
+      - checkout
       - skip_unless_relevant:
           base_ref: << parameters.base_ref >>
           pull_request_url: << parameters.pull_request_url >>
+      - setup_test_deps
+      - when:
+          condition: << parameters.legacy_mcp_peer >>
+          steps:
+            - run:
+                name: Install MCP SDK1 peer
+                command: |
+                  uv venv --python 3.12 .venv-mcp-peer
+                  uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+                  echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
       - run:
-          name: "Run << parameters.tests_path >> shard"
+          name: "Run << parameters.flag >> shard"
           no_output_timeout: 20m
           command: |
             mkdir -p test-results/<< parameters.flag >>
-            mapfile -t files < <(find << parameters.tests_path >> -name 'test_*.py' | sort | circleci tests split --split-by=timings --timings-type=filename)
-            if [ "${#files[@]}" -eq 0 ]; then echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.tests_path >> files; nothing to run"; exit 0; fi
+            selection="$(bash .circleci/scripts/unit_selection.sh << parameters.flag >>)" || { echo "unit_selection.sh failed for << parameters.flag >>"; exit 1; }
+            [ -n "${selection}" ] || { echo "unit_selection.sh produced no files for << parameters.flag >>"; exit 1; }
+            shard="$(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)" || { echo "circleci tests split failed for << parameters.flag >>"; exit 1; }
+            [ -n "${shard}" ] || { echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.flag >> files; nothing to run"; exit 0; }
+            mapfile -t files < <(printf '%s\n' "${shard}")
+            xdist_args=()
+            if [ "<< parameters.workers >>" -gt 0 ]; then xdist_args=(-n << parameters.workers >> --dist=<< parameters.dist >>); fi
+            rerun_args=(-p no:rerunfailures)
+            if [ "<< parameters.reruns >>" -gt 0 ]; then rerun_args=(--reruns << parameters.reruns >> --reruns-delay 1 --rerun-except "from pytest-timeout"); fi
+            test_env=(PATH="$PATH" HOME="$HOME" CI=true COVERAGE_CORE="$COVERAGE_CORE" LITELLM_LOCAL_MODEL_COST_MAP="$LITELLM_LOCAL_MODEL_COST_MAP")
+            if [ -n "${MCP_TEST_PEER_PYTHON:-}" ]; then test_env+=(MCP_TEST_PEER_PYTHON="$MCP_TEST_PEER_PYTHON"); fi
             set +e
-            uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short --durations=20 -o junit_family=xunit1 --junitxml=test-results/<< parameters.flag >>/junit.xml --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml --cov-config=pyproject.toml
+            env -i "${test_env[@]}" \
+              uv run --no-sync pytest "${files[@]}" "${rerun_args[@]}" -p no:pytest-retry --timeout=90 "${xdist_args[@]}" --tb=short --durations=20 -o junit_family=xunit1 --junitxml=test-results/<< parameters.flag >>/junit.xml --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml --cov-config=pyproject.toml
             status=$?
             set -e
             if [ "$status" -eq 5 ]; then echo "pytest collected no tests from the shard; passing"; exit 0; fi
@@ -224,6 +254,7 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
+      - checkout
       - setup_test_deps
       - run:
           name: Checkout litellm-docs
@@ -250,16 +281,17 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
-      - setup_test_deps
+      - checkout
       - skip_unless_relevant:
           base_ref: << parameters.base_ref >>
           pull_request_url: << parameters.pull_request_url >>
+      - setup_test_deps
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
       - start_redis
       - run:
           name: Run owned integration contracts
-          command: bash .circleci/scripts/run_integration.sh << parameters.suite >>
+          command: env -i PATH="$PATH" HOME="$HOME" CIRCLE_SHA1="$CIRCLE_SHA1" CIRCLE_WORKFLOW_ID="$CIRCLE_WORKFLOW_ID" bash .circleci/scripts/run_integration.sh << parameters.suite >>
           no_output_timeout: 15m
       - run:
           name: Stop owned database and Redis
@@ -280,6 +312,69 @@ workflows:
     when: (pipeline.event.name == "push" and pipeline.git.branch == "main") or pipeline.event.name == "api" or (pipeline.event.name == "pull_request" and (pipeline.event.github.pull_request.base.ref == "main" or pipeline.event.github.pull_request.base.ref starts-with "litellm_"))
     jobs:
       - unit:
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-<< matrix.flag >>
+          shards: 1
+          workers: 2
+          reruns: 2
+          matrix:
+            parameters:
+              flag: [caching-local, proxy-extras, enterprise-routing]
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-mcp-integration
+          flag: mcp-integration
+          shards: 1
+          workers: 2
+          legacy_mcp_peer: true
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-<< matrix.flag >>
+          shards: 1
+          reruns: 2
+          matrix:
+            parameters:
+              flag:
+                - enterprise-package
+                - proxy-infra
+                - responses-caching-types
+                - proxy-db-auth-checks
+                - proxy-db-jwt-and-keys
+                - proxy-db-proxy-server-core
+                - proxy-db-proxy-runtime
+                - proxy-db-custom-logging
+                - proxy-db-logging-misc
+                - proxy-db-db-and-spend
+                - proxy-db-guardrails-hooks
+                - proxy-db-budgets
+                - proxy-db-endpoints-and-responses
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-misc
+          flag: misc
+          shards: 2
+          reruns: 2
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-proxy-db-proxy-utils
+          flag: proxy-db-proxy-utils
+          shards: 1
+          reruns: 2
+          dist: worksteal
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-proxy-db-key-generation
+          flag: proxy-db-key-generation
+          shards: 1
+          workers: 0
+          reruns: 2
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - documentation

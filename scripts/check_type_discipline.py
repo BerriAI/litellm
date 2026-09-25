@@ -40,7 +40,8 @@ LIT003  noqa suppression without rule codes or without a reason.
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` suppression without a reason.
+        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` suppression
+        without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -103,6 +104,15 @@ LIT013  A `# <token>-ok: <reason>` suppression on a line where none of the rules
         that token suppresses fires. Like ruff's RUF100: a marker that suppresses
         nothing rots in place and hides real violations that land on the line
         later. Delete it.
+LIT014  Comprehension with more than one `for` clause or more than one `if` clause,
+        in any of the four forms (list, set, dict, generator expression). Stacked
+        `for`s and `if`s read as nested loops and guards squashed onto one line;
+        split the comprehension into a helper generator, a named intermediate, or
+        a plain loop instead. A comprehension nested inside another's element or
+        iterable is its own node and is judged separately. Suppress with
+        `# comprehension-ok: <reason>` on any line the comprehension spans. The
+        marker belongs to the innermost violating comprehension spanning that
+        line, and also to any single-line violating comprehension on that line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -206,6 +216,7 @@ GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
+COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
 
 @dataclass(frozen=True, slots=True)
 class _OkToken:
@@ -224,6 +235,7 @@ OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
     _OkToken("kwargs-ok", KWARGS_OK_RE, frozenset(("LIT008",))),
     _OkToken("rebind-ok", REBIND_OK_RE, frozenset(("LIT010", "LIT011"))),
     _OkToken("writable-ok", WRITABLE_OK_RE, frozenset(("LIT012",))),
+    _OkToken("comprehension-ok", COMPREHENSION_OK_RE, frozenset(("LIT014",))),
 )
 
 
@@ -1036,6 +1048,83 @@ def iter_typeddict_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 
 
 # --------------------------------------------------------------------------- #
+# Stacked comprehension clauses (LIT014)
+# --------------------------------------------------------------------------- #
+
+COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _span(node: ast.expr) -> range:
+    return range(node.lineno, (node.end_lineno or node.lineno) + 1)
+
+
+def _clause_counts(node: ast.expr) -> tuple[int, int]:
+    return (
+        len(node.generators),
+        sum(len(g.ifs) for g in node.generators),
+    )
+
+
+def _violates(node: ast.expr) -> bool:
+    for_count, if_count = _clause_counts(node)
+    return for_count > 1 or if_count > 1
+
+
+def _comprehension_owners(tree: ast.AST, ok_lines: frozenset[int]) -> Mapping[int, int]:
+    """id(node) -> marker line for each `# comprehension-ok` line's owner.
+
+    Only violating comprehensions own markers. Each marker belongs to the
+    innermost violating comprehension whose span contains it (line span first,
+    column width breaks ties) plus every violating comprehension whose whole
+    span is that single line, so a comment inside a nested comprehension never
+    silences a multi-line enclosing one and a violation sharing its only line
+    can still be suppressed.
+    """
+    violating: Final = tuple(
+        n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n)
+    )
+
+    def nesting_key(node: ast.expr) -> tuple[int, int]:
+        return (len(_span(node)), (node.end_col_offset or node.col_offset) - node.col_offset)
+
+    def owners(line: int) -> tuple[ast.expr, ...]:
+        containing: Final = tuple(n for n in violating if line in _span(n))
+        innermost: Final = min(containing, key=nesting_key, default=None)
+        single_line: Final = tuple(n for n in violating if len(_span(n)) == 1 and n.lineno == line)
+        return (*single_line, *(() if innermost is None else (innermost,)))
+
+    return MappingProxyType({id(o): line for line in ok_lines for o in owners(line)})
+
+
+def iter_comprehension_violations(
+    path: Path, tree: ast.AST, ok_lines: frozenset[int]
+) -> Iterator[tuple[Violation, bool]]:
+    """(violation, owned) pairs for every violating comprehension.
+
+    An owned comprehension reports at its marker's line so apply_suppressions
+    drops it and counts the marker as used; an unowned one reports at its own
+    line and is kept verbatim, since a marker suppresses only its owner even
+    when another violation shares that line.
+    """
+    owners: Final = _comprehension_owners(tree, ok_lines)
+    for node in ast.walk(tree):
+        if not isinstance(node, COMPREHENSION_NODES) or not _violates(node):
+            continue
+        for_count, if_count = _clause_counts(node)
+        yield (
+            Violation(
+                path,
+                owners.get(id(node), node.lineno),
+                "LIT014",
+                f"comprehension with {for_count} `for` clauses and {if_count} `if` clauses: "
+                f"at most one of each is allowed. Split it into a helper generator, a named "
+                f"intermediate, or a plain loop (suppress: `# comprehension-ok: <reason>`)",
+            ),
+            id(node) in owners,
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Suppression application and unused suppressions (LIT013)
 # --------------------------------------------------------------------------- #
 
@@ -1087,8 +1176,13 @@ def check_file(path: Path) -> tuple[Violation, ...]:
     except SyntaxError as exc:
         return (*violations, Violation(path, exc.lineno or 0, "LIT000", f"syntax error: {exc.msg}"))
 
+    comprehension_violations: Final = tuple(
+        iter_comprehension_violations(path, tree, suppressions["comprehension-ok"])
+    )
+
     return (
         *violations,
+        *(v for v, owned in comprehension_violations if not owned),
         *apply_suppressions(
             path,
             (
@@ -1099,6 +1193,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
                 *iter_final_violations(path, tree),
                 *iter_param_violations(path, tree),
                 *iter_typeddict_violations(path, tree),
+                *(v for v, owned in comprehension_violations if owned),
             ),
             suppressions,
         ),
