@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -498,7 +499,7 @@ def _extract_output_items(response_obj: _Gettable) -> str | None:
     output: Final = response_obj.get("output", [])
     if not isinstance(output, list) or not output:
         return None
-    rendered: Final = tuple(entry for item in output for entry in _output_items(item))
+    rendered: Final = tuple(chain.from_iterable(map(_output_items, output)))
     return safe_dumps(list(rendered)) if rendered else None
 
 
