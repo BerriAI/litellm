@@ -733,6 +733,7 @@ async def test_update_agent_in_db_preserves_secret_when_echoed_back_redacted():
     with the redaction marker."""
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value=SimpleNamespace(
@@ -830,6 +831,7 @@ async def test_update_agent_in_db_preserves_secret_nested_under_a_non_sensitive_
     redaction marker, not just top-level secret keys."""
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value=SimpleNamespace(
@@ -967,6 +969,7 @@ async def test_patch_agent_in_db_preserves_secret_when_echoed_back_redacted():
     the stored credential."""
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value={
@@ -1165,6 +1168,7 @@ _KILL_SWITCH: Final = {
 async def test_add_agent_to_db_stores_kill_switch_json_and_a_json_null_when_unset():
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_create = AsyncMock(return_value=_agent_row_mock([]))
     mock_prisma.db.litellm_agentstable.create = mock_create
 
@@ -1191,6 +1195,7 @@ async def test_add_agent_to_db_stores_kill_switch_json_and_a_json_null_when_unse
 async def test_add_agent_to_db_rejects_a_kill_switch_with_a_non_http_url():
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.create = AsyncMock(return_value=_agent_row_mock([]))
 
     with pytest.raises(Exception, match="absolute http"):
@@ -1210,6 +1215,7 @@ async def test_add_agent_to_db_rejects_a_kill_switch_with_a_non_http_url():
 async def test_patch_agent_in_db_keeps_kill_switch_when_omitted_and_clears_it_on_null():
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value={
             "agent_id": "agent-123",
@@ -1239,6 +1245,7 @@ async def test_patch_agent_in_db_keeps_kill_switch_when_omitted_and_clears_it_on
 async def test_patch_agent_in_db_restores_the_stored_kill_switch_secret_behind_the_marker():
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value={
             "agent_id": "agent-123",
@@ -1274,6 +1281,7 @@ async def test_patch_agent_in_db_restores_the_stored_kill_switch_secret_behind_t
 async def test_update_agent_in_db_clears_kill_switch_when_omitted_and_restores_secret_when_echoed():
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value=SimpleNamespace(litellm_params={}, object_permission_id=None, kill_switch=json.dumps(_KILL_SWITCH))
     )

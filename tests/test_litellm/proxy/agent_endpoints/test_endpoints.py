@@ -1330,6 +1330,7 @@ def test_kill_switch_trigger_fires_the_db_row_config_over_a_stale_in_memory_copy
         kill_switch={"url": "https://ops.example.com/kill-v2", "method": "DELETE", "auth": None},
     )
     prisma: Final = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=db_row)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     fake: Final = _FakeKillSwitchClient(httpx.Response(204))
@@ -1353,6 +1354,7 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
 
     def _get_as(role: LitellmUserRoles):
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.replica_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
             mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
             return _make_app_with_role(role).get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})
