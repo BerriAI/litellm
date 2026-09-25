@@ -3942,3 +3942,190 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+# --- URL-bound model on the LLM handler routes ---------------------------------------
+# chat-completions, completions and embeddings bind ``model`` from the URL
+# (``?model=`` on the plain routes, ``{model:path}`` on the deployment-style
+# routes); that value is part of the model candidates get_model_from_request
+# returns.
+
+
+def _matched_request(template: str, path_params: dict[str, object] | None = None) -> Request:
+    """Request as Starlette leaves it after routing: ``scope["route"]`` carries the
+    matched template and ``path_params`` the resolved segments."""
+
+    class _Route:
+        path = template
+
+    return Request(scope={"type": "http", "headers": [], "route": _Route(), "path_params": path_params or {}})
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/queue/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "/v1/embeddings",
+        "/embeddings",
+    ],
+)
+def test_get_model_from_request_includes_query_model_on_llm_handler_routes(route):
+    """Body model and query-string model are both returned as candidates."""
+    assert get_model_from_request(
+        request_data={"model": "allowed-model"},
+        route=route,
+        request_query_params={"model": "denied-model"},
+        request=_matched_request(route),
+    ) == ["allowed-model", "denied-model"]
+
+
+def test_get_model_from_request_query_model_without_request_object():
+    """Callers with no Request (budget reservation) classify the literal path."""
+    assert get_model_from_request(
+        request_data={"model": "allowed-model"},
+        route="/v1/chat/completions",
+        request_query_params={"model": "denied-model"},
+    ) == ["allowed-model", "denied-model"]
+
+
+def test_get_model_from_request_query_model_alone_on_chat_completions():
+    assert (
+        get_model_from_request(
+            request_data={"messages": []},
+            route="/v1/chat/completions",
+            request_query_params={"model": "denied-model"},
+            request=_matched_request("/v1/chat/completions"),
+        )
+        == "denied-model"
+    )
+
+
+def test_get_model_from_request_query_model_equal_to_body_dedupes():
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_query_params={"model": "allowed-model"},
+            request=_matched_request("/v1/chat/completions"),
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_query_model_lookup_is_exact_case():
+    """FastAPI binds ``model`` case-sensitively: ``?MODEL=`` is not bound by the
+    handler, so it is not a candidate either."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_query_params={"MODEL": "denied-model"},
+            request=_matched_request("/v1/chat/completions"),
+        )
+        == "allowed-model"
+    )
+
+
+@pytest.mark.parametrize(
+    "template, path, path_model",
+    [
+        ("/openai/deployments/{model:path}/chat/completions", "/openai/deployments/denied-model/chat/completions", "denied-model"),
+        ("/openai/deployments/{model:path}/completions", "/openai/deployments/denied-model/completions", "denied-model"),
+        ("/openai/deployments/{model:path}/embeddings", "/openai/deployments/denied-model/embeddings", "denied-model"),
+        ("/engines/{model:path}/chat/completions", "/engines/denied-model/chat/completions", "denied-model"),
+        ("/engines/{model:path}/completions", "/engines/denied-model/completions", "denied-model"),
+        ("/engines/{model:path}/embeddings", "/engines/denied-model/embeddings", "denied-model"),
+        # {model:path} may contain slashes
+        ("/openai/deployments/{model:path}/chat/completions", "/openai/deployments/org/denied-model/chat/completions", "org/denied-model"),
+    ],
+)
+def test_get_model_from_request_includes_deployment_path_model(template, path, path_model):
+    """The resolved ``{model:path}`` segment is returned alongside the body model."""
+    assert get_model_from_request(
+        request_data={"model": "allowed-model"},
+        route=path,
+        request=_matched_request(template, {"model": path_model}),
+    ) == ["allowed-model", path_model]
+
+
+def test_get_model_from_request_deployment_path_model_without_request_object():
+    """No Request: the literal path is parsed, slashes in the model included."""
+    assert get_model_from_request(
+        request_data={"model": "allowed-model"},
+        route="/openai/deployments/org/denied-model/chat/completions",
+    ) == ["allowed-model", "org/denied-model"]
+
+
+def test_get_model_from_request_deployment_route_ignores_query_model():
+    """On a ``{model:path}`` route FastAPI binds the path value and ignores a
+    same-named query parameter, so only the path value is read."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/openai/deployments/allowed-model/chat/completions",
+            request_query_params={"model": "denied-model"},
+            request=_matched_request("/openai/deployments/{model:path}/chat/completions", {"model": "allowed-model"}),
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_prefers_resolved_path_params_over_literal_path():
+    """The value FastAPI resolved wins over re-parsing the path (encoding, slashes)."""
+    assert get_model_from_request(
+        request_data={"model": "allowed-model"},
+        route="/openai/deployments/a%2Fb/chat/completions",
+        request=_matched_request("/openai/deployments/{model:path}/chat/completions", {"model": "a/b"}),
+    ) == ["allowed-model", "a/b"]
+
+
+@pytest.mark.parametrize(
+    "route, template",
+    [
+        ("/v1/messages", "/v1/messages"),
+        ("/v1/responses", "/v1/responses"),
+        ("/cursor/chat/completions", "/cursor/chat/completions"),
+    ],
+)
+def test_get_model_from_request_ignores_query_model_on_routes_that_do_not_bind_it(route, template):
+    """Routes whose handler does not bind ``?model=`` (including ones that merely
+    contain ``/chat/completions`` in the path) keep serving the body model, so the
+    query value is not a candidate there."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route=route,
+            request_query_params={"model": "denied-model"},
+            request=_matched_request(template),
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_azure_relay_path_is_not_treated_as_deployment_route():
+    """``/azure/openai/deployments/...`` is the Azure relay with its own resolver;
+    without a Request it must not be parsed as a plain deployment route either."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/azure/openai/deployments/denied-model/chat/completions",
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_ignores_routing_header_on_chat_completions():
+    """``x-litellm-model`` is only honoured on the managed-resource routes; the chat
+    handler never routes from it, so it must not become a candidate (control)."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_headers={"x-litellm-model": "denied-model"},
+            request=_matched_request("/v1/chat/completions"),
+        )
+        == "allowed-model"
+    )
