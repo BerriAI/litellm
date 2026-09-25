@@ -598,6 +598,16 @@ class CountTokensResponse(BaseModel):
     input_tokens: int
 
 
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    type: Literal["error"]
+    error: AnthropicErrorBody
+
+
 # ---------- mcp servers ----------
 
 
