@@ -20,6 +20,11 @@ NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
 TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
+ISO_DATE: Final[JsonSchema] = {
+    "type": "string",
+    "format": "date",
+    "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+}
 WEEKDAY_PATTERN: Final = (
     r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
 )
@@ -54,6 +59,16 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
                 ]
             },
             "minItems": 1,
+        },
+        "override_dates": {
+            "type": "array",
+            "items": ISO_DATE,
+            "minItems": 1,
+            "description": (
+                "YYYY-MM-DD dates, read on weekday_timezone, on which this rule alone decides: "
+                "weekdays and every other window are ignored. On any other date the rule does not "
+                "apply, and malformed entries disable it."
+            ),
         },
     },
     "required": ["hours_utc"],
@@ -258,10 +273,8 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "description": "URL of the provider pricing/model page this entry was taken from.",
         },
         "deprecation_date": {
-            "type": "string",
+            **ISO_DATE,
             "description": "Date the provider deprecates the model, YYYY-MM-DD.",
-            "format": "date",
-            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
         },
         "web_search_billing_unit": {
             "type": "string",

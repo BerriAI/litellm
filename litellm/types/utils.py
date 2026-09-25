@@ -240,11 +240,14 @@ class OffPeakWindow(TypedDict, total=False):
     midnight and an equal-ended window covers the whole day. weekdays is a list of days the
     rule applies on, as ISO-8601 numbers (1 = Monday .. 7 = Sunday) or English day names;
     omitted means every day. The weekday is read on the calendar named by the block's
-    weekday_timezone.
+    weekday_timezone. override_dates lists YYYY-MM-DD dates on that calendar on which this
+    rule alone decides, ignoring weekdays and every other window; on any other date the
+    rule does not apply, and malformed entries disable it entirely.
     """
 
     hours_utc: ReadOnly[str | Sequence[str]]
     weekdays: ReadOnly[Sequence[int | str]]
+    override_dates: ReadOnly[Sequence[str]]
 
 
 class OffPeakPricing(TypedDict, total=False):

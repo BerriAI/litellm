@@ -600,6 +600,328 @@ def test_is_off_peak_weekday_qualified_windows_deepseek_schedule():
         assert _is_off_peak(deepseek, when) is True, f"{when.isoformat()} should bill off-peak"
 
 
+def test_is_off_peak_holiday_weekday_is_off_peak_all_day():
+    """A rule whose override_dates names a public holiday applies its off-peak window all
+    day, including inside the peak hours a plain weekday would bill at standard rates."""
+    from datetime import datetime, timezone
+
+    deepseek = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+            {"hours_utc": "00:00-00:00", "override_dates": ["2026-01-01", "2026-10-01"]},
+            {
+                "hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"],
+                "override_dates": ["2026-01-04", "2026-02-14"],
+            },
+        ],
+    }
+    holiday = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    normal_thursday = datetime(2026, 1, 8, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(deepseek, holiday) is True, f"{holiday.isoformat()} is a public holiday"
+    assert _is_off_peak(deepseek, normal_thursday) is False, (
+        f"{normal_thursday.isoformat()} is a normal Thursday peak hour"
+    )
+
+
+def test_is_off_peak_make_up_weekend_day_uses_override_hours():
+    """On a make-up workday only the rule listing the date decides: the weekend whole-day
+    rule does not fire, and the make-up rule's weekday off-peak hours apply instead."""
+    from datetime import datetime, timezone
+
+    deepseek = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+            {"hours_utc": "00:00-00:00", "override_dates": ["2026-01-01", "2026-10-01"]},
+            {
+                "hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"],
+                "override_dates": ["2026-01-04", "2026-02-14"],
+            },
+        ],
+    }
+    make_up_sunday_peak = datetime(2026, 1, 4, 2, 0, tzinfo=timezone.utc)
+    make_up_sunday_off_peak = datetime(2026, 1, 4, 5, 0, tzinfo=timezone.utc)
+    plain_sunday = datetime(2026, 1, 11, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(deepseek, make_up_sunday_peak) is False, (
+        f"{make_up_sunday_peak.isoformat()} is a make-up workday peak hour"
+    )
+    assert _is_off_peak(deepseek, make_up_sunday_off_peak) is True, (
+        f"{make_up_sunday_off_peak.isoformat()} is inside the make-up rule's off-peak hours"
+    )
+    assert _is_off_peak(deepseek, plain_sunday) is True, (
+        f"{plain_sunday.isoformat()} is a normal Sunday, off-peak all day"
+    )
+
+
+def test_is_off_peak_override_skips_flat_hours_and_other_rules():
+    """On a date an override rule lists, the flat hours_utc and every other rule are
+    skipped: only the matching rules' windows decide."""
+    from datetime import datetime, timezone
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "windows": [
+            {"hours_utc": "00:00-00:00", "weekdays": [1, 2, 3, 4, 5, 6, 7]},
+            {"override_dates": ["2026-03-03"], "hours_utc": "12:00-13:00"},
+        ],
+    }
+    outside_window = datetime(2026, 3, 3, 2, 0, tzinfo=timezone.utc)
+    inside_window = datetime(2026, 3, 3, 12, 30, tzinfo=timezone.utc)
+    next_day = datetime(2026, 3, 4, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(block, outside_window) is False, (
+        "the override rule's window is closed and nothing else applies on its date"
+    )
+    assert _is_off_peak(block, inside_window) is True, "the override rule's window is open"
+    assert _is_off_peak(block, next_day) is True, (
+        "the next day falls back to the flat hours_utc and weekday rules"
+    )
+
+
+def test_is_off_peak_override_rule_does_not_leak_onto_other_dates():
+    """A rule carrying override_dates never participates on a date it does not list."""
+    from datetime import datetime, timezone
+
+    block = {"windows": [{"override_dates": ["2026-03-03"], "hours_utc": "00:00-00:00"}]}
+    assert _is_off_peak(block, datetime(2026, 3, 3, 2, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 3, 4, 2, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_override_dates_read_on_weekday_timezone_calendar():
+    """Override dates are read on the weekday_timezone calendar, so the Shanghai date can
+    diverge from the UTC date over 16:00-24:00 UTC."""
+    from datetime import datetime, timezone
+
+    shanghai = {
+        "weekday_timezone": "Asia/Shanghai",
+        "windows": [{"override_dates": ["2026-01-01"], "hours_utc": "00:00-00:00"}],
+    }
+    utc_block = {"windows": [{"override_dates": ["2026-01-01"], "hours_utc": "00:00-00:00"}]}
+    in_shanghai = datetime(2025, 12, 31, 16, 30, tzinfo=timezone.utc)
+    before_shanghai = datetime(2025, 12, 31, 15, 30, tzinfo=timezone.utc)
+    assert _is_off_peak(shanghai, in_shanghai) is True, (
+        f"{in_shanghai.isoformat()} is already 2026-01-01 in Shanghai"
+    )
+    assert _is_off_peak(shanghai, before_shanghai) is False, (
+        f"{before_shanghai.isoformat()} is still 2025-12-31 in Shanghai"
+    )
+    assert _is_off_peak(utc_block, in_shanghai) is False, (
+        f"{in_shanghai.isoformat()} is still 2025-12-31 on the UTC calendar"
+    )
+
+
+def test_is_off_peak_ignores_malformed_override_dates():
+    """A bare string, non-string entries, or an unparseable date disable the rule carrying
+    them, so malformed override_dates can never silently widen the off-peak hours."""
+    from datetime import datetime, timezone
+
+    peak_instant = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    peak_windows = [{"hours_utc": "00:30-01:00", "weekdays": [1, 2, 3, 4, 5]}]
+    for bad in (
+        "2026-01-01",
+        [20260101, None],
+        ["2026-1-1"],
+        ["2026-W01-4"],
+        ["2026-01-1 "],
+        ["2026-02-30"],
+        ["2026-13-01"],
+        ["2026-01-011"],
+    ):
+        block = {"windows": peak_windows + [{"hours_utc": "00:00-00:00", "override_dates": bad}]}
+        assert _is_off_peak(block, peak_instant) is False, (
+            f"override_dates={bad!r} is malformed and must disable its rule"
+        )
+
+
+def test_is_off_peak_override_rule_without_valid_hours_is_disabled():
+    """An override rule whose hours_utc does not parse never applies, even on a listed
+    date: the flat hours_utc still decides instead of the broken rule billing peak all day."""
+    from datetime import datetime, timezone
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "windows": [
+            {"override_dates": ["2026-03-03"], "hours_utc": 5},
+            {"override_dates": ["2026-03-03"]},
+            {"override_dates": ["2026-03-03"], "hours_utc": "garbage"},
+            {"override_dates": ["2026-03-03"], "hours_utc": "25:00-26:00"},
+            {"override_dates": ["2026-03-03"], "hours_utc": ["4pm-midnight"]},
+        ],
+    }
+    assert _is_off_peak(block, datetime(2026, 3, 3, 12, 0, tzinfo=timezone.utc)) is True
+
+
+def test_is_off_peak_override_rule_ignores_its_weekdays():
+    """On a date an override rule lists, its own weekdays field is ignored: a weekend-only
+    holiday rule still applies on the Thursday holiday."""
+    from datetime import datetime, timezone
+
+    block = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7], "override_dates": ["2026-01-01"]},
+        ],
+    }
+    holiday_thursday = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(block, holiday_thursday) is True, (
+        f"{holiday_thursday.isoformat()} is a Thursday holiday billed off-peak all day"
+    )
+
+
+def test_is_off_peak_matching_override_rules_are_a_union():
+    """Every rule listing today's date applies: the date is off-peak inside any of their
+    windows, peak outside all of them."""
+    from datetime import datetime, timezone
+
+    block = {
+        "windows": [
+            {"override_dates": ["2026-03-03"], "hours_utc": "01:00-02:00"},
+            {"override_dates": ["2026-03-03"], "hours_utc": "12:00-13:00"},
+        ],
+    }
+    assert _is_off_peak(block, datetime(2026, 3, 3, 1, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 3, 3, 12, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 3, 3, 5, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_disables_rules_with_partially_malformed_override_dates():
+    """One bad entry disables the whole override_dates list: a rule whose dates do not all
+    parse never applies on any date, so the flat hours decide alone."""
+    from datetime import datetime, timezone
+
+    peak_instant = datetime(2026, 3, 4, 12, 0, tzinfo=timezone.utc)
+    for bad in (["2026-03-04", 20260304], ["2026-03-04", "2026-3-5"]):
+        block = {
+            "hours_utc": "00:30-01:00",
+            "windows": [{"hours_utc": "00:00-00:00", "override_dates": bad}],
+        }
+        assert _is_off_peak(block, peak_instant) is False, (
+            f"override_dates={bad!r} must disable its rule, leaving only the closed flat window"
+        )
+
+
+def test_is_off_peak_without_override_dates_is_unchanged():
+    """The plain DeepSeek windows with no override_dates bill a holiday peak hour at
+    standard rates."""
+    from datetime import datetime, timezone
+
+    deepseek = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+        ],
+    }
+    assert _is_off_peak(deepseek, datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)) is False
+
+
+def test_override_dates_use_weekday_timezone_calendar_on_shipped_deepseek_rows():
+    """Every shipped DeepSeek row with off_peak_pricing carries the same block as
+    deepseek/deepseek-flash: the 2026 PRC holidays and make-up workdays, read on the
+    Asia/Shanghai calendar. The make-up Sunday bills weekday hours and a holiday is
+    off-peak all day. Dates per the State Council 2026 notice,
+    https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm, read 2026-09-24."""
+    from datetime import datetime, timezone
+
+    import litellm
+
+    block: Final = litellm.model_cost["deepseek/deepseek-flash"]["off_peak_pricing"]
+    assert block.get("weekday_timezone") == "Asia/Shanghai"
+    deepseek_rows: Final = {
+        name: entry["off_peak_pricing"]
+        for name, entry in litellm.model_cost.items()
+        if name.startswith("deepseek")
+        and not name.startswith("openrouter/")
+        and isinstance(entry, dict)
+        and "off_peak_pricing" in entry
+    }
+    assert deepseek_rows, "expected at least the deepseek/deepseek-flash row"
+    drifted: Final = [
+        name
+        for name, row in deepseek_rows.items()
+        if row.get("windows") != block["windows"] or row.get("weekday_timezone") != block["weekday_timezone"]
+    ]
+    assert not drifted, f"off_peak schedule drift on {drifted}"
+
+    from datetime import date, timedelta
+
+    windows: Final = block["windows"]
+    assert windows[:2] == [
+        {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+        {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+    ]
+    holidays: Final = {
+        (start + timedelta(days=offset)).isoformat()
+        for start, days in (
+            (date(2026, 1, 1), 3),
+            (date(2026, 2, 15), 9),
+            (date(2026, 4, 4), 3),
+            (date(2026, 5, 1), 5),
+            (date(2026, 6, 19), 3),
+            (date(2026, 9, 25), 3),
+            (date(2026, 10, 1), 7),
+        )
+        for offset in range(days)
+    }
+    workdays: Final = {"2026-01-04", "2026-02-14", "2026-02-28", "2026-05-09", "2026-09-20", "2026-10-10"}
+    holiday_rule, workday_rule = windows[2], windows[3]
+    assert holiday_rule["hours_utc"] == "00:00-00:00"
+    assert set(holiday_rule["override_dates"]) == holidays
+    assert workday_rule["hours_utc"] == windows[0]["hours_utc"]
+    assert set(workday_rule["override_dates"]) == workdays
+    assert holidays.isdisjoint(workdays)
+    assert all(date.fromisoformat(day).isoweekday() in (6, 7) for day in workdays)
+
+    shanghai_make_up_sunday = datetime(2026, 1, 3, 17, 0, tzinfo=timezone.utc)
+    make_up_sunday_peak = datetime(2026, 1, 4, 2, 0, tzinfo=timezone.utc)
+    plain_sunday = datetime(2026, 1, 11, 2, 0, tzinfo=timezone.utc)
+    holiday = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(block, shanghai_make_up_sunday) is True, (
+        f"{shanghai_make_up_sunday.isoformat()} is 2026-01-04 in Shanghai, a make-up workday"
+    )
+    assert _is_off_peak(block, make_up_sunday_peak) is False, (
+        f"{make_up_sunday_peak.isoformat()} is a make-up workday peak hour"
+    )
+    assert _is_off_peak(block, plain_sunday) is True
+    assert _is_off_peak(block, holiday) is True
+
+
+def test_get_token_base_cost_override_dates_bill_holiday_rates():
+    """End to end through _get_token_base_cost: a date listed on an override rule bills the
+    off-peak input rate during what would be a weekday peak hour."""
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "off_peak_pricing": {
+                "windows": [
+                    {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+                    {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+                    {"hours_utc": "00:00-00:00", "override_dates": ["2026-01-01"]},
+                ],
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    holiday_peak_hours = _get_token_base_cost(
+        model_info, usage, current_time=datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    )
+    assert holiday_peak_hours[:2] == (5e-7, 1e-6)
+
+    normal_thursday_same_hours = _get_token_base_cost(
+        model_info, usage, current_time=datetime(2026, 1, 8, 2, 0, tzinfo=timezone.utc)
+    )
+    assert normal_thursday_same_hours[:2] == (1e-6, 2e-6)
+
+
 def test_is_off_peak_weekday_timezone_reads_vendor_calendar():
     """The UTC and Asia/Shanghai calendars only disagree about the date over 16:00-24:00 UTC, so
     a window in that stretch is the one place a vendor-local weekday differs from a UTC one:

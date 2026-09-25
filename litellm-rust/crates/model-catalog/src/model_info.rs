@@ -116,6 +116,9 @@ pub struct OffPeakWindow {
     pub hours_utc: UtcHours,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekdays: Option<Vec<Weekday>>,
+    /// YYYY-MM-DD dates on which this rule alone decides, ignoring weekdays and other windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_dates: Option<Vec<String>>,
 }
 
 /// Rates that replace the same-named base fields inside the stated UTC windows.

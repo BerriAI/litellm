@@ -5,7 +5,9 @@ checks: the files parse, the backup copy matches the root file, and the JSON sch
 map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
 and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bot
 (branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch those three
-files and may only add or update models.
+files and may only add or update models. When the diff also changes the schema generator the sync and
+validation checks are skipped, since this check runs the base branch's generator and the unit tests cover the
+head's.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from generate_model_prices_schema import SPECIAL_ROOT_KEYS, build_schema, render
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
 SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
+GENERATOR_PATH: Final = "ci_cd/generate_model_prices_schema.py"
 GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH, SCHEMA_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 
@@ -51,15 +54,17 @@ def _rendered_schema(cost_map: CostMap) -> str:
         return str(error)
 
 
-def _file_failures(head: Snapshot, head_map: CostMap) -> tuple[str, ...]:
-    schema_text: Final = _rendered_schema(head_map)
-    if not schema_text.startswith("{"):
-        return (schema_text,)
+def _file_failures(head: Snapshot, head_map: CostMap, generator_changed: bool) -> tuple[str, ...]:
     backup_failure: Final = (
         ()
         if head.backup == head.cost_map
         else (f"{BACKUP_PATH} differs from {COST_MAP_PATH}; copy the root file over it",)
     )
+    if generator_changed:
+        return backup_failure
+    schema_text: Final = _rendered_schema(head_map)
+    if not schema_text.startswith("{"):
+        return (schema_text,)
     schema_failure: Final = (
         ()
         if head.schema == schema_text
@@ -127,7 +132,11 @@ def guard_failures(base: Snapshot, head: Snapshot, changed_files: Sequence[str],
     head_map: Final = _parse_object(head.cost_map, COST_MAP_PATH)
     if isinstance(head_map, str):
         return (head_map,)
-    return (*_file_failures(head, head_map), *(_bot_failures(base, head_map, changed_files) if bot else ()))
+    generator_changed: Final = GENERATOR_PATH in changed_files
+    return (
+        *_file_failures(head, head_map, generator_changed),
+        *(_bot_failures(base, head_map, changed_files) if bot else ()),
+    )
 
 
 def _git(*args: str) -> str | None:

@@ -4,7 +4,7 @@
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone, tzinfo
+from datetime import date, datetime, time, timezone, tzinfo
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -408,14 +408,7 @@ def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_
     """
     reference: Final = current_time if current_time is not None else current_billing_time()
     now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
-    windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
-    for window in windows:
-        try:
-            start_str, end_str = window.split("-")
-            start = datetime.strptime(start_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
-            end = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
-        except (ValueError, AttributeError):
-            continue
+    for start, end in _parse_windows(off_peak_hours_utc):
         if start < end:
             if start <= now < end:
                 return True
@@ -447,6 +440,21 @@ _WEEKDAY_NUMBERS: Final = MappingProxyType(
 )
 
 
+def _parse_window(window: object) -> tuple[time, time] | None:
+    try:
+        start_str, end_str = window.split("-")
+        start: Final = datetime.strptime(start_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+        end: Final = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+    except (ValueError, AttributeError):
+        return None
+    return (start, end)
+
+
+def _parse_windows(off_peak_hours_utc: str | Sequence[str]) -> tuple[tuple[time, time], ...]:
+    windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
+    return tuple(parsed for window in windows if (parsed := _parse_window(window)) is not None)
+
+
 def _normalize_weekday(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -464,6 +472,10 @@ def _weekday_calendar(weekday_timezone: object) -> tzinfo:
         except (ValueError, ZoneInfoNotFoundError):
             return timezone.utc
     return timezone.utc
+
+
+def _calendar_date(reference_utc: datetime, weekday_timezone: object) -> date:
+    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).date()
 
 
 def _matches_weekdays(reference_utc: datetime, weekdays: object, weekday_timezone: object) -> bool:
@@ -488,24 +500,66 @@ def _as_window_strings(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _parse_iso_date(value: object) -> date | None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 10
+        or value[4] != "-"
+        or value[7] != "-"
+        or not (value[:4] + value[5:7] + value[8:10]).isdigit()
+    ):
+        return None
+    try:
+        return date(int(value[:4]), int(value[5:7]), int(value[8:10]))
+    except ValueError:
+        return None
+
+
+def _as_dates(value: object) -> frozenset[date]:
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        return frozenset()
+    parsed: Final = tuple(_parse_iso_date(entry) for entry in value)
+    if not parsed or any(entry is None for entry in parsed):
+        return frozenset()
+    return frozenset(entry for entry in parsed if entry is not None)
+
+
 def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:
     """Return True when current_time (UTC, defaulting to now) is off-peak under the block's
     rules: the flat hours_utc windows, which apply every day, or any entry in windows, whose
-    hours apply only on its weekdays.
+    hours apply only on its weekdays. A rule carrying override_dates applies only on those
+    dates, read on the weekday_timezone calendar: on a listed date the matching rules alone
+    decide (their weekdays are ignored, and the flat hours_utc and every other rule are
+    skipped), and on any other date the rule never applies (a malformed override_dates, or an
+    hours_utc none of whose windows parse, disables the rule entirely).
     """
     reference: Final = current_time if current_time is not None else current_billing_time()
     reference_utc: Final = (
         reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
     )
+    weekday_timezone: Final = off_peak.get("weekday_timezone")
+    today: Final = _calendar_date(reference_utc, weekday_timezone)
+    windows: Final = off_peak.get("windows")
+    rules: Final = (
+        ()
+        if isinstance(windows, str) or not isinstance(windows, Sequence)
+        else tuple(rule for rule in windows if isinstance(rule, Mapping))
+    )
+    override_rules: Final = tuple(
+        rule
+        for rule in rules
+        if _parse_windows(_as_window_strings(rule.get("hours_utc"))) and today in _as_dates(rule.get("override_dates"))
+    )
+    if override_rules:
+        for rule in override_rules:
+            if _is_within_off_peak_window(_as_window_strings(rule.get("hours_utc")), reference_utc):
+                return True
+        return False
     flat_windows: Final = _as_window_strings(off_peak.get("hours_utc"))
     if flat_windows and _is_within_off_peak_window(flat_windows, reference_utc):
         return True
-    windows: Final = off_peak.get("windows")
-    if isinstance(windows, str) or not isinstance(windows, Sequence):
-        return False
-    weekday_timezone: Final = off_peak.get("weekday_timezone")
-    for rule in windows:
-        if not isinstance(rule, Mapping):
+    for rule in rules:
+        if "override_dates" in rule:
             continue
         rule_windows = _as_window_strings(rule.get("hours_utc"))
         if not rule_windows:

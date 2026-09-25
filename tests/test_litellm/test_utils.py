@@ -1065,6 +1065,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                                         "type": "array",
                                         "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
                                     },
+                                    "override_dates": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "items": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                                    },
                                 },
                                 "required": ["hours_utc"],
                                 "additionalProperties": False,
