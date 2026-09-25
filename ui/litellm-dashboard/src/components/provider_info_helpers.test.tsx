@@ -194,6 +194,7 @@ describe("provider_info_helpers", () => {
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
+        Providers.StreamLake,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -348,6 +349,19 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.OpenAI, modelMap);
       expect(result).toEqual(["gpt-3.5-turbo", "gpt-4"]);
+    });
+
+    it("should return StreamLake models and exclude models from other providers", () => {
+      const modelMap = {
+        "streamlake/GLM-5.3": { litellm_provider: "streamlake" },
+        "streamlake/DeepSeek-V3": { litellm_provider: "streamlake" },
+        "gpt-4o": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels(Providers.StreamLake, modelMap);
+
+      expect(provider_map.StreamLake).toBe("streamlake");
+      expect(result).toEqual(["streamlake/GLM-5.3", "streamlake/DeepSeek-V3"]);
+      expect(result).not.toContain("gpt-4o");
     });
 
     it("should return models whose litellm_provider is a prefix-anchored variant of the provider", () => {
