@@ -1239,10 +1239,14 @@ class LiteLLMAnthropicMessagesAdapter:
         system_param: Final = anthropic_message_request.get("system")
         if system_param is not None:
             stripped_system = strip_claude_code_identity_from_system(system_param)
-            if stripped_system is None:
-                anthropic_message_request.pop("system", None)
-            elif stripped_system != system_param:
-                anthropic_message_request["system"] = stripped_system
+            if stripped_system is None or stripped_system != system_param:
+                # This adapter is also invoked with a read-only wire-body mapping
+                # (shadow evaluation); mutate a copy, never the caller's request.
+                anthropic_message_request = cast(AnthropicMessagesRequest, dict(anthropic_message_request))
+                if stripped_system is None:
+                    anthropic_message_request.pop("system", None)
+                else:
+                    anthropic_message_request["system"] = stripped_system
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
         messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(

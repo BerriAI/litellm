@@ -143,7 +143,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return False
 
     @staticmethod
-    def _strip_claude_code_identity_from_system(system_param) -> str | list | None:
+    def _strip_claude_code_identity_from_system(system_param: str | list[object] | None) -> str | list[object] | None:
         """
         Strip Claude Code's self-identification sentence from system parameter.
 

@@ -143,7 +143,9 @@ def strip_claude_code_identity(text: str) -> str | None:
     return text
 
 
-def strip_claude_code_identity_from_system(system_param: str | list | None) -> str | list | None:
+def strip_claude_code_identity_from_system(
+    system_param: str | list[object] | None,
+) -> str | list[object] | None:
     """Strip Claude Code's self-identification sentence from a full system parameter.
 
     Unlike :func:`strip_claude_code_identity`, which operates on a single text
@@ -169,7 +171,6 @@ def strip_claude_code_identity_from_system(system_param: str | list | None) -> s
                 stripped_text = strip_claude_code_identity(text)
                 if stripped_text is None:
                     continue
-                # Only copy the block when the text changed.
                 if stripped_text == text:
                     filtered_list.append(content_block)
                 else:
