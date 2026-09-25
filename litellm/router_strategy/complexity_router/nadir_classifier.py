@@ -53,6 +53,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm.constants import NADIR_DEFAULT_API_BASE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
@@ -64,6 +66,7 @@ DEFAULT_TIER_MAP: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _API_PATH: Final = "/v1/bucket"
+_VERDICT: Final = TypeAdapter(Mapping[str, object])
 
 
 def _bucket_url(api_base: str) -> str:
@@ -134,11 +137,11 @@ class NadirComplexityClassifier:
         client: Final = self._client or get_async_httpx_client(llm_provider=httpxSpecialProvider.ComplexityClassifier)
         body: Final = {"messages": list(messages), "source": "litellm"}  # mutable-ok: one request body
         response: Final = await client.post(url=url, json=body, headers=self._headers(url))
-        match response.json():
-            case {"bucket": str(bucket)}:
-                return self._tier_map.get(bucket.strip().lower())
-            case _:
-                return None
+        try:
+            bucket: Final = _VERDICT.validate_python(response.json()).get("bucket")
+        except ValidationError:
+            return None
+        return self._tier_map.get(bucket.strip().lower()) if isinstance(bucket, str) else None
 
 
 nadir_classifier: Final = NadirComplexityClassifier()
