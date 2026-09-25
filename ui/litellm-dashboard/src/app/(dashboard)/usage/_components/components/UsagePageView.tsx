@@ -259,8 +259,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     userSpendData.metadata?.api_key_limit,
     userSpendData.metadata?.total_api_keys,
   );
-  const serverExportArgs =
-    accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
+  const serverExportArgs = accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
   const serverExport: ServerExport | undefined =
     apiKeyTruncation !== undefined && serverExportArgs !== null
       ? (scope, format) => userDailyActivityExportCall({ ...serverExportArgs, exportType: scope, format })
