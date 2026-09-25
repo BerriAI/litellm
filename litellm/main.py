@@ -8150,11 +8150,7 @@ def transcription(
                 response._hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:
-        raise litellm.BadRequestError(
-            message=f"{custom_llm_provider} does not support audio transcription. Model: {model}",
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
+        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 
