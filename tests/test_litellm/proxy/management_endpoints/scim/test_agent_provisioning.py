@@ -756,3 +756,36 @@ async def test_group_create_cannot_recreate_deleted_group_or_omit_directory_id(s
         )
     assert failure.value.status_code == (400 if state == "missing-external-id" else 409)
     tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,operation", [(kind, op) for kind in ("Users", "Groups") for op in ("get", "update", "patch", "delete")])
+async def test_legacy_scim_token_cannot_access_source_owned_local_record(
+    kind: str, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, _, native = provisioning_fixture()
+    client = MagicMock()
+    client.writer_db.litellm_scimresource.find_many = AsyncMock(
+        return_value=[native.model_copy(update={"kind": kind, "local_id": "local-owned"})]
+    )
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=client))
+    lookup = AsyncMock(side_effect=AssertionError("legacy operation reached the source-owned local record"))
+    monkeypatch.setattr(scim_v2, "_check_user_exists" if kind == "Users" else "_check_team_exists", lookup)
+    arguments = {"user_id" if kind == "Users" else "group_id": "local-owned", "auth": UserAPIKeyAuth(api_key="legacy-scim")}
+    if operation == "update":
+        arguments["user" if kind == "Users" else "group"] = (
+            SCIMUser(schemas=[], userName="changed@example.com") if kind == "Users" else SCIMGroup(schemas=[], displayName="Changed")
+        )
+    if operation == "patch":
+        arguments["patch_ops"] = SCIMPatchOp(Operations=[{"op": "replace", "path": "displayName", "value": "Changed"}])
+    endpoint = getattr(scim_v2, operation + ("_user" if kind == "Users" else "_group"))
+    with pytest.raises(HTTPException) as denied:
+        await endpoint(**arguments)
+    assert denied.value.status_code == 403
+    lookup.assert_not_awaited()

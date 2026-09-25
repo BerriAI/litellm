@@ -6,6 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 SCIM_AGENT_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:litellmAgent:2.0:User"
 
 
+def canonical_directory_id(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except ValueError:
+        return value
+
+
 class SCIMAgentUser(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

@@ -19,6 +19,7 @@ from pydantic import TypeAdapter
 from litellm.proxy._types import LiteLLM_UserTable as UserPolicy
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
+from litellm.types.proxy.management_endpoints.scim_agent_provisioning import canonical_directory_id
 from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMPatchOperation, SCIMUser
 
 
@@ -92,11 +93,12 @@ class SourceHumanProvisioner:
     async def reserve(self, user: SCIMUser) -> LiteLLM_SCIMResource:
         if user.externalId is None or user.userName is None:
             raise HTTPException(400, "externalId and userName are required")
+        external_id: Final = canonical_directory_id(user.externalId)
         resource_filter: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {
             "source_id_kind_external_id": {
                 "source_id": self.source.source_id,
                 "kind": "Users",
-                "external_id": user.externalId,
+                "external_id": external_id,
             }
         }
         async with self.client.tx() as tx:
@@ -117,19 +119,19 @@ class SourceHumanProvisioner:
                 )
             local_id: Final = user.userName
             scim_id: Final = str(uuid4())
-            document: Final = user.model_copy(update={"id": scim_id})
+            document: Final = user.model_copy(update={"id": scim_id, "externalId": external_id})
             data: Final = LiteLLM_SCIMResourceCreateInput(
                 id=scim_id,
                 source_id=self.source.source_id,
                 kind="Users",
-                external_id=user.externalId,
+                external_id=external_id,
                 user_name=user.userName,
                 display_name=user.displayName or user.userName,
                 document=Json(document.model_dump(by_alias=True, mode="json", exclude_none=True)),
                 active=user.active,
                 local_id=local_id,
                 human_email=email,
-                human_subject_key=f"{self.source.tenant_id}:{user.externalId}",
+                human_subject_key=f"{self.source.tenant_id}:{external_id}",
             )
             return await tx.litellm_scimresource.create(data=data)
 

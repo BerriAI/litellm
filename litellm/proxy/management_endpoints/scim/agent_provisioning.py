@@ -25,7 +25,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.table_repositories import SCIMSourceRepository
-from litellm.types.proxy.management_endpoints.scim_agent_provisioning import SCIM_AGENT_USER_SCHEMA
+from litellm.types.proxy.management_endpoints.scim_agent_provisioning import (
+    SCIM_AGENT_USER_SCHEMA,
+    canonical_directory_id,
+)
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMGroup,
     SCIMListResponse,
@@ -252,7 +255,7 @@ class AgentProvisioningService:
         filter_clause: Final[LiteLLM_SCIMResourceWhereInput] = (
             {"user_name": parsed[1]}
             if parsed and parsed[0] == "username"
-            else {"external_id": parsed[1]}
+            else {"external_id": canonical_directory_id(parsed[1])}
             if parsed and parsed[0] == "externalid"
             else {"display_name": parsed[1]}
             if parsed and parsed[0] == "displayname"
@@ -439,7 +442,10 @@ class AgentProvisioningService:
                 if isinstance(updated, SCIMProvisioningFailure):
                     raise HTTPException(updated.status, updated.message)
                 return await self._update_native(tx, row, updated)
-            if isinstance(user, SCIMUser) and (user.agent_user is not None or user.externalId != row.external_id):
+            if isinstance(user, SCIMUser) and (
+                user.agent_user is not None
+                or canonical_directory_id(user.externalId or "") != canonical_directory_id(row.external_id)
+            ):
                 raise HTTPException(409, "A human subject cannot be rebound or converted into an agent-user")
             if isinstance(user, SCIMPatchOp) and patch_changes_identity(user):
                 raise HTTPException(409, "A human cannot be converted into an agent-user")
@@ -484,13 +490,14 @@ class AgentProvisioningService:
     async def create_group(self, group: SCIMGroup) -> SCIMGroup:
         if not group.externalId:
             raise HTTPException(400, "externalId is required for a directory group")
+        external_id: Final = canonical_directory_id(group.externalId)
         async with self.client.tx() as tx:
             old: Final = await tx.litellm_scimresource.find_unique(
                 where={
                     "source_id_kind_external_id": {
                         "source_id": self.source.source_id,
                         "kind": "Groups",
-                        "external_id": group.externalId,
+                        "external_id": external_id,
                     }
                 }
             )
@@ -500,14 +507,14 @@ class AgentProvisioningService:
             return await self._update_group(old.id, group)
         members: Final = tuple(dict.fromkeys(member.value for member in group.members or ()))
         scim_id: Final = str(uuid4())
-        document: Final = group.model_copy(update={"id": scim_id})
+        document: Final = group.model_copy(update={"id": scim_id, "externalId": external_id})
         async with self.client.tx() as tx:
             await self._validate_members(tx, members)
             resource_data: Final[LiteLLM_SCIMResourceCreateInput] = LiteLLM_SCIMResourceCreateInput(
                 id=scim_id,
                 source_id=self.source.source_id,
                 kind="Groups",
-                external_id=group.externalId,
+                external_id=external_id,
                 display_name=group.displayName,
                 document=Json(document.model_dump(by_alias=True, mode="json", exclude_none=True)),
                 member_ids=list(members),
@@ -537,7 +544,7 @@ class AgentProvisioningService:
             )
             if isinstance(updated, SCIMProvisioningFailure):
                 raise HTTPException(updated.status, updated.message)
-            if updated.externalId != old.external_id:
+            if canonical_directory_id(updated.externalId or "") != canonical_directory_id(old.external_id):
                 raise HTTPException(409, "Directory group externalId is immutable")
             members: Final = tuple(dict.fromkeys(member.value for member in updated.members or ()))
             await self._validate_members(tx, members)

@@ -169,6 +169,7 @@ class UserProvisionerHelpers:
         prisma_client: PrismaClient,
         new_user_request: NewUserRequest,
         admin_group: str | None = None,
+        auth: UserAPIKeyAuth | None = None,
     ) -> SCIMUser | None:
         """
         Check if a user with the given email already exists and update them if found.
@@ -205,6 +206,7 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
+        await _assert_legacy_source_access(auth, "Users", existing_user.user_id)
         requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
         new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
 
@@ -469,6 +471,16 @@ async def _source_owned_ids(
     }
     resources: Final = await SCIMResourceRepository(prisma_client, use_writer=True).table.find_many(where=where)
     return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
+
+
+async def _assert_legacy_source_access(
+    auth: UserAPIKeyAuth | None, kind: Literal["Users", "Groups"], local_id: str
+) -> None:
+    if auth is None:
+        return
+    client: Final = await _get_prisma_client_or_raise_exception()
+    if await _source_owned_ids(client, kind, (local_id,)):
+        raise HTTPException(403, "This record is owned by a different provisioning source")
 
 
 async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list[str]) -> list[SCIMUserGroup]:
@@ -1701,6 +1713,7 @@ async def get_user(
     service: Final = await _agent_provisioning_service(auth)
     if service is not None:
         return await service.get("Users", user_id)
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug("SCIM GET USER request for user_id=%s", user_id)
     try:
         user: Final = await _check_user_exists(user_id)
@@ -1776,6 +1789,7 @@ async def create_user(
             prisma_client=prisma_client,
             new_user_request=new_user_request,
             admin_group=admin_group,
+            auth=auth,
         )
 
         if existing_user_scim:
@@ -1813,6 +1827,7 @@ async def update_user(
         return await service.update_user(user_id, user)
     if user.agent_user is not None:
         raise HTTPException(400, "Configure an Entra provisioning source before provisioning agent-users")
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug(
         "SCIM PUT USER request for user_id=%s: %s",
         user_id,
@@ -1905,6 +1920,7 @@ async def delete_user(
     if service is not None:
         await service.delete("Users", user_id)
         return Response(status_code=204)
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug("SCIM DELETE USER request for user_id=%s", user_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -2415,6 +2431,7 @@ async def patch_user(
 
     if patch_changes_identity(patch_ops):
         raise HTTPException(400, "SCIM PATCH cannot change a subject's identity classification")
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug(
         "SCIM PATCH USER request for user_id=%s: %s",
         user_id,
@@ -2584,6 +2601,7 @@ async def get_group(
     service: Final = await _agent_provisioning_service(auth)
     if service is not None:
         return await service.get("Groups", group_id)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug("SCIM GET GROUP request for group_id=%s", group_id)
     try:
         team: Final = await _check_team_exists(group_id)
@@ -2702,6 +2720,7 @@ async def update_group(
     service: Final = await _agent_provisioning_service(auth)
     if service is not None:
         return await service.update_group(group_id, group)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug(
         "SCIM PUT GROUP request for group_id=%s: %s",
         group_id,
@@ -2780,6 +2799,7 @@ async def delete_group(
     if service is not None:
         await service.delete("Groups", group_id)
         return Response(status_code=204)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -2982,6 +3002,7 @@ async def patch_group(
     service: Final = await _agent_provisioning_service(auth)
     if service is not None:
         return await service.update_group(group_id, patch_ops)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug(
         "SCIM PATCH GROUP request for group_id=%s: %s",
         group_id,

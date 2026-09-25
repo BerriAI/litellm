@@ -189,7 +189,10 @@ class AgentIdentityStore:
     async def directory_policy(self, agent: AgentResponse) -> AgentResponse | AgentIdentityFailure:
         from pydantic import TypeAdapter
 
-        from litellm.types.proxy.management_endpoints.scim_agent_provisioning import SCIMGroupMapping
+        from litellm.types.proxy.management_endpoints.scim_agent_provisioning import (
+            SCIMGroupMapping,
+            canonical_directory_id,
+        )
 
         if self.sources is None or self.resources is None or agent.identity is None:
             return AgentIdentityFailure(code="policy_unavailable", message="Provisioning state is unavailable")
@@ -238,7 +241,7 @@ class AgentIdentityStore:
         }
         groups: Final = await self.resources.table.find_many(where=groups_where)
         mappings: Final = TypeAdapter(tuple[SCIMGroupMapping, ...]).validate_python(source.group_mappings)
-        external_ids: Final = frozenset(group.external_id for group in groups)
+        external_ids: Final = frozenset(canonical_directory_id(group.external_id) for group in groups)
         mapped: Final = tuple(
             mapping.access_group_ids for mapping in mappings if str(mapping.external_group_id) in external_ids
         )

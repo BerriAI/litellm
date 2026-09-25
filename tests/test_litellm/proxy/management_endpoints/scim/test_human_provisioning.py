@@ -267,3 +267,15 @@ async def test_invalid_username_is_rejected_before_local_mutation(operation: str
     assert failure.value.status_code == 400
     tx.litellm_usertable.find_unique.assert_not_awaited()
     tx.litellm_scimresource.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_human_guid_case_replays_the_same_reserved_identity() -> None:
+    service, tx, row, user = human_fixture()
+    guid: Final = "abcdefab-abcd-4abc-8abc-abcdefabcdef"
+    tx.litellm_scimresource.find_unique.side_effect = lambda **query: (
+        row if query["where"]["source_id_kind_external_id"]["external_id"] == guid else None
+    )
+    result: Final = await service.reserve(user.model_copy(update={"externalId": guid.upper()}))
+    assert result.id == row.id
+    tx.litellm_scimresource.create.assert_not_awaited()

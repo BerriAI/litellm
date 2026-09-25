@@ -514,3 +514,17 @@ async def test_missing_or_unavailable_retirement_history_fails_closed(configured
     result: Final = await store.retired_agent("deleted-agent")
     assert isinstance(result, AgentIdentityFailure)
     assert result.code == "policy_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_directory_group_guid_case_does_not_remove_agent_grants() -> None:
+    store, sources, resources, _, _, resource = native_store()
+    guid: Final = "abcdefab-abcd-4abc-8abc-abcdefabcdef"
+    sources.find_unique.return_value = sources.find_unique.return_value.model_copy(
+        update={"group_mappings": [{"external_group_id": guid, "access_group_ids": ["read"]}]}
+    )
+    group: Final = resource.model_copy(update={"id": "group", "kind": "Groups", "external_id": guid.upper()})
+    resources.find_many.side_effect = lambda **query: [resource] if query["where"]["kind"] == "Users" else [group]
+    result: Final = await store.agent("agent-one")
+    assert isinstance(result, AgentResponse)
+    assert result.directory_access_group_ids == ("read",)
