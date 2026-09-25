@@ -170,23 +170,23 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const spendData = loadedPages?.base === spendDataBase ? loadedPages.merged : spendDataBase;
   const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
 
-  const keyPageWindow = accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
-  const loadMoreKeys =
-    aggregatedFetchFn && keyPageWindow && spendData.metadata?.next_cursor
-      ? () =>
-          teamDailyActivityAggregatedCall(
-            keyPageWindow.accessToken,
-            keyPageWindow.startTime,
-            keyPageWindow.endTime,
-            Array.isArray(entityFilterArg) ? entityFilterArg : null,
-            spendData.metadata?.next_cursor ?? null,
-          ).then((page: EntitySpendData) => {
-            setLoadedPages((prev) => {
-              const base = prev?.base === spendDataBase ? prev.merged : spendDataBase;
-              return { base: spendDataBase, merged: mergeKeyPage(base, page) };
-            });
-          })
-      : undefined;
+  const nextCursor = spendData.metadata?.next_cursor ?? null;
+  const loadMoreTeamKeys = useCallback(() => {
+    if (!accessToken || !startTime || !endTime) return Promise.resolve();
+    return teamDailyActivityAggregatedCall(
+      accessToken,
+      startTime,
+      endTime,
+      Array.isArray(entityFilterArg) ? entityFilterArg : null,
+      nextCursor,
+    ).then((page: EntitySpendData) => {
+      setLoadedPages((prev) => {
+        const base = prev?.base === spendDataBase ? prev.merged : spendDataBase;
+        return { base: spendDataBase, merged: mergeKeyPage(base, page) };
+      });
+    });
+  }, [accessToken, startTime, endTime, entityFilterArg, nextCursor, spendDataBase]);
+  const loadMoreKeys = aggregatedFetchFn && hasRequestWindow && nextCursor ? loadMoreTeamKeys : undefined;
 
   const {
     data: agentSpendDataRaw,

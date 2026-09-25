@@ -718,6 +718,34 @@ describe("EntityUsage", () => {
     });
   });
 
+  it("keeps an in-flight key page request pending across a parent re-render", async () => {
+    mockTeamDailyActivityAggregatedCall
+      .mockResolvedValueOnce({
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, api_key_limit: 1, total_api_keys: 2, next_cursor: "cursor-1" },
+      })
+      .mockReturnValue(new Promise(() => {}));
+    const { rerender } = render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Key Activity"));
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Load more keys" }));
+    expect(await screen.findByText("Loading more keys...")).toBeInTheDocument();
+    expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
+
+    rerender(<EntityUsage {...defaultProps} entityType="team" />);
+
+    expect(screen.getByRole("button", { name: "Load more keys" })).toBeDisabled();
+    expect(screen.getByText("Loading more keys...")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+    expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
+  });
+
   // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the
   // other, so treat either as "not on screen" and the assertion holds whichever one is rendering.
   const isShowing = (element: HTMLElement): boolean => {
