@@ -2,20 +2,25 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 import json
-import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import BaseModel, ConfigDict, field_validator
+
 from litellm import verbose_logger
+from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    INCOMPLETE_STREAM_ERROR_MESSAGE,
     refusal_stop_details,
     responses_output_refusal_text,
 )
+from litellm.responses.streaming_iterator import stream_error_status_and_message
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import (
@@ -25,6 +30,72 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+
+
+class _UpstreamFailure(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status_code: int | None = None
+    message: str | None = None
+
+    @field_validator("status_code", mode="before")
+    @classmethod
+    def http_error_status_or_none(cls, value: object) -> int | None:
+        candidate: Final = (
+            value
+            if isinstance(value, int) and not isinstance(value, bool)
+            else int(value)
+            if isinstance(value, str) and value.isdecimal()
+            else None
+        )
+        return candidate if candidate is not None and 400 <= candidate <= 599 else None
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def str_or_none(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
+
+
+class _FailedResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    error: object | None = None
+
+
+class _FailedResponseEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    response: _FailedResponse | None = None
+
+
+def _original_failure(exception: Exception) -> Exception:
+    failure = exception  # rebind-ok: walks the MidStreamFallbackError chain down to the provider failure
+    while isinstance(failure, MidStreamFallbackError) and failure.original_exception is not None:
+        failure = failure.original_exception
+    return failure
+
+
+def _failure_status_and_message(exception: Exception) -> tuple[int, str]:
+    original: Final = _original_failure(exception)
+    failure: Final = _UpstreamFailure.model_validate(
+        {"status_code": getattr(original, "status_code", None), "message": getattr(original, "message", None)}
+    )
+    status_code: Final = failure.status_code if failure.status_code is not None else 500
+    message: Final = failure.message or str(original) or INCOMPLETE_STREAM_ERROR_MESSAGE
+    return status_code, message
+
+
+def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
+        AnthropicExceptionMapping,
+    )
+
+    return dict(
+        AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=status_code,
+            raw_message=redact_internal_details_from_client_message(message),
+        )
+    )
 
 
 class AnthropicResponsesStreamWrapper:
@@ -40,6 +111,7 @@ class AnthropicResponsesStreamWrapper:
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
+      response.failed                    -> error (the stream ends without message_stop)
     """
 
     def __init__(
@@ -60,6 +132,7 @@ class AnthropicResponsesStreamWrapper:
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
+        self._stream_failed = False
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
@@ -293,10 +366,23 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        if event_type == "response.failed":
+            failed: Final = _FailedResponseEvent.model_validate(event)
+            status_code, message = stream_error_status_and_message(
+                failed.response.error if failed.response is not None else None
+            )
+            verbose_logger.error(
+                "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed (%s): %s",
+                self.model,
+                status_code,
+                message,
+            )
+            self._fail_stream(status_code, message)
+            return
+
         # ---- response completed -> message_delta + message_stop ----
         if event_type in (
             "response.completed",
-            "response.failed",
             "response.incomplete",
         ):
             response_obj: Final = getattr(event, "response", None) or (
@@ -350,21 +436,24 @@ class AnthropicResponsesStreamWrapper:
             self._sent_message_stop = True
             return
 
+    def _fail_stream(self, status_code: int, message: str) -> None:
+        self._stream_failed = True
+        self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
+
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
     async def __anext__(self) -> dict[str, object]:
-        # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()
+        if self._stream_failed:
+            raise StopAsyncIteration
 
-        # Emit message_start if not yet done (fallback if response.created wasn't fired)
         if not self._sent_message_start:
             self._sent_message_start = True
             self._chunk_queue.append(self._make_message_start())
             return self._chunk_queue.popleft()
 
-        # Consume the upstream stream
         try:
             if hasattr(self.responses_stream, "__aiter__"):
                 async for event in self.responses_stream:
@@ -382,10 +471,19 @@ class AnthropicResponsesStreamWrapper:
                         return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
-        except Exception as e:
-            verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
+        except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
+            verbose_logger.exception(
+                "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model
+            )
+            self._fail_stream(*_failure_status_and_message(e))
 
-        # Drain any remaining queued chunks
+        if not self._chunk_queue and not self._sent_message_stop and not self._stream_failed:
+            verbose_logger.error(
+                "AnthropicResponsesStreamWrapper: upstream Responses stream for %s ended without a terminal event",
+                self.model,
+            )
+            self._fail_stream(500, INCOMPLETE_STREAM_ERROR_MESSAGE)
+
         if self._chunk_queue:
             return self._chunk_queue.popleft()
 
