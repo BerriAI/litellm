@@ -334,7 +334,10 @@ async def test_agent_invocation_reserves_exact_fee_and_reconciles_without_child_
     assert reservation["reserved_cost"] == pytest.approx(0.2)
     assert [entry["counter_key"] for entry in reservation["entries"]] == [f"spend:agent:{charged_agent}"]
     assert await cache.async_get_cache(f"spend:agent:{charged_agent}") == pytest.approx(0.3)
-    await reconcile_budget_reservation(reservation, actual_cost=0.2)
+    await proxy_server.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.2,
+        billing_agent_id=charged_agent, budget_reservation=reservation,
+    )
     await reconcile_budget_reservation(reservation, actual_cost=4.0)
     assert await cache.async_get_cache(f"spend:agent:{charged_agent}") == pytest.approx(0.3)
 
