@@ -642,7 +642,6 @@ class TestCacheControl:
         return body["config"]["modules"]["prompt_templating"]["prompt"]["template"]
 
     def test_cache_control_preserved_on_text_content(self):
-        """cache_control on a TextContent part survives validation and appears in payload."""
         messages = [
             {
                 "role": "user",
@@ -662,14 +661,12 @@ class TestCacheControl:
         assert content[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_plain_text_content_unaffected(self):
-        """Text content without cache_control still serialises cleanly."""
         messages = [{"role": "user", "content": "Hello"}]
         body = self._transform("anthropic--claude-3-5-sonnet", messages)
         template = self._template(body)
         assert template[0]["content"] == "Hello"
 
     def test_cache_control_preserved_on_multiple_parts(self):
-        """cache_control is preserved on each part independently."""
         messages = [
             {
                 "role": "user",
@@ -685,7 +682,6 @@ class TestCacheControl:
         assert "cache_control" not in content[1]
 
     def test_cache_control_preserved_on_system_message(self):
-        """cache_control on a system message content part reaches the payload."""
         messages = [
             {
                 "role": "system",
@@ -706,7 +702,6 @@ class TestCacheControl:
         assert system_content[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_system_message_without_cache_control_stays_string(self):
-        """A plain system message is still serialised as a string, not a list."""
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello"},
@@ -716,7 +711,6 @@ class TestCacheControl:
         assert isinstance(template[0]["content"], str)
 
     def test_cache_control_preserved_on_tool_definition(self):
-        """cache_control on a tool definition reaches the payload."""
         tool = {
             "type": "function",
             "function": {
@@ -741,7 +735,6 @@ class TestCacheControl:
         assert tools[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_tool_without_cache_control_omits_field(self):
-        """A tool without cache_control does not emit cache_control: null."""
         tool = {
             "type": "function",
             "function": {
@@ -765,11 +758,6 @@ class TestCacheControl:
         assert "cache_control" not in tools[0]
 
     def test_message_level_cache_control_folded_onto_string_content(self):
-        """cache_control on the message dict (string content) is folded into a content block.
-
-        litellm's cache_control_injection_points hook produces this shape for
-        plain-string content.  The marker must not be silently dropped.
-        """
         messages = [
             {
                 "role": "system",
@@ -786,10 +774,6 @@ class TestCacheControl:
         assert system_content[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_null_cache_control_on_content_block_is_omitted(self):
-        """cache_control: null on a content block must not appear in the payload.
-
-        Sending null reaches AI Core and causes a 400 ('None is not of type object').
-        """
         messages = [
             {
                 "role": "user",
@@ -804,11 +788,6 @@ class TestCacheControl:
         assert "cache_control" not in content[0]
 
     def test_message_level_cache_control_folded_on_user_message(self):
-        """cache_control on the message dict (string user content) is folded into a content block.
-
-        The injection hook can attach cache_control at the message level for any role.
-        User messages must receive the same folding treatment as system messages.
-        """
         messages = [
             {
                 "role": "user",
@@ -823,7 +802,6 @@ class TestCacheControl:
         assert content[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_cache_control_ttl_omitted_when_absent(self):
-        """cache_control without ttl must not emit ttl: null in the payload."""
         messages = [
             {
                 "role": "user",
@@ -838,7 +816,6 @@ class TestCacheControl:
         assert "ttl" not in cc
 
     def test_cache_control_ttl_preserved_when_set(self):
-        """cache_control with ttl must include ttl in the payload."""
         messages = [
             {
                 "role": "user",
@@ -852,7 +829,6 @@ class TestCacheControl:
         assert cc == {"type": "ephemeral", "ttl": "5m"}
 
     def test_message_level_cache_control_folded_on_assistant_message(self):
-        """cache_control on an assistant turn is folded into a content block."""
         messages = [
             {"role": "user", "content": "Hi"},
             {
@@ -870,7 +846,6 @@ class TestCacheControl:
         assert assistant_content[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_message_level_cache_control_folded_on_tool_message(self):
-        """cache_control on a tool result is folded into a content block."""
         messages = [
             {"role": "user", "content": "What is the weather?"},
             {
@@ -899,12 +874,6 @@ class TestCacheControl:
         assert tool_content[0].get("cache_control") == {"type": "ephemeral"}
 
     def test_message_level_cache_control_folded_onto_last_list_element(self):
-        """A top-level cache_control with list content marks the last element.
-
-        Per the Anthropic spec, a message-level marker indicates the cache
-        breakpoint for the whole block.  It must land on the final content
-        part, not be silently dropped.
-        """
         messages = [
             {
                 "role": "user",
@@ -921,12 +890,6 @@ class TestCacheControl:
         assert content[1].get("cache_control") == {"type": "ephemeral"}
 
     def test_message_level_cache_control_folded_onto_trailing_image_block(self):
-        """A top-level cache_control with a trailing image part lands on that image.
-
-        The Anthropic spec allows cache_control on any content block including
-        image_url. Previously ImageContent had no cache_control field, so the
-        marker was silently dropped by Pydantic validation.
-        """
         messages = [
             {
                 "role": "user",
