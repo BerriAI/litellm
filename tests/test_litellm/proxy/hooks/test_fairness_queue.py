@@ -10,6 +10,7 @@ from litellm.proxy.hooks.fairness_queue import (
     InMemoryFairQueueStore,
     QueueAdmitted,
     QueueRejected,
+    QueueReleased,
     QueueTicket,
 )
 
@@ -132,6 +133,35 @@ async def test_client_disconnect_cancels_queued_request_without_admitting():
     assert outcome.reason == "client_disconnected"
     assert gate.admitted == []
     assert queue.depths(MODEL)["prod"] == 0
+
+
+@pytest.mark.asyncio
+async def test_waiter_is_released_without_admission_once_fairness_is_switched_off_mid_wait():
+    clock: Final = FakeClock()
+    queue: Final = FairQueue(clock=clock)
+    gate: Final = CapacityGate(slots=0)
+    fairness_enabled: Final = [True]
+
+    async def switch_off_after(seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        clock.now += 0.5
+        fairness_enabled[0] = False
+
+    switch: Final = asyncio.create_task(switch_off_after(0.02))
+    outcome: Final = await queue.wait_for_admission(
+        ticket=_ticket("batch", "r1"),
+        weights=WEIGHTS,
+        max_wait_seconds=30.0,
+        max_depth=10,
+        poll_interval_seconds=0.001,
+        try_admit=gate.for_class("batch"),
+        is_cancelled=_never_cancelled_after_probing_the_client,
+        is_released=lambda: not fairness_enabled[0],
+    )
+    await switch
+    assert outcome == QueueReleased(waited_seconds=0.5)
+    assert gate.admitted == []
+    assert queue.depths(MODEL)["batch"] == 0
 
 
 @pytest.mark.asyncio

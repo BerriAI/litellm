@@ -109,7 +109,16 @@ class QueueRejected:
     waited_seconds: float
 
 
-QueueOutcome = QueueAdmitted | QueueRejected
+@dataclass(frozen=True, slots=True)
+class QueueReleased:
+    waited_seconds: float
+
+
+QueueOutcome = QueueAdmitted | QueueRejected | QueueReleased
+
+
+def _never_released() -> bool:
+    return False
 
 
 class FairQueue:
@@ -133,6 +142,7 @@ class FairQueue:
         poll_interval_seconds: float,
         try_admit: Callable[[], Awaitable[bool]],
         is_cancelled: Callable[[], Awaitable[bool]],
+        is_released: Callable[[], bool] = _never_released,
     ) -> QueueOutcome:
         started: Final = self._clock()
         depth: Final = self._store.enqueue(ticket, enqueued_at=time.time())
@@ -142,7 +152,14 @@ class FairQueue:
         try:
             while True:
                 outcome: QueueOutcome | None = await self._poll_once(
-                    ticket, weights, started, max_wait_seconds, poll_interval_seconds, try_admit, is_cancelled
+                    ticket,
+                    weights,
+                    started,
+                    max_wait_seconds,
+                    poll_interval_seconds,
+                    try_admit,
+                    is_cancelled,
+                    is_released,
                 )
                 if outcome is not None:
                     return outcome
@@ -158,9 +175,12 @@ class FairQueue:
         poll_interval_seconds: float,
         try_admit: Callable[[], Awaitable[bool]],
         is_cancelled: Callable[[], Awaitable[bool]],
+        is_released: Callable[[], bool],
     ) -> QueueOutcome | None:
         if await is_cancelled():
             return QueueRejected(reason="client_disconnected", waited_seconds=self._clock() - started)
+        if is_released():
+            return QueueReleased(waited_seconds=self._clock() - started)
         elapsed: Final = self._clock() - started
         if elapsed >= max_wait_seconds:
             return QueueRejected(reason="queue_deadline_exceeded", waited_seconds=elapsed)

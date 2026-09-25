@@ -2024,11 +2024,15 @@ async def test_paused_limiter_settles_in_flight_reservation_and_admits_everythin
             end_time=None,
         )
 
+    disabled = asyncio.Event()
+    other_request_admitted = asyncio.Event()
+
     async def in_flight_request_spanning_the_disable() -> int:
         await admit("in-flight")
         reserved = await _model_tokens(handler, dual_cache, model)
         handler.enforcing = False
-        await asyncio.create_task(admit("after-disable"))
+        disabled.set()
+        await other_request_admitted.wait()
         assert await _model_tokens(handler, dual_cache, model) == reserved
         await finish("in-flight", 7)
         return reserved
@@ -2037,13 +2041,111 @@ async def test_paused_limiter_settles_in_flight_reservation_and_admits_everythin
         await admit("paused")
         await finish("paused", 50)
 
-    reserved = await asyncio.create_task(in_flight_request_spanning_the_disable())
+    in_flight = asyncio.create_task(in_flight_request_spanning_the_disable())
+    await disabled.wait()
+    await asyncio.create_task(admit("after-disable"))
+    other_request_admitted.set()
+    reserved = await in_flight
     assert reserved > 7
     assert await _model_tokens(handler, dual_cache, model) == 7
     assert await _priority_tokens(handler, dual_cache, model, "prod") == 7
 
     await asyncio.create_task(request_admitted_while_paused())
     assert await _model_tokens(handler, dual_cache, model) == 7
+
+
+@pytest.mark.asyncio
+async def test_request_admitted_while_paused_is_never_billed_even_if_fairness_is_re_enabled_first(monkeypatch):
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-re-enabled-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=10, tpm=100_000))
+
+    async def admitted_while_paused_then_finished_after_re_enable() -> None:
+        handler.enforcing = False
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(),
+            cache=dual_cache,
+            data={"model": model, "litellm_call_id": "paused", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+        handler.enforcing = True
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, "paused", "prod"),
+            response_obj=ModelResponse(
+                model=model, usage=Usage(prompt_tokens=0, completion_tokens=50, total_tokens=50)
+            ),
+            start_time=None,
+            end_time=None,
+        )
+
+    await asyncio.create_task(admitted_while_paused_then_finished_after_re_enable())
+    assert await _model_tokens(handler, dual_cache, model) == 0
+    assert await _priority_tokens(handler, dual_cache, model, "prod") == 0
+
+
+@pytest.mark.asyncio
+async def test_queued_request_is_released_without_a_reservation_when_fairness_is_disabled_mid_wait(monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-release-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(
+            enabled=True,
+            workload_classes=(WorkloadClass(name="prod", reserved_share=0.5, max_queue_wait_seconds=30.0),),
+            queue_poll_interval_seconds=0.01,
+        ),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=1, tpm=100_000))
+
+    async def admit(call_id: str) -> tuple[int, bool]:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(),
+            cache=dual_cache,
+            data={"model": model, "litellm_call_id": call_id, "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+        stash = get_or_create_request_stash()
+        return stash.dynamic_reserved_tokens, stash.dynamic_admission_bypassed
+
+    async def queued_then_released_then_finished() -> tuple[int, bool]:
+        reserved, bypassed = await admit("queued")
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, "queued", "prod"),
+            response_obj=ModelResponse(
+                model=model, usage=Usage(prompt_tokens=0, completion_tokens=50, total_tokens=50)
+            ),
+            start_time=None,
+            end_time=None,
+        )
+        return reserved, bypassed
+
+    first_reserved, first_bypassed = await asyncio.create_task(admit("first"))
+    assert first_reserved > 0 and not first_bypassed
+    tokens_after_first = await _model_tokens(handler, dual_cache, model)
+
+    queued = asyncio.create_task(queued_then_released_then_finished())
+    await asyncio.sleep(0.1)
+    assert not queued.done()
+    assert handler.fair_queue.depths(model) == {"prod": 1}
+
+    handler.enforcing = False
+    reserved, bypassed = await asyncio.wait_for(queued, timeout=3.0)
+    assert (reserved, bypassed) == (0, True)
+    assert handler.fair_queue.depths(model) == {"prod": 0}
+    assert await _model_tokens(handler, dual_cache, model) == tokens_after_first
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from litellm.proxy.hooks.fairness_queue import (
     FairQueue,
     QueueAdmitted,
     QueueRejected,
+    QueueReleased,
     QueueTicket,
 )
 from litellm.proxy.hooks.fairness_stats import FairnessMetric, FairnessStats
@@ -807,10 +808,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             poll_interval_seconds=fairness.queue_poll_interval_seconds,
             try_admit=try_admit,
             is_cancelled=self.is_client_disconnected,
+            is_released=lambda: not self.enforcing,
         )
         match outcome:
             case QueueAdmitted(waited_seconds=waited):
                 get_or_create_request_stash().fairness_queue_wait_seconds = waited
+                await self.fairness_stats.record(model, plan.class_name, "admitted_after_wait")
+                await self.fairness_stats.record(model, plan.class_name, "wait_seconds_sum", waited)
+            case QueueReleased(waited_seconds=waited):
+                released_stash: Final = get_or_create_request_stash()
+                released_stash.fairness_queue_wait_seconds = waited
+                released_stash.dynamic_admission_bypassed = True
                 await self.fairness_stats.record(model, plan.class_name, "admitted_after_wait")
                 await self.fairness_stats.record(model, plan.class_name, "wait_seconds_sum", waited)
             case QueueRejected(reason=reason, waited_seconds=waited):
@@ -859,10 +867,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Returns:
             None if request is allowed, otherwise raises HTTPException
         """
-        if "model" not in data or self.llm_router is None or not self.enforcing:
+        if "model" not in data or self.llm_router is None:
             return None
 
-        claim_request_stash_for_data(data)
+        stash: Final = claim_request_stash_for_data(data)
+        if not self.enforcing:
+            stash.dynamic_admission_bypassed = True
+            return None
         model: Final = data["model"]
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
@@ -978,7 +989,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if stash is not None and await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span):
                 return
 
-            if total_tokens == 0 or not self.enforcing:
+            bypassed: Final = stash.dynamic_admission_bypassed if stash is not None else not self.enforcing
+            if total_tokens == 0 or bypassed:
                 return
 
             # Create pipeline operations for token increments
