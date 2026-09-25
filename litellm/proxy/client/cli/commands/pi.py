@@ -175,7 +175,7 @@ def _model_entry(
     )
     output: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
         {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
-    )  # mutable-ok: JSON field
+    )
     return {"id": model_id, **context, **output}  # mutable-ok: JSON serialization requires a mutable object
 
 
@@ -208,9 +208,7 @@ def sync_models_json(
 ) -> PiSyncError | None:
     """Replace only the litellm provider entry, leaving the rest of the file intact."""
     try:
-        current: Final = (  # mutable-ok: JSON object default
-            _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
-        )
+        current: Final = _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
     except (OSError, ValidationError) as e:
         return PiSyncError(f"Could not read {path} as a JSON object: {e}. Fix or move the file, then retry.")
     existing_providers: Final = current.get("providers", {})  # mutable-ok: JSON object default

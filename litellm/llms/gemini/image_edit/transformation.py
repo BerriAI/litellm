@@ -1,4 +1,5 @@
 import base64
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -44,7 +45,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         return map_openai_image_params_to_gemini(
             params=image_edit_optional_params,
             model=model,
@@ -87,10 +88,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | None,
-        image_edit_optional_request_params: dict[str, Any],
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict[str, Any], RequestFiles | None]:
+    ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
@@ -106,7 +107,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             }
         ]
 
-        request_body: Final[dict[str, Any]] = {"contents": contents}
+        request_body: Final[dict[str, object]] = {"contents": contents}
 
         request_body["generationConfig"] = get_gemini_image_generation_config(
             model=model,
@@ -153,14 +154,14 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
         return model_response
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, Any]]:
+    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
         images: list[FileTypes]
         if isinstance(image, list):
             images = image
         else:
             images = [image]
 
-        inline_parts: Final[list[dict[str, Any]]] = []
+        inline_parts: Final[list[dict[str, object]]] = []
         for img in images:
             if img is None:
                 continue

@@ -7,7 +7,8 @@ import json
 import re
 import time
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -34,6 +35,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    CONVERTED_SYSTEM_NOTE,
+    is_system_message,
+    message_field,
+    parts_of,
+)
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -48,15 +55,18 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -98,7 +108,7 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -107,6 +117,7 @@ BEDROCK_COMPUTER_USE_TOOLS: Final = [
     "bash_",
     "text_editor_",
 ]
+BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -377,6 +388,10 @@ class AmazonConverseConfig(BaseConfig):
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
 
+    @staticmethod
+    def _requires_min_max_tokens(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -623,17 +638,34 @@ class AmazonConverseConfig(BaseConfig):
         """
         return self._is_deepseek_r1_model(model=model, base_model=base_model)
 
+    @classmethod
+    def _supports_sampling_params(cls, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        if base_model.startswith("anthropic"):
+            return True
+        candidates: Final = (model, *(f"{prefix}{base_model}" for prefix in ("global.", "us.", "eu.")))
+        for candidate in candidates:
+            if (
+                flag := AnthropicModelInfo._get_model_capability(  # pyright: ignore[reportPrivateUsage]  # Shared API
+                    candidate, "supports_sampling_params"
+                )
+            ) is not None:
+                return flag
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
+        supports_sampling: Final = self._supports_sampling_params(model)
         supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "stream",
             "stream_options",
             "stop",
-            "temperature",
-            "top_p",
+            *(("temperature", "top_p") if supports_sampling else ()),
             "extra_headers",
             "response_format",
             "requestMetadata",
@@ -999,7 +1031,11 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = (
+                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
+                    if isinstance(value, int) and self._requires_min_max_tokens(model)
+                    else value
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -1009,14 +1045,26 @@ class AmazonConverseConfig(BaseConfig):
                     value = [value]
                 optional_params["stopSequences"] = value
             if param == "temperature" or param == "top_p":
-                AnthropicConfig._apply_sampling_param(
-                    optional_params=optional_params,
-                    model=model,
-                    param=param,
-                    value=value,
-                    drop_params=drop_params,
-                    output_key="topP" if param == "top_p" else param,
-                )
+                if base_model.startswith("anthropic"):
+                    AnthropicConfig._apply_sampling_param(
+                        optional_params=optional_params,
+                        model=model,
+                        param=param,
+                        value=value,
+                        drop_params=drop_params,
+                        output_key="topP" if param == "top_p" else param,
+                    )
+                elif not self._supports_sampling_params(model):
+                    if not (litellm.drop_params or drop_params):
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                f"{model} does not support {param}={value}. "
+                                "To drop unsupported params, set `litellm.drop_params = True`."
+                            ),
+                            status_code=400,
+                        )
+                else:
+                    optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(list[OpenAIChatCompletionToolParam], value),
@@ -1116,7 +1164,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
         if value is not None and isinstance(value, dict):
             self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
@@ -1304,30 +1352,157 @@ class AmazonConverseConfig(BaseConfig):
                 cache_point["ttl"] = ttl
         return cache_point
 
+    @staticmethod
+    def _assistant_has_tool_calls(message: object) -> bool:
+        return message_field(message, "role") == "assistant" and bool(message_field(message, "tool_calls"))
+
+    @staticmethod
+    def _opens_with_tool_result(message: object) -> bool:
+        """Whether the message starts a tool-result turn on Converse.
+
+        ``_bedrock_converse_messages_pt`` builds ``toolResult`` blocks from ``tool``
+        messages only, so a ``function`` message never opens one."""
+        role: Final = message_field(message, "role")
+        if role == "tool":
+            return True
+        if role != "user":
+            return False
+        first_part: Final = next(iter(parts_of(message_field(message, "content"))), None)
+        return message_field(first_part, "type") == "tool_result"
+
+    def _system_run_before(self, messages: Sequence[AllMessageValues], index: int) -> Sequence[AllMessageValues]:
+        start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not is_system_message(messages[j])),
+            0,
+        )
+        return messages[start:index]
+
+    def _system_run_end(self, messages: Sequence[AllMessageValues], index: int) -> int:
+        return next(
+            (j for j in range(index, len(messages)) if not is_system_message(messages[j])),
+            len(messages),
+        )
+
+    def _reordered_around_tool_results(
+        self, messages: Sequence[AllMessageValues], index: int
+    ) -> tuple[AllMessageValues, ...]:
+        """Move a system run wedged between an assistant tool-call turn and its
+        tool-result turn(s) to after the tool results.
+
+        A converted system entry becomes a user turn, and a user turn between
+        a tool call and its result would split them. Everything else stays in
+        place so the cached prefix stays byte-identical."""
+        message: Final = messages[index]
+        if self._opens_with_tool_result(message):
+            if index + 1 < len(messages) and self._opens_with_tool_result(messages[index + 1]):
+                return (message,)
+            tool_run_start: Final = next(
+                (j + 1 for j in range(index, -1, -1) if not self._opens_with_tool_result(messages[j])),
+                0,
+            )
+            run: Final = self._system_run_before(messages, tool_run_start)
+            prev_idx: Final = tool_run_start - len(run) - 1
+            if run and prev_idx >= 0 and self._assistant_has_tool_calls(messages[prev_idx]):
+                return (message, *run)
+            return (message,)
+        if not is_system_message(message):
+            return (message,)
+        run_start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not is_system_message(messages[j])),
+            0,
+        )
+        run_end: Final = self._system_run_end(messages, index)
+        follower: Final = messages[run_end] if run_end < len(messages) else None
+        if (
+            follower is not None
+            and self._opens_with_tool_result(follower)
+            and run_start > 0
+            and self._assistant_has_tool_calls(messages[run_start - 1])
+        ):
+            return ()
+        return (message,)
+
+    def _system_role_message_as_user(self, message: ChatCompletionSystemMessage) -> ChatCompletionUserMessage | None:
+        """Convert a mid-conversation system entry to a user turn, in place.
+
+        The Converse API only accepts user/assistant roles in ``messages``,
+        so keeping the role is not an option. Hoisting it to the top-level
+        ``system`` block would mutate the system prefix and collapse implicit
+        prompt caching; converting in place keeps everything before the entry
+        byte-identical. An entry that carries no text becomes ``None``."""
+        text_blocks: Final = self._converted_text_blocks(message)
+        if not text_blocks:
+            return None
+        note: Final = ChatCompletionTextObject(type="text", text=CONVERTED_SYSTEM_NOTE)
+        body: Final = [  # mutable-ok: _bedrock_converse_messages_pt narrows content with isinstance(list)
+            note,
+            *text_blocks,
+        ]
+        return ChatCompletionUserMessage(role="user", content=body)
+
+    def _converted_or_kept(self, message: AllMessageValues) -> AllMessageValues | None:
+        if not is_system_message(message):
+            return message
+        return self._system_role_message_as_user(
+            cast(ChatCompletionSystemMessage, message)  # cast-ok: the role is checked on the line above
+        )
+
+    def _converted_text_blocks(self, message: ChatCompletionSystemMessage) -> tuple[ChatCompletionTextObject, ...]:
+        content: Final = message["content"]
+        if isinstance(content, str):
+            return (self._converted_text_block(content, message.get("cache_control")),) if content else ()
+        parts: Final[Sequence[object]] = content or ()
+        return tuple(
+            self._converted_text_block(part["text"], part.get("cache_control"))
+            for part in map(self._text_part, parts)
+            if part is not None
+        )
+
+    @staticmethod
+    def _text_part(part: object) -> ChatCompletionTextObject | None:
+        if not isinstance(part, dict) or part.get("type") != "text" or not part.get("text"):
+            return None
+        return cast(ChatCompletionTextObject, part)  # cast-ok: the shape is checked on the line above
+
+    @staticmethod
+    def _converted_text_block(text: str, cache_control: ChatCompletionCachedContent | None) -> ChatCompletionTextObject:
+        if cache_control is None:
+            return ChatCompletionTextObject(type="text", text=text)
+        return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
+
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        system_prompt_indices: Final = []
+        leading_count: Final = next(
+            (i for i, m in enumerate(messages) if not is_system_message(m)),
+            len(messages),
+        )
+        hoisted: Final = messages[:leading_count]
+        remaining: Final = messages[leading_count:]
         system_content_blocks: Final[list[SystemContentBlock]] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                system_prompt_indices.append(idx)
-                if isinstance(message["content"], str) and message["content"]:
-                    system_content_blocks.append(SystemContentBlock(text=message["content"]))
-                    cache_block = self.get_cache_point_block(message, block_type="system", model=model)
-                    if cache_block:
-                        system_content_blocks.append(cache_block)
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type") == "text" and m.get("text"):
-                            system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                            cache_block = self.get_cache_point_block(m, block_type="system", model=model)
-                            if cache_block:
-                                system_content_blocks.append(cache_block)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-        return messages, system_content_blocks
+        for message in hoisted:
+            if message["role"] != "system":
+                continue
+            if isinstance(message["content"], str) and message["content"]:
+                system_content_blocks.append(SystemContentBlock(text=message["content"]))
+                cache_block = self.get_cache_point_block(message, block_type="system", model=model)
+                if cache_block:
+                    system_content_blocks.append(cache_block)
+            elif isinstance(message["content"], list):
+                for m in message["content"]:
+                    if m.get("type") == "text" and m.get("text"):
+                        system_content_blocks.append(SystemContentBlock(text=m["text"]))
+                        cache_block = self.get_cache_point_block(m, block_type="system", model=model)
+                        if cache_block:
+                            system_content_blocks.append(cache_block)
+        reordered: Final = tuple(
+            chain.from_iterable(
+                self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
+            )
+        )
+        converted: Final = tuple(self._converted_or_kept(message) for message in reordered)
+        kept: Final = [message for message in converted if message is not None]  # mutable-ok: converse pt takes a list
+        return kept, system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:
@@ -1517,12 +1692,6 @@ class AmazonConverseConfig(BaseConfig):
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
 
-        # Collect anthropic_beta values from user headers
-        anthropic_beta_list: Final = []
-        if headers:
-            user_betas: Final = get_anthropic_beta_from_headers(headers)
-            anthropic_beta_list.extend(user_betas)
-
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools: Final = []
@@ -1541,6 +1710,17 @@ class AmazonConverseConfig(BaseConfig):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        eager_beta: Final = (
+            (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
+            if base_model.startswith("anthropic")
+            and AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
+            and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1619,7 +1799,6 @@ class AmazonConverseConfig(BaseConfig):
 
         # Opus 4.5 gates ``output_config.effort`` behind a beta header;
         # Claude 4.6/4.7 accept it without one.
-        base_model: Final = BedrockModelInfo.get_base_model(model)
         if base_model.startswith("anthropic"):
             output_config: Final = additional_request_params.get("output_config")
             if (
@@ -1906,7 +2085,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

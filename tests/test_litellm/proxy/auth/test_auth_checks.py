@@ -1,5 +1,7 @@
 import asyncio
 import json
+import time
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,20 +34,26 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
+from litellm.types.agents import AgentCaller
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_management_object,
     _can_object_call_model,
     _can_object_call_vector_stores,
+    _check_agent_access_group_model_access,
     _check_end_user_budget,
     _check_team_member_budget,
     _fetch_key_object_from_db_with_reconnect,
     _get_fuzzy_user_object,
+    CallerTeamLoader,
+    CallerUserLoader,
     _get_team_db_check,
     _log_budget_lookup_failure,
     _tag_max_budget_check,
     _team_max_budget_check,
     _virtual_key_max_budget_alert_check,
+    _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     get_key_object,
@@ -65,7 +73,10 @@ from litellm.constants import (
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
@@ -635,6 +646,114 @@ async def test_fetch_key_object_from_db_bounds_in_flight_prisma_requests():
     assert prisma.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
 
 
+@pytest.fixture
+def _clear_db_lookup_stall() -> Iterator[None]:
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+
+    db_lookup_stall_tracker.clear()
+    yield
+    db_lookup_stall_tracker.clear()
+
+
+class _StalledPrisma:
+    def __init__(self) -> None:
+        self.attempt_db_reconnect = AsyncMock(return_value=True)
+        self.db = MagicMock()
+        self.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_stall_forever)
+        self.db.litellm_teamtable.update = AsyncMock(side_effect=_answer_slowly)
+
+    async def get_data(self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None) -> None:
+        await _stall_forever()
+
+
+async def _stall_forever(**kwargs: object) -> None:
+    await asyncio.Event().wait()
+
+
+async def _answer_slowly(**kwargs: object) -> Mapping[str, object]:
+    await asyncio.sleep(0.15)
+    return {"team_id": "slow-write"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadline_without_reconnecting(
+    _clear_db_lookup_stall,
+):
+    """The incident: a stalled database parked every request in the pod with liveness
+    and readiness green until it OOMed. Every lookup in a burst larger than the gate,
+    the ones queued behind it included, must fail within one deadline, must not try to
+    reconnect (the transport is fine, the query is slow), and must leave every gate slot
+    free for the next burst."""
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    prisma: Final = _StalledPrisma()
+    burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 3
+    started: Final = time.monotonic()
+
+    results: Final = await asyncio.gather(
+        *(
+            _fetch_key_object_from_db_with_reconnect(
+                hashed_token=f"hashed-token-{i}",
+                prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+                deadline_seconds=0.2,
+            )
+            for i in range(burst)
+        ),
+        return_exceptions=True,
+    )
+    elapsed: Final = time.monotonic() - started
+
+    assert len(results) == burst
+    assert all(isinstance(result, DBLookupDeadlineExceeded) for result in results)
+    assert all(PrismaDBExceptionHandler.is_database_service_unavailable_error(result) for result in results)
+    assert elapsed < 3
+    prisma.attempt_db_reconnect.assert_not_awaited()
+
+    recovered: Final = _InFlightCountingPrisma()
+    after: Final = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                _fetch_key_object_from_db_with_reconnect(
+                    hashed_token=f"after-{i}",
+                    prisma_client=recovered,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+                    parent_otel_span=None,
+                    proxy_logging_obj=None,
+                )
+                for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)
+            )
+        ),
+        timeout=5,
+    )
+    assert {r.token for r in after if r is not None} == {f"after-{i}" for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)}
+
+
+@pytest.mark.asyncio
+async def test_team_lookup_fails_at_the_db_lookup_deadline_while_writes_stay_unbounded(_clear_db_lookup_stall):
+    """Team, user, budget, and membership reads share the key lookup's deadline through
+    the typed table wrappers; writes do not, since a slow write must land rather than
+    fail the request that already passed auth."""
+    from litellm.proxy.auth.auth_checks import _team_table
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+    from litellm.repositories.table_repositories import TeamRepository
+
+    prisma: Final = _StalledPrisma()
+    with patch(  # test-quality-ok: lowers the module-level lookup deadline so the stalled-read test finishes fast
+        "litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05
+    ):
+        started: Final = time.monotonic()
+        with pytest.raises(DBLookupDeadlineExceeded, match=r"team lookup did not answer within 0\.05s"):
+            await _get_team_db_check(team_id="stalled-team", prisma_client=prisma)  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+        assert time.monotonic() - started < 2
+
+        written: Final = await _team_table(TeamRepository(prisma)).update(
+            where={"team_id": "slow-write"}, data={"spend": 1.0}
+        )
+
+    assert written == {"team_id": "slow-write"}
+
+
 def _fake_redis_cache():
     fake_redis = MagicMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
@@ -883,36 +1002,106 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
         assert "budget_reset_at" not in creation_args
 
 
-@pytest.mark.asyncio
-async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context():
-    """Pin get_user_object's exception contract: it catches every DB failure in a broad except and
-    re-raises a bare ValueError, so a real outage survives only as __context__ rather than as the
-    exception type. The MCP dcr_bridge admission and refresh paths depend on this to tell a transient
-    outage (retry, 503) from a missing user (fail closed), which is why they classify across the cause
-    chain instead of the top exception's type. If this wrapping ever changes, that classification must
-    change with it, so this test guards the contract the callers rely on."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return prisma_client, cache
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db = AsyncMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=ConnectionError("can't reach database server")
-    )
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outage",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        httpx.ReadTimeout("timed out"),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": "Can't reach database server at `127.0.0.1:41071`",
+                    "error_code": "P1001",
+                }
+            }
+        ),
+    ],
+    ids=["connect_error", "read_timeout", "p1001_as_data_error"],
+)
+async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user(outage):
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    prisma_client, cache = _user_read_raising(outage)
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
-        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as exc_info:
+        with pytest.raises(type(outage)) as raised:
             await get_user_object(
-                user_id="outage-contract-probe-user",
-                prisma_client=mock_prisma_client,
-                user_api_key_cache=mock_cache,
+                user_id="outage-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
                 user_id_upsert=False,
                 proxy_logging_obj=None,
             )
 
-    assert isinstance(exc_info.value.__context__, ConnectionError)
+    assert raised.value is outage
+    assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(raised.value) is outage
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}}),
+        RuntimeError("row validation failed"),
+    ],
+    ids=["query_level_data_error", "runtime_error"],
+)
+async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user(failure):
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    prisma_client, cache = _user_read_raising(failure)
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as raised:
+            await get_user_object(
+                user_id="data-error-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                user_id_upsert=False,
+                proxy_logging_obj=None,
+            )
+
+    assert raised.value.__context__ is failure
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("401", ProxyErrorTypes.auth_error)
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
+    """A database-only read is never answered by the per-worker negative memo: a row created after a miss on
+    this worker is returned within db_cache_expiry seconds instead of raising UserNotFoundError, so the token
+    exchange mints for a user JWT auth just accepted."""
+    from litellm.proxy.auth import auth_checks
+
+    user_id = "memo-probe-user"
+    monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
+    db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+
+    result = await get_user_object(
+        user_id=user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        check_db_only=True,
+    )
+
+    assert result is not None
+    assert result.user_id == user_id
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1592,6 +1781,336 @@ def test_can_object_call_model_access_via_alias_only():
 
     # Should return True because access is granted via the alias
     assert result is True
+
+
+def test_can_object_call_model_key_alias_to_allowed_target_is_allowed():
+    """A key alias whose target is on the key allowlist resolves like a team alias."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    result = _can_object_call_model(
+        model="mistral-7b",
+        llm_router=None,
+        models=["gpt-4o-mini"],
+        key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    assert result is True
+
+
+def test_can_object_call_model_key_alias_to_disallowed_target_is_denied():
+    """A key alias whose target is outside the key allowlist stays denied."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            models=["gpt-4o-mini"],
+            key_model_aliases={"mistral-7b": "gpt-4"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_honors_key_alias():
+    """A key on a team can call a model through its own alias when the target is on the team allowlist."""
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=["gpt-4o-mini"],
+    )
+
+    assert (
+        await can_team_access_model(
+            model="mistral-7b",
+            team_object=team_object,
+            llm_router=None,
+            key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="mistral-7b",
+            team_object=team_object,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_honors_key_alias():
+    """The real key entry point resolves a key alias to its target before the allowlist check."""
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    allowed_token = UserAPIKeyAuth(
+        api_key="sk-test",
+        models=["gpt-4o-mini"],
+        aliases={"mistral-7b": "gpt-4o-mini"},
+    )
+
+    assert (
+        await can_key_call_model(
+            model="mistral-7b",
+            llm_model_list=None,
+            valid_token=allowed_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    denied_token = UserAPIKeyAuth(
+        api_key="sk-test",
+        models=["gpt-4o-mini"],
+        aliases={"mistral-7b": "gpt-4"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="mistral-7b",
+            llm_model_list=None,
+            valid_token=denied_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+def test_can_object_call_model_key_alias_applies_before_global_alias(monkeypatch):
+    """The key alias rewrite precedes the global one at dispatch, so the key target is authorized."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+def test_can_object_call_model_key_alias_matches_global_rewritten_name(monkeypatch):
+    """A key alias on the globally rewritten name resolves the same way the request chain does."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_chained_alias_requires_final_target(monkeypatch):
+    """When a key alias fires on the globally rewritten name, only the final target is dispatched."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_key_alias_name_alone_is_not_enough():
+    """A key that may call the alias name but not its target cannot call the alias."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="bar",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+    assert (
+        _can_object_call_model(
+            model="bar",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_team_alias_applies_before_key_alias():
+    """A key alias on the raw name loses to the team alias that rewrites it first at dispatch."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_key_alias_on_team_alias_target():
+    """A key alias on the team-rewritten name resolves like the dispatch chain does."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_honors_key_alias():
+    """A personal-scope key alias resolves to its target before the user allowlist check."""
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    user_object = LiteLLM_UserTable(user_id="test-user", models=["gpt-4o-mini"])
+
+    assert (
+        await can_user_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            user_object=user_object,
+            key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_user_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            user_object=user_object,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_honors_key_alias():
+    """A key alias resolves against the member allowlist, not just the raw alias name."""
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["gpt-4o-mini"]),
+    )
+
+    await _check_team_member_model_access(
+        model="mistral-7b",
+        team_object=LiteLLM_TeamTable(team_id="team-a"),
+        valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+        llm_router=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        team_membership=membership,
+        team_membership_loaded=True,
+        key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_team_member_model_access(
+            model="mistral-7b",
+            team_object=LiteLLM_TeamTable(team_id="team-a"),
+            valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+            llm_router=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=MagicMock(),
+            team_membership=membership,
+            team_membership_loaded=True,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
 
 
 def test_can_object_call_model_access_via_underlying_model_only():
@@ -4780,6 +5299,28 @@ async def test_resolve_end_user_preserves_id_when_default_budget_configured(_val
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cached_verdict", [None, "invalid"])
+async def test_resolve_end_user_preserves_id_when_only_the_key_default_budget_is_configured(
+    _validate_flag_on, monkeypatch, cached_verdict
+):
+    """With no proxy-wide default, a key-level end_user_budget_id still keeps an unregistered id
+    alive so the key's budget can be applied to that new customer downstream."""
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+    cache.async_get_cache = AsyncMock(return_value=cached_verdict)
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="new-customer",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    assert result == "new-customer"
+
+
+@pytest.mark.asyncio
 async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypatch):
     from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
 
@@ -6037,6 +6578,109 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
     assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
 
 
+@pytest.mark.parametrize("warmed_by_auth_prefetch", [False, True])
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_serves_last_known_org_through_db_outage(warmed_by_auth_prefetch):
+    """A JWT whose team sits in an org resolves the org on every request, and the org row
+    is cached for only DEFAULT_IN_MEMORY_TTL seconds while the team and user rows ride the
+    60s management-object TTL. Without a last-known copy, a DB outage a few seconds old
+    turned that traffic into 503s while the same request through a virtual key kept
+    succeeding on its cached team. The copy must exist whoever filled the short-lived entry:
+    this lookup's own DB read, or the virtual-key auth prefetch warming it for the same org."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    org_columns = {
+        "organization_id": "org-1",
+        "organization_alias": "platform-org",
+        "budget_id": "b1",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "litellm_budget_table": {"budget_id": "b1", "max_budget": 50.0, "tpm_limit": 700, "rpm_limit": 7},
+    }
+    org_row = MagicMock()
+    org_row.model_dump = lambda: org_columns
+    db_outage = ConnectionRefusedError("db unavailable")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(
+        side_effect=[db_outage] if warmed_by_auth_prefetch else [org_row, db_outage]
+    )
+    user_api_key_cache = UserApiKeyCache()
+    if warmed_by_auth_prefetch:
+        await user_api_key_cache.async_set_cache(
+            key="org_id:org-1:with_budget",
+            value=LiteLLM_OrganizationTable.model_validate(org_columns),
+            model_type=LiteLLM_OrganizationTable,
+        )
+
+    async def _lookup():
+        return await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    ):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
+        warm = await _lookup()
+        assert warm is not None and warm.organization_alias == "platform-org"
+        await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
+
+        during_outage = await _lookup()
+
+    assert prisma_client.db.litellm_organizationtable.find_unique.await_count == (1 if warmed_by_auth_prefetch else 2)
+    assert during_outage is not None
+    assert during_outage.organization_alias == "platform-org"
+    assert during_outage.litellm_budget_table is not None
+    assert during_outage.litellm_budget_table.rpm_limit == 7
+    assert during_outage.litellm_budget_table.max_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_writes_the_last_known_org_only_when_absent():
+    """The last-known copy is written when this worker holds none, never per request:
+    with Redis attached, a write on every cached org hit would cost one SET per JWT request."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    class _WriteRecordingCache(UserApiKeyCache):
+        def __init__(self):
+            super().__init__()
+            self.written_keys = []
+
+        async def async_set_cache(self, key, value, local_only=False, **kwargs):
+            self.written_keys.append(key)
+            return await super().async_set_cache(key=key, value=value, local_only=local_only, **kwargs)
+
+    user_api_key_cache = _WriteRecordingCache()
+    await user_api_key_cache.async_set_cache(
+        key="org_id:org-1:with_budget",
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-1",
+            organization_alias="platform-org",
+            budget_id="b1",
+            created_by="admin",
+            updated_by="admin",
+        ),
+        model_type=LiteLLM_OrganizationTable,
+    )
+
+    for _ in range(3):
+        org = await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=MagicMock(),
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+        assert org is not None and org.organization_alias == "platform-org"
+
+    assert user_api_key_cache.written_keys.count("org_id:org-1:with_budget:last_known") == 1
+
+
 @pytest.mark.parametrize(
     "max_budget, spend, expect_blocked",
     [
@@ -6608,6 +7252,208 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
     mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
 
 
+def _budget_lookup_by_id(budgets: Mapping[str, float]) -> AsyncMock:
+    """A ``litellm_budgettable.find_unique`` double that serves the given budgets by id."""
+
+    async def _find_unique(where: Mapping[str, str]) -> MagicMock | None:
+        budget_id = where["budget_id"]
+        if budget_id not in budgets:
+            return None
+        row = MagicMock()
+        row.dict = lambda: {"budget_id": budget_id, "max_budget": budgets[budget_id]}
+        return row
+
+    return AsyncMock(side_effect=_find_unique)
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_key_default_budget_beats_global_default_without_leaking_across_keys(
+    monkeypatch,
+):
+    """Two service-account keys with different ``end_user_budget_id`` values must each see their
+    own default on the same unknown-but-existing end user, and the proxy-wide default must lose
+    to both. The row is cached after the first call, so the second call exercises the cache path.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id(
+        {"global-eu-budget": 100.0, "svc-a-budget": 0.5, "svc-b-budget": 7.0}
+    )
+    cache = UserApiKeyCache()
+
+    for_key_a = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    for_key_b = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-b-budget",
+    )
+    for_plain_key = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+
+    assert for_key_a is not None and for_key_a.litellm_budget_table is not None
+    assert for_key_a.litellm_budget_table.max_budget == 0.5
+    assert for_key_b is not None and for_key_b.litellm_budget_table is not None
+    assert for_key_b.litellm_budget_table.max_budget == 7.0
+    assert for_plain_key is not None and for_plain_key.litellm_budget_table is not None
+    assert for_plain_key.litellm_budget_table.max_budget == 100.0
+    mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_cached_row_does_not_carry_another_keys_default_budget(monkeypatch):
+    """A key without a default must see the end user unrestricted even after a key with a default
+    populated the shared per-end-user cache entry for the same id."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
+    cache = UserApiKeyCache()
+
+    for_key_a = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    for_plain_key = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+
+    assert for_key_a is not None and for_key_a.litellm_budget_table is not None
+    assert for_key_a.litellm_budget_table.max_budget == 0.5
+    assert for_plain_key is not None
+    assert for_plain_key.litellm_budget_table is None
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_caches_row_with_global_default_but_never_a_key_default(monkeypatch):
+    """The cached row is what post-request readers (Prometheus customer gauges) see: it must keep
+    the proxy-wide default exactly as before, while a key default stays on the request copy."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-budget")
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-cached"))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5, "global-budget": 7.0})
+    cache = UserApiKeyCache()
+
+    for_key_a = await get_end_user_object(
+        end_user_id="eu-cached",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    cached = await cache.async_get_cache(key=end_user_cache_key("eu-cached"), model_type=LiteLLM_EndUserTable)
+
+    assert for_key_a is not None and for_key_a.litellm_budget_table is not None
+    assert for_key_a.litellm_budget_table.max_budget == 0.5
+    assert cached is not None and cached.litellm_budget_table is not None
+    assert cached.litellm_budget_table.max_budget == 7.0
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_without_global_default(
+    end_user_registry_skip_enabled,
+):
+    """With no proxy-wide default, a key default alone must keep the registry skip off, otherwise
+    the unrestricted row is never loaded and the key default is never enforced.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=3.0))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 2.0})
+
+    result = await get_end_user_object(
+        end_user_id="eu-anon-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        key_end_user_budget_id="svc-a-budget",
+    )
+
+    assert result is not None
+    assert result.spend == 3.0
+    assert result.litellm_budget_table is not None
+    assert result.litellm_budget_table.max_budget == 2.0
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_explicit_end_user_budget_beats_key_default(monkeypatch):
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=_end_user_db_row(
+            "eu-vip",
+            budget_id="vip-budget",
+            litellm_budget_table={"budget_id": "vip-budget", "max_budget": 500.0},
+        )
+    )
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
+
+    result = await get_end_user_object(
+        end_user_id="eu-vip",
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        key_end_user_budget_id="svc-a-budget",
+    )
+
+    assert result is not None and result.litellm_budget_table is not None
+    assert result.litellm_budget_table.max_budget == 500.0
+    mock_prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_default_end_user_budget_falls_back_to_global_when_key_budget_is_missing(monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_default_end_user_budget
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"global-eu-budget": 100.0})
+
+    resolved = await resolve_default_end_user_budget(
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        key_end_user_budget_id="deleted-budget",
+    )
+
+    assert resolved is not None
+    assert resolved.budget_id == "global-eu-budget"
+    assert resolved.max_budget == 100.0
+
+
 @pytest.mark.asyncio
 async def test_end_user_id_validation_gate_still_resolves_unrestricted_end_users(monkeypatch):
     """
@@ -6946,7 +7792,7 @@ async def test_common_checks_skips_membership_load_when_no_check_reads_it():
 
 
 @pytest.mark.asyncio
-async def test_get_team_membership_db_error_returns_none_and_retries_next_call():
+async def test_get_team_membership_db_error_surfaces_and_retries_next_call():
     from litellm.proxy.auth.auth_checks import get_team_membership
     from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
@@ -6958,12 +7804,13 @@ async def test_get_team_membership_db_error_returns_none_and_retries_next_call()
     )
     cache = UserApiKeyCache()
 
-    failed = await get_team_membership(
-        user_id="u-fail",
-        team_id="t-fail",
-        prisma_client=mock_prisma_client,
-        user_api_key_cache=cache,
-    )
+    with pytest.raises(RuntimeError, match="db down"):
+        await get_team_membership(
+            user_id="u-fail",
+            team_id="t-fail",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
     cached_after_failure = await cache.async_get_cache(
         key=team_membership_reservation_cache_key(user_id="u-fail", team_id="t-fail")
     )
@@ -6974,24 +7821,52 @@ async def test_get_team_membership_db_error_returns_none_and_retries_next_call()
         user_api_key_cache=cache,
     )
 
-    assert failed is None
     assert cached_after_failure is None
     assert recovered is not None
     assert recovered.user_id == "u-fail"
     assert mock_prisma_client.db.litellm_teammembership.find_unique.await_count == 2
 
 
-@pytest.mark.asyncio
-async def test_get_team_membership_string_prisma_client_returns_none():
-    from litellm.proxy.auth.auth_checks import get_team_membership
+class _UnreachableMembershipPrisma:
+    class db:
+        class litellm_teammembership:
+            @staticmethod
+            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                raise httpx.ConnectError("All connection attempts failed")
 
-    result = await get_team_membership(
-        user_id="u-str",
-        team_id="t-str",
-        prisma_client="hello-world",
-        user_api_key_cache=UserApiKeyCache(),
-    )
-    assert result is None
+
+def _restricted_member_check_deps() -> dict[str, object]:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = UserApiKeyCache()
+    return {
+        "team_object": LiteLLM_TeamTable(team_id="team-outage", models=["claude-sonnet-5"]),
+        "valid_token": UserAPIKeyAuth(token="hashed-fake", user_id="bob", team_id="team-outage"),
+        "prisma_client": _UnreachableMembershipPrisma(),
+        "user_api_key_cache": cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
+    }
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_fails_closed_when_the_membership_read_hits_a_db_outage():
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    with pytest.raises(httpx.ConnectError) as raised:
+        await _check_team_member_model_access(
+            model="claude-sonnet-5", llm_router=None, **_restricted_member_check_deps()
+        )
+
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_budget_fails_closed_when_the_membership_read_hits_a_db_outage():
+    with pytest.raises(httpx.ConnectError):
+        await _check_team_member_budget(user_object=None, **_restricted_member_check_deps())
 
 
 @pytest.mark.asyncio
@@ -7320,6 +8195,71 @@ async def test_project_allowlist_enforced_when_key_models_empty():
     assert exc_info.value.code == "403"
 
 
+def _project_with_budget(spend: float, max_budget: float | None):
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_ProjectTableCachedObj
+
+    return LiteLLM_ProjectTableCachedObj(
+        project_id="p-budget",
+        team_id="t-1",
+        budget_id="b-1",
+        spend=spend,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="b-1", max_budget=max_budget),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter_spend, db_spend, max_budget, blocks",
+    [
+        pytest.param(5.0, 0.0, 5.0, True, id="counter-at-budget-blocks-despite-stale-db-row"),
+        pytest.param(4.99, 0.0, 5.0, False, id="counter-under-budget-admits"),
+        pytest.param(None, 5.0, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
+        pytest.param(None, 0.0, 5.0, False, id="no-counter-and-no-persisted-spend-admits"),
+        pytest.param(None, 0.0, 0.0, True, id="zero-budget-blocks-before-any-spend"),
+        pytest.param(12.5, 12.5, 0.0, True, id="zero-budget-blocks-with-spend"),
+        pytest.param(12.5, 12.5, None, False, id="null-budget-is-unlimited"),
+    ],
+)
+async def test_project_max_budget_check_blocks_when_live_spend_reaches_the_budget(
+    counter_spend, db_spend, max_budget, blocks
+):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.auth_checks import _project_max_budget_check
+
+    real_spend_counter_cache = DualCache()
+    if counter_spend is not None:
+        real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=counter_spend)
+    valid_token = UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget", team_id="t-1", user_id="u-1")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        if not blocks:
+            await _project_max_budget_check(
+                project_object=_project_with_budget(spend=db_spend, max_budget=max_budget),
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            await asyncio.sleep(0)
+            proxy_logging_obj.budget_alerts.assert_not_awaited()
+            return
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _project_max_budget_check(
+                project_object=_project_with_budget(spend=db_spend, max_budget=max_budget),
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        await asyncio.sleep(0)
+
+    assert exc_info.value.entity_type == Litellm_EntityType.PROJECT.value
+    assert exc_info.value.entity_id == "p-budget"
+    assert exc_info.value.current_cost == (db_spend if counter_spend is None else counter_spend)
+    proxy_logging_obj.budget_alerts.assert_awaited_once()
+    assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
+
+
 def test_is_user_proxy_admin_rejects_view_only_admin():
     """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
     Admin Viewer answering True here would gain every write route. Read parity for
@@ -7557,7 +8497,6 @@ def test_model_has_no_cost_mapping_no_model_or_router_is_false():
     [
         "azure/speech/azure-tts",
         "mistral/mistral-ocr-latest",
-        "vertex_ai/imagen-3.0-generate-001",
         "dashscope/qwen-flash",
     ],
 )
@@ -8059,7 +8998,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
@@ -8133,7 +9072,7 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
@@ -8434,26 +9373,60 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
     reader: Final = AsyncMock(return_value=group)
     client: Final = MagicMock(db=MagicMock(litellm_accessgrouptable=MagicMock(find_unique=reader)))
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
-        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),  # test-quality-ok: [TQ008] isolate the process cache
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()
+        ),  # test-quality-ok: [TQ008] isolate the process cache
     ):
         if channel == "team":
-            assert await can_team_access_model(
-                model="allowed", team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
-                llm_router=None, prisma_client=client,
-            ) is True
+            assert (
+                await can_team_access_model(
+                    model="allowed",
+                    team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
+                    llm_router=None,
+                    prisma_client=client,
+                )
+                is True
+            )
         else:
-            assert await can_key_call_model(
-                model="allowed", llm_model_list=None,
-                valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
-                llm_router=None, prisma_client=client,
-            ) is True
+            assert (
+                await can_key_call_model(
+                    model="allowed",
+                    llm_model_list=None,
+                    valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
+                    llm_router=None,
+                    prisma_client=client,
+                )
+                is True
+            )
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
+
+
+def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
+    """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
+    auth only binds a team from a multi-team claim when that team may call the route, so the
+    default team allowlist has to cover the gateway's token endpoint or the exchange would mint
+    teamless credentials for every ``team_ids_jwt_field`` deployment."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM, user_route="/token", litellm_proxy_roles=LiteLLM_JWTAuth()
+    )
+    assert not allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM,
+        user_route="/token",
+        litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
+    )
 
 
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
     assert route_skips_budget_checks(route="/spend/logs") is True
+    assert route_skips_budget_checks(route="/utils/model_info") is True
+    assert RouteChecks.is_llm_api_route(route="/utils/model_info") is True
     assert route_skips_budget_checks(route="/health") is False
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
 
@@ -8461,3 +9434,411 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
     assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
+
+
+def _agent_model_ceiling_resolver(
+    models: frozenset[str] | None,
+) -> tuple[CeilingResolver, list[str]]:
+    """Resolver that records the agent ids it was asked about and answers with a fixed model
+    ceiling, or None when the agent has no access groups attached."""
+    asked: Final[list[str]] = []
+
+    async def resolve(agent_id: str) -> AgentAccessGroupCeiling | None:
+        asked.append(agent_id)
+        if models is None:
+            return None
+        return AgentAccessGroupCeiling(
+            access_group_ids=("ag-1",), models=models, mcp_server_ids=frozenset(), agent_ids=frozenset()
+        )
+
+    return resolve, asked
+
+
+@pytest.mark.asyncio
+async def test_agent_access_groups_cap_models_even_when_key_allows_them():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve) is True
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_agent_access_group_model_access("claude-sonnet", agent_key, None, resolve)
+
+    assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert asked == ["agent-1", "agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_admits_the_key_alias_target():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5"])
+    agent_key.aliases = {"fast": "gpt-5"}
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("fast", agent_key, None, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_checks_the_team_alias_target():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["gpt-5"])
+    agent_key.team_model_aliases = {"foo": "gpt-5"}
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("foo", agent_key, None, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_denies_a_team_alias_outside_the_ceiling():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["gpt-5"])
+    agent_key.team_model_aliases = {"foo": "claude-sonnet-4-5"}
+    resolve, _ = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc:
+        await _check_agent_access_group_model_access("foo", agent_key, None, resolve)
+    assert exc.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_keeps_the_name_for_a_deleted_team_deployment():
+    from litellm.router import Router
+
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["foo"])
+    agent_key.team_model_aliases = {"foo": "model_name_team-1_deadbeef"}
+    router: Final = Router(model_list=[])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"foo"}))
+
+    assert await _check_agent_access_group_model_access("foo", agent_key, router, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_groups_naming_no_model_deny_every_model():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
+    resolve, _ = _agent_model_ceiling_resolver(frozenset())
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve)
+
+    assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_agent_without_access_groups_adds_no_model_ceiling():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    resolve, asked = _agent_model_ceiling_resolver(None)
+
+    assert await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve) is True
+    assert await _check_agent_access_group_model_access("claude-sonnet", agent_key, None, resolve) is True
+    assert asked == ["agent-1", "agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_key_without_agent_never_consults_agent_access_groups():
+    plain_key: Final = UserAPIKeyAuth(token="plain-token", models=["gpt-5"])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset())
+
+    assert await _check_agent_access_group_model_access("gpt-5", plain_key, None, resolve) is True
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_check_temp_budget_increase_extends_cap():
+    """Spend above max_budget but below max_budget + active temp increase
+    must not raise; once the increase expires the same spend must raise."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", metadata={})
+    user_object = LiteLLM_UserTable(user_id="test-user")
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=100.0,
+            temp_budget_expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+        ),
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        if counter_key == "spend:team_member:test-user:test-team":
+            return 150.0
+        return fallback_spend
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    expired_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=100.0,
+            temp_budget_expiry=datetime.now(timezone.utc) - timedelta(hours=1),
+        ),
+    )
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=expired_membership,
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=DualCache(),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    assert exc_info.value.current_cost == 150.0
+    assert exc_info.value.max_budget == 100.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_cap, expiry_offset, spend, expected_cap",
+    [
+        (0.4, timedelta(hours=1), 1.0, None),
+        (0.4, timedelta(hours=-1), 1.0, 0.4),
+        (0.0, timedelta(hours=1), 1.0, None),
+    ],
+)
+async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
+    default_cap: float, expiry_offset: timedelta, spend: float, expected_cap: float | None
+):
+    """A member row that carries only the temporary pair inherits the team default
+    cap live: the increase is added to it while active, the default alone applies
+    once it expires, and a zero default stays uncapped."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = DualCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-budget-1",
+        value=LiteLLM_BudgetTable(budget_id="default-budget-1", max_budget=default_cap),
+    )
+    team_object = LiteLLM_TeamTable(team_id="test-team", metadata={"team_member_budget_id": "default-budget-1"})
+    valid_token = UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team")
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=spend,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=None,
+            temp_budget_increase=1.0,
+            temp_budget_expiry=datetime.now(timezone.utc) + expiry_offset,
+        ),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        if expected_cap is None:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=LiteLLM_UserTable(user_id="test-user"),
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+            return
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=LiteLLM_UserTable(user_id="test-user"),
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+    assert exc_info.value.max_budget == expected_cap
+
+
+def _agent_key_acting_for(user_id: str | None, team_id: str | None) -> UserAPIKeyAuth:
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    agent_key.agent_caller = AgentCaller(user_id=user_id, team_id=team_id)
+    return agent_key
+
+
+def _caller_loaders(
+    team: LiteLLM_TeamTable | None,
+    user: LiteLLM_UserTable | None,
+) -> tuple[CallerTeamLoader, CallerUserLoader, list[str]]:
+    """Loaders that hand back fixed caller rows and record the agent_caller they were asked about."""
+    asked: Final[list[str]] = []
+
+    async def load_team(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+        asked.append(f"team:{valid_token.agent_caller.team_id if valid_token.agent_caller else None}")
+        return team
+
+    async def load_user(valid_token: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+        asked.append(f"user:{valid_token.agent_caller.user_id if valid_token.agent_caller else None}")
+        return user
+
+    return load_team, load_user, asked
+
+
+async def _cache_with_membership(user_id: str, team_id: str, allowed_models: list[str] | None) -> UserApiKeyCache:
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            litellm_budget_table=LiteLLM_BudgetTable(allowed_models=allowed_models) if allowed_models else None,
+        ),
+        model_type=LiteLLM_TeamMembership,
+    )
+    return cache
+
+
+async def _check_caller_models(
+    agent_key: UserAPIKeyAuth,
+    model: str,
+    load_team: CallerTeamLoader,
+    load_user: CallerUserLoader,
+    cache: UserApiKeyCache | None = None,
+) -> None:
+    await _check_agent_caller_model_access(
+        model=model,
+        valid_token=agent_key,
+        llm_router=None,
+        prisma_client=None,
+        user_api_key_cache=cache or UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        load_team=load_team,
+        load_user=load_user,
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_models():
+    """LIT-8014: the invoking team may only call gpt-5, so the agent's own claude grant does not help."""
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=["gpt-5"]), None)
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=None)
+
+    await _check_caller_models(agent_key, "gpt-5", load_team, load_user, cache)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user, cache)
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert asked == ["team:team-a", "team:team-a"]
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_a_team_member_is_capped_at_the_members_scope():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    load_team, load_user, _ = _caller_loaders(
+        LiteLLM_TeamTable(team_id="team-a", models=["gpt-5", "claude-sonnet"]), None
+    )
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=["gpt-5"])
+
+    await _check_caller_models(agent_key, "gpt-5", load_team, load_user, cache)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user, cache)
+
+    assert "User=alice, Team=team-a" in exc_info.value.internal_message
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_models():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id=None)
+    load_team, load_user, asked = _caller_loaders(None, LiteLLM_UserTable(user_id="alice", models=["gpt-5"]))
+
+    await _check_caller_models(agent_key, "gpt-5", load_team, load_user)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+    assert asked == ["team:None", "user:alice", "team:None", "user:alice"]
+
+
+@pytest.mark.asyncio
+async def test_agent_key_alias_resolves_against_the_echoed_teams_models():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    agent_key.aliases = {"foo": "bar"}
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=["bar"]), None)
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=None)
+
+    await _check_caller_models(agent_key, "foo", load_team, load_user, cache)
+
+    assert asked == ["team:team-a"]
+
+
+@pytest.mark.asyncio
+async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=[]), None)
+
+    await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
+
+    assert asked == []
+
+
+def test_can_object_call_model_allows_listed_model_for_key():
+    result: Final = _can_object_call_model(
+        model="allowed-model",
+        llm_router=None,
+        models=["allowed-model"],
+        object_type="key",
+    )
+
+    assert result is True

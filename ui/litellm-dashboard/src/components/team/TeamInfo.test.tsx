@@ -55,6 +55,12 @@ vi.mock("@/components/networking", () => ({
   getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
 }));
 
+const { bulkUpdatePOST } = vi.hoisted(() => ({ bulkUpdatePOST: vi.fn() }));
+vi.mock("@/lib/http/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/http/api")>();
+  return { ...actual, fetchClient: { ...actual.fetchClient, POST: bulkUpdatePOST } };
+});
+
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
@@ -1918,6 +1924,26 @@ describe("TeamInfoView", () => {
       expect(toast.error).not.toHaveBeenCalled();
     });
 
+    it("prefills the RPM limit and budget a team admin may edit with the team's stored values", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          rpm_limit: 50,
+          max_budget: 20,
+          caller_edit_access: { kind: "team_admin", editable_fields: ["rpm_limit", "max_budget"] },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Requests per minute Limit (RPM)")).toHaveValue(50);
+      expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(20);
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+    });
+
     it("opens the form when the proxy reports unrestricted access although the props only mark a team admin", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
@@ -2936,5 +2962,52 @@ describe("TeamInfo MCP permission retention", () => {
     );
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
     errorToast.mockRestore();
+  });
+});
+
+describe("TeamInfoView - disable_global_guardrails switch gating", () => {
+  beforeEach(() => {
+    seedDefaultMocks();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    authState.userRole = "Admin";
+  });
+
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
+  const openEditForm = async () => {
+    const user = userEvent.setup({ delay: null });
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("hides the Disable all global guardrails switch from a non-admin", async () => {
+    authState.userRole = "Internal User";
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} />);
+    await openEditForm();
+
+    expect(screen.queryByRole("switch", { name: /Disable all global guardrails/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Disable all global guardrails switch to a proxy admin", async () => {
+    renderWithProviders(<TeamInfoView {...props} />);
+    await openEditForm();
+
+    expect(await screen.findByRole("switch", { name: /Disable all global guardrails/i })).toBeInTheDocument();
   });
 });

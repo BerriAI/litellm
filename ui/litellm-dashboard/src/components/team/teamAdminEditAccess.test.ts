@@ -9,12 +9,17 @@ import {
 } from "./teamAdminEditAccess";
 
 describe("teamAdminFieldLabel", () => {
-  it("names tpm_limit the way the team settings form does", () => {
-    expect(teamAdminFieldLabel("tpm_limit")).toBe("Tokens per minute Limit (TPM)");
+  it.each([
+    ["tpm_limit", "Tokens per minute Limit (TPM)"],
+    ["rpm_limit", "Requests per minute Limit (RPM)"],
+    ["max_budget", "Max Budget (USD)"],
+    ["projects", "Create and update projects"],
+  ])("names %s the way the team settings form does", (field, label) => {
+    expect(teamAdminFieldLabel(field)).toBe(label);
   });
 
   it("falls back to the raw field name for a field the dashboard has no label for", () => {
-    expect(teamAdminFieldLabel("max_budget")).toBe("max_budget");
+    expect(teamAdminFieldLabel("team_alias")).toBe("team_alias");
   });
 });
 
@@ -45,6 +50,27 @@ describe("teamAdminSettingsChanges", () => {
 
   it("leaves tpm_limit out when the proxy did not enable it for team admins", () => {
     expect(teamAdminSettingsChanges({ tpm_limit: "5000" }, stored, new Set(["max_budget"]))).toStrictEqual({});
+  });
+
+  const allStored = { tpm_limit: 1000, rpm_limit: 10, max_budget: 20 };
+
+  it("sends every enabled field that changed and skips the ones that did not", () => {
+    const values = { tpm_limit: "1000", rpm_limit: "50", max_budget: "12.5" };
+    const enabled = new Set(["tpm_limit", "rpm_limit", "max_budget"]);
+
+    expect(teamAdminSettingsChanges(values, allStored, enabled)).toStrictEqual({ rpm_limit: 50, max_budget: 12.5 });
+  });
+
+  it("sends a cleared max budget as no budget", () => {
+    expect(teamAdminSettingsChanges({ max_budget: "" }, allStored, new Set(["max_budget"]))).toStrictEqual({
+      max_budget: null,
+    });
+  });
+
+  it("leaves out changed fields the proxy did not enable", () => {
+    const values = { tpm_limit: "5000", rpm_limit: "50", max_budget: "5" };
+
+    expect(teamAdminSettingsChanges(values, allStored, new Set(["rpm_limit"]))).toStrictEqual({ rpm_limit: 50 });
   });
 });
 

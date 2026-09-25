@@ -2,10 +2,10 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
@@ -61,6 +61,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
+    TypeSafeGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
@@ -138,6 +141,7 @@ class SupportedGuardrailIntegrations(Enum):
     SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
+    TYPESAFE = "typesafe"
     STRAIKER = "straiker"
     ALICE = "alice"
     AGENT_365 = "agent_365"
@@ -815,7 +819,7 @@ class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
     guard_name: str | None = Field(default=None, description="Name of the Javelin guard to use")
-    api_version: str | None = Field(default="v1", description="API version for Javelin service")
+    api_version: str | None = Field(default=None, description="API version for Javelin service")
     metadata: dict | None = Field(default=None, description="Additional metadata to send with requests")
     application: str | None = Field(default=None, description="Application name for Javelin service")
     config: dict | None = Field(default=None, description="Additional configuration for the guardrail")
@@ -1046,7 +1050,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
-    additional_provider_specific_params: dict[str, Any] | None = Field(
+    additional_provider_specific_params: dict[str, object] | None = Field(
         default=None,
         description="Additional provider-specific parameters for generic guardrail APIs",
     )
@@ -1055,7 +1059,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
+            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -1171,6 +1175,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
     CompresrGuardrailConfigModel,
+    TypeSafeGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     DeepKeepGuardrailConfigModel,
@@ -1269,7 +1274,7 @@ class GuardrailEventHooks(str, Enum):
 
 
 class DynamicGuardrailParams(TypedDict):
-    extra_body: dict[str, Any]
+    extra_body: ReadOnly[dict[str, object]]
 
 
 class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
@@ -1300,7 +1305,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_modes: list[str]
     supported_modes_by_provider: dict[str, list[str]]
     pii_entity_categories: list[PiiEntityCategoryMap]
-    content_filter_settings: dict[str, Any] | None = None
+    content_filter_settings: dict[str, object] | None = None
 
 
 class PresidioPerRequestConfig(BaseModel):
@@ -1318,8 +1323,8 @@ class ApplyGuardrailRequest(BaseModel):
     language: str | None = None
     entities: list[PiiEntityType] | None = None
     input_type: str = "request"
-    messages: list[dict[str, Any]] | None = None
-    metadata: dict[str, Any] | None = None
+    messages: list[dict[str, object]] | None = None
+    metadata: dict[str, object] | None = None
 
 
 class ApplyGuardrailResponse(BaseModel):
@@ -1329,4 +1334,4 @@ class ApplyGuardrailResponse(BaseModel):
 class PatchGuardrailRequest(BaseModel):
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
-    guardrail_info: dict[str, Any] | None = None
+    guardrail_info: dict[str, object] | None = None

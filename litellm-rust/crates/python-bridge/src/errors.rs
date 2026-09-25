@@ -1,7 +1,10 @@
-use litellm_core::transport::Error as TransportError;
-use litellm_core::{Error, audio_transcription, chat_completions, messages, ocr, responses};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
+use litellm_core::{Error, audio_transcription, chat_completions, messages, responses};
+use litellm_http::transport::Error as TransportError;
+use litellm_llms::base_llm::ocr::error::Error as OcrError;
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+};
 
 pyo3::create_exception!(
     _native,
@@ -35,27 +38,27 @@ pub(crate) fn responses_error_to_pyerr(error: responses::Error) -> PyErr {
 
 pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
     let value_error = match &error {
-        Error::Ocr(error) => matches!(
-            error,
-            ocr::Error::Auth(_)
-                | ocr::Error::InvalidProvider(_)
-                | ocr::Error::InvalidRequest(_)
-                | ocr::Error::InvalidType { .. }
-                | ocr::Error::MissingField(_)
-                | ocr::Error::MissingDocumentUrl
-        ),
+        Error::Ocr(error) => {
+            error.is_request()
+                || matches!(
+                    error,
+                    OcrError::Auth(_)
+                        | OcrError::InvalidProvider(_)
+                        | OcrError::InvalidRequest(_)
+                        | OcrError::MissingField(_)
+                        | OcrError::MissingDocumentUrl
+                )
+        }
         Error::Messages(error) => match error {
             messages::Error::Auth(source) => auth_is_value_error(source),
-            messages::Error::InvalidProvider(_)
-            | messages::Error::InvalidRequest(_)
-            | messages::Error::Headers(_) => true,
-            _ => false,
+            _ => error.is_request(),
         },
         Error::AudioTranscription(error) => match error {
             audio_transcription::Error::Auth(source) => auth_is_value_error(source),
             audio_transcription::Error::InvalidProvider(_)
             | audio_transcription::Error::InvalidRequest(_)
             | audio_transcription::Error::Headers(_)
+            | audio_transcription::Error::Http(_)
             | audio_transcription::Error::InvalidType { .. }
             | audio_transcription::Error::MissingField(_)
             | audio_transcription::Error::Aws(_) => true,
@@ -66,6 +69,7 @@ pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
             chat_completions::Error::InvalidProvider(_)
             | chat_completions::Error::InvalidRequest(_)
             | chat_completions::Error::Headers(_)
+            | chat_completions::Error::Http(_)
             | chat_completions::Error::InvalidType { .. }
             | chat_completions::Error::MissingField(_)
             | chat_completions::Error::Aws(_) => true,
@@ -103,6 +107,7 @@ pub(crate) fn chat_completions_error_to_pyerr(error: chat_completions::Error) ->
         | Error::InvalidType { .. }
         | Error::MissingField(_)
         | Error::Headers(_)
+        | Error::Http(_)
         | Error::Transport(TransportError::Connect(_)) => {
             RustBridgeDeclined::new_err(error.to_string())
         }
@@ -113,12 +118,6 @@ pub(crate) fn chat_completions_error_to_pyerr(error: chat_completions::Error) ->
             RustUpstreamError::new_err((0u16, message))
         }
     }
-}
-
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = module.py();
-    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
-    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
 }
 
 #[cfg(test)]

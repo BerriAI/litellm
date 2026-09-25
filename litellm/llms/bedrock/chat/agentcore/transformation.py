@@ -6,7 +6,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 
 import json
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
@@ -31,6 +31,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     Choices,
     Delta,
+    LlmProviders,
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -39,9 +40,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -872,7 +872,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "bedrock"), params={})
+            client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK, params={})
 
         verbose_logger.debug("Making async streaming request to: %s", api_base)
 
@@ -989,7 +989,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

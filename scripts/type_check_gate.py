@@ -35,7 +35,7 @@ detached worktree at the merge-base, run under the same environment so import
 resolution matches, and its per-rule counts are cached under the repo's git
 common dir keyed by merge-base commit, ``pyrightconfig.json``, ``uv.lock``,
 the Prisma schema, and the dependency-group set, so re-runs against the same
-branch point pay for it once. A CI workflow publishes every staging commit's counts as
+branch point pay for it once. A CI workflow publishes every main commit's counts as
 an artifact (``--emit-counts-dir`` is its entry point), and on a disk-cache miss
 the gate first tries to download the merge-base's artifact through the ``gh``
 CLI; any fetch failure falls back silently to the local base pass, so the gate

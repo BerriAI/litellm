@@ -28,6 +28,7 @@ class EndpointType(str, Enum):
     GEMINI = "gemini"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    TINYFISH = "tinyfish"
     GENERIC = "generic"
 
 
