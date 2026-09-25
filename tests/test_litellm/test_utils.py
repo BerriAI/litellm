@@ -5679,6 +5679,29 @@ class TestHuggingFaceConfigFetch:
         request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
         assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
 
+    def test_get_model_info_asks_for_the_repo_path_without_the_routing_prefix(self, hf_config_route):
+        """The repo id is the path; the `huggingface/` routing prefix is not part of it.
+
+        `_get_model_info_helper` has `split_model` -- the bare repo id -- and used to
+        hand `model` to the fetch instead, so the address asked for was
+        `huggingface.co/huggingface/<org>/<model>`, which is not a repo and answers 404.
+        The window came back None for every Hugging Face model. `get_max_tokens` one
+        function away does the same branch correctly, by reassigning `model` from
+        `get_llm_provider` first.
+
+        The mock answers any path ending in config.json, so the returned value alone
+        cannot catch this -- the URL is what the assertion has to read.
+        """
+        from litellm.utils import get_model_info
+
+        info = get_model_info("huggingface/some-org/some-model")
+
+        assert info["max_tokens"] == 512
+        assert (
+            str(hf_config_route.calls.last.request.url)
+            == "https://huggingface.co/some-org/some-model/raw/main/config.json"
+        )
+
     def test_get_max_position_embeddings_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
         from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
         from litellm.utils import _get_max_position_embeddings

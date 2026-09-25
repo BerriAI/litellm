@@ -5968,7 +5968,7 @@ def _get_model_info_helper(
                     )
 
         if custom_llm_provider == "huggingface":
-            max_tokens: Final = _get_max_position_embeddings(model_name=model)
+            max_tokens: Final = _get_max_position_embeddings(model_name=split_model)
             return ModelInfoBase(
                 key=model,
                 max_tokens=max_tokens,
