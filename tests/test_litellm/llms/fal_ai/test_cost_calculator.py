@@ -297,3 +297,22 @@ def test_nano_banana_unpriced_resolution_falls_back_to_the_default_rate(model):
         model=f"fal_ai/{model}", image_response=_image_response(), optional_params={"resolution": "8K"}
     )
     assert cost == litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_image"] > 0
+
+
+@pytest.mark.parametrize("model", NANO_BANANA_RESOLUTION_MODELS)
+def test_passthrough_num_images_multiplies_the_per_image_rate(model):
+    entry: Final = litellm.model_cost[f"fal_ai/{model}"]
+    assert fal_ai_passthrough_cost(model, {"num_images": 3}) == 3 * entry["output_cost_per_image"] > 0
+    assert (
+        fal_ai_passthrough_cost(model, {"resolution": "4K", "num_images": 2}) == 2 * entry["output_cost_per_image_4K"] > 0
+    )
+
+
+@pytest.mark.parametrize("num_images", (None, 0, -2, True, 2.0, "2"))
+def test_passthrough_without_a_positive_integer_num_images_charges_one_image(num_images):
+    body: Final = {} if num_images is None else {"num_images": num_images}
+    assert (
+        fal_ai_passthrough_cost("fal-ai/nano-banana-2", body)
+        == litellm.model_cost["fal_ai/fal-ai/nano-banana-2"]["output_cost_per_image"]
+        > 0
+    )

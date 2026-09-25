@@ -150,15 +150,27 @@ def _resolution_cost_per_image(entry: Mapping[str, object] | None, resolution: o
     return float(cost) if isinstance(cost, (int, float)) else None
 
 
-def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
-    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
-    if entry is None:
-        return None
+def _requested_image_count(request_body: Mapping[str, object]) -> int:
+    num_images: Final = request_body.get("num_images")
+    return num_images if type(num_images) is int and num_images > 0 else 1
+
+
+def _passthrough_cost_per_image(entry: Mapping[str, object], request_body: Mapping[str, object]) -> float | None:
     resolution_cost: Final = _resolution_cost_per_image(entry, request_body.get("resolution"))
     if resolution_cost is not None:
         return resolution_cost
     cost: Final = entry.get("output_cost_per_image")
     return float(cost) if isinstance(cost, (int, float)) else None
+
+
+def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
+    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
+    if entry is None:
+        return None
+    cost_per_image: Final = _passthrough_cost_per_image(entry, request_body)
+    if cost_per_image is None:
+        return None
+    return cost_per_image * _requested_image_count(request_body)
 
 
 def cost_calculator(
