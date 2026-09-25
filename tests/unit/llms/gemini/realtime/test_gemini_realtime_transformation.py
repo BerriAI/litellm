@@ -1362,6 +1362,45 @@ def test_gemini_input_audio_buffer_clear_is_local_noop():
     assert messages == []
 
 
+def test_gemini_manual_vad_sends_activity_start_once_per_turn():
+    config = GeminiRealtimeConfig()
+    setup = {
+        "setup": {
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {"disabled": True},
+            }
+        }
+    }
+    session_configuration_request = json.dumps(setup)
+
+    first = config.transform_realtime_request(
+        _input_audio_append_message(3200),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=session_configuration_request,
+    )
+    second = config.transform_realtime_request(
+        _input_audio_append_message(3200),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=session_configuration_request,
+    )
+
+    assert json.loads(first[0]) == {"realtimeInput": {"activityStart": {}}}
+    assert len(first) == 2
+    assert len(second) == 1
+
+    config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=session_configuration_request,
+    )
+    next_turn = config.transform_realtime_request(
+        _input_audio_append_message(3200),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=session_configuration_request,
+    )
+    assert json.loads(next_turn[0]) == {"realtimeInput": {"activityStart": {}}}
+
+
 def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad():
     config = GeminiRealtimeConfig()
     setup = {
@@ -1377,7 +1416,7 @@ def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad()
         session_configuration_request=json.dumps(setup),
     )
     assert len(messages) == 1
-    assert json.loads(messages[0]) == {"realtimeInput": {"activityEnd": True}}
+    assert json.loads(messages[0]) == {"realtimeInput": {"activityEnd": {}}}
 
 
 def test_gemini_tool_call_id_to_name_evicts_oldest_when_capped():

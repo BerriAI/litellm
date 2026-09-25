@@ -3982,6 +3982,49 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
 
 
 @pytest.mark.asyncio
+async def test_gemini_realtime_forwards_manual_activity_boundaries():
+    from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    backend_ws: Final = Mock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        Mock(scope={"headers": []}),
+        backend_ws,
+        Mock(),
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    session_configuration_request: Final = json.dumps(
+        {
+            "setup": {
+                "realtimeInputConfig": {
+                    "automaticActivityDetection": {"disabled": True},
+                }
+            }
+        }
+    )
+    streaming.session_configuration_request = session_configuration_request
+    append: Final = json.dumps(
+        {
+            "type": "input_audio_buffer.append",
+            "audio": base64.b64encode(b"audio").decode(),
+        }
+    )
+
+    await streaming._send_to_backend(append)
+    await streaming._send_to_backend(append)
+    await streaming._send_to_backend(json.dumps({"type": "input_audio_buffer.commit"}))
+
+    sent_messages: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert sent_messages[0] == {"realtimeInput": {"activityStart": {}}}
+    assert "audio" in sent_messages[1]["realtimeInput"]
+    assert "audio" in sent_messages[2]["realtimeInput"]
+    assert sent_messages[3] == {"realtimeInput": {"activityEnd": {}}}
+
+
+
+@pytest.mark.asyncio
 async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
     """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""
     from litellm.integrations.custom_logger import CustomLogger
