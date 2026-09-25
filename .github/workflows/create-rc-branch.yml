@@ -16,6 +16,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::rc branches are cut from refs/heads/main only, got $REF"
+            exit 1
+          fi
+
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
