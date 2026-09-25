@@ -800,6 +800,33 @@ def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _has_rate(model: str, custom_llm_provider: str | None) -> bool:
+    # A registered entry is a real answer even when it prices at zero; an unregistered
+    # model is not, because `get_model_info` invents zero rates for it rather than
+    # raising. Hence truthiness here, not `is not None`.
+    if model in litellm.model_cost:
+        return True
+    try:
+        info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return False
+    return any(info.get(key) for key in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_second"))
+
+
+def _priced_provider_response_model(
+    provider_response_model: str | None,
+    completion_response_model: str | None,
+    custom_llm_provider: str | None,
+) -> str | None:
+    if provider_response_model is None:
+        return None
+    if _has_rate(provider_response_model, custom_llm_provider):
+        return provider_response_model
+    if completion_response_model is not None and _has_rate(completion_response_model, custom_llm_provider):
+        return completion_response_model
+    return provider_response_model
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -846,7 +873,13 @@ def _select_model_name_for_cost_calc(
             return_model = model
 
     elif base_model is not None or provider_response_model is not None:
-        return_model = base_model if base_model is not None else provider_response_model
+        return_model = (
+            base_model
+            if base_model is not None
+            else _priced_provider_response_model(
+                provider_response_model, completion_response_model, custom_llm_provider
+            )
+        )
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
