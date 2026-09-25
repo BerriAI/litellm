@@ -10,6 +10,7 @@ import {
   type GitHubApi,
   type Issue,
 } from "./auto-close-duplicates";
+import { labelName } from "./issue-labels";
 
 declare const process: { readonly env: Readonly<Record<string, string | undefined>> };
 
@@ -31,16 +32,20 @@ export type ParsedVerdict =
 
 export type FlagTarget =
   | { readonly kind: "target"; readonly original: number }
-  | { readonly kind: "skip"; readonly reason: string };
+  | { readonly kind: "clear"; readonly reason: string };
 
 export type FlagVerdict =
   | { readonly kind: "flagged"; readonly original: number; readonly body: string }
+  | { readonly kind: "clear"; readonly reason: string }
   | { readonly kind: "skip"; readonly reason: string };
 
 export const MIN_CONFIDENCE = 0.95;
 export const NOTICE_MARKER_PREFIX = "<!-- litellm:potential-duplicate candidates=";
+export const WORKFLOW_LOGIN = "github-actions[bot]";
+export const CLEAR_LABEL = labelName("dup", "clear");
 
 const skip = (reason: string): { readonly kind: "skip"; readonly reason: string } => ({ kind: "skip", reason });
+const clear = (reason: string): { readonly kind: "clear"; readonly reason: string } => ({ kind: "clear", reason });
 
 const parseJson = (raw: string): unknown => {
   try {
@@ -70,13 +75,13 @@ export function parseVerdict(raw: string): ParsedVerdict {
 
 export function flagTarget(verdict: Verdict, issueNumber: number): FlagTarget {
   if (verdict.duplicate_of === null) {
-    return skip("no duplicate named");
+    return clear("no duplicate named");
   }
   if (verdict.confidence < MIN_CONFIDENCE) {
-    return skip(`confidence ${verdict.confidence} is below ${MIN_CONFIDENCE}`);
+    return clear(`confidence ${verdict.confidence} is below ${MIN_CONFIDENCE}`);
   }
   if (verdict.duplicate_of >= issueNumber) {
-    return skip(`#${verdict.duplicate_of} is not older than #${issueNumber}`);
+    return clear(`#${verdict.duplicate_of} is not older than #${issueNumber}`);
   }
   return { kind: "target", original: verdict.duplicate_of };
 }
@@ -98,13 +103,16 @@ export function noticeBody(issue: Issue, prior: Issue, evidence: string): string
 
 export async function flagIssue(api: GitHubApi, config: FlagConfig, verdict: Verdict): Promise<FlagVerdict> {
   const target = flagTarget(verdict, config.issueNumber);
-  if (target.kind === "skip") {
-    return target;
-  }
   const issuePath = `/repos/${config.repo}/issues/${config.issueNumber}`;
   const comments = await listAll<Comment>(api, `${issuePath}/comments`);
-  if (comments.some((comment) => comment.body.includes(NOTICE_MARKER_PREFIX))) {
+  if (comments.some((comment) => comment.user.login === WORKFLOW_LOGIN && comment.body.includes(NOTICE_MARKER_PREFIX))) {
     return skip("already carries a duplicate notice");
+  }
+  if (target.kind === "clear") {
+    if (!config.dryRun) {
+      await api.request("POST", `${issuePath}/labels`, { labels: [CLEAR_LABEL] });
+    }
+    return target;
   }
   const prior = await api.request<Issue>("GET", `/repos/${config.repo}/issues/${target.original}`);
   if (prior.pull_request !== undefined) {
@@ -135,6 +143,10 @@ export function readConfig(env: Readonly<Record<string, string | undefined>>): F
 function describe(config: FlagConfig, verdict: FlagVerdict): string {
   if (verdict.kind === "skip") {
     return `#${config.issueNumber}: skipped, ${verdict.reason}`;
+  }
+  if (verdict.kind === "clear") {
+    const action = config.dryRun ? `DRY RUN, would add ${CLEAR_LABEL}` : `added ${CLEAR_LABEL}`;
+    return `#${config.issueNumber}: ${action}, ${verdict.reason}`;
   }
   if (config.dryRun) {
     return `#${config.issueNumber}: DRY RUN, set the DUPLICATE_CHECK_ENABLED repo variable to true to post this:\n\n${verdict.body}`;
