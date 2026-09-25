@@ -910,6 +910,11 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             sambanova_embedding_models.add(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.add(key)
+        elif value.get("litellm_provider") == "nebius":
+            if value.get("mode") == "embedding":
+                nebius_embedding_models.add(key)
+            else:
+                nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
             nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":

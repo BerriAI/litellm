@@ -8865,7 +8865,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value, LlmProviders.NEBIUS.value})
 
 
 def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
@@ -8919,7 +8919,11 @@ def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Opti
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    reported_cost: Final = getattr(usage, "cost", None)
+    if (
+        isinstance(reported_cost, (int, float))
+        and logging_obj.model_call_details.get("custom_llm_provider") != LlmProviders.NEBIUS.value
+    ):
         return
     computed_cost: Final = logging_obj._response_cost_calculator(result=response)
     if isinstance(computed_cost, (int, float)) and computed_cost > 0:
