@@ -24,6 +24,8 @@ from litellm.router_strategy.adaptive_router.config import (
 )
 from litellm.types.router import AdaptiveRouterPreferences, RequestType
 
+MIN_SHAPE_PARAMETER: Final[float] = 1e-9
+
 
 @dataclass(frozen=True)
 class BanditCell:
@@ -68,17 +70,22 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
     SAMPLE_CAP is a HARD cap on (alpha + beta). When the cap would be exceeded,
     we drop the update. (D5: hard cap, no rescaling — keep v0 simple.)
     """
-    new_alpha: Final = cell.alpha + delta_alpha
-    new_beta: Final = cell.beta + delta_beta
+    new_alpha: Final = max(MIN_SHAPE_PARAMETER, cell.alpha + delta_alpha)
+    new_beta: Final = max(MIN_SHAPE_PARAMETER, cell.beta + delta_beta)
     if new_alpha + new_beta > SAMPLE_CAP:
-        return cell
+        return BanditCell(
+            alpha=max(MIN_SHAPE_PARAMETER, cell.alpha),
+            beta=max(MIN_SHAPE_PARAMETER, cell.beta),
+        )
     return BanditCell(alpha=new_alpha, beta=new_beta)
 
 
 def thompson_sample(cell: BanditCell, rng: random.Random | None = None) -> float:
     """Draw a sample from Beta(alpha, beta). Returns a quality estimate in [0, 1]."""
     r: Final = rng if rng is not None else random
-    return r.betavariate(cell.alpha, cell.beta)
+    alpha: Final = max(MIN_SHAPE_PARAMETER, cell.alpha)
+    beta: Final = max(MIN_SHAPE_PARAMETER, cell.beta)
+    return r.betavariate(alpha, beta)
 
 
 def normalized_cost(model_cost: float, all_costs: list[float]) -> float:
