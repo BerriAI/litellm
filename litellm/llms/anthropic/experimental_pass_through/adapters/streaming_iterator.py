@@ -119,6 +119,14 @@ class _CombinedChunkSplitter:
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
 
+    @property
+    def chunks(self) -> list | None:
+        return getattr(self._stream, "chunks", None)
+
+    @property
+    def messages(self) -> list | None:
+        return getattr(self._stream, "messages", None)
+
     @staticmethod
     def _is_combined(chunk: "ModelResponseStream") -> bool:
         """True if ``chunk`` carries response content AND a finish_reason."""
@@ -354,6 +362,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             type="text",
             text="",
         )
+
+    @property
+    def chunks(self) -> list | None:
+        return getattr(self.completion_stream, "chunks", None)
+
+    @property
+    def messages(self) -> list | None:
+        return getattr(self.completion_stream, "messages", None)
 
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> MessageBlockDelta:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
