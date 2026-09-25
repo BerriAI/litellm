@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from functools import reduce
 from typing import TYPE_CHECKING, Final, TypeAlias, cast
 
 from pydantic import JsonValue
@@ -23,9 +24,17 @@ PII_FIELD_NAMES: Final = tuple(DEFAULT_PII_DENYLIST) + tuple(SENTRY_PII_DENYLIST
 
 LITELLM_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
 SOURCE_CONTEXT_KEYS: Final = frozenset({"pre_context", "context_line", "post_context"})
+MAX_SCRUB_DEPTH: Final = 64
 EMAIL_PATTERN: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 SHA256_HEX_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{64}(?![0-9A-Za-z])")
 QUOTED_VALUE: Final = r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\""
+BRACKET_ATOM: Final = rf"(?:{QUOTED_VALUE})|[^\[\]{{}}()'\"]"
+NESTED_BRACKET_LEVELS: Final = 3
+BRACKETED_VALUE: Final = reduce(
+    lambda inner, _: rf"[\[{{(](?:{BRACKET_ATOM}|{inner})*[\]}})]",
+    range(NESTED_BRACKET_LEVELS),
+    rf"[\[{{(](?:{BRACKET_ATOM})*[\]}})]",
+)
 BARE_VALUE: Final = r"(?!None(?![0-9A-Za-z_]))[^,)\]}\s]+"
 
 
@@ -43,7 +52,7 @@ class SentryInitOptions(TypedDict):
 def build_repr_field_pattern(field_names: Sequence[str]) -> re.Pattern[str]:
     names: Final = "|".join(re.escape(name) for name in field_names)
     return re.compile(
-        rf"(?P<field>(?<![0-9A-Za-z_])(?:{names})=|['\"](?:{names})['\"]:\s*)(?P<value>{QUOTED_VALUE}|{BARE_VALUE})",
+        rf"(?P<field>(?<![0-9A-Za-z_])(?:{names})=|['\"](?:{names})['\"]:\s*)(?P<value>{QUOTED_VALUE}|{BRACKETED_VALUE}|{BARE_VALUE})",
         re.IGNORECASE,
     )
 
@@ -68,20 +77,21 @@ def _filtered_field(match: re.Match[str]) -> str:
 
 
 def _substitute_all(patterns: Sequence[re.Pattern[str]], text: str) -> str:
-    if not patterns:
-        return text
-    return _substitute_all(patterns[1:], patterns[0].sub(FILTERED, text))
+    return reduce(lambda scrubbed, pattern: pattern.sub(FILTERED, scrubbed), patterns, text)
 
 
-def scrub_json_strings(value: JsonValue, scrub: Callable[[str], str]) -> JsonValue:
+def scrub_json_strings(value: JsonValue, scrub: Callable[[str], str], depth: int = 0) -> JsonValue:
+    if depth > MAX_SCRUB_DEPTH:
+        return FILTERED
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, dict):
         return {  # mutable-ok: JSON object
-            key: item if key in SOURCE_CONTEXT_KEYS else scrub_json_strings(item, scrub) for key, item in value.items()
+            key: item if key in SOURCE_CONTEXT_KEYS else scrub_json_strings(item, scrub, depth + 1)
+            for key, item in value.items()
         }
     if isinstance(value, list):
-        return [scrub_json_strings(item, scrub) for item in value]  # mutable-ok: JSON array
+        return [scrub_json_strings(item, scrub, depth + 1) for item in value]  # mutable-ok: JSON array
     return value
 
 

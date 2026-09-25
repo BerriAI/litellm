@@ -1,7 +1,8 @@
 import hashlib
 import json
 from collections.abc import Mapping
-from typing import Final
+from functools import reduce
+from typing import Final, cast
 
 import pytest
 import sentry_sdk
@@ -12,8 +13,10 @@ from sentry_sdk.utils import event_from_exception
 
 from litellm.litellm_core_utils.sentry_scrubbing import (
     FILTERED,
+    MAX_SCRUB_DEPTH,
     build_sentry_init_options,
     build_string_scrubber,
+    scrub_json_strings,
 )
 from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 
@@ -164,10 +167,26 @@ def test_transaction_events_are_scrubbed_too() -> None:
             "headers={'x-tenant-key': 'sk-custom-header-key-0123456789'} key_name='sk-...6789'",
             f"headers={{'x-tenant-key': '{FILTERED}'}} key_name='sk-...6789'",
         ),
+        (
+            "master_key={'value': 'not-a-litellm-key'} timeout=10",
+            f"master_key='{FILTERED}' timeout=10",
+        ),
+        (
+            "credentials=[{'value': ('deep', 'secret')}], model='gpt-5'",
+            f"credentials='{FILTERED}', model='gpt-5'",
+        ),
     ],
 )
 def test_string_scrubber_rewrites_field_and_value_forms(text: str, expected: str) -> None:
     assert build_string_scrubber(send_default_pii=False)(text) == expected
+
+
+def test_json_walk_fails_closed_past_the_depth_cap() -> None:
+    scrub: Final = build_string_scrubber(send_default_pii=False)
+    nested: Final = reduce(lambda inner, _: [inner], range(MAX_SCRUB_DEPTH + 1), cast("JsonValue", "api_key=sk-1"))
+    assert FILTERED in json.dumps(scrub_json_strings(nested, scrub))
+    assert "sk-1" not in json.dumps(scrub_json_strings(nested, scrub))
+    assert scrub_json_strings([["api_key=sk-1"]], scrub) == [[f"api_key='{FILTERED}'"]]
 
 
 def test_string_scrubber_with_pii_on_only_scrubs_secrets() -> None:
