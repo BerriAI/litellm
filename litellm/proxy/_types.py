@@ -5349,11 +5349,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=False,
         description=(
             "When True, users whose JWT contains no team claims are authenticated "
-            "using their database team memberships instead of receiving HTTP 403. "
-            "Usage is attributed to the user's first resolvable DB team, or to the "
-            "team specified via the x-litellm-team-id request header (validated "
-            "against DB membership). Requires user_id_upsert=True so that user "
-            "records exist before the fallback runs."
+            "using their database team memberships instead of receiving HTTP 403, "
+            "with usage attributed to the user's first resolvable DB team. Whether or "
+            "not the JWT carries team claims, the x-litellm-team-id request header may "
+            "select any team the user is a member of in the database (validated against "
+            "DB membership); without the header the JWT team stays the default. Requires "
+            "user_id_upsert=True so that user records exist before the fallback runs."
         ),
     )
     issuers: list[JWTIssuerConfig] | None = Field(
