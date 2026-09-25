@@ -199,9 +199,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 headers=self.headers,
                 params={  # mutable-ok: one-shot query-params dict passed directly to httpx, not stored
                     "scenarioId": "orchestration",
-                    "executableIds": [
-                        "orchestration"
-                    ],
+                    "executableIds": ["orchestration"],
                     "status": "RUNNING",
                 },
             )
