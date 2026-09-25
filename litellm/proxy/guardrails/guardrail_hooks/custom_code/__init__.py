@@ -50,7 +50,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         if isinstance(raw_litellm_params, Mapping)
         else getattr(litellm_params, "streaming_deliver_ended_rewrites", None)
     )
-    streaming_deliver_ended_rewrites: Final = configured_value if isinstance(configured_value, bool) else True
+    streaming_deliver_ended_rewrites: Final = configured_value if isinstance(configured_value, bool) else False
 
     custom_code_guardrail: Final = CustomCodeGuardrail(
         guardrail_name=guardrail_name,

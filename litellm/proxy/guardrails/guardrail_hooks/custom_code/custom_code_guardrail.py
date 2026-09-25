@@ -90,7 +90,7 @@ class CustomCodeGuardrailConfigModel(GuardrailConfigModel):
     custom_code: str
     """The Python-like code containing the apply_guardrail function."""
 
-    streaming_deliver_ended_rewrites: bool = True
+    streaming_deliver_ended_rewrites: bool = False
     """Buffer complete streams before delivering arbitrary custom-code rewrites."""
 
 
@@ -122,7 +122,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         self,
         custom_code: str,
         guardrail_name: str | None = "custom_code",
-        streaming_deliver_ended_rewrites: bool = True,
+        streaming_deliver_ended_rewrites: bool = False,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         """

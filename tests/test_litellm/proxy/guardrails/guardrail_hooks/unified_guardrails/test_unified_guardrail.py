@@ -962,6 +962,21 @@ def test_custom_code_initializer_forwards_streaming_rewrite_setting(monkeypatch)
     assert guardrail.streaming_deliver_ended_rewrites is False
 
 
+def test_custom_code_initializer_keeps_streaming_rewrite_opt_in(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code import initialize_guardrail
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda _: None)
+    params = SimpleNamespace(
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n",
+        mode="post_call",
+        default_on=True,
+    )
+
+    guardrail = initialize_guardrail(params, {"guardrail_name": "custom-code-default"})
+
+    assert guardrail.streaming_deliver_ended_rewrites is False
+
+
 class TestStreamingTransform:
     """Streaming text-transformation (incremental_diff) path on the OpenAI chat
     completions streaming surface."""
@@ -1017,6 +1032,7 @@ class TestStreamingTransform:
                 "    return allow()\n"
             ),
             guardrail_name="custom-code-streaming",
+            streaming_deliver_ended_rewrites=True,
         )
 
         chunks = [
@@ -1060,6 +1076,7 @@ class TestStreamingTransform:
                 f"    return modify(texts=[text.replace('{placeholder}', '{replacement}') for text in inputs['texts']])\n"
             ),
             guardrail_name="custom-code-placeholder-rewrite",
+            streaming_deliver_ended_rewrites=True,
         )
 
         chunks = [_stream_chunk(original[index : index + 3]) for index in range(0, len(original), 3)]
@@ -1084,6 +1101,7 @@ class TestStreamingTransform:
                 f"    return modify(texts=[text.replace('{placeholder}', '{replacement}') for text in inputs['texts']])\n"
             ),
             guardrail_name="custom-code-responses-rewrite",
+            streaming_deliver_ended_rewrites=True,
         )
         _patch_translation_mappings(
             monkeypatch,
@@ -1140,6 +1158,7 @@ class TestStreamingTransform:
                 '"function": {"name": "lookup", "arguments": \'{"value": "restored-secret"}\'}}])\n'
             ),
             guardrail_name="custom-code-tool-rewrite",
+            streaming_deliver_ended_rewrites=True,
         )
         placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
         fragments = ['{"value": "', placeholder[:20], placeholder[20:45], placeholder[45:], '"}']
@@ -1194,6 +1213,7 @@ class TestStreamingTransform:
                 '"function": {"name": "lookup", "arguments": \'{"value": "rewritten"}\'}}])\n'
             ),
             guardrail_name="custom-code-multi-choice-tool-rewrite",
+            streaming_deliver_ended_rewrites=True,
         )
         original_arguments = ('{"value": "original"}', '{"value": "second"}')
         chunks = [
