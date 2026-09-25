@@ -257,7 +257,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
-    all_litellm_params,
+    is_litellm_owned_kwarg,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -4180,7 +4180,7 @@ def filter_out_litellm_params(kwargs: dict) -> dict:
         >>> # filtered = {"query": "test"}
     """
 
-    return {key: value for key, value in kwargs.items() if key not in all_litellm_params}
+    return {key: value for key, value in kwargs.items() if not is_litellm_owned_kwarg(key)}
 
 
 def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
@@ -10122,12 +10122,7 @@ def get_standard_openai_params(params: Mapping[str, object]) -> dict:
 
 def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict:
     openai_params: Final = litellm.OPENAI_CHAT_COMPLETION_PARAMS
-    default_params: Final = openai_params + all_litellm_params
-    non_default_params: Final = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
-
-    return non_default_params
+    return {k: v for k, v in kwargs.items() if k not in openai_params and not is_litellm_owned_kwarg(k)}
 
 
 def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
@@ -10176,9 +10171,7 @@ def strip_reasoning_summary_aliases_from_optional_params(
 def get_non_default_transcription_params(kwargs: dict) -> dict:
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
-    default_params: Final = OPENAI_TRANSCRIPTION_PARAMS + all_litellm_params
-    non_default_params: Final = {k: v for k, v in kwargs.items() if k not in default_params}
-    return non_default_params
+    return {k: v for k, v in kwargs.items() if k not in OPENAI_TRANSCRIPTION_PARAMS and not is_litellm_owned_kwarg(k)}
 
 
 def add_openai_metadata(

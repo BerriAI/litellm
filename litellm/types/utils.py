@@ -62,6 +62,7 @@ from .guardrails import GuardrailEventHooks
 from .litellm_params import (
     AGENTIC_LOOP_KWARG_NAMES,
     BEDROCK_BATCH_KWARG_NAMES,
+    INTERNAL_KWARG_PREFIX,
     KWARG_ARTIFACTS,
     OWNED_KWARG_NAMES,
 )
@@ -3921,6 +3922,10 @@ all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-
     *StandardCallbackDynamicParams.__annotations__,
     *CustomPricingLiteLLMParams.model_fields,
 ]
+
+
+def is_litellm_owned_kwarg(name: str) -> bool:
+    return name.startswith(INTERNAL_KWARG_PREFIX) or name in all_litellm_params
 
 
 class KeyGenerationConfig(TypedDict, total=False):
