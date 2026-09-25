@@ -912,6 +912,15 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+_BEDROCK_OPENAI_MODEL_RE: Final = re.compile(r"^openai\.(.+)$")
+
+
+def get_bedrock_openai_alias_model(model: str) -> str | None:
+    """Return the bare OpenAI model name for a Bedrock ``openai.<model>`` id, else None."""
+    match: Final = _BEDROCK_OPENAI_MODEL_RE.match(get_bedrock_base_model(model))
+    return match.group(1) if match is not None else None
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True

@@ -50,6 +50,7 @@ from litellm.types.utils import (
     ImageResponse,
     LlmProviders,
     LLMResponseTypes,
+    Message,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -251,6 +252,8 @@ def bedrock_openai_alias_cost_map(local_model_cost_map: None, monkeypatch: pytes
             "max_input_tokens": 1000,
             "max_output_tokens": 100,
             "max_tokens": 100,
+            "supports_web_search": True,
+            "supported_endpoints": ["/v1/responses"],
         },
     )
     litellm.utils._invalidate_model_cost_lowercase_map()
@@ -276,6 +279,8 @@ def test_get_model_info_bedrock_openai_alias_falls_back_to_openai_row(
     assert info["input_cost_per_token"] == 3e-6
     assert info["output_cost_per_token"] == 9e-6
     assert info["litellm_provider"] == expected_provider
+    assert info.get("supports_web_search") is not True
+    assert info.get("supported_endpoints") is None
 
 
 def test_get_model_info_bedrock_openai_alias_exact_row_wins(
@@ -321,6 +326,21 @@ def test_cost_per_token_bedrock_openai_alias_prices_off_openai_row(bedrock_opena
     )
     assert prompt_cost == pytest.approx(3e-5)
     assert completion_cost == pytest.approx(4.5e-5)
+
+
+def test_completion_cost_bedrock_openai_alias_prices_response_model(
+    bedrock_openai_alias_cost_map: None,
+) -> None:
+    response: Final = ModelResponse(
+        model="us.openai.fake-openai-bedrock-model",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    response._hidden_params = {"custom_llm_provider": "bedrock"}
+    cost: Final = litellm.completion_cost(
+        completion_response=response, custom_llm_provider="bedrock", region_name="us-east-1"
+    )
+    assert cost == pytest.approx(7.5e-5)
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:

@@ -966,6 +966,22 @@ def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
     assert s3_static_key_pair({"aws_access_key_id": "bedrock-key", **partial_s3_pair}) is None
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("us.openai.fake-model", "fake-model"),
+        ("bedrock/global.openai.fake-model", "fake-model"),
+        ("openai.fake-model", "fake-model"),
+        ("anthropic.fake-model", None),
+        ("us.anthropic.fake-model", None),
+    ],
+)
+def test_get_bedrock_openai_alias_model(model, expected):
+    from litellm.llms.bedrock.common_utils import get_bedrock_openai_alias_model
+
+    assert get_bedrock_openai_alias_model(model) == expected
+
+
 def test_unmapped_openai_family_model_routes_to_converse():
     """A Bedrock-native OpenAI model that is not in the cost map yet must not fall to the invoke route.
 

@@ -5755,8 +5755,8 @@ def _get_model_info_from_generalization(
     return None
 
 
-_BEDROCK_OPENAI_MODEL_RE: Final = re.compile(r"^openai\.(.+)$")
 _BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
+_BEDROCK_OPENAI_ALIAS_FIELDS: Final = frozenset({"mode", "max_tokens", "max_input_tokens", "max_output_tokens"})
 
 
 def _get_model_info_from_bedrock_openai_alias(
@@ -5765,12 +5765,12 @@ def _get_model_info_from_bedrock_openai_alias(
     """Price an unmapped Bedrock ``openai.<model>`` id off the OpenAI catalog row for ``<model>``."""
     if custom_llm_provider not in _BEDROCK_PROVIDERS:
         return None
-    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+    from litellm.llms.bedrock.common_utils import get_bedrock_openai_alias_model
 
-    match: Final = _BEDROCK_OPENAI_MODEL_RE.match(get_bedrock_base_model(split_model))
-    if match is None:
+    openai_model: Final = get_bedrock_openai_alias_model(split_model)
+    if openai_model is None:
         return None
-    openai_key: Final = _get_model_cost_key(match.group(1))
+    openai_key: Final = _get_model_cost_key(openai_model)
     if openai_key is None:
         return None
     openai_info: Final = _get_model_info_from_model_cost(key=openai_key)
@@ -5782,7 +5782,10 @@ def _get_model_info_from_bedrock_openai_alias(
         custom_llm_provider,
         openai_key,
     )
-    return openai_key, {**openai_info, "litellm_provider": custom_llm_provider}
+    return openai_key, {
+        **{k: v for k, v in openai_info.items() if k in _BEDROCK_OPENAI_ALIAS_FIELDS or "cost" in k},
+        "litellm_provider": custom_llm_provider,
+    }
 
 
 def _strip_mantle_region_prefix(model: str) -> str:
