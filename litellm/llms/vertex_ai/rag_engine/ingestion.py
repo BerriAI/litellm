@@ -122,41 +122,26 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         """
         import litellm
 
-        # Set GCS_BUCKET_NAME env var for litellm.files.create_file
-        # The handler uses this to determine where to upload
-        original_bucket: Final = os.environ.get("GCS_BUCKET_NAME")
-        if self.gcs_bucket:
-            os.environ["GCS_BUCKET_NAME"] = self.gcs_bucket
+        file_tuple: Final = (filename, file_content, content_type)
 
-        try:
-            # Create file tuple for litellm.files.acreate_file
-            file_tuple: Final = (filename, file_content, content_type)
+        verbose_logger.debug(
+            "Uploading file to GCS via litellm.files.acreate_file: %s (bucket: %s)", filename, self.gcs_bucket
+        )
 
-            verbose_logger.debug(
-                "Uploading file to GCS via litellm.files.acreate_file: %s (bucket: %s)", filename, self.gcs_bucket
-            )
+        response: Final = await litellm.acreate_file(
+            file=file_tuple,
+            purpose="assistants",
+            custom_llm_provider="vertex_ai",
+            gcs_bucket_name=self.gcs_bucket,
+            vertex_project=self.vertex_project,
+            vertex_location=self.vertex_location,
+            vertex_credentials=self.vertex_credentials,
+        )
 
-            # Upload to GCS using LiteLLM's file upload
-            response: Final = await litellm.acreate_file(
-                file=file_tuple,
-                purpose="assistants",  # Purpose for file storage
-                custom_llm_provider="vertex_ai",
-                vertex_project=self.vertex_project,
-                vertex_location=self.vertex_location,
-                vertex_credentials=self.vertex_credentials,
-            )
+        gcs_uri: Final = response.id
+        verbose_logger.info("Uploaded file to GCS: %s", gcs_uri)
 
-            # The response.id should be the GCS URI
-            gcs_uri: Final = response.id
-            verbose_logger.info("Uploaded file to GCS: %s", gcs_uri)
-
-            return gcs_uri
-        finally:
-            # Restore original env var
-            if original_bucket is not None:
-                os.environ["GCS_BUCKET_NAME"] = original_bucket
-            elif "GCS_BUCKET_NAME" in os.environ:
-                del os.environ["GCS_BUCKET_NAME"]
+        return gcs_uri
 
     async def _import_file_to_corpus_via_sdk(
         self,
