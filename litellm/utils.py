@@ -8911,6 +8911,12 @@ class ProviderConfigManager:
             )
 
             return TencentAnthropicMessagesConfig()
+        elif litellm.LlmProviders.ZAI == provider:
+            from litellm.llms.zai.messages.transformation import (
+                ZAIAnthropicMessagesConfig,
+            )
+
+            return ZAIAnthropicMessagesConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             if "claude" in model_lower:
                 from litellm.llms.github_copilot.messages.transformation import (
@@ -9159,6 +9165,12 @@ class ProviderConfigManager:
             return litellm.BedrockMantleResponsesAPIConfig(
                 use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
             )
+        elif litellm.LlmProviders.ZAI == provider:
+            from litellm.llms.zai.responses.transformation import (
+                ZAIResponsesAPIConfig,
+            )
+
+            return ZAIResponsesAPIConfig()
         return None
 
     @staticmethod
