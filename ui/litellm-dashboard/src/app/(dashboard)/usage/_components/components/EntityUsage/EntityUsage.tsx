@@ -744,7 +744,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
         teams={teams || []}
-        exportBlockedReason={getExportBlockedReason(spendFetchState)}
+        exportBlockedReason={getExportBlockedReason(spendFetchState, "an entity export")}
         serverExport={serverExport}
       />
       <Tabs defaultValue={tabs[0].key}>
