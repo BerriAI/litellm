@@ -48,9 +48,10 @@ _DATES = "start_date=2024-01-01&end_date=2024-12-31"
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
         "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/aggregated/model_top_keys",
         "/team/daily/activity/export",
     ),
-    ids=("paginated", "aggregated", "search", "export"),
+    ids=("paginated", "aggregated", "search", "model_top_keys", "export"),
 )
 @pytest.mark.parametrize(
     "actor,team,expected_status",
@@ -62,6 +63,7 @@ async def test_team_daily_activity_matrix(
 ):
     filter_param = "team_id" if endpoint.endswith("/export") else "team_ids"
     query = _DATES + ("&search=x" if endpoint.endswith("/search") else "")
+    query += "&model=m" if endpoint.endswith("/model_top_keys") else ""
     if team == "alpha":
         query += f"&{filter_param}={world.team_alpha_id}"
     elif team == "beta":

@@ -23,7 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
-import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
+import { ActivityMetrics, processActivityData, toTopApiKeyData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import type { EntityType, ServerExport } from "@/components/EntityUsageExport/types";
@@ -36,6 +36,7 @@ import {
   teamDailyActivityCall,
   teamDailyActivityExportCall,
   teamDailyActivityKeySearchCall,
+  teamDailyActivityModelTopKeysCall,
   userDailyActivityCall,
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -195,6 +196,22 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [accessToken, startTime, endTime, entityFilterArg, teams],
   );
   const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
+
+  const fetchModelTopApiKeys = useCallback(
+    (modelName: string) => {
+      if (!accessToken || !startTime || !endTime) return Promise.resolve([]);
+      const teamIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
+      return teamDailyActivityModelTopKeysCall(
+        accessToken,
+        startTime,
+        endTime,
+        modelName,
+        modelViewType === "groups" ? "model_group" : "model",
+        teamIds,
+      ).then(toTopApiKeyData);
+    },
+    [accessToken, startTime, endTime, entityFilterArg, modelViewType],
+  );
 
   const getAllTags = () => {
     if (entityList) {
@@ -664,7 +681,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <div className="flex justify-end mt-2 mb-4">
             <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
           </div>
-          <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+          <ActivityMetrics
+            modelMetrics={modelMetrics}
+            hidePromptCachingMetrics={entityType === "agent"}
+            fetchTopApiKeys={entityType === "team" && hasRequestWindow ? fetchModelTopApiKeys : undefined}
+          />
         </>
       ),
     },

@@ -26,7 +26,7 @@ import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
-import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
+import { ActivityMetrics, processActivityData, toTopApiKeyData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
@@ -40,6 +40,7 @@ import {
   userDailyActivityAggregatedCall,
   userDailyActivityCall,
   userDailyActivityKeySearchCall,
+  userDailyActivityModelTopKeysCall,
 } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
@@ -451,6 +452,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const mcpServerMetrics = useMemo(
     () => processActivityData(userSpendData, "mcp_servers", teams),
     [userSpendData, teams],
+  );
+  const fetchModelTopApiKeys = useCallback(
+    (modelName: string) => {
+      if (!accessToken || !startTime || !endTime) return Promise.resolve([]);
+      return userDailyActivityModelTopKeysCall(
+        accessToken,
+        startTime,
+        endTime,
+        modelName,
+        modelViewType === "groups" ? "model_group" : "model",
+        effectiveUserId,
+      ).then(toTopApiKeyData);
+    },
+    [accessToken, startTime, endTime, modelViewType, effectiveUserId],
   );
 
   return (
@@ -873,7 +888,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <div className="flex justify-end mt-2 mb-4">
                     <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
                   </div>
-                  <ActivityMetrics modelMetrics={modelMetrics} />
+                  <ActivityMetrics
+                    modelMetrics={modelMetrics}
+                    fetchTopApiKeys={accessToken && startTime && endTime ? fetchModelTopApiKeys : undefined}
+                  />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
                   <KeyActivityPanel

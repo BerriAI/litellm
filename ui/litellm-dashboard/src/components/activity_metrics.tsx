@@ -13,17 +13,29 @@ import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown } from "lucide-react";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
+import { ModelTopApiKeysResponse } from "./networking";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
 import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
+  fetchTopApiKeys?: (modelName: string) => Promise<TopApiKeyData[]>;
 }
+
+export const toTopApiKeyData = (response: ModelTopApiKeysResponse): TopApiKeyData[] =>
+  (response.api_keys ?? []).map((key) => ({
+    api_key: key.api_key,
+    key_alias: key.key_alias ?? null,
+    team_id: key.team_id ?? null,
+    spend: key.spend ?? 0,
+    requests: key.api_requests ?? 0,
+    tokens: key.total_tokens ?? 0,
+  }));
 
 const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =>
   averageResponseTimeMs(metrics.total_response_time_ms ?? 0, metrics.total_timed_requests ?? 0);
@@ -37,14 +49,106 @@ export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProp
   />
 );
 
+type TopApiKeysResult = {
+  source: [string, (modelName: string) => Promise<TopApiKeyData[]>];
+  status: "error" | "ready";
+  keys: TopApiKeyData[];
+};
+
+const TopApiKeysCard = ({
+  modelName,
+  fallback,
+  fetchTopApiKeys,
+}: {
+  modelName: string;
+  fallback: TopApiKeyData[];
+  fetchTopApiKeys?: (modelName: string) => Promise<TopApiKeyData[]>;
+}) => {
+  const [result, setResult] = useState<TopApiKeysResult | null>(null);
+
+  useEffect(() => {
+    if (fetchTopApiKeys === undefined) return;
+    let cancelled = false;
+    fetchTopApiKeys(modelName)
+      .then((keys) => {
+        if (!cancelled) setResult({ source: [modelName, fetchTopApiKeys], status: "ready", keys });
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ source: [modelName, fetchTopApiKeys], status: "error", keys: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [modelName, fetchTopApiKeys]);
+
+  const isCurrent =
+    fetchTopApiKeys !== undefined &&
+    result !== null &&
+    result.source[0] === modelName &&
+    result.source[1] === fetchTopApiKeys;
+  const fetched = isCurrent ? result : null;
+
+  if (fetchTopApiKeys !== undefined && fetched?.status === "error") {
+    return (
+      <Card className="mt-4">
+        <CardContent>
+          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
+          <p className="mt-3 text-sm text-muted-foreground">Failed to load top keys</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (fetchTopApiKeys !== undefined && fetched === null) {
+    return (
+      <Card className="mt-4">
+        <CardContent>
+          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
+          <p className="mt-3 text-sm text-muted-foreground">Loading top keys...</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const keys = fetched !== null && fetched.status === "ready" ? fetched.keys : fallback;
+  if (keys.length === 0) return null;
+
+  return (
+    <Card className="mt-4">
+      <CardContent>
+        <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
+        <div className="mt-3">
+          <div className="grid grid-cols-1 gap-2">
+            {keys.map((keyData) => (
+              <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                <div>
+                  <p className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</p>
+                  {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
+                </div>
+                <div className="text-right">
+                  <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
 const ModelSection = ({
   modelName,
   metrics,
   hidePromptCachingMetrics = false,
+  fetchTopApiKeys,
 }: {
   modelName: string;
   metrics: ModelActivityData;
   hidePromptCachingMetrics?: boolean;
+  fetchTopApiKeys?: (modelName: string) => Promise<TopApiKeyData[]>;
 }) => {
   return (
     <div className="space-y-2">
@@ -96,31 +200,7 @@ const ModelSection = ({
         </Card>
       </div>
 
-      {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
-        <Card className="mt-4">
-          <CardContent>
-            <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
-            <div className="mt-3">
-              <div className="grid grid-cols-1 gap-2">
-                {metrics.top_api_keys.map((keyData) => (
-                  <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                    <div>
-                      <p className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</p>
-                      {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
-                    </div>
-                    <div className="text-right">
-                      <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <TopApiKeysCard modelName={modelName} fallback={metrics.top_api_keys ?? []} fetchTopApiKeys={fetchTopApiKeys} />
 
       {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
 
@@ -300,7 +380,11 @@ const ModelCollapsible = ({
   );
 };
 
-export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, hidePromptCachingMetrics = false }) => {
+export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
+  modelMetrics,
+  hidePromptCachingMetrics = false,
+  fetchTopApiKeys,
+}) => {
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
     if (a === "") return 1;
     if (b === "") return -1;
@@ -481,6 +565,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               modelName={modelName || "Unknown Model"}
               metrics={modelMetrics[modelName]}
               hidePromptCachingMetrics={hidePromptCachingMetrics}
+              fetchTopApiKeys={fetchTopApiKeys}
             />
           </ModelCollapsible>
         ))}
