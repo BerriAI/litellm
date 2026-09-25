@@ -90,6 +90,34 @@ const SortableHead = ({
   );
 };
 
+const KeyQueryNotice = ({ query }: { query: ReturnType<typeof useCacheLeakageKeys> }) => {
+  if (query.isPending) {
+    return (
+      <p role="status" className="py-8 text-center text-sm text-muted-foreground">
+        Loading key ranking...
+      </p>
+    );
+  }
+  if (query.isError) {
+    return (
+      <div role="alert" className="flex items-center justify-center gap-3 py-8">
+        <p className="text-sm text-muted-foreground">Could not load the key ranking</p>
+        <Button variant="outline" onClick={() => void query.refetch()} disabled={query.isFetching}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  if (query.data != null && query.data.results.length < query.data.metadata.total_api_keys) {
+    return (
+      <p className="mt-2 text-sm text-muted-foreground">
+        {`Showing the top ${query.data.results.length} of ${query.data.metadata.total_api_keys} keys, ranked by uncached prompt tokens.`}
+      </p>
+    );
+  }
+  return null;
+};
+
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity, accessToken, scopeUserId }) => {
   const { results, loading, isFetchingMore } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
@@ -143,19 +171,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity, accessTok
               Data is still loading; rows and totals will update as the rest of the range arrives.
             </p>
           )}
-          {dimension === "key" && keyQuery.isPending && (
-            <p role="status" className="py-8 text-center text-sm text-muted-foreground">
-              Loading key ranking...
-            </p>
-          )}
-          {dimension === "key" && keyQuery.isError && (
-            <div role="alert" className="flex items-center justify-center gap-3 py-8">
-              <p className="text-sm text-muted-foreground">Could not load the key ranking</p>
-              <Button variant="outline" onClick={() => void keyQuery.refetch()} disabled={keyQuery.isFetching}>
-                Retry
-              </Button>
-            </div>
-          )}
+          {dimension === "key" && <KeyQueryNotice query={keyQuery} />}
           {showTableOrEmpty &&
             (rows.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">

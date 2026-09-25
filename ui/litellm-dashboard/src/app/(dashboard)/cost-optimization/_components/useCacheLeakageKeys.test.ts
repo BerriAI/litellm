@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/components/networking", () => ({ formatDate: vi.fn((d: Date) => d.toISOString().slice(0, 10)) }));
 vi.mock("@/lib/http/api", () => ({ $api: { useQuery: vi.fn() } }));
 
 import { $api } from "@/lib/http/api";
@@ -15,7 +14,7 @@ const lastCall = () =>
     { enabled: boolean; retry: boolean },
   ];
 
-const range = { from: new Date("2026-07-06T19:00:00Z"), to: new Date("2026-08-05T19:00:00Z") };
+const range = { from: new Date(2026, 6, 6, 19), to: new Date(2026, 7, 5, 19) };
 
 describe("useCacheLeakageKeys", () => {
   it("queries the cache-leakage route with the picked range, the caller's UTC offset and the live-day extension", () => {
