@@ -309,5 +309,22 @@ describe("guardrail_info_helpers", () => {
       expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, "streaming")).toBe("both");
       expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, undefined)).toBeUndefined();
     });
+
+    it("keeps stored restrictions for modes outside the current selection", () => {
+      expect(
+        streamScopeForUpdate(
+          ["pre_call"],
+          { pre_call: "streaming" },
+          { pre_call: "streaming", post_call: "non_streaming" },
+        ),
+      ).toBeUndefined();
+      expect(
+        streamScopeForUpdate(
+          ["pre_call"],
+          { pre_call: "both" },
+          { pre_call: "streaming", post_call: "non_streaming" },
+        ),
+      ).toEqual({ post_call: "non_streaming" });
+    });
   });
 });

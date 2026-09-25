@@ -331,10 +331,25 @@ export const streamScopeForUpdate = (
   previousRaw: unknown,
   previousModes: string[] = modes,
 ): GuardrailStreamScope | Record<string, GuardrailStreamScope> | undefined => {
-  const nextStreamScope = streamScopePayload(modes, nextByMode);
+  const previousMap: Record<string, unknown> =
+    previousRaw !== null && typeof previousRaw === "object" && !Array.isArray(previousRaw)
+      ? (previousRaw as Record<string, unknown>)
+      : {};
+  const preserved: Record<string, GuardrailStreamScope> = Object.fromEntries(
+    Object.entries(previousMap).filter(
+      (entry): entry is [string, GuardrailStreamScope] =>
+        !modes.includes(entry[0]) && isGuardrailStreamScope(entry[1]),
+    ),
+  );
+  const nextModes = [...modes, ...Object.keys(preserved)];
+  const nextStreamScope = streamScopePayload(nextModes, {
+    ...preserved,
+    ...Object.fromEntries(modes.map((mode) => [mode, nextByMode[mode] ?? "both"])),
+  });
+  const previousCompareModes = Object.keys(previousMap).length > 0 ? Object.keys(previousMap) : previousModes;
   const previousStreamScope = streamScopePayload(
-    previousModes,
-    streamScopeByModeFromConfig(previousRaw, previousModes),
+    previousCompareModes,
+    streamScopeByModeFromConfig(previousRaw, previousCompareModes),
   );
   if (JSON.stringify(nextStreamScope ?? "both") === JSON.stringify(previousStreamScope ?? "both")) {
     return undefined;

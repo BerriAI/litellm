@@ -1,4 +1,3 @@
-// Code templates
 export const CODE_TEMPLATES = {
   empty: {
     name: "Empty Template",
@@ -74,7 +73,6 @@ export const CODE_TEMPLATES = {
   },
 };
 
-// Available primitives organized by category
 export const PRIMITIVES = {
   "Return Values": [
     { name: "allow()", desc: "Let request/response through" },
