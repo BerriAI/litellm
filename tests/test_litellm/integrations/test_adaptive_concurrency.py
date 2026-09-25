@@ -89,3 +89,34 @@ async def test_growing_the_limit_wakes_a_waiting_acquirer() -> None:
     released.set()
     await asyncio.wait_for(holder, timeout=5)
     assert tuple(acquired) == ("waiter",)
+
+
+@pytest.mark.asyncio
+async def test_releasing_a_slot_wakes_exactly_one_waiter() -> None:
+    limiter: Final = AdaptiveConcurrencyLimiter(initial=1, floor=1, ceiling=4)
+    acquired: Final[list[str]] = []  # mutable-ok: the waiter tasks append to it across the await boundary
+    release: Final = asyncio.Event()
+
+    async def hold() -> None:
+        async with limiter:
+            await asyncio.sleep(0.05)
+
+    async def waiter(name: str) -> None:
+        async with limiter:
+            acquired.append(name)
+            await release.wait()
+
+    holder: Final = asyncio.create_task(hold())
+    waiters: Final = tuple(asyncio.create_task(waiter(f"w{i}")) for i in range(3))
+    await asyncio.sleep(0.02)
+    await asyncio.wait_for(holder, timeout=5)
+    await asyncio.sleep(0.05)
+    assert len(acquired) == 1
+
+    # Growing the limit wakes the remaining waiters even though nothing else frees a slot.
+    for _ in range(3):
+        limiter.record(PutSample(rtt_seconds=0.1, throttled=False))
+        await asyncio.sleep(0.05)
+    assert len(acquired) == 3
+    release.set()
+    await asyncio.gather(*waiters)

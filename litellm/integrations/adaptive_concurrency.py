@@ -52,7 +52,7 @@ class AdaptiveConcurrencyLimiter:
     async def __aexit__(self, *_: object) -> None:
         async with self._condition:
             self._in_flight -= 1
-            self._condition.notify_all()
+            self._condition.notify(1)
 
     def record(self, sample: PutSample) -> None:
         ewma_before_update: Final[float | None] = self._rtt_ewma
