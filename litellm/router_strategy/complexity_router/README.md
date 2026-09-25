@@ -516,6 +516,13 @@ exceeds the limit. The estimate counts all message text at approximately four ch
 so a short newest nudge in a long agentic session still reaches the classifier. Leave it unset to
 keep the scorer's tier in control at any conversation size
 
+The context veto only applies on turns that are classified, so it never overrides a held pin. With
+`classification_mode: user_turn`, a continuation turn inside a session that already holds a pin
+replays that pin (`x-litellm-complexity-router-cause: user_turn_continuation`) with no classifier
+call, however large the conversation has grown. The threshold applies again on the next human ask,
+which falls through to classification and, when the conversation exceeds the limit, goes to the LLM
+classifier. With `session_affinity` on, the pin wins for new asks as well
+
 The signal requirement is what keeps this from quietly routing everything to your cheapest model.
 A prompt where no dimension fires scores exactly 0.0, which is below `simple_medium`, so the score
 to tier mapping calls it SIMPLE by default rather than by evidence. Around half of general traffic
