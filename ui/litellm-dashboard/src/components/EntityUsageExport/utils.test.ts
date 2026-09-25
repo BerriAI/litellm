@@ -2531,6 +2531,31 @@ describe("EntityUsageExport utils", () => {
         expect(byKey["k3"]["User ID"]).toBe("Unassigned");
       });
 
+      it("should not lose user ids that collide with JavaScript object properties", () => {
+        const colliding: EntitySpendData = {
+          ...mockSpendData,
+          results: [
+            {
+              date: "2025-01-01",
+              breakdown: {
+                entities: {},
+                api_keys: {
+                  k1: perUserKey("__proto__", "team-1", 4),
+                  k2: perUserKey("constructor", "team-1", 6),
+                },
+              },
+            },
+          ],
+        } as EntitySpendData;
+
+        const result = generateDailyData(colliding, "user", "User");
+
+        expect(result).toHaveLength(2);
+        const byId = Object.fromEntries(result.map((row: any) => [row["User ID"], row]));
+        expect(byId["__proto__"]["Spend ($)"]).toBe("4.0000");
+        expect(byId["constructor"]["Spend ($)"]).toBe("6.0000");
+      });
+
       it("should still group by team_id for team exports on the same input", () => {
         const result = generateDailyData(userAggregatedSpendData, "team", "Team");
 

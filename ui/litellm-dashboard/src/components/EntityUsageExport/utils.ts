@@ -45,7 +45,7 @@ const aggregateApiKeysIntoEntities = (breakdown: Record<string, any>, entityType
   const apiKeys = breakdown.api_keys;
   if (!apiKeys || Object.keys(apiKeys).length === 0) return {};
 
-  const grouped: Record<string, any> = {};
+  const grouped: Record<string, any> = Object.create(null);
   const isUser = entityType === "user";
 
   for (const [keyId, keyData] of Object.entries<any>(apiKeys)) {
