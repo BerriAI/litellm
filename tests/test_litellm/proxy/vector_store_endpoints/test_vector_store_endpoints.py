@@ -1420,8 +1420,14 @@ class TestIndexCreate:
         mock_response = MagicMock()
         mock_row = MagicMock()
         mock_row.model_dump.return_value = {
+            "id": "index-id",
             "index_name": "test-index",
             "litellm_params": create_request.litellm_params.model_dump(),
+            "index_info": None,
+            "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "created_by": "admin-user",
+            "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+            "updated_by": "admin-user",
         }
 
         mock_prisma = MagicMock()
@@ -1431,11 +1437,10 @@ class TestIndexCreate:
         mock_prisma.db.litellm_managedvectorstoreindextable.create = AsyncMock(
             return_value=mock_row
         )
-
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
-        ):
+        ), patch.object(litellm, "vector_store_index_registry", None):
             result = await index_create(
                 request=mock_request,
                 index_create_request=create_request,
@@ -1447,6 +1452,8 @@ class TestIndexCreate:
                     user_id="admin-user",
                 ),
             )
+            assert litellm.vector_store_index_registry is not None
+            assert litellm.vector_store_index_registry.is_vector_store_index("test-index")
 
         assert result["index_name"] == "test-index"
         mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
