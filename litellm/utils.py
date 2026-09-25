@@ -5815,6 +5815,7 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
     vendor_model: Final = (
         _split_bedrock_vendor_model(region_free_split_model)
         if custom_llm_provider in ("bedrock", "bedrock_converse", "bedrock_mantle")
+        and "/" not in region_free_split_model
         else None
     )
     provider_model_info: Final = (
