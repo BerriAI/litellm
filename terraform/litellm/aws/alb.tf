@@ -5,7 +5,7 @@ resource "aws_lb" "this" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = local.public_subnet_ids
 
-  idle_timeout = 120
+  idle_timeout = var.alb_idle_timeout_seconds
 
   lifecycle {
     precondition {

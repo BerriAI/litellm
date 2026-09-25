@@ -23,6 +23,12 @@ ingress:
   #          wildcard pathType, so that rule could never match there.
   controller: alb
   annotations: {}
+  # Load balancer idle timeout in seconds. ALB renders
+  # alb.ingress.kubernetes.io/load-balancer-attributes:
+  # idle_timeout.timeout_seconds=N. Nginx renders
+  # nginx.ingress.kubernetes.io/proxy-read-timeout and proxy-send-timeout.
+  # Streams silent longer than this (slow first token) are cut with a 504.
+  idleTimeoutSeconds: 600
   host: ""        # optional; if set, becomes the rule's host
   tls: []
   # Extra HTTP paths appended to the ingress rule. Additive: every built-in
@@ -282,6 +288,10 @@ gateway:
   # Number of uvicorn worker processes per gateway pod. Sets NUM_WORKERS,
   # consumed by the gateway image entrypoint. Default is 1.
   numWorkers: 1
+  # Uvicorn keep-alive timeout in seconds (KEEPALIVE_TIMEOUT). Must exceed the
+  # load balancer idle timeout in front of the gateway, otherwise the LB can
+  # hand a request to a connection uvicorn is closing.
+  keepaliveTimeoutSeconds: 630
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps
   envSecrets: [] # Add extra environment variables to the gateway from secrets

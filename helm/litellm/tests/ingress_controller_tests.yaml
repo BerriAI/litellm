@@ -4,6 +4,65 @@ templates:
 values:
   - ./values/required.yaml
 tests:
+  - it: adds the default ALB idle timeout annotation
+    set:
+      ingress.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+          value: idle_timeout.timeout_seconds=600
+
+  - it: preserves a user-supplied ALB load balancer attributes annotation
+    set:
+      ingress.enabled: true
+      ingress.annotations:
+        alb.ingress.kubernetes.io/load-balancer-attributes: "idle_timeout.timeout_seconds=120,routing.http2.enabled=true"
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+          value: idle_timeout.timeout_seconds=120,routing.http2.enabled=true
+
+  - it: adds nginx proxy timeout annotations for ingress-nginx
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+    asserts:
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"]
+          value: "600"
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-send-timeout"]
+          value: "600"
+
+  - it: preserves user-supplied nginx proxy timeout annotations
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+      ingress.annotations:
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"]
+          value: "120"
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-send-timeout"]
+          value: "180"
+
+  - it: does not add load balancer timeout annotations when disabled
+    set:
+      ingress.enabled: true
+      ingress.idleTimeoutSeconds: 0
+    asserts:
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"]
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-send-timeout"]
+
   - it: keeps the AWS Load Balancer Controller path types by default
     set:
       ingress.enabled: true

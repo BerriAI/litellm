@@ -57,6 +57,10 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- if and .Values.keepaliveTimeoutSeconds (not (hasKey (default dict .Values.envVars) "KEEPALIVE_TIMEOUT")) }}
+            - name: KEEPALIVE_TIMEOUT
+              value: {{ .Values.keepaliveTimeoutSeconds | quote }}
+            {{- end }}
             {{- include "litellm.proxyMetricsEnv" . | nindent 12 }}
             {{- if .Values.collector.enabled }}
             {{- include "litellm.collectorEnv" . | nindent 12 }}
