@@ -1404,12 +1404,80 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
     print(f"Total cost: {total_cost}")
 
-    assert abs(input_cost - expected_input_cost) < 1e-10, (
-        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    assert (
+        abs(input_cost - expected_input_cost) < 1e-10
+    ), f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    assert (
+        abs(output_cost - expected_output_cost) < 1e-10
+    ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+
+
+AZURE_GPT_5_6_MAP_KEYS = (
+    "azure/gpt-5.6",
+    "azure/gpt-5.6-sol",
+    "azure/gpt-5.6-terra",
+    "azure/gpt-5.6-luna",
+    "azure/us/gpt-5.6",
+    "azure/us/gpt-5.6-sol",
+    "azure/us/gpt-5.6-terra",
+    "azure/us/gpt-5.6-luna",
+    "azure/eu/gpt-5.6",
+    "azure/eu/gpt-5.6-sol",
+    "azure/eu/gpt-5.6-terra",
+    "azure/eu/gpt-5.6-luna",
+)
+
+
+def test_azure_gpt_5_6_cache_write_tokens_are_billed(_local_model_cost_map):
+    """
+    Azure bills gpt-5.6 prompt cache writes at 1.25x the input rate on every
+    tier, but the azure entries carried no ``cache_creation_input_token_cost``,
+    so cache-write tokens were billed at the plain input rate instead.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        completion_tokens=100,
+        prompt_tokens=2000,
+        total_tokens=2100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, text_tokens=687),
+        cache_creation_input_tokens=1313,
     )
-    assert abs(output_cost - expected_output_cost) < 1e-10, (
-        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="azure/gpt-5.6-luna", usage=usage, custom_llm_provider="azure"
     )
+
+    assert input_cost == pytest.approx(687 * 2e-07 + 1313 * 2.5e-07)
+    assert output_cost == pytest.approx(100 * 1.2e-06)
+
+
+@pytest.mark.parametrize("model", AZURE_GPT_5_6_MAP_KEYS)
+def test_azure_gpt_5_6_rates_match_azure_price_page(_local_model_cost_map, model):
+    """
+    Per the Azure OpenAI price page (rendered 2026-08-26): cache writes cost
+    1.25x input on every gpt-5.6 tier, and Data Zone costs 1.1x Global for
+    standard and priority alike (us/eu priority rates previously sat at 1.25x).
+    """
+    entry = litellm.model_cost[model]
+    input_keys = [key for key in entry if key.startswith("input_cost_per_token")]
+    assert input_keys
+    for key in input_keys:
+        suffix = key[len("input_cost_per_token") :]
+        assert entry["cache_creation_input_token_cost" + suffix] == pytest.approx(entry[key] * 1.25)
+
+    zone = model.split("/")[1]
+    if zone in ("us", "eu"):
+        global_entry = litellm.model_cost["azure/" + model.split("/", 2)[2]]
+        prefixes = ("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation")
+        token_cost_keys = [key for key in entry if key.startswith(prefixes)]
+        global_token_cost_keys = [key for key in global_entry if key.startswith(prefixes)]
+        assert len(token_cost_keys) >= 9
+        assert set(token_cost_keys) <= set(global_token_cost_keys)
+        for key in token_cost_keys:
+            assert entry[key] == pytest.approx(global_entry[key] * 1.1), key
+
 
 
 def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
@@ -3512,6 +3580,101 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
+def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_cost_map):
+    """Regression: an Anthropic /v1/messages response reports cache reads as top-level
+    cache_read_input_tokens with input_tokens excluding them. Reading that usage as
+    Responses API usage dropped the cache tokens and billed the whole prompt at the
+    uncached input rate, overstating spend on cache hits."""
+
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "gpt-5.6-sol",
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": "1"}],
+        "usage": {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014},
+    }
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="gpt-5.6-sol",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+def _together_chat_response(model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-together-cache",
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"content": "acknowledged", "role": "assistant"}}],
+        created=1756164000,
+        model=model,
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+
+def test_completion_cost_prices_together_cached_tokens_at_cache_read_rate(_local_model_cost_map):
+    """Regression: Together reports prompt_tokens_details.cached_tokens but no together_ai
+    registry entry carried cache_read_input_token_cost, so cache-hit tokens were priced at
+    0.0 and spend on cache-heavy workloads was understated."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_tokens=7864, completion_tokens=16, cached_tokens=7863
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1 * 1.4e-07 + 7863 * 3e-08 + 16 * 2.8e-07, rel=1e-9)
+
+
+def test_completion_cost_together_mapped_model_skips_size_bucket(_local_model_cost_map):
+    """Regression: any together model whose name matches (\\d+b) was rewritten to a
+    together-ai-* size bucket before the registry lookup, so mapped models like
+    Muse-Glimmer-30B never used their per-model rates, cache fields included."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="meta-models/Muse-Glimmer-30B", prompt_tokens=63, completion_tokens=16, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(63 * 3.5e-07 + 16 * 1.5e-06, rel=1e-9)
+
+
+def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_model_cost_map):
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="qwen/Qwen2-72B-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 9e-07, rel=1e-9)
+
+
+def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
+    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)
+
+
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.
@@ -4059,6 +4222,106 @@ def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> 
     assert combined.completion_tokens_details.audio_tokens == 0
 
 
+def _live_terminal_event(duration=4000):
+    return {"type": "session.closed", "usage": {"audio_duration_ms": duration, "backend_model_usage": []}}
+
+
+@pytest.mark.parametrize("rate,expected", [(0.025, 0.1), (0, 0), (None, 0)])
+def test_live_terminal_duration_uses_configured_second_price(monkeypatch, rate, expected):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-priced-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": rate},
+    )
+    assert handle_realtime_stream_cost_calculation(
+        [_live_terminal_event()], Usage(), "chatgpt", "live-priced-test"
+    ) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("public_live", [False, True])
+def test_live_terminal_duration_honors_deployment_override(monkeypatch, public_live):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-deployment-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        Usage(), [{"type": "session.closed", "usage": {"seconds": 4}}] if public_live else [_live_terminal_event()]
+    )
+    assert completion_cost(
+        completion_response=result,
+        model="gpt-live-1",
+        custom_llm_provider="chatgpt",
+        call_type="_arealtime",
+        custom_pricing=True,
+        router_model_id="live-deployment-test",
+    ) == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("duration", [-1, True, "4000", float("inf"), float("nan"), None])
+def test_live_terminal_invalid_duration_does_not_create_spend(monkeypatch, duration):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-priced-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    assert (
+        handle_realtime_stream_cost_calculation(
+            [_live_terminal_event(duration)], Usage(), "chatgpt", "live-priced-test"
+        )
+        == 0
+    )
+
+
+def test_live_terminal_is_not_counted_twice(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-priced-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    assert handle_realtime_stream_cost_calculation(
+        [_live_terminal_event(), _live_terminal_event()], Usage(), "chatgpt", "live-priced-test"
+    ) == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("with_tokens", [False, True])
+@pytest.mark.parametrize("terminal_count", [1, 2])
+@pytest.mark.parametrize("duration_priced", [False, True])
+def test_live_terminal_with_response_done_preserves_configured_billing(
+    monkeypatch, with_tokens, terminal_count, duration_priced
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "realtime-deployment-test",
+        {
+            "litellm_provider": "chatgpt",
+            "mode": "realtime",
+            **(
+                {"input_cost_per_second": 0.025}
+                if duration_priced
+                else {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+            ),
+        },
+    )
+    events = [
+        {
+            "type": "response.done",
+            "response": {
+                "usage": ({"input_tokens": 10, "output_tokens": 5, "total_tokens": 15} if with_tokens else {})
+            },
+        },
+        *(_live_terminal_event() for _ in range(terminal_count)),
+    ]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(usage, events)
+    assert completion_cost(
+        completion_response=result,
+        model="gpt-live-1-codex" if duration_priced else "gpt-realtime-1.5",
+        custom_llm_provider="chatgpt",
+        call_type="_arealtime",
+        custom_pricing=True,
+        router_model_id="realtime-deployment-test",
+    ) == pytest.approx(0.1 if duration_priced else (0.02 if with_tokens else 0))
 def test_realtime_combine_sums_nested_cached_tokens_details():
     results: OpenAIRealtimeStreamList = [
         {
@@ -4387,6 +4650,241 @@ def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_f
     assert cost == 0.0
 
 
+@pytest.mark.parametrize("terminal", [False, True])
+def test_public_live_seconds_are_cumulative_and_backend_usage_is_separately_priced(monkeypatch, terminal):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-seconds-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "realtime",
+            "input_cost_per_second": 0.025,
+            "input_cost_per_token": 100,
+            "output_cost_per_token": 100,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-backend-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        },
+    )
+    backend = {
+        "type": "response.event",
+        "event": {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_backend",
+                "created_at": 1,
+                "model": "live-backend-test",
+                "output": [],
+                "usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+            },
+        },
+    }
+    events = [
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {"type": "session.usage.updated", "usage": {"seconds": 30}},
+        backend,
+        backend,
+        {"type": "session.closed" if terminal else "session.usage.updated", "usage": {"seconds": 30}},
+    ]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    assert usage.total_tokens == 30
+    assert handle_realtime_stream_cost_calculation(events, usage, "openai", "live-seconds-test") == pytest.approx(0.79)
+
+
+@pytest.mark.parametrize("seconds", [-1, True, "30", float("inf"), float("nan"), None])
+def test_public_live_invalid_seconds_are_not_billed(monkeypatch, seconds):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-seconds-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "realtime",
+            "input_cost_per_second": 0.025,
+        },
+    )
+    assert (
+        handle_realtime_stream_cost_calculation(
+            [{"type": "session.closed", "usage": {"seconds": seconds}}], Usage(), "openai", "live-seconds-test"
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_live_duration_does_not_regress_when_primary_and_observer_events_interleave(monkeypatch, terminal):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-interleaved-test",
+        {"litellm_provider": "openai", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    events = [
+        {"type": "session.closed" if terminal else "session.usage.updated", "usage": {"seconds": 30}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+    ]
+    assert handle_realtime_stream_cost_calculation(events, Usage(), "openai", "live-interleaved-test") == pytest.approx(
+        0.75
+    )
+
+
+@pytest.mark.parametrize("seconds,expected", [(None, 15), (0, 15), (4, 15), (15, 15), (30, 30)])
+def test_live_webrtc_initialization_is_credited_against_duration(monkeypatch, seconds, expected):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-init-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "realtime",
+            "input_cost_per_second": 0.025,
+        },
+    )
+    events = [{"type": "litellm.live.initialization", "usage": {"seconds": 15}}]
+    if seconds is not None:
+        events.append({"type": "session.closed", "usage": {"seconds": seconds}})
+    assert handle_realtime_stream_cost_calculation(events, Usage(), "openai", "live-init-test") == pytest.approx(
+        expected * 0.025
+    )
+
+
+def test_live_invalid_terminal_retains_last_reported_partial_usage(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-partial-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "realtime",
+            "input_cost_per_second": 0.025,
+        },
+    )
+    events = [
+        {"type": "litellm.live.initialization", "usage": {"seconds": 15}},
+        {"type": "session.usage.updated", "usage": {"seconds": 30}},
+        {"type": "session.closed", "usage": {"seconds": "invalid"}},
+    ]
+    assert handle_realtime_stream_cost_calculation(events, Usage(), "openai", "live-partial-test") == pytest.approx(
+        0.75
+    )
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [
+        {"type": "response.created", "response": {"model": "still-starting"}},
+        {"type": "response.in_progress", "response": {}},
+        {"type": "future.event", "response": ["unknown", "payload"]},
+        {"type": "response.completed", "response": {"id": "broken", "usage": "invalid"}},
+    ],
+)
+def test_live_partial_or_malformed_backend_events_preserve_duration(monkeypatch, nested):
+    from unittest.mock import MagicMock
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-resilient-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "realtime",
+            "input_cost_per_second": 0.025,
+        },
+    )
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    events = [
+        {"type": "response.event", "event": nested},
+        {"type": "session.closed", "usage": {"seconds": 30}},
+    ]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    assert usage.total_tokens == 0
+    assert handle_realtime_stream_cost_calculation(
+        events,
+        usage,
+        "openai",
+        "live-resilient-test",
+        litellm_logging_obj=logger,
+    ) == pytest.approx(0.75)
+    assert bool(logger.model_call_details.get("realtime_backend_accounting_incomplete")) == (
+        nested["type"] == "response.completed"
+    )
+
+
+@pytest.mark.parametrize("missing_usage_duplicate", [False, True])
+def test_live_missing_backend_price_preserves_duration_and_marks_accounting_incomplete(
+    monkeypatch, missing_usage_duplicate
+):
+    from unittest.mock import MagicMock
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-resilient-test",
+        {
+            "litellm_provider": "openai",
+            "mode": "realtime",
+            "input_cost_per_second": 0.025,
+        },
+    )
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    response = {
+        "id": "resp_unknown",
+        "created_at": 1,
+        "model": "unmapped-live-backend-price-test",
+        "output": [],
+        "usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+    }
+    events = [
+        {"type": "response.event", "event": {"type": "response.completed", "response": response}},
+        *(
+            [
+                {
+                    "type": "response.event",
+                    "event": {"type": "response.completed", "response": {**response, "usage": None}},
+                }
+            ]
+            if missing_usage_duplicate
+            else []
+        ),
+        {"type": "session.closed", "usage": {"seconds": 30}},
+    ]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    assert usage.total_tokens == 30
+    assert handle_realtime_stream_cost_calculation(
+        events,
+        usage,
+        "openai",
+        "live-resilient-test",
+        litellm_logging_obj=logger,
+    ) == pytest.approx(0.75)
+    assert logger.model_call_details["realtime_backend_accounting_incomplete"] is True
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        {"type": "response.event"},
+        {"type": "response.event", "event": {"response": {"id": "resp"}}},
+        {"type": "response.event", "event": "not-an-object"},
+    ],
+)
+def test_live_backend_malformed_envelope_is_dropped_without_accounting_flag(envelope):
+    """
+    Malformed event envelopes (missing event, missing event.type, wrong shape)
+    are skipped silently: unlike a terminal response.completed that fails
+    response validation, they must not mark the call's accounting incomplete.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.cost_calculator import _live_backend_response
+
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    assert _live_backend_response(envelope, logger) is None
+    assert "realtime_backend_accounting_incomplete" not in logger.model_call_details
 def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     """Issue #41299: a session mixing default and priority turns must price each turn at
     its own returned service_tier, not the summed usage at a single tier."""

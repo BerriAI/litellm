@@ -3064,6 +3064,39 @@ def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict)
     assert round(cost, 12) == round(expected, 12)
 
 
+@pytest.mark.parametrize("excess", ["text", "image"])
+def test_image_response_cached_modality_counts_cannot_exceed_inputs(excess):
+    """
+    A cached_tokens_details entry larger than the matching input modality count
+    would turn cache reads into negative savings; the calculation must reject
+    the inconsistent usage instead of pricing it.
+    """
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        calculate_image_response_cost_from_usage,
+    )
+    from litellm.types.utils import Usage
+
+    cached: dict = (
+        {"text_tokens": 11, "image_tokens": 0} if excess == "text" else {"text_tokens": 0, "image_tokens": 101}
+    )
+    image_response = ImageResponse(data=[ImageObject(b64_json="x")])
+    image_response.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=212,
+        input_tokens=110,
+        input_tokens_details={"text_tokens": 10, "image_tokens": 100, "cached_tokens_details": cached},
+        output_tokens=102,
+        output_tokens_details={"image_tokens": 102, "text_tokens": 0},
+    )
+    with pytest.raises(ValueError, match="Image cached token counts exceed their input modality counts"):
+        calculate_image_response_cost_from_usage(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
 GEMINI_DAY0_LAUNCH_PRICING = [
     ("gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
     ("gemini/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),

@@ -112,6 +112,10 @@ class ReconcileOutcome(NamedTuple):
     live_after: frozenset[str] | None
 
 
+class InternalRequestOrigin(enum.Enum):
+    REALTIME_OBSERVER = enum.auto()
+
+
 class SupportedDBObjectType(str, enum.Enum):
     """
     Supported database object types for fine-grained DB storage control.
@@ -269,8 +273,8 @@ class Litellm_EntityType(enum.Enum):
 def hash_token(token: str):
     import hashlib
 
-    # Hash the string using SHA-256
-    hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
+    # This digest is an opaque lookup identifier, not a password hash.
+    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
 
     return hashed_token
 
@@ -422,6 +426,36 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        "/live",
+        "/v1/live",
+        "/v1/live/{call_id}",
+        "/openai/v1/live",
+        "/live/{call_id}",
+        "/openai/v1/live/{call_id}",
+        "/live/sessions",
+        "/live/sessions/{session_id}/attach",
+        "/live/sessions/{session_id}/fork",
+        "/live/sessions/{session_id}/content",
+        "/live/sessions/{session_id}/accept",
+        "/live/sessions/{session_id}/reject",
+        "/live/sessions/{session_id}/refer",
+        "/live/sessions/{session_id}/hangup",
+        "/v1/live/sessions",
+        "/v1/live/sessions/{session_id}/attach",
+        "/v1/live/sessions/{session_id}/fork",
+        "/v1/live/sessions/{session_id}/content",
+        "/v1/live/sessions/{session_id}/accept",
+        "/v1/live/sessions/{session_id}/reject",
+        "/v1/live/sessions/{session_id}/refer",
+        "/v1/live/sessions/{session_id}/hangup",
+        "/openai/v1/live/sessions",
+        "/openai/v1/live/sessions/{session_id}/attach",
+        "/openai/v1/live/sessions/{session_id}/fork",
+        "/openai/v1/live/sessions/{session_id}/content",
+        "/openai/v1/live/sessions/{session_id}/accept",
+        "/openai/v1/live/sessions/{session_id}/reject",
+        "/openai/v1/live/sessions/{session_id}/refer",
+        "/openai/v1/live/sessions/{session_id}/hangup",
         # realtime (GA WebRTC HTTP routes)
         "/realtime/client_secrets",
         "/v1/realtime/client_secrets",

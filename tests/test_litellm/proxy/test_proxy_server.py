@@ -3217,7 +3217,10 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch: pyt
     import litellm
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
-    # Set up required litellm settings
+    # Set up required litellm settings. Through monkeypatch rather than plain
+    # assignment: `litellm.max_budget` is process-global, and any later test on
+    # this worker that authenticates reads the global proxy spend whenever a
+    # proxy budget is set, which needs a real prisma client.
     monkeypatch.setattr(litellm, "budget_duration", "30d")
     monkeypatch.setattr(litellm, "max_budget", 100.0)
 
@@ -14694,6 +14697,31 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
     assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
         "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
     )
+
+
+@pytest.mark.asyncio
+async def test_login_throttle_config_settings_override_database(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config = ProxyConfig()
+    configured = {
+        "max_failed_login_attempts_per_source": 5,
+        "failed_login_window_seconds": 60,
+        "failed_login_block_seconds": 120,
+    }
+    config.settings.load_yaml(configured)
+    monkeypatch.setattr(ps, "general_settings", config.settings)
+    await config._update_general_settings(
+        db_general_settings={
+            "max_failed_login_attempts_per_source": 999,
+            "failed_login_window_seconds": 1,
+            "failed_login_block_seconds": 1,
+        }
+    )
+    for key, value in configured.items():
+        assert ps.general_settings[key] == value
+        assert config.settings.source(key) == "config"
 
 
 @pytest.mark.asyncio

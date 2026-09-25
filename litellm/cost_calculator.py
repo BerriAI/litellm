@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -2773,6 +2773,13 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
                 result["response"].get("usage", {})
             )
             usage_objects.append(usage_object)
+        usage_objects.extend(
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # reuse the existing Responses usage conversion for nested Live events
+                response.usage.model_dump()
+            )
+            for response in _live_backend_responses(results)
+            if response.usage is not None
+        )
         return usage_objects
 
     @staticmethod
@@ -2955,7 +2962,15 @@ def handle_realtime_stream_cost_calculation(
     potential_model_names.append(litellm_model_name)
     input_cost_per_token, output_cost_per_token = _first_priced_realtime_token_costs(
         potential_model_names=potential_model_names,
-        combined_usage_object=combined_usage_object,
+        combined_usage_object=(
+            RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+                [  # mutable-ok: collector requires a concrete event list
+                    event for event in results if event.get("type") != "response.event"
+                ]
+            )
+            if any(event.get("type") == "response.event" for event in results)
+            else combined_usage_object
+        ),
         custom_llm_provider=custom_llm_provider,
         data_residency=data_residency,
     )
@@ -2969,7 +2984,18 @@ def handle_realtime_stream_cost_calculation(
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
     )
-    total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost
+    live_audio_cost: Final = handle_live_session_duration_cost(
+        results=results,
+        custom_llm_provider=custom_llm_provider,
+        litellm_model_name=litellm_model_name,
+    )
+    backend_cost: Final = sum(
+        _live_backend_response_cost(response, litellm_logging_obj)
+        for response in _live_backend_responses(results, litellm_logging_obj)
+    )
+    total_cost: Final = (
+        input_cost_per_token + output_cost_per_token + transcription_cost + live_audio_cost + backend_cost
+    )
 
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
@@ -2977,11 +3003,120 @@ def handle_realtime_stream_cost_calculation(
         completion_tokens_cost_usd_dollar=output_cost_per_token,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
-        additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
+        additional_costs={  # mutable-ok: logging cost breakdown requires a concrete dict
+            name: cost
+            for name, cost in (
+                ("transcription_cost", transcription_cost),
+                ("live_audio_cost", live_audio_cost),
+                ("live_backend_cost", backend_cost),
+            )
+            if cost > 0
+        }
+        or None,
         data_residency=data_residency,
     )
 
     return total_cost
+
+
+class _LiveBackendEvent(BaseModel):
+    type: str
+    response: object = None
+
+
+class _LiveBackendEnvelope(BaseModel):
+    event: _LiveBackendEvent
+
+
+def _live_backend_responses(
+    results: OpenAIRealtimeStreamList, logging_obj: LitellmLoggingObject | None = None
+) -> tuple[ResponsesAPIResponse, ...]:
+    responses: Final = {  # mutable-ok: deduplicate terminal backend responses by response id
+        response.id: response
+        for result in results
+        if result.get("type") == "response.event"
+        and (response := _live_backend_response(result, logging_obj)) is not None
+    }
+    return tuple(responses.values())
+
+
+def _mark_live_backend_accounting_incomplete(logging_obj: LitellmLoggingObject | None) -> None:
+    verbose_logger.warning("Live backend accounting incomplete: missing valid terminal usage or model pricing")
+    if logging_obj is not None:
+        logging_obj.model_call_details["realtime_backend_accounting_incomplete"] = True
+
+
+def _live_backend_response(
+    result: Mapping[str, object], logging_obj: LitellmLoggingObject | None
+) -> ResponsesAPIResponse | None:
+    try:
+        event: Final = _LiveBackendEnvelope.model_validate(result).event
+    except ValidationError:
+        return None
+    if event.type not in ("response.completed", "response.incomplete", "response.failed"):
+        return None
+    try:
+        response: Final = ResponsesAPIResponse.model_validate(event.response)
+    except ValidationError:
+        _mark_live_backend_accounting_incomplete(logging_obj)
+        return None
+    if response.usage is None:
+        _mark_live_backend_accounting_incomplete(logging_obj)
+        return None
+    return response
+
+
+def _live_backend_response_cost(response: ResponsesAPIResponse, logging_obj: LitellmLoggingObject | None) -> float:
+    try:
+        return completion_cost(
+            completion_response=response, model=response.model, custom_llm_provider="openai", call_type="aresponses"
+        )
+    except Exception:  # noqa: BLE001  # preserve measured voice cost when backend pricing cannot be resolved
+        _mark_live_backend_accounting_incomplete(logging_obj)
+        return 0.0
+
+
+def handle_live_session_duration_cost(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    seconds: Final = max(
+        (
+            duration
+            for event in results
+            if event.get("type") in ("session.closed", "session.usage.updated")
+            and (duration := _live_duration_seconds(event)) is not None
+        ),
+        default=0.0,
+    )
+    initialization_seconds: Final = max(
+        (
+            duration
+            for event in results
+            if event.get("type") == "litellm.live.initialization"
+            and (duration := _live_duration_seconds(event)) is not None
+        ),
+        default=0.0,
+    )
+    try:
+        model_info: Final = litellm.get_model_info(model=litellm_model_name, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return 0.0
+    return max(seconds, initialization_seconds) * (model_info.get("input_cost_per_second") or 0.0)
+
+
+def _live_duration_seconds(event: Mapping[str, object]) -> float | None:
+    from litellm.types.realtime import LiveSessionUsageEvent
+
+    try:
+        usage: Final = LiveSessionUsageEvent.model_validate(event).usage
+    except ValidationError:
+        return None
+    raw_usage: Final = cast(  # cast-ok: LiveSessionUsageEvent validated the usage mapping above
+        Mapping[str, object], event.get("usage")
+    )
+    return usage.duration / (1 if "seconds" in raw_usage else 1000)
 
 
 def handle_realtime_transcription_cost_calculation(

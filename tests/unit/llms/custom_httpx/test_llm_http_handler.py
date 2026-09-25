@@ -3835,6 +3835,125 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert response.data[0].b64_json == "sync"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["client_secrets", "transcription_sessions"])
+@pytest.mark.parametrize("provider", ["chatgpt", "openai"])
+@pytest.mark.parametrize("authorization_header", ["Authorization", "aUtHoRiZaTiOn"])
+async def test_realtime_http_sessions_preserve_provider_identity(
+    endpoint, provider, authorization_header, tmp_path, monkeypatch
+):
+    import time
+
+    from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+    from litellm.llms.openai.realtime.http_transformation import OpenAIRealtimeHTTPConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "test-resolved", "account_id": "test-selected", "expires_at": time.time() + 3600})
+    )
+    config = ChatGPTRealtimeHTTPConfig(GenericLiteLLMParams()) if provider == "chatgpt" else OpenAIRealtimeHTTPConfig()
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"id": "session-test"})
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response = await BaseLLMHTTPHandler()._async_realtime_session_post(
+            endpoint=endpoint,
+            api_base="https://gateway.example/v1",
+            api_key="test-openai",
+            request_data={"session": {"model": "gpt-realtime-1.5"}},
+            logging_obj=Mock(),
+            timeout=5,
+            provider_config=config,
+            model="gpt-realtime-1.5",
+            extra_headers={
+                authorization_header: "Bearer test-override",
+                "CHATGPT-ACCOUNT-ID": "test-other-account",
+                "x-gateway-route": "required",
+            },
+            client=client,
+        )
+        assert response.status_code == 200
+        assert not client.client.is_closed
+    finally:
+        await client.client.aclose()
+    assert len(requests) == 1
+    assert requests[0].url.path == f"/v1/realtime/{endpoint}"
+    assert requests[0].headers["x-gateway-route"] == "required"
+    if provider == "chatgpt":
+        assert requests[0].headers.get_list("authorization") == ["Bearer test-resolved"]
+        assert requests[0].headers.get_list("chatgpt-account-id") == ["test-selected"]
+    else:
+        assert requests[0].headers.get_list("authorization")[-1] == "Bearer test-override"
+        assert requests[0].headers["chatgpt-account-id"] == "test-other-account"
+
+
+class _ImageGenerationRecordingConfig(BaseImageGenerationConfig):
+    def get_supported_openai_params(self, model):
+        return ["size"]
+
+    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+        optional_params.update(non_default_params)
+        return optional_params
+
+    def validate_environment(self, headers, model, messages, optional_params, litellm_params, api_key=None, api_base=None):
+        return {"authorization": f"Bearer {api_key}"}
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return "https://images.example/v1/generations"
+
+    def transform_image_generation_request(self, model, prompt, optional_params, litellm_params, headers):
+        return {"model": model, "prompt": prompt}
+
+    def transform_image_generation_response(self, model, raw_response, model_response, logging_obj, request_data, optional_params, litellm_params, encoding=None, api_key=None, json_mode=None):
+        return ImageResponse(data=[ImageObject(b64_json=raw_response.json()["created"])])
+
+
+def test_image_extra_headers_strips_oauth_identity_only_for_chatgpt():
+    headers: Final = {"authorization": "Bearer oauth", "chatgpt-account-id": "acct-1", "x-router": "keep"}
+    assert BaseLLMHTTPHandler._image_extra_headers("openai", headers) is headers
+    stripped: Final = BaseLLMHTTPHandler._image_extra_headers("chatgpt", headers)
+    assert dict(stripped) == {"x-router": "keep"}
+
+
+@pytest.mark.asyncio
+async def test_async_image_generation_handler_merges_extra_headers_for_non_chatgpt():
+    requests: Final = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"created": "ok"})
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response: Final = await BaseLLMHTTPHandler().async_image_generation_handler(
+            model="image-model",
+            prompt="a red circle",
+            image_generation_provider_config=_ImageGenerationRecordingConfig(),
+            image_generation_optional_request_params={},
+            custom_llm_provider="openai",
+            litellm_params={"api_key": "sk-image"},
+            logging_obj=Mock(),
+            timeout=10,
+            extra_headers={"x-router-header": "routed"},
+            api_key="sk-image",
+            client=client,
+        )
+    finally:
+        await client.client.aclose()
+    assert requests[0].headers["x-router-header"] == "routed"
+    assert requests[0].headers["authorization"] == "Bearer sk-image"
+    assert requests[0].url == "https://images.example/v1/generations"
+    assert response.data[0].b64_json == "ok"
+
+
 class _ScriptedClientWebSocket(_FakeClientWebSocket):
     def __init__(self, messages: list[str], last_event_type: str) -> None:
         super().__init__()

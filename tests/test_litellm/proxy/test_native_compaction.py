@@ -121,6 +121,11 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
+    # Pin the proxy-wide budget: authentication only reads the global spend when a
+    # proxy max budget is configured, and that read goes through the stub prisma
+    # client above. A budget left set by an earlier test on the same worker would
+    # turn this fixture's child requests into 401s.
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
     monkeypatch.setattr(common_request_processing, "route_request", route)
     with inherit_message_logging_privacy(True):
         call: Final = with_proxy_compaction_executor(

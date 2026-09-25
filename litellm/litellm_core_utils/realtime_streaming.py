@@ -1,11 +1,13 @@
 import asyncio
 import json
 import traceback
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -14,9 +16,11 @@ from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESS
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
+    OpenAILiveResponseEvent,
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseDelta,
+    OpenAIRealtimeSessionClosed,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
@@ -24,6 +28,10 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
+
+realtime_attachment_cleanup: Final[ContextVar[Callable[[], Awaitable[None]] | None]] = ContextVar(
+    "realtime_attachment_cleanup", default=None
+)
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
@@ -137,12 +145,25 @@ class RealTimeStreaming:
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
+        *,
+        account_usage: bool = True,
+        live_initialization_seconds: float = 0,
     ):
         self.websocket: _ClientWebSocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
+        self._account_usage = account_usage
         self.messages: list[OpenAIRealtimeEvents] = []
+        if account_usage and live_initialization_seconds > 0:
+            self.messages.append(
+                {  # mutable-ok: initialization event is appended to the mutable event history
+                    "type": "litellm.live.initialization",
+                    "usage": {  # mutable-ok: usage payload is consumed as part of the typed event
+                        "seconds": live_initialization_seconds,
+                    },
+                }
+            )
         self._backend_sent_frames: bool = False
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
@@ -254,6 +275,16 @@ class RealTimeStreaming:
         else:
             message_obj = cast(dict[str, Any], json.loads(cast(str, message)))
         self._collect_tool_calls_from_response_done(cast(dict, message_obj))
+        if message_obj.get("type") in ("session.closed", "session.usage.updated") and isinstance(
+            message_obj.get("usage"), dict
+        ):
+            self.messages.append(TypeAdapter(OpenAIRealtimeSessionClosed).validate_python(message_obj))
+            return
+        if message_obj.get("type") == "response.event" and isinstance(message_obj.get("event"), dict):
+            nested: Final = message_obj["event"]
+            if nested.get("type") in ("response.completed", "response.incomplete", "response.failed"):
+                self.messages.append(TypeAdapter(OpenAILiveResponseEvent).validate_python(message_obj))
+            return
         if not self._should_store_message(message_obj):
             return
         try:
@@ -408,8 +439,10 @@ class RealTimeStreaming:
         if self.logging_obj:
             self.logging_obj.pre_call(input=message, api_key="")
 
-    async def log_messages(self):
+    async def log_messages(self, *, wait_for_dispatch: bool = False):
         """Log messages in list"""
+        if not self._account_usage:
+            return
         if self.logging_obj:
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
@@ -419,9 +452,12 @@ class RealTimeStreaming:
             # Route through the bounded logging worker (per-coroutine timeout +
             # concurrency cap) instead of a bare create_task, so a slow callback
             # can't leave suspended tasks pinning each call's response in memory.
-            self._logging_worker.ensure_initialized_and_enqueue(
-                self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
-            )
+            if wait_for_dispatch:
+                await self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
+            else:
+                self._logging_worker.ensure_initialized_and_enqueue(
+                    self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
+                )
             self.logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
     async def _send_to_backend(self, message: str) -> bool:
@@ -1573,7 +1609,12 @@ class RealTimeStreaming:
         finally:
             forward_task.cancel()
             client_task.cancel()
-            await asyncio.gather(forward_task, client_task, return_exceptions=True)
+            try:
+                await asyncio.gather(forward_task, client_task, return_exceptions=True)
+            finally:
+                cleanup: Final = realtime_attachment_cleanup.get()
+                if not self._account_usage and cleanup is not None:
+                    await cleanup()
 
     async def _close_client(self, close: BackendClose) -> None:
         redacted_message: Final = redact_internal_details_from_client_message(close.message)

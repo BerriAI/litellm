@@ -26,6 +26,15 @@ def test_openai_realtime_handler_url_construction(api_base):
     assert "model=gpt-4o-realtime-preview-2024-10-01" in url
 
 
+def test_openai_realtime_handler_requires_api_key():
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    handler = OpenAIRealtime()
+    with pytest.raises(ValueError, match="api_key is required for OpenAI realtime calls"):
+        handler._resolve_api_key(None)
+    assert handler._resolve_api_key("sk-realtime-key") == "sk-realtime-key"
+
+
 def test_openai_realtime_handler_url_with_extra_params():
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
     from litellm.types.realtime import RealtimeQueryParams
