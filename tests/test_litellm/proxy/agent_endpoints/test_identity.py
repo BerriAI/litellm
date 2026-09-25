@@ -4,13 +4,7 @@ from typing import Final
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.agent_endpoints.identity import (
-    agent_identity,
-    identity_evidence_key,
-    match_agent_identity,
-    preserve_identity,
-    validate_identity_binding,
-)
+from litellm.proxy.agent_endpoints.identity import agent_identity, preserve_identity, validate_identity_binding
 from litellm.types.agents import AgentResponse
 
 TENANT: Final = "11111111-1111-4111-8111-111111111111"
@@ -53,12 +47,6 @@ def test_binding_requires_trusted_tenant_and_unique_agent() -> None:
     assert agent_identity(agent.litellm_params).issuer == ISSUER
 
 
-def test_duplicate_records_fail_closed_at_authentication() -> None:
-    with pytest.raises(HTTPException) as failure:
-        match_agent_identity((registered_agent(), registered_agent("agent-two")), {"iss": ISSUER, "tid": TENANT, "azp": CLIENT})
-    assert failure.value.status_code == 403
-
-
 @pytest.mark.parametrize("incoming", [{"model": "new-model"}, {}])
 def test_runtime_updates_preserve_identity(incoming: Mapping[str, object]) -> None:
     existing: Final = {"identity": binding(), "model": "old-model"}
@@ -68,11 +56,7 @@ def test_runtime_updates_preserve_identity(incoming: Mapping[str, object]) -> No
     assert existing["model"] == "old-model"
 
 
-def test_identity_can_be_explicitly_removed_and_evidence_is_bound_to_configuration() -> None:
+def test_identity_can_be_explicitly_removed() -> None:
     agent: Final = registered_agent()
     assert preserve_identity({"identity": None}, agent.litellm_params or {}) == {"identity": None}
     assert preserve_identity({"model": "new"}, {}) == {"model": "new"}
-    renamed: Final = agent.model_copy(update={"agent_name": "Renamed agent"})
-    removed: Final = agent.model_copy(update={"litellm_params": {}})
-    assert identity_evidence_key(agent) == identity_evidence_key(renamed)
-    assert identity_evidence_key(agent) != identity_evidence_key(removed)

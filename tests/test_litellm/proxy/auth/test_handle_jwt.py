@@ -7649,8 +7649,6 @@ def test_runtime_json_cannot_establish_a_managed_identity(claim_field: str | Non
     {"azp": "Readable agent name"},
 ])
 def test_explicit_entra_identity_cannot_be_claimed_via_legacy_lookup(override: Mapping[str, object]) -> None:
-    from litellm.proxy.agent_endpoints.identity import identity_evidence_key
-
     registry: Final = _explicit_identity_registry()
     handler: Final = _entra_agent_jwt_handler("azp")
     with pytest.raises(HTTPException) as failure:
@@ -7661,7 +7659,6 @@ def test_explicit_entra_identity_cannot_be_claimed_via_legacy_lookup(override: M
             **override,
         }, registry)
     assert failure.value.status_code == 403
-    assert handler.user_api_key_cache.get_cache(identity_evidence_key(registry.get_agent_list()[0])) is None
 
 
 @pytest.mark.asyncio

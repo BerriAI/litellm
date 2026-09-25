@@ -1,6 +1,4 @@
-import hashlib
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 from uuid import UUID
@@ -21,11 +19,6 @@ class EntraAgentIdentity(BaseModel):
     @property
     def issuer(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
-
-
-class AgentIdentityStatus(BaseModel):
-    identity: EntraAgentIdentity | None = None
-    last_authenticated_at: datetime | None = None
 
 
 def agent_identity(params: Mapping[str, object] | None) -> EntraAgentIdentity | None:
@@ -59,23 +52,3 @@ def validate_identity_binding(
         raise HTTPException(400, "This Entra tenant is not configured for trusted JWT authentication on the gateway")
     if any(agent.agent_id != agent_id and agent_identity(agent.litellm_params) == identity for agent in agents):
         raise HTTPException(409, "This Entra application is already bound to another agent")
-
-
-def match_agent_identity(agents: Sequence[AgentResponse], claims: Mapping[str, object]) -> AgentResponse | None:
-    matches: Final = tuple(
-        agent
-        for agent in agents
-        if (identity := agent_identity(agent.litellm_params)) is not None
-        and claims.get("iss") == identity.issuer
-        and claims.get("tid") == str(identity.tenant_id)
-        and claims.get("azp") == str(identity.client_id)
-    )
-    if len(matches) > 1:
-        raise HTTPException(403, "The authenticated Entra application matches multiple agents")
-    return matches[0] if matches else None
-
-
-def identity_evidence_key(agent: AgentResponse) -> str:
-    identity: Final = agent_identity(agent.litellm_params)
-    digest: Final = hashlib.sha256(f"{agent.agent_id}:{identity}".encode()).hexdigest()
-    return f"agent-identity-authentication:{digest}"
