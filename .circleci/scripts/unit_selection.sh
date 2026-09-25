@@ -130,6 +130,7 @@ legacy_paths() {
       echo tests/unit/proxy/spend_tracking/test_search_api_logging.py
       echo tests/unit/proxy/test_proxy_reject_logging.py ;;
     proxy-db-proxy-runtime)
+      echo tests/unit/proxy/liteadmin
       echo tests/unit/proxy/auth/test_multipart_bypass_repro.py
       echo tests/unit/proxy/auth/test_proxy_routes.py
       echo tests/unit/proxy/middleware/test_request_size_limit_middleware.py

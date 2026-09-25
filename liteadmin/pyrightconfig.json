@@ -1,0 +1,5 @@
+{
+  "include": ["agent.py", "catalog.py", "models.py", "results.py", "worker.py"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.13"
+}

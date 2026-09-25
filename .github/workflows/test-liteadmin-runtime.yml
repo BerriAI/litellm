@@ -1,0 +1,32 @@
+name: LiteAdmin runtime
+
+on:
+  pull_request:
+    paths:
+      - 'liteadmin/**'
+      - 'litellm/proxy/liteadmin/**'
+      - 'ui/litellm-dashboard/src/components/liteadmin/**'
+      - '.github/workflows/test-liteadmin-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.liteadmin-venv
+      PYDANTIC_AI_NO_BANNER: '1'
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: '0.10.9'
+      - run: uv sync --project liteadmin --frozen --python 3.13
+      - run: .liteadmin-venv/bin/python -m pytest -c liteadmin/pyproject.toml liteadmin/tests

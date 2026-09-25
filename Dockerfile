@@ -85,6 +85,9 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra bedrock-realtime \
     --python python3.13
 
+COPY liteadmin/pyproject.toml liteadmin/uv.lock liteadmin/
+RUN UV_PROJECT_ENVIRONMENT=/app/.liteadmin-venv uv sync --project liteadmin --frozen --no-default-groups --python python3.13
+
 # Copy full source tree
 COPY . .
 
@@ -141,6 +144,9 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 # ship (manifest-scanning tools attribute everything in it to this image).
 # entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/.liteadmin-venv /app/.liteadmin-venv
+COPY --from=builder /app/liteadmin /app/liteadmin
+ENV LITEADMIN_PYTHON=/app/.liteadmin-venv/bin/python LITEADMIN_RUNTIME=/app/liteadmin
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py

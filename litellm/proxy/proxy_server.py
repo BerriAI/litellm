@@ -555,6 +555,7 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
+from litellm.proxy.liteadmin.endpoints import router as liteadmin_router
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
@@ -19639,6 +19640,7 @@ app.include_router(openai_files_router)
 reserve_lazy_slot(app, "llm_passthrough")
 app.include_router(pass_through_router)
 app.include_router(health_router)
+app.include_router(liteadmin_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(password_management_router)

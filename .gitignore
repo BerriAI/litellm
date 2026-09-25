@@ -150,3 +150,5 @@ litellm.log
 
 .coverage-rust
 coverage-rust.xml
+
+.liteadmin-venv/

@@ -167,6 +167,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
     } finally {
       if (active.current === turn) {
         active.current = null;
+        if (turn.approval) updateAction(turn.approval.id, { status: "cancelled" });
         turn.approval?.resolve(false);
         setPhase("idle");
       }
