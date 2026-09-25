@@ -875,20 +875,26 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         upstream: httpx.Response,
         report: _ReportPreview,
         log_warning: Callable[..., None],
-        enqueue: Callable[[Coroutine[None, None, None]], None],
+        spawn: Callable[[Coroutine[None, None, None]], asyncio.Future[None]],
     ) -> None:
         self._upstream: Final = upstream
         self._report: Final = report
         self._log_warning: Final = log_warning
-        self._enqueue: Final = enqueue
+        self._spawn: Final = spawn
         self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
         self._dispatched = False
+        self._pending: asyncio.Future[None] | None = None
 
     def _dispatch_report(self) -> None:
         if self._dispatched:
             return
         self._dispatched = True
-        self._enqueue(self._report(b"".join(self._collected)))
+        self._pending = self._spawn(self._report(b"".join(self._collected)))
+
+    async def _drain_pending_report(self) -> None:
+        pending: Final = self._pending
+        if pending is not None:
+            await asyncio.shield(pending)
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
@@ -901,6 +907,7 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
                         self._dispatch_report()
                 yield chunk
             self._dispatch_report()
+            await self._drain_pending_report()
         except httpx.HTTPError as err:
             self._log_warning(
                 "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
@@ -908,12 +915,17 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
                 type(err).__name__,
             )
             self._dispatch_report()
+            await self._drain_pending_report()
         finally:
             self._dispatch_report()
 
     async def aclose(self) -> None:
         self._dispatch_report()
         await self._upstream.aclose()
+
+
+def _spawn_report_task(report: Coroutine[None, None, None]) -> asyncio.Future[None]:
+    return asyncio.ensure_future(report)
 
 
 def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
@@ -998,7 +1010,7 @@ async def _log_passthrough_upstream_failure(
             upstream=response,
             report=report,
             log_warning=log_warning,
-            enqueue=GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue,
+            spawn=_spawn_report_task,
         ),
         request=response.request,
         extensions=response.extensions,

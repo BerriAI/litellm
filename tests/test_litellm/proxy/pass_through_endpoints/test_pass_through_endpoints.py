@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 import zlib
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
@@ -4454,16 +4454,17 @@ async def test_pass_through_request_streaming_upstream_error_reads_only_preview_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[Coroutine[None, None, None]] = []
+    enqueued: list[asyncio.Future[None]] = []
     served_at_dispatch: list[int] = []
 
-    def _recording_enqueue(coro):
+    def _recording_spawn(coro):
         served_at_dispatch.append(body_stream.served)
-        enqueued.append(coro)
+        enqueued.append(asyncio.ensure_future(coro))
+        return enqueued[-1]
 
     with patch(
-        "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
-        side_effect=_recording_enqueue,
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
+        side_effect=_recording_spawn,
     ):
         with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
             with patch(
@@ -4523,16 +4524,17 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[Coroutine[None, None, None]] = []
+    enqueued: list[asyncio.Future[None]] = []
     served_at_dispatch: list[int] = []
 
-    def _recording_enqueue(coro):
+    def _recording_spawn(coro):
         served_at_dispatch.append(body_stream.served)
-        enqueued.append(coro)
+        enqueued.append(asyncio.ensure_future(coro))
+        return enqueued[-1]
 
     with patch(
-        "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
-        side_effect=_recording_enqueue,
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
+        side_effect=_recording_spawn,
     ):
         with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
             with patch(
@@ -4615,7 +4617,7 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[Coroutine[None, None, None]] = []
+    enqueued: list[asyncio.Future[None]] = []
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
@@ -4625,8 +4627,8 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
             ) as mock_success_handler:
                 with patch(
-                    "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
-                    side_effect=lambda coro: enqueued.append(coro),
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
+                    side_effect=lambda coro: enqueued.append(asyncio.ensure_future(coro)) or enqueued[-1],
                 ):
                     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
                     mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -4687,7 +4689,7 @@ async def test_pass_through_request_streaming_upstream_error_client_disconnect_e
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[Coroutine[None, None, None]] = []
+    enqueued: list[asyncio.Future[None]] = []
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
@@ -4697,8 +4699,8 @@ async def test_pass_through_request_streaming_upstream_error_client_disconnect_e
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
             ) as mock_success_handler:
                 with patch(
-                    "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
-                    side_effect=lambda coro: enqueued.append(coro),
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
+                    side_effect=lambda coro: enqueued.append(asyncio.ensure_future(coro)) or enqueued[-1],
                 ):
                     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
                     mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -4754,7 +4756,7 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[Coroutine[None, None, None]] = []
+    enqueued: list[asyncio.Future[None]] = []
 
     async def _held_hook(**kwargs):
         await release.wait()
@@ -4767,8 +4769,8 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
             ) as mock_success_handler:
                 with patch(
-                    "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
-                    side_effect=lambda coro: enqueued.append(coro),
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
+                    side_effect=lambda coro: enqueued.append(asyncio.ensure_future(coro)) or enqueued[-1],
                 ):
                     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
                     mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_held_hook)
@@ -4793,6 +4795,8 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
                     iterator: Final = response.body_iterator.__aiter__()
                     first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
                     assert not release.is_set()
+                    assert not enqueued[0].done()
+                    release.set()
                     relayed: Final = b"".join(
                         [first]
                         + [chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") async for chunk in iterator]
@@ -4800,16 +4804,53 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
                     assert relayed == first_chunk
 
     assert len(enqueued) == 1, enqueued
-    report_task: Final = asyncio.ensure_future(enqueued[0])
-    await asyncio.sleep(0)
-    assert not report_task.done()
-    release.set()
-    await report_task
+    await enqueued[0]
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
     assert (
         detail == f"Upstream passthrough request failed with status 500: {'x' * 4096}... (truncated at 4096 chars)"
     ), detail
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_drains_the_report_before_stream_end():
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/plain"},
+        stream=_ChunkedUpstreamErrorBodyStream((b"x" * 512,)),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
+
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
+
+                assert isinstance(response, StreamingResponse)
+                assert response.status_code == 500
+                drained: Final = [chunk async for chunk in response.body_iterator]
+                assert drained == [b"x" * 512]
+                mock_proxy_logging.post_call_failure_hook.assert_called_once()
 
 
 class _UpstreamErrorBodyStreamDropping(httpx.AsyncByteStream):
