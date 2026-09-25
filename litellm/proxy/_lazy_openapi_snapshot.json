@@ -3412,6 +3412,11 @@
               "title": "Total Prompt Tokens",
               "type": "integer"
             },
+            "total_ptu_hours": {
+              "default": 0.0,
+              "title": "Total Ptu Hours",
+              "type": "number"
+            },
             "total_response_time_ms": {
               "default": 0,
               "title": "Total Response Time Ms",
@@ -3964,6 +3969,11 @@
               "default": 0,
               "title": "Prompt Tokens",
               "type": "integer"
+            },
+            "ptu_hours": {
+              "default": 0.0,
+              "title": "Ptu Hours",
+              "type": "number"
             },
             "spend": {
               "default": 0.0,

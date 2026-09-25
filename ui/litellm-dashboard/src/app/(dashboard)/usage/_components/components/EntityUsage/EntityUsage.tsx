@@ -9,7 +9,13 @@ import {
   type ExtendedDailyData,
   type ProviderSpendRow,
 } from "./entityUsageAggregations";
-import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
+import {
+  buildCostBreakdownTiles,
+  buildSummaryTiles,
+  hasFlatCost,
+  hasPtuHours,
+  type SummaryTile,
+} from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
@@ -69,6 +75,7 @@ interface EntitySpendData {
   metadata: {
     total_spend: number;
     total_flat_cost?: number;
+    total_ptu_hours?: number;
     total_api_requests: number;
     total_successful_requests: number;
     total_failed_requests: number;
@@ -296,6 +303,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+  const showPtuHours = entityType === "team" && hasPtuHours(spendData.metadata);
   const userSpendTeamIds = useMemo(
     () =>
       selectedTags.length > 0
@@ -404,7 +412,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   );
 
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
-  const summaryTiles = [...buildSummaryTiles(spendData.metadata, showFlatCost), ...breakdownTiles];
+  const summaryTiles = [...buildSummaryTiles(spendData.metadata, showFlatCost, showPtuHours), ...breakdownTiles];
 
   const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
 
@@ -414,7 +422,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <ShadcnCard>
           <CardContent>
             <h3 className="text-lg font-medium text-foreground">{capitalizedEntityLabel} Spend Overview</h3>
-            <div className="grid grid-cols-5 gap-4 mt-4">{summaryTiles.map(renderSummaryTile)}</div>
+            <div className={`grid ${showPtuHours ? "grid-cols-6" : "grid-cols-5"} gap-4 mt-4`}>
+              {summaryTiles.map(renderSummaryTile)}
+            </div>
           </CardContent>
         </ShadcnCard>
       </div>

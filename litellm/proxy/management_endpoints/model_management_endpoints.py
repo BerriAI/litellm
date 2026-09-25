@@ -17,12 +17,14 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from functools import partial
 from json import JSONDecodeError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,6 +39,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
+    parsed_ptu_shares,
     ptu_config_error,
 )
 from litellm.proxy._types import (
@@ -132,6 +135,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
 )
+from litellm.types.proxy.management_endpoints.team_endpoints import TeamIdSearchFilter
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
@@ -236,13 +240,22 @@ class _ExistingModelRow(Protocol):
 
 class _TeamRow(Protocol):
     @property
+    def team_id(self) -> str: ...
+
+    @property
     def models(self) -> Sequence[str]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
 
 
+class _TeamIdsWhere(TypedDict):
+    team_id: ReadOnly[TeamIdSearchFilter]
+
+
 class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
+
+    def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_TeamRow]]: ...
 
 
 class _TeamTable(_TeamLookupTable, Protocol):
@@ -777,6 +790,22 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     error: Final = ptu_config_error(model_info)
     if error is not None:
         raise HTTPException(status_code=400, detail=error)
+
+
+async def _raise_if_ptu_share_teams_missing(
+    model_info: Mapping[str, object], team_table: Callable[[], _TeamLookupTable]
+) -> None:
+    """Hold every team named in ``ptu_shares`` to the existence check ``team_id`` already gets."""
+    shares: Final = parsed_ptu_shares(model_info.get("ptu_shares"))
+    if shares is None:
+        return
+    where: Final[_TeamIdsWhere] = {"team_id": {"in": tuple(shares)}}
+    rows: Final = await team_table().find_many(where=where)
+    found: Final = frozenset(row.team_id for row in rows)
+    missing: Final = tuple(team_id for team_id in shares if team_id not in found)
+    if not missing:
+        return
+    raise HTTPException(status_code=400, detail={"error": f"Team id={', '.join(missing)} does not exist in db"})
 
 
 # The mirrored per-token pricing fields plus the remaining rates the public cost map or a
@@ -1614,8 +1643,10 @@ async def _update_team_model_in_db(
     # raising the rate on a configured model carries no ptu_effective_from, which the
     # stored row supplies.
     if patch_data.model_info is not None:
-        _raise_if_ptu_cost_attribution_disabled(patch_data.model_info.model_dump(exclude_none=True))
+        incoming_model_info: Final = patch_data.model_info.model_dump(exclude_none=True)
+        _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(_merged_ptu_model_info(db_model=db_model, patch_data=patch_data))
+        await _raise_if_ptu_share_teams_missing(incoming_model_info, partial(_repo_team_table, prisma_client))
     _raise_if_ptu_deployment_is_priced(
         model_info=_merged_ptu_model_info(db_model=db_model, patch_data=patch_data),
         supplied=(
@@ -2456,6 +2487,7 @@ async def add_new_model(
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
         _validate_ptu_model_info(incoming_model_info)
+        await _raise_if_ptu_share_teams_missing(incoming_model_info, partial(_repo_team_table, prisma_client))
         priced_model_params: Final = _ptu_priced_deployment(model_params)
 
         if store_model_in_db is True:

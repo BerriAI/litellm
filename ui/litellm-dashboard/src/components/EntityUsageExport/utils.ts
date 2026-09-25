@@ -443,6 +443,9 @@ export const generateMetadata = (
     summary.total_flat_cost = flatCost;
     summary.total_cost = spendData.metadata.total_spend + flatCost;
   }
+  if ((spendData.metadata.total_ptu_hours ?? 0) > 0) {
+    summary.total_ptu_hours = spendData.metadata.total_ptu_hours;
+  }
   return {
     export_date: new Date().toISOString(),
     entity_type: entityType,

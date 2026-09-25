@@ -15,7 +15,7 @@ from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
     PTUModel,
     _active_hours_on_day,
     _compute_daily_flat_cost,
-    _parse_ptu_model,
+    _parse_ptu_models,
     run_ptu_flat_cost_backfill,
     run_ptu_flat_cost_rollup,
     run_scheduled_ptu_rollup,
@@ -39,6 +39,14 @@ def _ptu_enabled(monkeypatch):
 
 
 _VALID_PTU = {"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}
+
+
+def _parse_ptu_model(row):
+    """The single holding a team_id deployment parses to, else None; shared deployments
+    parse to one holding per team and have their own tests below."""
+    parsed = _parse_ptu_models(row)
+    assert len(parsed) <= 1
+    return parsed[0] if parsed else None
 
 
 def _model_row(model_id="m1", model_name="gpt-4o-mini-ptu", model_info=None, with_start=True):
@@ -2082,3 +2090,54 @@ async def test_the_catch_up_pass_reaches_a_config_declared_deployment():
     assert len(charged) == 3, charged
     assert charged[-1] == yesterday
     assert all(row["ptu_flat_cost"] == pytest.approx(48.0) for row in table.rows.values())
+
+
+# --- a deployment split into per-team PTU shares -----------------------------------------
+
+_SHARED_PTU = {"ptu_count": 50, "cost_per_ptu_per_hour": 1.0, "ptu_shares": {"team-b": 20, "team-a": 30}}
+
+
+def test_a_shared_deployment_parses_to_one_holding_per_team_carrying_its_share():
+    parsed = _parse_ptu_models(_model_row(model_info=dict(_SHARED_PTU)))
+
+    assert [(m.team_id, m.ptu_count) for m in parsed] == [("team-a", 30), ("team-b", 20)]
+    assert {m.model_id for m in parsed} == {"m1"}
+    assert {m.model_name for m in parsed} == {"gpt-4o-mini-ptu"}
+    assert {m.cost_per_ptu_per_hour for m in parsed} == {1.0}
+
+
+def test_a_shared_deployment_whose_shares_do_not_add_up_is_not_priced():
+    assert _parse_ptu_models(_model_row(model_info={**_SHARED_PTU, "ptu_shares": {"team-a": 30}})) == ()
+
+
+@pytest.mark.asyncio
+async def test_rollup_splits_a_shared_deployments_flat_cost_by_share():
+    """50 PTUs at $1/hour for a day is $1,200; team-a's 30 PTUs are $720 of it and team-b's
+    20 are $480, each keyed on the same deployment id and public name."""
+    prisma, table = _prisma_with_models([_model_row(model_info=dict(_SHARED_PTU))])
+
+    result = await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
+
+    assert result.rows_written == 2
+    assert result.models_processed == 1
+    created = {
+        call.kwargs["data"]["create"]["team_id"]: call.kwargs["data"]["create"] for call in table.upsert.await_args_list
+    }
+    assert created["team-a"]["ptu_flat_cost"] == pytest.approx(720.0)
+    assert created["team-b"]["ptu_flat_cost"] == pytest.approx(480.0)
+    assert sum(row["ptu_flat_cost"] for row in created.values()) == pytest.approx(50 * 1.0 * 24)
+    assert {row["model"] for row in created.values()} == {"m1"}
+    assert {row["model_group"] for row in created.values()} == {"gpt-4o-mini-ptu"}
+    assert {row["api_key"] for row in created.values()} == {PTU_SENTINEL_API_KEY}
+
+
+@pytest.mark.asyncio
+async def test_a_shared_deployment_with_a_closed_window_is_reported_lapsed_once():
+    closed = {**_SHARED_PTU, "ptu_effective_from": "2020-01-01T00:00:00Z", "ptu_effective_to": "2020-02-01T00:00:00Z"}
+    prisma, _ = _prisma_with_models([_model_row(model_id="dep-shared", model_info=closed)])
+    alert = AsyncMock()
+
+    result = await run_scheduled_ptu_rollup(prisma, target_date=DAY, alert=alert)
+
+    assert result.lapsed == ("gpt-4o-mini-ptu",)
+    alert.assert_awaited_once()

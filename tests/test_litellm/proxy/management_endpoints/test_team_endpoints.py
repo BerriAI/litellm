@@ -1,9 +1,9 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from collections.abc import Sequence
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -17103,6 +17104,147 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
     assert response.json() == _DB_OUTAGE_503_BODY
 
 
+# --- PTU-equivalent consumption on /team/daily/activity ------------------------------------
+
+
+_ONE_PTU_HOUR_OF_INPUT: Final = AZURE_PTU_CAPACITY["gpt-4.1"].normalized_tokens_per_ptu_hour
+
+
+def _ptu_activity_page():
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        BreakdownMetrics,
+        DailySpendData,
+        DailySpendMetadata,
+        MetricWithMetadata,
+        SpendAnalyticsPaginatedResponse,
+        SpendMetrics,
+    )
+
+    tokens: Final = _ONE_PTU_HOUR_OF_INPUT
+    metrics = SpendMetrics(
+        prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens, api_requests=3, successful_requests=3
+    )
+    return SpendAnalyticsPaginatedResponse(
+        results=[
+            DailySpendData(
+                date=datetime(2026, 9, 23).date(),
+                metrics=metrics,
+                breakdown=BreakdownMetrics(
+                    model_groups={"gpt-4.1-ptu": MetricWithMetadata(metrics=metrics, metadata={}, api_key_breakdown={})}
+                ),
+            )
+        ],
+        metadata=DailySpendMetadata(total_tokens=tokens, total_api_requests=3, total_successful_requests=3),
+    )
+
+
+def _shared_ptu_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-a": 30, "team-b": 20},
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attribution_enabled", [True, False])
+async def test_team_daily_activity_reports_ptu_hours_only_while_attribution_is_on(
+    mock_db_client, mock_admin_auth, monkeypatch, attribution_enabled
+):
+    """An hour of one PTU's input rate on gpt-4.1, in uncached input tokens, is one PTU-hour;
+    the figure appears beside tokens only once the PTU flag is on, and the token totals are
+    untouched either way."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if attribution_enabled else "False")
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    page = _ptu_activity_page()
+
+    with (
+        patch("litellm.proxy.management_endpoints.team_endpoints.get_daily_activity", AsyncMock(return_value=page)),
+        patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router()),
+    ):
+        result = await get_team_daily_activity(
+            team_ids="team-a",
+            start_date="2026-09-23",
+            end_date="2026-09-24",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    expected_ptu_hours = 1.0 if attribution_enabled else 0.0
+    assert result.metadata.total_ptu_hours == expected_ptu_hours
+    assert result.results[0].metrics.ptu_hours == expected_ptu_hours
+    assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == expected_ptu_hours
+    assert result.metadata.total_tokens == _ONE_PTU_HOUR_OF_INPUT
+    assert result.results[0].metrics.total_tokens == _ONE_PTU_HOUR_OF_INPUT
+
+
+@pytest.mark.asyncio
+async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_name(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    """A deployment registered for one team is renamed to a unique internal name and keeps the
+    name callers use in ``team_public_model_name``, which is the name the activity rows carry,
+    so its sizing row is still found."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    page = _ptu_activity_page()
+    team_scoped_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu-3f9c1b",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "team-a-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "team_id": "team-a",
+                    "team_public_model_name": "gpt-4.1-ptu",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                },
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.management_endpoints.team_endpoints.get_daily_activity", AsyncMock(return_value=page)),
+        patch("litellm.proxy.proxy_server.llm_router", team_scoped_router),
+    ):
+        result = await get_team_daily_activity(
+            team_ids="team-a",
+            start_date="2026-09-23",
+            end_date="2026-09-24",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert result.metadata.total_ptu_hours == 1.0
+    assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == 1.0
+
+
 def test_team_export_csv_columns_match_the_dashboard_client_layout():
     import csv
     import io
@@ -17151,6 +17293,38 @@ def test_team_export_csv_columns_match_the_dashboard_client_layout():
             "Cache Creation Input Tokens": "4",
         }
     ]
+
+
+def test_team_export_csv_escapes_a_formula_shaped_team_id_like_the_alias():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="=HYPERLINK(\"https://example.com\")",
+        team_alias="=SUM(A1)",
+        api_key=None,
+        key_alias=None,
+        user_id=None,
+        user_email=None,
+        spend=0.0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+        total_tokens=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+
+    record: Final = next(csv.DictReader(io.StringIO(_team_export_csv("daily", (row,)))))
+
+    assert record["Team ID"] == "'=HYPERLINK(\"https://example.com\")"
+    assert record["Team"] == "'=SUM(A1)"
 
 
 def test_team_export_csv_omits_key_columns_for_the_plain_daily_scope():
