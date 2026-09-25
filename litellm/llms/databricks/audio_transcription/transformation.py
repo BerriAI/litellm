@@ -35,9 +35,7 @@ from ..common_utils import DatabricksBase, DatabricksException
 
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 _STRING_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
-# Databricks serving endpoint names use [a-z0-9-]; underscores are also
-# permitted so no plausible name is rejected. Dots are excluded: allowing
-# them would admit path-shaping inputs such as "..".
+# dots are excluded so path-shaping inputs such as ".." cannot reach the URL
 _ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -45,9 +43,7 @@ class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, Databrick
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: base class signature returns list
-        # advertised so OpenAI-style params are accepted (and ignored) instead
-        # of raising UnsupportedParamsError; the invoke route has no parameter
-        # surface
+        # accept-and-ignore: advertising these avoids UnsupportedParamsError; the invoke route has no parameter surface
         return [  # mutable-ok: fixed provider param set, never grown
             "language",
             "prompt",
@@ -84,9 +80,8 @@ class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, Databrick
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: base class signature returns dict
-        # endpoint_type="chat_completions" reuses the shared Databricks auth
-        # (OAuth M2M, PAT, SDK fallback); the /chat/completions suffix it
-        # appends is discarded because get_complete_url() builds the URL
+        # endpoint_type="chat_completions" reuses the shared Databricks auth; the
+        # /chat/completions suffix it appends is discarded (get_complete_url builds the URL)
         auth_headers: Final = _STRING_OBJECT_DICT.validate_python(
             self.databricks_validate_environment(  # pyright: ignore[reportUnknownMemberType]  # common_utils auth predates strict typing; re-annotating it is out of scope here
                 api_key=api_key,
@@ -118,8 +113,7 @@ class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, Databrick
                 ),
             )
         resolved_base: Final = self._get_api_base(api_base or os.getenv("DATABRICKS_API_BASE")).rstrip("/")
-        # _get_api_base only appends /serving-endpoints in its SDK-fallback
-        # branch; normalize here so a bare workspace host works too
+        # _get_api_base appends /serving-endpoints only in its SDK-fallback branch
         serving_base: Final = (
             resolved_base if resolved_base.endswith("/serving-endpoints") else f"{resolved_base}/serving-endpoints"
         )
@@ -152,7 +146,7 @@ class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, Databrick
             )
         try:
             payload: Final = _STRING_OBJECT_DICT.validate_python(raw_response.json())
-        except ValueError as e:  # pydantic ValidationError and json.JSONDecodeError are both ValueError subclasses
+        except ValueError as e:
             raise DatabricksException(
                 status_code=500,
                 message=f"Error parsing Databricks transcription response: {e}\nResponse: {raw_response.text}",

@@ -170,7 +170,6 @@ def test_validate_environment_sets_bearer_and_json():
 
 
 def test_validate_environment_resolves_base_from_env(monkeypatch):
-    # the audio handler passes api_base=None when only the env var is set
     monkeypatch.setenv("DATABRICKS_API_BASE", API_BASE)
     headers = CONFIG.validate_environment(
         headers={},
@@ -247,7 +246,6 @@ def test_transform_response_predictions_variants(payload, expected_text):
 
 
 def test_transform_response_empty_transcript_is_valid():
-    # silent audio legitimately transcribes to an empty string
     raw = httpx.Response(200, json={"predictions": [""]}, request=httpx.Request("POST", INVOKE_URL))
     response = CONFIG.transform_audio_transcription_response(raw_response=raw)
 
@@ -346,9 +344,7 @@ def test_transcription_dispatches_to_databricks_invoke(monkeypatch):
 
 
 def test_transcription_uses_per_call_api_base_for_auth(monkeypatch):
-    # no DATABRICKS_API_BASE env var (the autouse fixture clears it): an
-    # explicit api_base= must reach validate_environment, otherwise auth
-    # falls into the SDK fallback even though the caller supplied a base
+    # regression: auth must see the per-call base, else it silently falls into the SDK fallback
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
