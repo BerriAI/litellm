@@ -1,6 +1,8 @@
 import re
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
@@ -49,6 +51,7 @@ class AzureGuardrailBase:
         # (typically CustomGuardrail).
         super().__init__(**kwargs)
 
+        self.timeout: float | httpx.Timeout | None
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key
         self.api_base = api_base
@@ -77,6 +80,7 @@ class AzureGuardrailBase:
             url=url,
             headers=headers,
             json=request_body,
+            timeout=self.timeout,
         )
         response_json: Final[dict[str, Any]] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)

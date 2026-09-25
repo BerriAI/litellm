@@ -814,7 +814,7 @@ class LassoGuardrail(CustomGuardrail):
             url=url,
             headers=headers,
             json=payload,
-            timeout=10.0,
+            timeout=self.timeout if self.timeout is not None else 10.0,
         )
         response.raise_for_status()
         return response.json()

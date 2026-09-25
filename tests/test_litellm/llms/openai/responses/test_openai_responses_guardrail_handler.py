@@ -2479,7 +2479,7 @@ def _per_message_guardrail_server(structured_messages_in_answer: bool) -> Callab
     """Answers one redacted text per chat row it was shown, the way a guardrail
     that scans per message does, and optionally the rewritten rows themselves."""
 
-    def post(url: str, json: dict, headers: dict) -> MagicMock:
+    def post(url: str, json: dict, headers: dict, timeout=None) -> MagicMock:
         rows = json["structured_messages"]
         answer: dict = {
             "action": "GUARDRAIL_INTERVENED",

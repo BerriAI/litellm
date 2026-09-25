@@ -305,6 +305,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": self._inspection_messages(data)},
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_CatoAnalyzeResponse] = response.json()
@@ -445,6 +446,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={"messages": inspection_messages + [{"role": "assistant", "content": output}]},
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_CatoAnalyzeResponse] = response.json()

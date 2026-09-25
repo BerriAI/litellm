@@ -337,6 +337,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 url=url,
                 json=body,
                 headers=headers,
+                timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
             detail = self._build_api_error_detail(e.response.status_code, e.response.text)

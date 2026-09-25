@@ -140,6 +140,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                 url=self.api_url,
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             response_json: Final[list[list[IBMDetectorDetection]]] = response.json()
@@ -231,6 +232,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                 url=self.api_url,
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             response_json: Final[IBMDetectorResponseOrchestrator] = response.json()

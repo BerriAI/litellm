@@ -28,6 +28,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         anonymize_input=litellm_params.anonymize_input,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_callback)
 
@@ -46,6 +47,7 @@ def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardra
         block_failures=litellm_params.block_failures,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_v2_callback)
 

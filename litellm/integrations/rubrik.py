@@ -1055,6 +1055,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 url=self.logging_endpoint,
                 json=data,
                 headers=dict(self._headers),
+                timeout=self.timeout,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -1120,6 +1121,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             endpoint,
             json=dict(payload),
             headers=dict(self._headers),
+            timeout=self.timeout,
         )
         http_response.raise_for_status()
         result: Final[_ModerationResponse | None] = http_response.json()
