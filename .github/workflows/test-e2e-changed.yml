@@ -129,6 +129,17 @@ jobs:
       - name: Install Playwright chromium
         run: uv run --no-sync playwright install --with-deps chromium
 
+      - name: Set up Node for the client_apps suite
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: tests/e2e/client_apps/.nvmrc
+          cache: npm
+          cache-dependency-path: tests/e2e/client_apps/package-lock.json
+
+      - name: Install the client apps the client_apps suite drives
+        working-directory: tests/e2e/client_apps
+        run: npm ci --no-audit --no-fund
+
       - name: Configure AWS credentials
         id: aws
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
@@ -172,6 +183,7 @@ jobs:
           cat "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" >> "${GITHUB_ENV}"
 
       - name: Run the selected tests three times
+        id: tests
         env:
           TESTS: ${{ needs.detect.outputs.tests }}
           E2E_FIXTURE_MODE: live
@@ -217,6 +229,15 @@ jobs:
           uv run --no-sync python .github/e2e-stack/redact_output.py \
             --values tests/e2e/.env --values "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" \
             --out "${RUNNER_TEMP}/e2e-redacted" "${RUNNER_TEMP}"/e2e-pass-*.log "${RUNNER_TEMP}"/e2e-pass-*.xml
+
+      - name: Redact the gateway logs of a failed run
+        if: always() && steps.boot.outcome == 'success' && steps.tests.outcome != 'success'
+        run: |
+          umask 077
+          shopt -s nullglob
+          uv run --no-sync python .github/e2e-stack/redact_output.py \
+            --values tests/e2e/.env --values "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" \
+            --out "${RUNNER_TEMP}/e2e-redacted" "${RUNNER_TEMP}"/litellm-e2e-stack/logs/gateway-*.log
 
       - name: Keep the redacted pytest output
         if: always() && steps.boot.outcome == 'success'
