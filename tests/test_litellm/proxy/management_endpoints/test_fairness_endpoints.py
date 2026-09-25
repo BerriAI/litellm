@@ -191,6 +191,17 @@ def test_settings_reject_duplicate_and_reserved_class_names() -> None:
         FairnessSettings(workload_classes=(WorkloadClass(name="default", reserved_share=0.1),))
 
 
+def test_settings_reject_shares_that_exceed_full_capacity_including_default_pool() -> None:
+    classes: Final = (
+        WorkloadClass(name="production", reserved_share=0.6),
+        WorkloadClass(name="batch", reserved_share=0.3),
+    )
+    with pytest.raises(ValidationError, match="add up to 115%"):
+        FairnessSettings(workload_classes=classes, default_reserved_share=0.25)
+    exact: Final = FairnessSettings(workload_classes=classes, default_reserved_share=0.1)
+    assert sum(exact.reserved_shares().values()) + exact.default_reserved_share == pytest.approx(1.0)
+
+
 @pytest.mark.asyncio
 async def test_status_reports_reserved_capacity_per_class(
     isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch

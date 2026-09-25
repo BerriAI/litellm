@@ -819,9 +819,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         """
         if "model" not in data or self.llm_router is None:
             return None
-        fairness: Final = self._fairness_settings()
-        if fairness is not None and not fairness.enabled:
-            return None
 
         claim_request_stash_for_data(data)
         model: Final = data["model"]
@@ -1026,8 +1023,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
         if stash is None:
             return
+        recovered_tokens: Final = self.v3_limiter.recovered_partial_usage_tokens(kwargs)[0]
         try:
-            await self._settle_reservation(stash, 0, None)
+            await self._settle_reservation(stash, recovered_tokens, None)
         except Exception as e:
             verbose_proxy_logger.exception("Error refunding dynamic rate limiter reservation: %s", e)
 

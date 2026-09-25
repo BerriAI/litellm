@@ -4737,7 +4737,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 statuses=statuses,
             )
 
-    def _recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
+    def recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
         usage: Final = source.get("combined_usage_object")
         if not isinstance(usage, Usage) or (usage.completion_tokens or 0) <= 0:
             return 0, 0, 0
@@ -4778,7 +4778,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if stash is None or stash.reservation_released
                 else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
             )
-            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(kwargs)
+            tpm_actual, itpm_actual, otpm_actual = self.recovered_partial_usage_tokens(kwargs)
 
             if stash is not None and reserved_tokens > 0:
                 verbose_proxy_logger.debug(
@@ -4982,7 +4982,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             otpm_reserved: Final = stash.otpm_reserved_tokens
             if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
-            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
+            tpm_actual, itpm_actual, otpm_actual = self.recovered_partial_usage_tokens(request_data)
 
             combined_ops: Final = (
                 self.build_reservation_aware_tpm_ops(

@@ -69,6 +69,7 @@ describe("FairnessStatusTable", () => {
     expect(row.getByText("7 queued, 5 admitted")).toBeInTheDocument();
     expect(row.getByText("avg wait 1.23s")).toBeInTheDocument();
     expect(row.getByText("1 capacity, 2 queue full, 3 deadline, 4 disconnected")).toBeInTheDocument();
+    expect(row.getByText("10")).toBeInTheDocument();
     expect(screen.getByTestId("class-row-default")).toBeInTheDocument();
   });
 

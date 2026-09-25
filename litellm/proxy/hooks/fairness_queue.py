@@ -146,15 +146,16 @@ class FairQueue:
     ) -> QueueOutcome | None:
         if await is_cancelled():
             return QueueRejected(reason="client_disconnected", waited_seconds=self._clock() - started)
+        elapsed: Final = self._clock() - started
+        if elapsed >= max_wait_seconds:
+            return QueueRejected(reason="queue_deadline_exceeded", waited_seconds=elapsed)
         if _has_turn(ticket, self._store.snapshot(ticket.model, tuple(weights))):
             admitted: Final = await try_admit()
             self._store.advance(ticket.model, ticket.class_name, 1.0 / max(weights.get(ticket.class_name, 0.0), 1e-6))
             if admitted:
                 return QueueAdmitted(waited_seconds=self._clock() - started)
-        elapsed: Final = self._clock() - started
-        if elapsed >= max_wait_seconds:
-            return QueueRejected(reason="queue_deadline_exceeded", waited_seconds=elapsed)
-        await asyncio.sleep(min(poll_interval_seconds, max_wait_seconds - elapsed))
+        remaining: Final = max_wait_seconds - (self._clock() - started)
+        await asyncio.sleep(max(0.0, min(poll_interval_seconds, remaining)))
         return None
 
 

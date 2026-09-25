@@ -2217,3 +2217,72 @@ async def test_fairness_queue_drops_request_when_client_disconnects(monkeypatch)
     default_pool = next(cls for cls in (await handler.fairness_status((model,)))[0].classes if cls.name == "default")
     assert default_pool.disconnected_total == 1
     assert default_pool.current_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_disabled_fairness_settings_keep_model_capacity_enforced(monkeypatch):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.types.proxy.fairness import FairnessSettings
+
+    model = "fairness-disabled-model"
+    monkeypatch.setattr(litellm, "fairness_settings", FairnessSettings(enabled=False))
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=1))
+
+    async def call(call_id: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=dual_cache,
+            data={"model": model, "litellm_call_id": call_id},
+            call_type="completion",
+        )
+
+    await asyncio.create_task(call("first"))
+    with pytest.raises(ProxyRateLimitError) as over_capacity:
+        await asyncio.create_task(call("second"))
+    assert over_capacity.value.status_code == 429
+    assert over_capacity.value.headers["x-litellm-fairness-reason"] == "capacity_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_settles_reservation_at_recovered_partial_usage(monkeypatch):
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import Usage
+
+    model = "fairness-partial-failure-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    data = {
+        "model": model,
+        "litellm_call_id": "partial-stream",
+        "messages": [{"role": "user", "content": "stream a long answer that gets cut off"}],
+        "max_tokens": 400,
+    }
+
+    async def reserve_then_fail() -> int:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(), cache=dual_cache, data=data, call_type="completion"
+        )
+        reserved = await _model_tokens(handler, dual_cache, model)
+        await handler.async_log_failure_event(
+            kwargs={
+                **_success_kwargs(model, "partial-stream", "prod"),
+                "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=12, total_tokens=42),
+            },
+            response_obj=None,
+            start_time=0.0,
+            end_time=0.0,
+        )
+        return reserved
+
+    reserved = await asyncio.create_task(reserve_then_fail())
+    assert reserved > 42
+    assert await _model_tokens(handler, dual_cache, model) == 42
+    assert 42 <= await _priority_tokens(handler, dual_cache, model, "prod") <= 43

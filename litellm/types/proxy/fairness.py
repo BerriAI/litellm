@@ -8,6 +8,7 @@ DEFAULT_POOL_NAME: Final = "default"
 FAIRNESS_SETTINGS_KEY: Final = "fairness_settings"
 MAX_QUEUE_WAIT_HEADER: Final = "x-litellm-max-queue-wait"
 MAX_QUEUE_WAIT_SECONDS: Final = 600.0
+SHARE_ROUNDING_TOLERANCE: Final = 1e-9
 
 FairnessRejectReason = Literal["capacity_exhausted", "queue_full", "queue_deadline_exceeded", "client_disconnected"]
 
@@ -39,12 +40,20 @@ class FairnessSettings(BaseModel):
     queue_poll_interval_seconds: float = Field(default=0.1, gt=0.0, le=5.0)
 
     @model_validator(mode="after")
-    def _unique_class_names(self) -> "FairnessSettings":
+    def _consistent_workload_classes(self) -> "FairnessSettings":
         names: Final = tuple(workload_class.name for workload_class in self.workload_classes)
         if len(names) != len(frozenset(names)):
             raise ValueError("workload class names must be unique")
         if DEFAULT_POOL_NAME in names:
             raise ValueError(f"{DEFAULT_POOL_NAME!r} is reserved for keys and teams without a workload class")
+        total_share: Final = (
+            sum(workload_class.reserved_share for workload_class in self.workload_classes) + self.default_reserved_share
+        )
+        if total_share > 1.0 + SHARE_ROUNDING_TOLERANCE:
+            raise ValueError(
+                f"reserved shares add up to {total_share:.0%} including the {self.default_reserved_share:.0%} default "
+                "pool; keep the total at or below 100%"
+            )
         return self
 
     def max_queue_wait_for(self, class_name: str | None) -> float:

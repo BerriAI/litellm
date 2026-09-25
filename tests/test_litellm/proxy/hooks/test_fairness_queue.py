@@ -217,3 +217,27 @@ async def test_same_class_admits_in_arrival_order():
     gate.slots = 3
     await asyncio.gather(*tasks)
     assert order == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_request_past_its_deadline_is_never_admitted_even_when_capacity_frees():
+    clock: Final = FakeClock()
+    queue: Final = FairQueue(clock=clock)
+    gate: Final = CapacityGate(slots=5)
+
+    async def slow_disconnect_probe() -> bool:
+        clock.now += 2.0
+        return False
+
+    outcome: Final = await queue.wait_for_admission(
+        ticket=_ticket("prod", "r1"),
+        weights=WEIGHTS,
+        max_wait_seconds=1.0,
+        max_depth=10,
+        poll_interval_seconds=0.001,
+        try_admit=gate.for_class("prod"),
+        is_cancelled=slow_disconnect_probe,
+    )
+    assert outcome == QueueRejected(reason="queue_deadline_exceeded", waited_seconds=2.0)
+    assert gate.admitted == []
+    assert queue.depths(MODEL)["prod"] == 0

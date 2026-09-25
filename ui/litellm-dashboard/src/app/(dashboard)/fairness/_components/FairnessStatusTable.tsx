@@ -24,8 +24,8 @@ const percent = (fraction: number): string => `${Math.round(fraction * 100)}%`;
 const seconds = (value: number): string => `${Math.round(value * 100) / 100}s`;
 const limit = (value: number | null): string => (value === null ? "no limit" : value.toLocaleString());
 
-export const rejectedTotal = (row: WorkloadClassStatus): number =>
-  row.rejected_capacity_total + row.rejected_queue_full_total + row.rejected_deadline_total;
+export const notServedTotal = (row: WorkloadClassStatus): number =>
+  row.rejected_capacity_total + row.rejected_queue_full_total + row.rejected_deadline_total + row.disconnected_total;
 
 const ClassRow = ({ row }: { row: WorkloadClassStatus }) => (
   <TableRow data-testid={`class-row-${row.name}`}>
@@ -48,7 +48,7 @@ const ClassRow = ({ row }: { row: WorkloadClassStatus }) => (
       <span className="block text-xs text-muted-foreground">avg wait {seconds(row.avg_queue_wait_seconds)}</span>
     </TableCell>
     <TableCell>
-      {rejectedTotal(row).toLocaleString()}
+      {notServedTotal(row).toLocaleString()}
       <span className="block text-xs text-muted-foreground">
         {`${row.rejected_capacity_total} capacity, ${row.rejected_queue_full_total} queue full, ` +
           `${row.rejected_deadline_total} deadline, ${row.disconnected_total} disconnected`}
@@ -77,7 +77,7 @@ const ModelSection = ({ model, threshold }: { model: ModelFairnessStatus; thresh
           <TableHead>In window</TableHead>
           <TableHead>Queue depth</TableHead>
           <TableHead>Waited</TableHead>
-          <TableHead>Rejected</TableHead>
+          <TableHead>Not served</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
