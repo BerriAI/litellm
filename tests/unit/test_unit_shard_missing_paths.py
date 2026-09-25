@@ -39,6 +39,7 @@ def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.Compl
             "GITHUB_OUTPUT": str(tmp_path / "github_output"),
             "TEST_PATH": test_path,
             "WORKERS": workers,
+            "UNIT_FLAG": "",
         },
         capture_output=True,
         text=True,
