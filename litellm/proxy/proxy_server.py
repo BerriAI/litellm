@@ -9782,10 +9782,10 @@ def get_litellm_model_info(model: dict = {}):
         return {
             **live_model_info,
             **static_model_info,
-            **(
-                {"max_input_tokens": live_model_info["max_input_tokens"]}
+            "max_input_tokens": (
+                live_model_info["max_input_tokens"]
                 if live_model_info["max_input_tokens"] is not None
-                else {}
+                else static_model_info.get("max_input_tokens")
             ),
         }
     except Exception:
@@ -15052,17 +15052,15 @@ async def model_info_v2(
 
     # Fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     # This must happen before teamId filtering so that direct_access and access_via_team_ids are populated
-    all_models = list(
-        await asyncio.gather(
-            *(
-                asyncio.to_thread(
-                    _enrich_model_info_with_litellm_data,
-                    model=_model,
-                    debug=debug if debug is not None else False,
-                    llm_router=llm_router,
-                )
-                for _model in all_models
+    all_models = await asyncio.gather(
+        *(
+            asyncio.to_thread(
+                _enrich_model_info_with_litellm_data,
+                model=_model,
+                debug=debug if debug is not None else False,
+                llm_router=llm_router,
             )
+            for _model in all_models
         )
     )
 
