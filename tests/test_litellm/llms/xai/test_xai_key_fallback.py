@@ -12,6 +12,9 @@ from litellm.types.router import GenericLiteLLMParams
 
 
 class FakeLogging:
+    def __init__(self) -> None:
+        self.litellm_params: dict = {}
+
     def update_from_kwargs(self, **kwargs):
         pass
 

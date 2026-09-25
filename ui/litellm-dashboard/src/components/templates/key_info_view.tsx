@@ -1,15 +1,17 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
 import { modelGroupHref, teamDetailHref } from "@/utils/entityLinks";
@@ -45,8 +47,12 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
+import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+
+export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
+  return (totalSpend ?? 0) < spend;
+}
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -95,6 +101,7 @@ export default function KeyInfoView({
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -507,7 +514,8 @@ export default function KeyInfoView({
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
+  const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -679,6 +687,26 @@ export default function KeyInfoView({
                   )}
                   <p className="text-sm mt-2" data-testid="key-lifetime-spend">
                     Lifetime spend: ${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)}
+                    {needsLifetimeSpendBackfill(currentKeyData.spend, currentKeyData.total_spend) && (
+                      <HoverCard>
+                        <HoverCardTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Why lifetime spend is below current spend"
+                              className="inline-flex align-middle ml-1 cursor-help"
+                              data-testid="key-lifetime-spend-backfill-hint"
+                            />
+                          }
+                        >
+                          <Info className="size-3 text-muted-foreground" />
+                        </HoverCardTrigger>
+                        <HoverCardContent className="w-80">
+                          Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026 and was not backfilled,
+                          so this key&apos;s lifetime spend only counts usage since that upgrade.
+                        </HoverCardContent>
+                      </HoverCard>
+                    )}
                   </p>
                 </div>
               </Card>

@@ -11,8 +11,10 @@ from litellm import ModelResponse, Router
 from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, ComplexityTier
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.router_strategy.complexity_router.llm_v2 import (
     LLM_V2_PROMPT_VERSION,
+    LLM_V2_SYSTEM_PROMPT,
     LLMV2Calibration,
     LLMV2Config,
     LLMV2ProbabilityCalibration,
@@ -172,6 +174,114 @@ def test_invalid_forecast_settings_are_rejected(overrides: dict[str, object]) ->
     assert base is not None
     with pytest.raises(ValidationError):
         LLMV2Config.model_validate({**base.model_dump(), **overrides})
+
+
+def _preset_config(**overrides: object) -> LLMV2Config:
+    catalog: Final = get_fuse_presets()
+    return LLMV2Config.model_validate(
+        {
+            "efficient_profile_preset": catalog.models[0].id,
+            "capable_profile_preset": catalog.models[-1].id,
+            "harness_preset": catalog.harnesses[-1].id,
+            "max_quality_gap": 0.05,
+            **overrides,
+        }
+    )
+
+
+def test_preset_roundtrip_keeps_references_without_materializing_text() -> None:
+    config: Final = _preset_config()
+    serialized: Final = config.model_dump(exclude_none=True)
+    assert serialized["efficient_profile_preset"] == config.efficient_profile_preset
+    assert serialized["capable_profile_preset"] == config.capable_profile_preset
+    assert serialized["harness_preset"] == config.harness_preset
+    assert not {"efficient_profile", "capable_profile", "harness"}.intersection(serialized)
+    assert LLMV2Config.model_validate(config.model_dump()) == config
+    assert LLMV2Config.model_validate_json(config.model_dump_json()) == config
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_preset_explicit_override_wins_and_survives_roundtrip(field: str) -> None:
+    config: Final = _preset_config(**{field: "  Operator description  "})
+    roundtrip: Final = LLMV2Config.model_validate_json(config.model_dump_json())
+    assert roundtrip.model_dump()[field] == "Operator description"
+    assert roundtrip.efficient_profile_preset == config.efficient_profile_preset
+    assert roundtrip.capable_profile_preset == config.capable_profile_preset
+    assert roundtrip.harness_preset == config.harness_preset
+    payload: Final = json.loads(
+        roundtrip.system_prompt("opaque-efficient", "opaque-capable").split("Configured solver profiles:\n")[1]
+    )
+    if field == "harness":
+        assert payload["harness"] == "Operator description"
+    else:
+        assert payload[field.removesuffix("_profile")]["profile"] == "Operator description"
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+@pytest.mark.parametrize("invalid", ("", " \n\t", "x" * 4001))
+def test_preset_does_not_bypass_supplied_text_bounds(field: str, invalid: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        _preset_config(**{field: invalid})
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+@pytest.mark.parametrize("override", (None, "Custom override"))
+@pytest.mark.parametrize("invalid_id", ("missing-v1", ""))
+def test_preset_unknown_reference_rejects_even_when_overridden(
+    field: str, override: str | None, invalid_id: str
+) -> None:
+    with pytest.raises(ValidationError, match=f"{field}.*preset"):
+        _preset_config(**{field: override, f"{field}_preset": invalid_id})
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_preset_missing_text_and_reference_rejects(field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        _preset_config(**{f"{field}_preset": None})
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_preset_reference_rejects_the_wrong_catalog_kind(field: str) -> None:
+    catalog: Final = get_fuse_presets()
+    wrong_id: Final = catalog.models[0].id if field == "harness" else catalog.harnesses[0].id
+    with pytest.raises(ValidationError, match=field):
+        _preset_config(**{f"{field}_preset": wrong_id})
+
+
+@pytest.mark.parametrize("mode", ("json_schema", "json_object"))
+def test_custom_profile_prompt_bytes_are_unchanged(mode: str) -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    config: Final = LLMV2Config.model_validate({**base.model_dump(), "response_format": mode})
+    old_payload: Final = {
+        "prompt_version": LLM_V2_PROMPT_VERSION,
+        "harness": config.harness,
+        "efficient": {"model": "opaque-efficient", "profile": config.efficient_profile},
+        "capable": {"model": "opaque-capable", "profile": config.capable_profile},
+    }
+    schema: Final = (
+        "\n\nResponse JSON schema:\n" + json.dumps(LLMV2Verdict.model_json_schema()) if mode == "json_object" else ""
+    )
+    assert config.system_prompt("opaque-efficient", "opaque-capable") == (
+        LLM_V2_SYSTEM_PROMPT + "\n\nConfigured solver profiles:\n" + json.dumps(old_payload) + schema
+    )
+
+
+@pytest.mark.asyncio
+async def test_preset_router_passes_catalog_text_and_opaque_group_names_to_judge() -> None:
+    catalog: Final = get_fuse_presets()
+    config: Final = _config(llm_v2_config=_preset_config().model_dump())
+    router, client = _router(_verdict().model_dump_json(), config)
+    outcome: Final = await router.aclassify("Complete the supplied task")
+    assert outcome.tier == ComplexityTier.SIMPLE
+    prompt: Final = client.acompletion.call_args.kwargs["messages"][0]["content"]
+    payload: Final = json.loads(prompt.split("Configured solver profiles:\n")[1])
+    assert payload == {
+        "prompt_version": LLM_V2_PROMPT_VERSION,
+        "harness": catalog.harnesses[-1].text,
+        "efficient": {"model": "efficient", "profile": catalog.models[0].text},
+        "capable": {"model": "capable", "profile": catalog.models[-1].text},
+    }
 
 
 @pytest.mark.asyncio
@@ -367,6 +477,10 @@ async def test_user_turn_mode_reuses_forecast_until_a_new_user_requirement() -> 
     assert first.model == second.model == "efficient"
     assert first.routing_decision["cause"] == "llm_v2_classifier"
     assert first.routing_decision["classifier_cost"] == 0.001
+    assert second is not None and second.routing_decision is not None
+    assert second.routing_decision["cause"] == "user_turn_continuation"
+    assert "classifier_efficient_p_solve" not in second.routing_decision
+    assert "classifier_capable_p_solve" not in second.routing_decision
     client.acompletion.assert_awaited_once()
     client.acompletion.return_value = _response(_verdict(0.3, 0.9).model_dump_json())
     updated: Final = await router.async_pre_routing_hook(

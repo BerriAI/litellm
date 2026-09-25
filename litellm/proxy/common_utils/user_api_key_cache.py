@@ -86,6 +86,10 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
 
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        super().update_in_memory_max_size(max_size)
+        self.key_object_cache.update_in_memory_max_size(max_size)
+
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
     ) -> None:
@@ -323,6 +327,14 @@ def model_access_group_spend_counter_key(access_group_name: str) -> str:
     up as a budget that never trips or never resets.
     """
     return f"spend:model_access_group:{access_group_name}"
+
+
+def project_cache_key(project_id: str) -> str:
+    return f"project_id:{project_id}"
+
+
+def project_spend_counter_key(project_id: str) -> str:
+    return f"spend:project:{project_id}"
 
 
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds

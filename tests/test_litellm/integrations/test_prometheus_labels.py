@@ -787,6 +787,176 @@ async def test_failure_hook_prefers_request_data_provider_over_exception_provide
     ) == ["azure"]
 
 
+def test_model_group_in_deployment_metrics():
+    """
+    Test that model_group label is present on the deployment-scoped metrics
+    needed to build model-group dashboards (request counts, success/failure
+    counts, tpm/rpm limits). These metrics previously only carried
+    requested_model, litellm_model_name and model_id, none of which identify
+    the model_group a pooled deployment belongs to.
+    """
+    model_group_label = UserAPIKeyLabelNames.MODEL_GROUP.value
+
+    metrics_with_model_group = [
+        "litellm_deployment_total_requests",
+        "litellm_deployment_success_responses",
+        "litellm_deployment_failure_responses",
+        "litellm_deployment_tpm_limit",
+        "litellm_deployment_rpm_limit",
+    ]
+
+    for metric_name in metrics_with_model_group:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            model_group_label in labels
+        ), f"Metric {metric_name} should contain model_group label"
+        print(f"✅ {metric_name} contains model_group label")
+
+
+def test_model_group_value_flows_through_deployment_metrics_label_factory():
+    """
+    The label being in the allow-list is necessary but not sufficient: the
+    factory must also carry the value from the enum through to the emitted
+    label. This would fail if the label were dropped from a metric's list or
+    if the value plumbing regressed, which the allow-list assertion above
+    cannot catch on its own.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+
+    prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
+    prometheus_logger.get_labels_for_metric = (
+        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        model_group="example-model-group",
+        litellm_model_name="gpt-4o-mini",
+        requested_model="example-model-group",
+        status_code="200",
+    )
+
+    for metric_name in [
+        "litellm_deployment_total_requests",
+        "litellm_deployment_success_responses",
+        "litellm_deployment_failure_responses",
+        "litellm_deployment_tpm_limit",
+        "litellm_deployment_rpm_limit",
+    ]:
+        labels = prometheus_label_factory(
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(
+                metric_name=metric_name
+            ),
+            enum_values=enum_values,
+        )
+        assert (
+            labels.get("model_group") == "example-model-group"
+        ), f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+
+
+def test_deployment_failure_metrics_emit_model_group_from_standard_logging_payload():
+    """
+    End-to-end emit wiring for the failure path.
+
+    The label-list and factory tests above prove the label exists and that
+    the factory carries a value handed to it, but neither drives the real
+    set_llm_deployment_failure_metrics code path, so deleting the production
+    model_group=model_group assignment there would still pass them. This
+    calls it directly with a standard_logging_object carrying model_group and
+    asserts the real litellm_deployment_failure_responses / _total_requests
+    Counter series actually carry it.
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": {}},
+                "standard_logging_object": {
+                    "model_group": "example-model-group",
+                    "model_id": "model-123",
+                    "api_base": "https://api.openai.com",
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        for metric in (
+            logger.litellm_deployment_failure_responses,
+            logger.litellm_deployment_total_requests,
+        ):
+            index = metric._labelnames.index("model_group")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {"example-model-group"}, (
+                f"expected model_group=example-model-group on {metric._name}, got {values}"
+            )
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_deployment_tpm_rpm_limit_metrics_emit_model_group_from_enum_values():
+    """
+    End-to-end emit wiring for the tpm/rpm limit gauges.
+
+    _set_deployment_tpm_rpm_limit_metrics used to build its own
+    UserAPIKeyLabelValues with no model_group parameter at all, dropping the
+    value even though its only caller (set_llm_deployment_success_metrics)
+    already had it on enum_values. This drives set_llm_deployment_success_metrics
+    directly with a deployment that has tpm/rpm configured and asserts the real
+    litellm_deployment_tpm_limit / litellm_deployment_rpm_limit Gauge series
+    carry model_group; it fails if that plumbing is removed.
+    """
+    import datetime
+
+    from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        now = datetime.datetime.now()
+        enum_values = UserAPIKeyLabelValues(
+            model_group="example-model-group",
+            litellm_model_name="gpt-4o-mini",
+            requested_model="example-model-group",
+            status_code="200",
+        )
+        logger.set_llm_deployment_success_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": {"model_info": {"id": "model-123", "tpm": 1000, "rpm": 10}}},
+                "standard_logging_object": {
+                    "model_group": "example-model-group",
+                    "model_id": "model-123",
+                    "api_base": "https://api.openai.com",
+                    "hidden_params": {"additional_headers": None, "litellm_overhead_time_ms": None},
+                },
+            },
+            start_time=now,
+            end_time=now,
+            enum_values=enum_values,
+        )
+
+        for metric in (logger.litellm_deployment_tpm_limit, logger.litellm_deployment_rpm_limit):
+            index = metric._labelnames.index("model_group")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {"example-model-group"}, (
+                f"expected model_group=example-model-group on {metric._name}, got {values}"
+            )
+    finally:
+        _clear_prometheus_registry()
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()

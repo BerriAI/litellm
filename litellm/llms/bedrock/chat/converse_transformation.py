@@ -48,6 +48,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -98,7 +99,7 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -107,6 +108,7 @@ BEDROCK_COMPUTER_USE_TOOLS: Final = [
     "bash_",
     "text_editor_",
 ]
+BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -377,6 +379,10 @@ class AmazonConverseConfig(BaseConfig):
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
 
+    @staticmethod
+    def _requires_min_max_tokens(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -623,17 +629,34 @@ class AmazonConverseConfig(BaseConfig):
         """
         return self._is_deepseek_r1_model(model=model, base_model=base_model)
 
+    @classmethod
+    def _supports_sampling_params(cls, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        if base_model.startswith("anthropic"):
+            return True
+        candidates: Final = (model, *(f"{prefix}{base_model}" for prefix in ("global.", "us.", "eu.")))
+        for candidate in candidates:
+            if (
+                flag := AnthropicModelInfo._get_model_capability(  # pyright: ignore[reportPrivateUsage]  # Shared API
+                    candidate, "supports_sampling_params"
+                )
+            ) is not None:
+                return flag
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
+        supports_sampling: Final = self._supports_sampling_params(model)
         supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "stream",
             "stream_options",
             "stop",
-            "temperature",
-            "top_p",
+            *(("temperature", "top_p") if supports_sampling else ()),
             "extra_headers",
             "response_format",
             "requestMetadata",
@@ -999,7 +1022,11 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = (
+                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
+                    if isinstance(value, int) and self._requires_min_max_tokens(model)
+                    else value
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -1009,14 +1036,26 @@ class AmazonConverseConfig(BaseConfig):
                     value = [value]
                 optional_params["stopSequences"] = value
             if param == "temperature" or param == "top_p":
-                AnthropicConfig._apply_sampling_param(
-                    optional_params=optional_params,
-                    model=model,
-                    param=param,
-                    value=value,
-                    drop_params=drop_params,
-                    output_key="topP" if param == "top_p" else param,
-                )
+                if base_model.startswith("anthropic"):
+                    AnthropicConfig._apply_sampling_param(
+                        optional_params=optional_params,
+                        model=model,
+                        param=param,
+                        value=value,
+                        drop_params=drop_params,
+                        output_key="topP" if param == "top_p" else param,
+                    )
+                elif not self._supports_sampling_params(model):
+                    if not (litellm.drop_params or drop_params):
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                f"{model} does not support {param}={value}. "
+                                "To drop unsupported params, set `litellm.drop_params = True`."
+                            ),
+                            status_code=400,
+                        )
+                else:
+                    optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(list[OpenAIChatCompletionToolParam], value),
@@ -1116,7 +1155,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
         if value is not None and isinstance(value, dict):
             self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
@@ -1517,12 +1556,6 @@ class AmazonConverseConfig(BaseConfig):
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
 
-        # Collect anthropic_beta values from user headers
-        anthropic_beta_list: Final = []
-        if headers:
-            user_betas: Final = get_anthropic_beta_from_headers(headers)
-            anthropic_beta_list.extend(user_betas)
-
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools: Final = []
@@ -1541,6 +1574,17 @@ class AmazonConverseConfig(BaseConfig):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        eager_beta: Final = (
+            (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
+            if base_model.startswith("anthropic")
+            and AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
+            and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1619,7 +1663,6 @@ class AmazonConverseConfig(BaseConfig):
 
         # Opus 4.5 gates ``output_config.effort`` behind a beta header;
         # Claude 4.6/4.7 accept it without one.
-        base_model: Final = BedrockModelInfo.get_base_model(model)
         if base_model.startswith("anthropic"):
             output_config: Final = additional_request_params.get("output_config")
             if (
@@ -1906,7 +1949,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

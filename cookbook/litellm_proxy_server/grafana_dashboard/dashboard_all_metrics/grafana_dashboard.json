@@ -6267,6 +6267,63 @@
       ],
       "title": "Spend update queue sizes (litellm_<queue>_size)",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Requests that carried usage but were logged at $0 on a model whose pricing entry has a non-zero rate, by requested model and reason",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 430
+      },
+      "id": 110,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(litellm_zero_cost_requests_total[$__rate_interval])) by (requested_model, reason)",
+          "legendFormat": "{{requested_model}} / {{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "litellm_zero_cost_requests rate",
+      "type": "timeseries"
     }
   ],
   "preload": false,

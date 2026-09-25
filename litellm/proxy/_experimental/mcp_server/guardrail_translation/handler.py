@@ -135,7 +135,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         mcp_tool: Final = MCPTool(
             name=mcp_tool_name,
             description=mcp_tool_description or "",
-            inputSchema={},  # Call payload has no schema; guardrail gets args from request_data
+            input_schema={},  # mutable-ok: call payload has no schema; guardrail gets args from request_data
         )
         openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
         fn: Final = openai_tool["function"]

@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Generic, TypeVar
+from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Context, Route, Rules
+from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.configuration import decision as rollout_decision
 
-RequestT = TypeVar("RequestT")
-NativeT = TypeVar("NativeT")
-ResultT = TypeVar("ResultT")
+RequestT: Final = TypeVar("RequestT")
+NativeT: Final = TypeVar("NativeT")
+ResultT: Final = TypeVar("ResultT")
 
-NativeHook = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
+NativeHook: TypeAlias = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
 
 
 def call_hook(
@@ -30,12 +30,12 @@ def call_hook(
 class PublicDispatch(Generic[RequestT]):
     route: Route
     request: Callable[[tuple[object, ...], Mapping[str, object]], RequestT | None]
-    context: Callable[[RequestT], Context]
+    context: Callable[[RequestT], RouteContext]
     bypass: Callable[[RequestT], bool] | None = None
 
     def _requires_projection(self, rules: Rules) -> bool:
         for rule in rules:
-            if rule.route is not self.route:
+            if not isinstance(rule, RouteRule) or rule.route is not self.route:
                 continue
             if rule.providers is not None or rule.models is not None or rule.deliveries is not None:
                 if rollout_decision(rule.rollout) is not Decision.PYTHON:

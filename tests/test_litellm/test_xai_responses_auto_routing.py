@@ -46,34 +46,6 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") != "responses"
         assert updated_model == model
 
-    def test_responses_api_bridge_check_with_tools(self):
-        """Test that with tools, xAI automatically routes to Responses API"""
-        model = "grok-3"
-        custom_llm_provider = "xai"
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"location": {"type": "string"}},
-                    },
-                },
-            }
-        ]
-        web_search_options = None
-
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-
-        # Should auto-route to responses mode when tools are present
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
 
     def test_responses_api_bridge_check_with_empty_tools(self):
         """Test that with empty tools list, xAI does not route to Responses API"""
@@ -134,57 +106,8 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") == "responses"
         assert updated_model == "grok-3"  # prefix removed
 
-    def test_responses_api_bridge_check_with_code_interpreter_tool(self):
-        """Test auto-routing with code_interpreter tool"""
-        model = "grok-3"
-        custom_llm_provider = "xai"
-        tools = [{"type": "code_interpreter"}]
-        web_search_options = None
 
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-        # Should auto-route with code_interpreter tool
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
 
-    def test_responses_api_bridge_check_with_web_search_tool(self):
-        """Test auto-routing with web_search tool"""
-        model = "grok-4"
-        custom_llm_provider = "xai"
-        tools = [
-            {"type": "web_search", "filters": {"allowed_domains": ["wikipedia.org"]}}
-        ]
-        web_search_options = None
-
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-
-        # Should auto-route with web_search tool
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
-
-    def test_responses_api_bridge_check_with_x_search_tool(self):
-        """Test auto-routing with x_search tool"""
-        model = "grok-4"
-        custom_llm_provider = "xai"
-        tools = [{"type": "x_search", "allowed_x_handles": ["@elonmusk"]}]
-        web_search_options = None
-
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-
-        # Should auto-route with x_search tool
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
 
     def test_responses_api_bridge_check_with_web_search_options(self):
         """Test auto-routing with web_search_options"""

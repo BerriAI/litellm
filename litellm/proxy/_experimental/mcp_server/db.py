@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
@@ -24,6 +25,7 @@ from litellm.proxy._types import (
     MCPApprovalStatus,
     MCPEnvVar,
     MCPEnvVarScope,
+    MCPServerUserCredentialListItem,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
     SpecialMCPServerName,
@@ -45,6 +47,7 @@ from litellm.repositories.table_repositories import (
     MCPServerOAuthClientRepository,
     MCPServerRepository,
     MCPUserCredentialsRepository,
+    PrismaTableRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
@@ -62,6 +65,7 @@ if TYPE_CHECKING:
 
 class _UserEnvVarsTransactionClient(Protocol):
     litellm_mcpuserenvvars: "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]"
+    litellm_mcpservertable: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]"
 
     async def execute_raw(self, query: str, *args: object) -> int: ...
 
@@ -70,6 +74,19 @@ class _UserEnvVarsTransaction(Protocol):
     async def __aenter__(self) -> _UserEnvVarsTransactionClient: ...
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class McpIdentifierConflict:
+    """An incoming ``server_name``/``alias`` already belongs to another MCP server row.
+
+    ``field`` is the incoming identifier that collided, ``value`` the submitted
+    string, and ``server_id`` the existing row that owns it.
+    """
+
+    field: Literal["server_name", "alias"]
+    value: str
+    server_id: str
 
 
 _AUTH_FLOW_SCOPED_FIELDS: Final["frozenset[str]"] = frozenset(
@@ -498,6 +515,121 @@ def _db_transaction_manager(prisma_client: PrismaClient) -> _UserEnvVarsTransact
     return manager
 
 
+def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_types.LiteLLM_MCPServerTableWhereInput":
+    own_row_guard: Final = (
+        ({"NOT": [{"server_id": exclude_server_id}]},)  # mutable-ok: prisma where-inputs must be plain dicts
+        if exclude_server_id is not None
+        else ()
+    )
+    where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
+        "AND": [  # mutable-ok: prisma where-inputs must be plain dicts
+            {
+                "OR": [  # mutable-ok: prisma where-inputs must be plain dicts
+                    {"server_name": {"equals": value, "mode": "insensitive"}},
+                    {"alias": {"equals": value, "mode": "insensitive"}},
+                ]
+            },
+            {
+                "OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]
+            },  # mutable-ok: prisma where-inputs must be plain dicts
+            *own_row_guard,
+        ]
+    }
+    return where
+
+
+def _identifier_field(data_dict: "Mapping[str, object]", field: str) -> str | None:
+    value: Final = data_dict.get(field)
+    return value if isinstance(value, str) else None
+
+
+async def _find_mcp_server_identifier_conflict(
+    table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
+    *,
+    server_name: str | None,
+    alias: str | None,
+    exclude_server_id: str | None,
+) -> McpIdentifierConflict | None:
+    """Return the collision between an incoming identifier and a stored row, else None.
+
+    Each non-empty incoming identifier is compared case-insensitively against
+    BOTH the ``server_name`` and ``alias`` columns, because a value that matches
+    either column would still share the tool prefix another server answers to.
+    ``alias`` is checked first so the reported field is deterministic. Draft
+    rows back the transient OAuth session flow and never reach the registry, so
+    they cannot collide. NULL ``approval_status`` predates the approval
+    workflow and is kept via the inner OR, matching ``get_all_mcp_servers``.
+    """
+    candidates: Final[tuple[tuple[Literal["alias", "server_name"], str | None], ...]] = (
+        ("alias", alias),
+        ("server_name", server_name),
+    )
+    for field_name, value in candidates:
+        if not value:
+            continue
+        if (row := await table.find_first(where=_identifier_where(value, exclude_server_id))) is not None:
+            return McpIdentifierConflict(field=field_name, value=value, server_id=row.server_id)
+    return None
+
+
+async def find_mcp_server_identifier_conflict(
+    prisma_client: PrismaClient,
+    *,
+    server_name: str | None,
+    alias: str | None,
+    exclude_server_id: str | None,
+) -> McpIdentifierConflict | None:
+    """Unlocked identifier-collision check, for callers outside a write path."""
+    return await _find_mcp_server_identifier_conflict(
+        _mcp_server_table_actions(prisma_client),
+        server_name=server_name,
+        alias=alias,
+        exclude_server_id=exclude_server_id,
+    )
+
+
+def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
+    """Deterministic advisory-lock keys for the lowercased identifiers, sorted
+    so concurrent requests for the same pair always lock in the same order."""
+    return tuple(
+        int.from_bytes(
+            hashlib.blake2b(f"mcp_identifier:{normalized}".encode(), digest_size=8).digest(),
+            "big",
+            signed=True,
+        )
+        for normalized in sorted(frozenset(value.lower() for value in identifiers if value))
+    )
+
+
+async def _mcp_server_write_if_identifier_free(
+    prisma_client: PrismaClient,
+    *,
+    server_name: str | None,
+    alias: str | None,
+    exclude_server_id: str | None,
+    write: "Callable[[TableActions[prisma_db_models.LiteLLM_MCPServerTable]], Awaitable[prisma_db_models.LiteLLM_MCPServerTable | None]]",
+) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
+    """Run ``write`` only when no other live row owns ``server_name``/``alias``.
+
+    The conflict check and the write share a transaction guarded by per-identifier
+    advisory locks, so two concurrent requests for the same name cannot both
+    pass the check and both insert.
+    """
+    lock_keys: Final = _mcp_identifier_lock_keys(server_name, alias)
+    async with _db_transaction_manager(prisma_client) as tx:
+        for lock_key in lock_keys:
+            await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
+        conflict: Final = await _find_mcp_server_identifier_conflict(
+            tx.litellm_mcpservertable,
+            server_name=server_name,
+            alias=alias,
+            exclude_server_id=exclude_server_id,
+        )
+        if conflict is not None:
+            return conflict
+        return await write(tx.litellm_mcpservertable)
+
+
 async def _db_find_mcp_server_rows(
     prisma_client: PrismaClient,
     where: "prisma_db_types.LiteLLM_MCPServerTableWhereInput | None" = None,
@@ -534,11 +666,14 @@ def _user_credential_actions(
     return table
 
 
+class _MCPUserEnvVarsRepository(PrismaTableRepository["prisma_db_models.LiteLLM_MCPUserEnvVars"]):
+    table_name = "litellm_mcpuserenvvars"
+
+
 def _user_env_var_actions(
     prisma_client: PrismaClient,
 ) -> "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]":
-    table: Final[TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]] = prisma_client.db.litellm_mcpuserenvvars
-    return table
+    return _MCPUserEnvVarsRepository(prisma_client).table
 
 
 async def _db_find_user_credential_row(
@@ -631,8 +766,6 @@ async def get_all_mcp_servers(
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = (
         {"approval_status": approval_status}
         if approval_status is not None
-        # mutable-ok: prisma where-inputs must be plain dicts, and both `NOT` and `not` drop
-        # NULL rows (measured), so the OR is the only NULL-preserving way to exclude drafts
         else {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]}
     )
     mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where)
@@ -877,6 +1010,43 @@ async def create_mcp_server(
     return LiteLLM_MCPServerTable.model_validate(new_mcp_server.model_dump())
 
 
+async def create_mcp_server_if_identifier_free(
+    prisma_client: PrismaClient, data: NewMCPServerRequest, touched_by: str
+) -> LiteLLM_MCPServerTable | McpIdentifierConflict:
+    """Create the row only when no other live server owns ``server_name``/``alias``.
+
+    Returns the McpIdentifierConflict instead of inserting when the collision
+    check finds an existing row; the advisory-lock transaction keeps two
+    concurrent creates of the same identifier from both passing.
+    """
+    if data.server_id is None:
+        data.server_id = str(uuid.uuid4())
+
+    data_dict: Final = _prepare_mcp_server_data(data)
+    data_dict["created_by"] = touched_by
+    data_dict["updated_by"] = touched_by
+
+    async def _create(
+        table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
+    ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
+        return await table.create(data=data_dict)
+
+    written: Final = await _mcp_server_write_if_identifier_free(
+        prisma_client,
+        server_name=_identifier_field(data_dict, "server_name"),
+        alias=_identifier_field(data_dict, "alias"),
+        exclude_server_id=None,
+        write=_create,
+    )
+    if isinstance(written, McpIdentifierConflict):
+        return written
+    if written is None:
+        raise RuntimeError("inserted MCP server row missing")
+
+    _decrypt_env_vars_on_returned_row(written)
+    return LiteLLM_MCPServerTable.model_validate(written.model_dump())
+
+
 async def create_draft_mcp_server(
     prisma_client: PrismaClient,
     data: NewMCPServerRequest,
@@ -967,14 +1137,57 @@ async def get_draft_mcp_server(
     return table
 
 
+async def _update_mcp_server_row(
+    prisma_client: PrismaClient,
+    *,
+    server_id: str,
+    data_dict: Mapping[str, object],
+) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
+    identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
+
+    async def _update(
+        table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
+    ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
+        return await table.update(
+            where={"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+            data=data_dict,
+        )
+
+    if not identifier_write:
+        return await _update(_mcp_server_table_actions(prisma_client))
+    if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
+        # Clearing the alias drops the prefix to the stored server_name, which
+        # may already belong to another row, so that name needs the check too.
+        existing: Final = await _db_find_mcp_server_row(prisma_client, server_id)
+        if existing is None:
+            return await _update(_mcp_server_table_actions(prisma_client))
+        return await _mcp_server_write_if_identifier_free(
+            prisma_client,
+            server_name=existing.server_name,
+            alias=None,
+            exclude_server_id=server_id,
+            write=_update,
+        )
+    return await _mcp_server_write_if_identifier_free(
+        prisma_client,
+        server_name=_identifier_field(data_dict, "server_name"),
+        alias=_identifier_field(data_dict, "alias"),
+        exclude_server_id=server_id,
+        write=_update,
+    )
+
+
 async def update_mcp_server(
     prisma_client: PrismaClient,
     data: UpdateMCPServerRequest,
     touched_by: str,
     fields_set: set[str] | None = None,
-) -> LiteLLM_MCPServerTable | None:
+) -> LiteLLM_MCPServerTable | McpIdentifierConflict | None:
     """
     Update a new mcp server record in the db
+
+    Returns McpIdentifierConflict instead of writing when the update would put
+    ``server_name``/``alias`` onto identifiers another live row already owns.
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -1083,11 +1296,14 @@ async def update_mcp_server(
 
         data_dict["credentials"] = Json(None)
 
-    updated_mcp_server: Final = await MCPServerRepository(prisma_client).table.update(
-        where={"server_id": data.server_id},
-        data=data_dict,
+    updated_mcp_server: Final = await _update_mcp_server_row(
+        prisma_client,
+        server_id=data.server_id,
+        data_dict=data_dict,
     )
 
+    if isinstance(updated_mcp_server, McpIdentifierConflict):
+        return updated_mcp_server
     _decrypt_env_vars_on_returned_row(updated_mcp_server)
     return LiteLLM_MCPServerTable.model_validate(updated_mcp_server.model_dump()) if updated_mcp_server else None
 
@@ -1502,6 +1718,37 @@ async def get_user_oauth_credential(
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
     return _parse_oauth_payload(decoded)
+
+
+def _server_user_credential_item(
+    row: "prisma_db_models.LiteLLM_MCPUserCredentials",
+) -> MCPServerUserCredentialListItem:
+    oauth_payload: Final = _decode_oauth_payload(row.credential_b64)
+    if oauth_payload is None:
+        return MCPServerUserCredentialListItem(
+            user_id=row.user_id,
+            credential_type="byok",
+            updated_at=row.updated_at.isoformat(),
+        )
+    return MCPServerUserCredentialListItem(
+        user_id=row.user_id,
+        credential_type="oauth2",
+        expires_at=oauth_payload.get("expires_at"),
+        connected_at=oauth_payload.get("connected_at"),
+        updated_at=row.updated_at.isoformat(),
+    )
+
+
+async def list_server_user_credentials(
+    prisma_client: PrismaClient,
+    server_id: str,
+) -> tuple[MCPServerUserCredentialListItem, ...]:
+    """Every user's stored credential for one server, typed but without the secret, for admins."""
+    rows: Final = await _db_find_user_credential_rows(
+        prisma_client,
+        {"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+    )
+    return tuple(_server_user_credential_item(row) for row in rows)
 
 
 async def list_user_oauth_credentials(

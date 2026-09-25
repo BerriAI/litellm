@@ -1,7 +1,11 @@
 
-import pytest
-
+import json
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+import respx
 
 import litellm
 from litellm.constants import (
@@ -124,22 +128,32 @@ def test_calculate_usage_prefers_served_speed_from_response_usage():
     assert no_response_speed.speed == "fast"
 
 
-def test_streaming_iterator_persists_served_speed_across_usage_chunks():
+@pytest.mark.parametrize("input_update, expected_fresh", [({}, 1000), ({"input_tokens": 0}, 0), ({"input_tokens": 2000}, 2000)])
+def test_streaming_iterator_persists_cumulative_usage_across_partial_chunks(input_update, expected_fresh):
     """
-    Only ``message_start`` usage carries the served speed; the final
-    ``message_delta`` usage does not. The iterator must remember the served
-    value so the last usage chunk, which wins in the stream chunk builder, does
-    not fall back to the requested speed.
+    Omitted input/cache/pricing fields retain their last cumulative values;
+    explicit input updates, including zero, replace them.
     """
     from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
     iterator = ModelResponseIterator(None, sync_stream=True, speed="fast")
 
-    start_usage = iterator._handle_usage({"input_tokens": 12, "output_tokens": 1, "speed": "standard"})
-    delta_usage = iterator._handle_usage({"output_tokens": 5})
+    start_usage = iterator._handle_usage({
+        "input_tokens": 1000, "output_tokens": 1, "speed": "standard", "inference_geo": "us",
+        "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 2000,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 3000},
+    })
+    delta_usage = iterator._handle_usage({"output_tokens": 5, **input_update})
 
     assert start_usage.speed == "standard"
     assert delta_usage.speed == "standard"
+    assert delta_usage.inference_geo == "us"
+    assert delta_usage.prompt_tokens == expected_fresh + 5000
+    assert delta_usage.completion_tokens == 5
+    details = delta_usage.prompt_tokens_details
+    assert (details.text_tokens, details.cached_tokens, details.cache_creation_tokens) == (expected_fresh, 2000, 3000)
+    assert details.cache_creation_token_details.ephemeral_1h_input_tokens == 3000
+    assert start_usage.prompt_tokens_details.text_tokens == 1000
 
 
 def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
@@ -3761,6 +3775,70 @@ def test_multiple_compaction_blocks():
     assert compaction_blocks[1]["content"] == "Second summary..."
 
 
+@pytest.mark.parametrize("messages_api,gateway,native_endpoint", [
+    (False, False, False), (True, False, False), (False, True, False), (True, True, False), (True, True, True),
+])
+async def test_native_compaction_wire_roundtrip(
+    messages_api: bool, gateway: bool, native_endpoint: bool,
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(litellm.anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", False)
+    block: Final = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
+    operation: Final = {"type": "summarize", "instructions": "Keep identifiers"}
+    usage: Final = {"input_tokens": 0, "output_tokens": 0,
+                    "iterations": [{"type": "compaction", "input_tokens": 103, "output_tokens": 165}]}
+    chat_wire: Final = gateway and not native_endpoint
+    base: Final = "https://gateway.test/v1" if gateway else "https://api.anthropic.com/v1"
+    route: Final = respx_mock.post(f"{base}/{'chat/completions' if chat_wire else 'messages'}")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload: Final = json.loads(request.content)
+        assert len(request.headers.get_list("anthropic-beta")) == 1
+        assert {value.strip() for value in request.headers["anthropic-beta"].split(",")} == {
+            "compact-2026-09-04", "interleaved-thinking-2025-05-14",
+        }
+        if "compaction" in payload:
+            assert payload["compaction"] == operation
+        else:
+            assert payload["messages"][0] == {"role": "assistant", "content": [block]}
+        body: Final = (
+            {"id": "chatcmpl_compact", "object": "chat.completion", "created": 1, "model": "claude-sonnet-5",
+             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "",
+                          "provider_specific_fields": {"compaction_blocks": [block]}}}],
+             "usage": {"prompt_tokens": 103, "completion_tokens": 165, "total_tokens": 268}}
+            if chat_wire else
+            {"id": "msg_compact", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+             "content": [block], "stop_reason": "compaction", "usage": usage}
+        )
+        return httpx.Response(200, json=body)
+
+    route.mock(side_effect=respond)
+    call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
+    params: Final = dict(
+        model=f"{'openai/' if gateway else ''}anthropic/claude-sonnet-5", api_key="test", max_tokens=512,
+        api_base=base if gateway else "https://api.anthropic.com",
+        extra_headers={"Anthropic-Beta": f"interleaved-thinking-2025-05-14{',compact-2026-09-04' if gateway else ''}"},
+        model_info={"supported_endpoints": ["/v1/messages"]} if native_endpoint else {},
+    )
+    response: Final = await call(
+        messages=[{"role": "user", "content": "Remember identifiers"}], compaction=operation, **params
+    )
+    message: Final = response if messages_api else response.choices[0].message.model_dump()
+    blocks: Final = message["content"] if messages_api else message["provider_specific_fields"]["compaction_blocks"]
+    assert blocks == [block]
+    if messages_api:
+        assert response["stop_reason"] == "compaction"
+        if not chat_wire:
+            assert response["usage"] == usage
+    if not gateway:
+        replay: Final = {"role": "assistant", "content": blocks} if messages_api else message
+        await call(messages=[replay, {"role": "user", "content": "Continue"}], **params)
+    assert route.call_count == (1 if gateway else 2)
+
+
 def test_compaction_block_request_transformation():
     """
     Test that compaction blocks from provider_specific_fields are correctly
@@ -6370,3 +6448,74 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
 
     assert "tools" in result
     assert "tool_choice" not in result
+
+
+def _eager_chat_function(**extra: object) -> dict[str, object]:
+    return {
+        "name": "write_file",
+        "description": "Write a file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        **extra,
+    }
+
+
+def _eager_chat_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": _eager_chat_function(), **extra}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+
+    assert mapped_tool == {
+        "name": "write_file",
+        "description": "Write a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        "type": "custom",
+        "eager_input_streaming": flag,
+    }
+
+
+def test_eager_input_streaming_passed_through_from_function():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+        {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
+    )
+
+    assert mapped_tool["eager_input_streaming"] is True
+    assert "eager_input_streaming" not in mapped_tool["input_schema"]
+
+
+def test_eager_input_streaming_absent_stays_absent():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_rejects_non_boolean():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+
+
+def test_eager_input_streaming_not_set_on_computer_use_tool():
+    computer_tool = {
+        "type": "computer_20250124",
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "eager_input_streaming": True,
+    }
+
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+
+    assert mapped_tool["type"] == "computer_20250124"
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_reaches_anthropic_request_tools():
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={"tools": [_eager_chat_tool(eager_input_streaming=True)], "stream": True},
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+
+    assert result["tools"][0]["eager_input_streaming"] is True
+    assert result["tools"][0]["name"] == "write_file"

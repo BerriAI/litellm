@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime, timezone
 from typing import Final
@@ -11,10 +12,21 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.utils import LlmProviders
+
+
+def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    client: Final = TestClient(app)
+    response: Final = client.get("/public/complexity_router/fuse_presets")
+    assert response.status_code == 200
+    assert response.json() == get_fuse_presets().model_dump(mode="json")
+    assert client.get("/public/complexity_router/fuse_presets").json() == response.json()
 
 
 def test_get_supported_providers_returns_enum_values():
@@ -328,6 +340,25 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    providers = test_client.get("/public/providers/fields").json()
+
+    mainland = next(p for p in providers if p["litellm_provider"] == "qwen_ai_platform")
+    international = next(p for p in providers if p["litellm_provider"] == "qwencloud")
+
+    assert mainland["provider_display_name"] == "Qianwen AI Platform"
+    assert international["provider_display_name"] == "QwenCloud"
+
+    mainland_fields = {f["key"]: f for f in mainland["credential_fields"]}
+    assert mainland_fields["api_key"]["label"] == "Qianwen AI Platform API Key"
+    assert "Qianwen AI Platform" in mainland_fields["api_base"]["tooltip"]
+    assert "Qwen AI Platform" not in json.dumps(mainland)
+
+
 def test_chatgpt_provider_fields():
     app_instance = FastAPI()
     app_instance.include_router(router)
@@ -384,6 +415,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "tencent",
         "tensormesh",
         "text-completion-inception",
+        "transcribe",
         "valkey",
         "xiaomi_mimo",
         "zai",
@@ -1186,13 +1218,13 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert "anthropic_family" in payload
     assert payload["1m_context"]["complexity_router_config"]["classifier_type"] == "heuristic_v2"
     assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
-        "SIMPLE": ["gpt-5.6-luna"],
+        "SIMPLE": ["gpt-6-luna"],
         "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["gpt-5.6-sol"],
-        "REASONING": ["claude-opus-5"],
+        "COMPLEX": ["gpt-6-sol"],
+        "REASONING": ["claude-opus-5-5"],
     }
     assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {
-        "REASONING": [{"model_name": "claude-opus-5", "litellm_params": {"reasoning_effort": "high"}}]
+        "REASONING": [{"model_name": "claude-opus-5-5", "litellm_params": {"reasoning_effort": "high"}}]
     }
     for preset in payload.values():
         assert isinstance(preset["label"], str)
