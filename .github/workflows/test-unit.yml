@@ -297,6 +297,9 @@ jobs:
             tests/test_litellm/llms/openai/test_openai.py \
             tests/test_litellm/llms/openai/test_openai_common_utils.py \
             tests/test_litellm/llms/openai/test_openai_file_content_streaming.py \
+            tests/test_litellm/test_openai_embedding_encoding_format_default.py \
+            tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_targets_fim_endpoint \
+            tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_async \
             tests/test_litellm/llms/azure/test_azure_exception_mapping.py \
             tests/test_litellm/test_completion_timeout_resolution.py \
             tests/test_litellm/types/test_router.py \

@@ -70,6 +70,11 @@ def http_backend(request: pytest.FixtureRequest) -> ModuleType:
     return importlib.import_module("httpx" if request.param == "httpx" else SDKResponse.__module__)
 
 
+@pytest.fixture(params=("openai", "perplexity", "cerebras", "nvidia_nim"))
+def sdk_provider(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
 class _Request(Protocol):
     @property
     def content(self) -> bytes: ...
@@ -77,13 +82,23 @@ class _Request(Protocol):
     @property
     def extensions(self) -> Mapping[str, object]: ...
 
+    @property
+    def url(self) -> object: ...
+
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
 
 @pytest.mark.asyncio
-async def test_acompletion_returns_json_reply_over_injected_transport(http_backend: ModuleType):
+async def test_acompletion_returns_json_reply_over_injected_transport(
+    http_backend: ModuleType, sdk_provider: str, monkeypatch: pytest.MonkeyPatch
+):
     outbound: Final = asyncio.Queue()
 
     def respond(request: _Request) -> httpx.Response | SDKResponse:
-        assert request.extensions["timeout"] == {"connect": 1, "read": None, "write": 2, "pool": 3}
+        assert str(request.url) == f"https://{sdk_provider}.example/v1/chat/completions"
+        assert request.headers["authorization"] == f"Bearer {sdk_provider}-key"
+        assert request.extensions["timeout"] == {"connect": 7, "read": 7, "write": 7, "pool": 7}
         outbound.put_nowait(json.loads(request.content))
         return http_backend.Response(
             200,
@@ -91,7 +106,7 @@ async def test_acompletion_returns_json_reply_over_injected_transport(http_backe
                 "id": "chatcmpl-smoke",
                 "object": "chat.completion",
                 "created": 0,
-                "model": "gpt-5.6",
+                "model": "sdk-compat",
                 "choices": [
                     {
                         "index": 0,
@@ -104,21 +119,21 @@ async def test_acompletion_returns_json_reply_over_injected_transport(http_backe
         )
 
     async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
-        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
         response: Final = await asyncio.wait_for(
             litellm.acompletion(
-                model="openai/gpt-5.6",
-                api_key="transport-only",
-                client=client,
+                model=f"{sdk_provider}/sdk-compat",
+                api_key=f"{sdk_provider}-key",
+                api_base=f"https://{sdk_provider}.example/v1",
                 messages=[{"role": "user", "content": "smoke-json-request"}],
-                timeout=http_backend.Timeout(connect=1, read=None, write=2, pool=3),
+                timeout=7,
                 num_retries=0,
                 max_retries=0,
             ),
             timeout=10,
         )
         request: Final = await asyncio.wait_for(outbound.get(), timeout=10)
-        assert request["model"] == "gpt-5.6"
+        assert request["model"] == "sdk-compat"
         assert request["messages"] == [{"role": "user", "content": "smoke-json-request"}]
         assert not request.get("stream")
         assert outbound.empty()
@@ -139,7 +154,11 @@ async def test_acompletion_returns_json_reply_over_injected_transport(http_backe
     ),
 )
 async def test_acompletion_preserves_public_errors_for_both_http_clients(
-    http_backend: ModuleType, status: int | None, expected_error: type[Exception]
+    http_backend: ModuleType,
+    sdk_provider: str,
+    status: int | None,
+    expected_error: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def respond(request: _Request) -> httpx.Response | SDKResponse:
         if status is None:
@@ -147,11 +166,12 @@ async def test_acompletion_preserves_public_errors_for_both_http_clients(
         return http_backend.Response(status, json={"error": {"message": "upstream failure", "type": "api_error"}})
 
     async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
-        sdk_client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
         with pytest.raises(expected_error, match="timed out" if status is None else "upstream failure"):
             await litellm.acompletion(
-                model="openai/gpt-5.6",
-                client=sdk_client,
+                model=f"{sdk_provider}/sdk-compat",
+                api_key=f"{sdk_provider}-key",
+                api_base=f"https://{sdk_provider}.example/v1",
                 messages=[{"role": "user", "content": "request"}],
                 num_retries=0,
                 max_retries=0,
@@ -160,7 +180,9 @@ async def test_acompletion_preserves_public_errors_for_both_http_clients(
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streams_text_deltas_over_injected_transport(http_backend: ModuleType):
+async def test_acompletion_streams_text_deltas_over_injected_transport(
+    http_backend: ModuleType, sdk_provider: str, monkeypatch: pytest.MonkeyPatch
+):
     outbound: Final = asyncio.Queue()
 
     def chunk(delta: dict, finish: str | None) -> bytes:
@@ -168,7 +190,7 @@ async def test_acompletion_streams_text_deltas_over_injected_transport(http_back
             "id": "chatcmpl-smoke",
             "object": "chat.completion.chunk",
             "created": 0,
-            "model": "gpt-5.6",
+            "model": "sdk-compat",
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
         }
         return f"data: {json.dumps(body)}\n\n".encode()
@@ -179,7 +201,7 @@ async def test_acompletion_streams_text_deltas_over_injected_transport(http_back
             "id": "chatcmpl-smoke",
             "object": "chat.completion.chunk",
             "created": 0,
-            "model": "gpt-5.6",
+            "model": "sdk-compat",
             "choices": [],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
@@ -194,11 +216,11 @@ async def test_acompletion_streams_text_deltas_over_injected_transport(http_back
         return http_backend.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
     async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
-        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
         stream: Final = await litellm.acompletion(
-            model="openai/gpt-5.6",
-            api_key="transport-only",
-            client=client,
+            model=f"{sdk_provider}/sdk-compat",
+            api_key=f"{sdk_provider}-key",
+            api_base=f"https://{sdk_provider}.example/v1",
             messages=[{"role": "user", "content": "smoke-stream-request"}],
             stream=True,
             num_retries=0,
@@ -253,6 +275,7 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport(h
         return f"data: {json.dumps(body)}\n\n".encode()
 
     def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert request.extensions["timeout"] == {"connect": 1, "read": None, "write": 2, "pool": 3}
         outbound.put_nowait(json.loads(request.content))
         content: Final = b"".join(
             (
@@ -286,6 +309,7 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport(h
             messages=messages,
             tools=tools,
             stream=True,
+            timeout=http_backend.Timeout(connect=1, read=None, write=2, pool=3),
             num_retries=0,
             max_retries=0,
         )
