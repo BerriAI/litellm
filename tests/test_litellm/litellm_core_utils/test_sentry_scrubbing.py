@@ -11,6 +11,7 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from sentry_sdk.utils import event_from_exception
 
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
 from litellm.litellm_core_utils.sentry_scrubbing import (
     FILTERED,
     MAX_SCRUB_DEPTH,
@@ -203,6 +204,13 @@ def test_transaction_events_are_scrubbed_too() -> None:
 )
 def test_string_scrubber_rewrites_field_and_value_forms(text: str, expected: str) -> None:
     assert build_string_scrubber(send_default_pii=False)(text) == expected
+
+
+def test_bare_key_floor_follows_the_custom_key_minimum() -> None:
+    scrub: Final = build_string_scrubber(send_default_pii=False)
+    shortest_key: Final = "sk-" + "a" * (MINIMUM_CUSTOM_KEY_LENGTH - len("sk-"))
+    assert scrub(f"label={shortest_key} model=gpt-5") == f"label={FILTERED} model=gpt-5"
+    assert scrub(f"label={shortest_key[:-1]} model=gpt-5") == f"label={shortest_key[:-1]} model=gpt-5"
 
 
 def test_json_walk_fails_closed_past_the_depth_cap() -> None:

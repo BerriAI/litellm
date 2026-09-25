@@ -9,7 +9,7 @@ from pydantic import JsonValue
 from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScrubber
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ SEND_DEFAULT_PII_ENV: Final = "SENTRY_SEND_DEFAULT_PII"
 SECRET_FIELD_NAMES: Final = tuple(DEFAULT_DENYLIST) + tuple(SENTRY_DENYLIST)
 PII_FIELD_NAMES: Final = tuple(DEFAULT_PII_DENYLIST) + tuple(SENTRY_PII_DENYLIST)
 
-LITELLM_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
+LITELLM_KEY_PATTERN: Final = re.compile(rf"sk-[A-Za-z0-9_-]{{{MINIMUM_CUSTOM_KEY_LENGTH - len('sk-')},}}")
 SOURCE_CONTEXT_KEYS: Final = frozenset({"pre_context", "context_line", "post_context"})
 STACK_FRAME_PATHS: Final = frozenset(
     {
