@@ -16,9 +16,9 @@ on:
       fork-flag:
         description: >-
           Codecov flag of the `.circleci/tests.yml` job that now owns part of
-          this shard. CircleCI does not run on pull requests from forks, so on
-          those events this shard also runs the files
-          `.circleci/scripts/unit_selection.sh` lists for the flag.
+          this shard. The CircleCI `litellm-tests` pipeline is manually
+          triggered while tests migrate, so on every event this shard also runs
+          the files `.circleci/scripts/unit_selection.sh` lists for the flag.
         required: false
         type: string
         default: ""
@@ -176,7 +176,6 @@ jobs:
         env:
           TEST_PATH: ${{ inputs.test-path }}
           FORK_FLAG: ${{ inputs.fork-flag }}
-          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
@@ -186,7 +185,7 @@ jobs:
         run: |
           echo "has-coverage=false" >> "$GITHUB_OUTPUT"
           selection="${TEST_PATH}"
-          if [ "${IS_FORK}" = "true" ] && [ -n "${FORK_FLAG}" ]; then
+          if [ -n "${FORK_FLAG}" ]; then
             selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${FORK_FLAG}" | tr '\n' ' ')"
           fi
           if [ -z "${selection// /}" ]; then
