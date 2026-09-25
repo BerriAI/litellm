@@ -92,11 +92,13 @@ class ExceptionCheckers:
         known_exception_substrings: Final = [
             "exceed context limit",
             "this model's maximum context length is",
+            "exceeds the context window of this model",  # OpenAI (current wording)
             "string too long. expected a string with maximum length",
             "model's maximum context limit",
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
+            "exceeded model token limit",  # Moonshot
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
         ]
