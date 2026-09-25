@@ -264,17 +264,23 @@ def _default_reload_client() -> _AsyncGetClient:
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap)
 
 
-def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -> _FetchAttemptOutcome:
+def _classify_fetch_error(error: Exception, url: str) -> _FetchAttemptOutcome:
     reason: Final = f"{type(error).__name__} fetching {url}: {error}"
     if isinstance(error, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
         return ModelCostMapReloadUnavailable(reason=reason)
-    return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
+    if isinstance(error, (httpx.HTTPError, httpx.InvalidURL)):
+        return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
+    # Anything else is not a transport hiccup: a sandbox blocking socket creation
+    # (pytest-socket's SocketBlockedError, a bare OSError/PermissionError),
+    # or a custom transport raising its own error type. Retrying cannot fix it,
+    # so fall back to the bundled map immediately rather than crashing the import.
+    return ModelCostMapReloadUnavailable(reason=reason)
 
 
 async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
     try:
         response: Final = await client.get(url, timeout=timeout)
-    except (httpx.HTTPError, httpx.InvalidURL) as e:
+    except Exception as e:  # noqa: BLE001  # any failure, httpx or not, must fall back to the bundled map, never propagate
         return _classify_fetch_error(e, url)
     return _classify_fetch_response(response, url)
 
@@ -282,7 +288,7 @@ async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _Fe
 def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
     try:
         response: Final = client.get(url, timeout=timeout)
-    except (httpx.HTTPError, httpx.InvalidURL) as e:
+    except Exception as e:  # noqa: BLE001  # any failure, httpx or not, must fall back to the bundled map, never propagate
         return _classify_fetch_error(e, url)
     return _classify_fetch_response(response, url)
 
