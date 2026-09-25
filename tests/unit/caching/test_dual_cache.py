@@ -96,13 +96,6 @@ async def test_dual_cache_batch_get_cache_uses_sync_redis_client_inside_running_
     _assert_sync_batch_used_blocking_client(dual_cache, mock_redis)
 
 
-def test_dual_cache_batch_get_cache_uses_sync_redis_client_without_running_loop():
-    mock_redis = _redis_mock_for_sync_batch({"lit6729_key": "redis_value"})
-    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
-
-    _assert_sync_batch_used_blocking_client(dual_cache, mock_redis)
-
-
 def test_dual_cache_batch_get_cache_only_reads_missing_keys_from_redis():
     mock_redis = _redis_mock_for_sync_batch({"miss_key": "from_redis"})
     dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)

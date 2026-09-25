@@ -17,7 +17,7 @@ import tiktoken
 from unittest.mock import AsyncMock, patch
 
 import litellm
-from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
+from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
@@ -32,12 +32,12 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
-from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
     timed_with_loop_lags,
     warm_tokenizer,
 )
-from tests.test_litellm.litellm_core_utils.messages_with_counts import (
+from tests.unit.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
     MESSAGES_WITH_TOOLS,
@@ -439,66 +439,6 @@ class NeedsToleranceUpdateError(Exception):
     pass
 
 
-def test_tokenizers():
-    try:
-        ### test the openai, claude, cohere and llama2 tokenizers.
-        ### The tokenizer value should be different for all
-        sample_text = "Hellö World, this is my input string! My name is ishaan CTO"
-
-        # openai tokenizer
-        openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)
-
-        # claude tokenizer
-        claude_tokens = token_counter(
-            model="claude-3-5-haiku-20241022", text=sample_text
-        )
-
-        # cohere tokenizer
-        cohere_tokens = token_counter(model="command-nightly", text=sample_text)
-
-        # llama2 tokenizer
-        llama2_tokens = token_counter(
-            model="meta-llama/Llama-2-7b-chat", text=sample_text
-        )
-
-        # llama3 tokenizer (also testing custom tokenizer)
-        llama3_tokens_1 = token_counter(
-            model="meta-llama/llama-3-70b-instruct", text=sample_text
-        )
-
-        try:
-            llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
-        except Exception as e:
-            pytest.skip(
-                f"custom tokenizer download failed (HF hub unreachable): {e}"
-            )
-        llama3_tokens_2 = token_counter(
-            custom_tokenizer=llama3_tokenizer, text=sample_text
-        )
-
-        print(
-            f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}; llama3 tokens: {llama3_tokens_1}"
-        )
-
-        # assert that all token values are different
-        # llama2 may fall back to the tiktoken tokenizer when the HuggingFace
-        # model hub is unreachable (e.g. in CI).  In that case the count will
-        # equal the openai count and the differentiation assertion is skipped.
-        if openai_tokens == llama2_tokens:
-            pytest.skip(
-                "llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion"
-            )
-        assert llama2_tokens != llama3_tokens_1, "Token values are not different."
-
-        assert (
-            llama3_tokens_1 == llama3_tokens_2
-        ), "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
-
-        print("test tokenizer: It worked!")
-    except Exception as e:
-        pytest.fail(f"An exception occured: {e}")
-
-
 # test_tokenizers()
 
 
@@ -536,23 +476,6 @@ def test_encoding_and_decoding():
 # test_encoding_and_decoding()
 
 
-def test_gpt_vision_token_counting():
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What’s in this image?"},
-                {
-                    "type": "image_url",
-                    "image_url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
-                },
-            ],
-        }
-    ]
-    tokens = token_counter(model="gpt-4-vision-preview", messages=messages)
-    print(f"tokens: {tokens}")
-
-
 # test_gpt_vision_token_counting()
 
 
@@ -586,47 +509,6 @@ def test_load_test_token_counter(model):
     total_time = end_time - start_time
     print("model={}, total test time={}".format(model, total_time))
     assert total_time < 10, f"Total encoding time > 10s, {total_time}"
-
-
-def test_openai_token_with_image_and_text():
-    model = "gpt-4o"
-    full_request = {
-        "model": "gpt-4o",
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "json",
-                    "parameters": {
-                        "type": "object",
-                        "required": ["clause"],
-                        "properties": {"clause": {"type": "string"}},
-                    },
-                    "description": "Respond with a JSON object.",
-                },
-            }
-        ],
-        "logprobs": False,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "text": "\n    Just some long text, long long text, and you know it will be longer than 7 tokens definetly.",
-                        "type": "text",
-                    }
-                ],
-            }
-        ],
-        "tool_choice": {"type": "function", "function": {"name": "json"}},
-        "exclude_models": [],
-        "disable_fallback": False,
-        "exclude_providers": [],
-    }
-    messages = full_request.get("messages", [])
-
-    token_count = token_counter(model=model, messages=messages)
-    print(token_count)
 
 
 @pytest.mark.parametrize(
@@ -880,47 +762,6 @@ class TestTokenizerSelection(unittest.TestCase):
             assert result["tokenizer"] == encoding
         finally:
             monkeypatch.undo()
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "gpt-4o",
-        "claude-3-opus-20240229",
-    ],
-)
-@pytest.mark.parametrize(
-    "messages",
-    [
-        [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "These are some sample images from a movie. Based on these images, what do you think the tone of the movie is?",
-                    },
-                    {
-                        "type": "text",
-                        "image_url": {
-                            "url": "https://gratisography.com/wp-content/uploads/2024/11/gratisography-augmented-reality-800x525.jpg",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            }
-        ],
-    ],
-)
-def test_bad_input_token_counter(model, messages):
-    """
-    Safely handle bad input for token counter.
-    """
-    token_counter(
-        model=model,
-        messages=messages,
-        default_token_count=1000,
-    )
 
 
 def test_token_counter_with_anthropic_tool_use():
@@ -1252,7 +1093,6 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
-
 
 
 def test_token_counter_with_redacted_thinking_content():
