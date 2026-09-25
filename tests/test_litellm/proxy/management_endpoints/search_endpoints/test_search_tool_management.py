@@ -1,8 +1,10 @@
 import contextlib
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -22,6 +24,60 @@ from litellm.proxy.proxy_server import app
 from litellm.types.search import SearchToolInfoResponse
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "team_id,role,key_tools,team_tools,expected_status",
+    [
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.PROXY_ADMIN, ["webiq-ui"], None, 200),
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.PROXY_ADMIN, None, None, 200),
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.INTERNAL_USER, ["webiq-ui"], None, 200),
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.INTERNAL_USER, ["other-tool"], None, 403),
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.INTERNAL_USER, None, None, 403),
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.INTERNAL_USER, [], None, 403),
+        (UI_SESSION_TOKEN_TEAM_ID, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, None, None, 403),
+        ("real-team", LitellmUserRoles.INTERNAL_USER, ["webiq-ui"], ["other-tool"], 403),
+        ("real-team", LitellmUserRoles.INTERNAL_USER, ["webiq-ui"], ["webiq-ui"], 200),
+        ("real-team", LitellmUserRoles.INTERNAL_USER, None, ["webiq-ui"], 200),
+        ("missing-team", LitellmUserRoles.INTERNAL_USER, ["webiq-ui"], None, 404),
+    ],
+)
+def test_search_dashboard_session_preserves_key_and_real_team_authorization(
+    team_id: str,
+    role: LitellmUserRoles,
+    key_tools: list[str] | None,
+    team_tools: list[str] | None,
+    expected_status: int,
+) -> None:
+    user: Final = UserAPIKeyAuth(
+        user_role=role,
+        user_id="search-user",
+        team_id=team_id,
+        object_permission=(
+            LiteLLM_ObjectPermissionTable(object_permission_id="key-op", search_tools=key_tools)
+            if key_tools is not None
+            else None
+        ),
+    )
+    team_lookup: Final = AsyncMock(
+        side_effect=HTTPException(status_code=404, detail="Team does not exist") if team_tools is None else None,
+        return_value=LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="team-op", search_tools=team_tools),
+        ),
+    )
+    process_request: Final = AsyncMock(return_value={"object": "search", "results": []})
+    processor_factory: Final = MagicMock(return_value=MagicMock(base_process_llm_request=process_request))
+    with (
+        _override_auth(user),
+        patch("litellm.proxy.auth.auth_checks.get_team_object", team_lookup),
+        patch("litellm.proxy.search_endpoints.endpoints.ProxyBaseLLMRequestProcessing", processor_factory),
+    ):
+        response: Final = TestClient(app).post("/v1/search/webiq-ui", json={"query": "official documentation"})
+
+    assert response.status_code == expected_status, response.text
+    assert process_request.await_count == int(expected_status == 200)
+    assert team_lookup.await_count == int(team_id != UI_SESSION_TOKEN_TEAM_ID)
 
 
 @pytest.mark.asyncio

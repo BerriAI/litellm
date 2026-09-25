@@ -20,7 +20,8 @@ removed, so `test_internal_control_fields_never_leak_into_provider_body` proves
 they stay out of the body even without it.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import datetime
+from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,9 +35,12 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.utils import CustomStreamWrapper
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    HEADROOM_CONVERTED_STREAM_KEY,
 )
 from litellm.types.utils import (
     Choices,
@@ -45,6 +49,64 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_followup", [False, True])
+@pytest.mark.parametrize(
+    "stream_marker",
+    [
+        "_websearch_interception_converted_stream",
+        "_code_interpreter_interception_converted_stream",
+        HEADROOM_CONVERTED_STREAM_KEY,
+        None,
+    ],
+)
+async def test_intercepted_completion_restores_requested_stream(
+    restore_callbacks: None, run_followup: bool, stream_marker: Optional[str]
+) -> None:
+    response: Final = _plain_model_response("Answer grounded in the search results")
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+    )
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[{"role": "user", "content": "Search and answer"}],
+        stream=stream_marker is not None,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="stream-regression",
+        function_id="stream-regression",
+        dynamic_success_callbacks=(
+            [_GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})] if run_followup else []
+        ),
+    )
+    followup: Final = AsyncMock(return_value=response)
+    with patch.object(litellm, "acompletion", followup):
+        result: Final = await maybe_run_chat_completion_agentic_loop(
+            response=_tool_call_model_response() if run_followup else response,
+            model="test-model",
+            messages=[{"role": "user", "content": "Search and answer"}],
+            optional_params={"stream": False},
+            kwargs={stream_marker: True} if stream_marker else {},
+            logging_obj=logging_obj,
+            custom_llm_provider="openai",
+            stream=False,
+        )
+
+    assert followup.await_count == int(run_followup)
+    if stream_marker is None:
+        assert result is (response if run_followup else None)
+        return
+    assert isinstance(result, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in result]
+    assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == (
+        "Answer grounded in the search results"
+    )
+    assert [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason] == ["stop"]
+    assert all(not choice.delta.tool_calls for chunk in chunks for choice in chunk.choices)
+
 
 # The internal control fields that must never reach a provider request body.
 _INTERNAL_CONTROL_FIELDS = (
