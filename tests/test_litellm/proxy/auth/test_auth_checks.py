@@ -9480,6 +9480,16 @@ async def test_agent_access_group_ceiling_admits_the_key_alias_target():
 
 
 @pytest.mark.asyncio
+async def test_agent_access_group_ceiling_checks_the_team_alias_target():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["gpt-5"])
+    agent_key.team_model_aliases = {"foo": "gpt-5"}
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("foo", agent_key, None, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
 async def test_agent_access_groups_naming_no_model_deny_every_model():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
     resolve, _ = _agent_model_ceiling_resolver(frozenset())
