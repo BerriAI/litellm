@@ -18143,3 +18143,108 @@ def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_co
 
     assert router._has_content_policy_fallback("claude-sonnet-4-6", {}) is True
     assert router._has_content_policy_fallback("claude-haiku-4-5", {}) is False
+
+
+def test_router_strips_model_alias_map_from_completion_kwargs() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    def _capture(**kwargs: object) -> None:
+        captured.update(kwargs)
+        raise RuntimeError("stop_early")
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-alias-model",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.6-luna",
+                    "api_base": "https://example.invalid",
+                    "api_key": "sk-test",
+                    "model_alias_map": {"test-alias-model": "azure_ai/gpt-5.6-luna"},
+                },
+            }
+        ]
+    )
+
+    with patch("litellm.completion", side_effect=_capture):
+        with pytest.raises(RuntimeError, match="stop_early"):
+            router.completion(
+                model="test-alias-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert "model_alias_map" not in captured
+
+
+@pytest.mark.asyncio
+async def test_router_strips_model_alias_map_from_acompletion_kwargs() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    async def _capture(**kwargs: object) -> None:
+        captured.update(kwargs)
+        raise RuntimeError("stop_early")
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-alias-model",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.6-luna",
+                    "api_base": "https://example.invalid",
+                    "api_key": "sk-test",
+                    "model_alias_map": {"test-alias-model": "azure_ai/gpt-5.6-luna"},
+                },
+            }
+        ]
+    )
+
+    with patch("litellm.acompletion", side_effect=_capture):
+        with pytest.raises(RuntimeError, match="stop_early"):
+            await router.acompletion(
+                model="test-alias-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert "model_alias_map" not in captured
+
+
+def test_router_resolves_global_model_alias_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_alias_map",
+        {
+            "global-alias-model": "target-deployment-model",
+            "configured-model": "unwanted-target-model",
+        },
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "target-deployment-model",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.6-luna",
+                    "api_base": "https://example.invalid",
+                    "api_key": "sk-test",
+                },
+            },
+            {
+                "model_name": "configured-model",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-configured",
+                    "api_base": "https://example.invalid",
+                    "api_key": "sk-test",
+                },
+            },
+        ]
+    )
+
+    resolved_model, _ = router._common_checks_available_deployment(model="global-alias-model")
+    assert resolved_model == "target-deployment-model"
+    deployment: Final = router.get_available_deployment(model="global-alias-model")
+    assert deployment["litellm_params"]["model"] == "azure_ai/gpt-5.6-luna"
+
+    resolved_model2, _ = router._common_checks_available_deployment(model="configured-model")
+    assert resolved_model2 == "configured-model"
+    deployment2: Final = router.get_available_deployment(model="configured-model")
+    assert deployment2["litellm_params"]["model"] == "azure_ai/gpt-configured"

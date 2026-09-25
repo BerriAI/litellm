@@ -5021,7 +5021,7 @@ def get_optional_params(
     return optional_params
 
 
-EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
+EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model", "model_alias_map"})
 
 
 def add_provider_specific_params_to_optional_params(
@@ -5040,7 +5040,7 @@ def add_provider_specific_params_to_optional_params(
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
             for k in passed_params:
-                if k not in openai_params and passed_params[k] is not None:
+                if k not in openai_params and k not in EXTRA_BODY_ROUTING_KEYS and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
                 optional_params["extra_body"] = {}
@@ -5058,7 +5058,7 @@ def add_provider_specific_params_to_optional_params(
             optional_params["extra_body"] = _ensure_extra_body_is_safe(extra_body=processed_extra_body)
     else:
         for k in passed_params:
-            if k not in openai_params and passed_params[k] is not None:
+            if k not in openai_params and k not in EXTRA_BODY_ROUTING_KEYS and passed_params[k] is not None:
                 if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
                     continue
                 optional_params[k] = passed_params[k]
