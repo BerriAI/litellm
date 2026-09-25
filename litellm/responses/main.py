@@ -2402,6 +2402,7 @@ async def _aresponses_websocket(
 
     resolved_api_key: Final = (
         dynamic_api_key
+        or api_key
         or litellm_params.api_key
         or litellm.api_key
         or litellm.openai_key
