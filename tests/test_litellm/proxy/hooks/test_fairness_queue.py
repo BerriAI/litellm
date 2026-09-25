@@ -5,6 +5,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy.hooks.fairness_queue import (
+    ClassQueueState,
     FairQueue,
     InMemoryFairQueueStore,
     QueueAdmitted,
@@ -252,6 +253,20 @@ async def test_class_blocked_on_its_own_share_yields_the_slot_to_a_class_that_fi
     assert isinstance(batch_outcome, QueueAdmitted)
     assert gate.admitted == ["batch"]
     prod.cancel()
+
+
+def test_removing_the_head_that_yielded_hands_its_successor_a_fresh_turn():
+    store: Final = InMemoryFairQueueStore()
+    store.enqueue(_ticket("prod", "prod-1"), enqueued_at=1.0)
+    store.enqueue(_ticket("prod", "prod-2"), enqueued_at=2.0)
+    store.enqueue(_ticket("batch", "batch-1"), enqueued_at=3.0)
+    store.yield_turn(MODEL, "prod")
+    store.remove(_ticket("prod", "prod-1"))
+    snapshot: Final = store.snapshot(MODEL, ("prod", "batch"))
+    assert snapshot["prod"] == ClassQueueState(
+        head_request_id="prod-2", head_enqueued_at=2.0, depth=1, pass_value=0.0, yielded=False
+    ), snapshot
+    assert snapshot["batch"].yielded is False, snapshot
 
 
 @pytest.mark.asyncio

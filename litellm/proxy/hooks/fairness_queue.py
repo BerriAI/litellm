@@ -57,9 +57,11 @@ class InMemoryFairQueueStore:
         if state is None:
             return
         queue: Final = state.queues.get(ticket.class_name)
-        if queue is None:
+        if not queue:
             return
         state.queues[ticket.class_name] = tuple(entry for entry in queue if entry[1] != ticket.request_id)
+        if queue[0][1] == ticket.request_id:
+            state.yielded = state.yielded - {ticket.class_name}
 
     def snapshot(self, model: str, class_names: Sequence[str]) -> Mapping[str, ClassQueueState]:
         state: Final = self._model(model)
