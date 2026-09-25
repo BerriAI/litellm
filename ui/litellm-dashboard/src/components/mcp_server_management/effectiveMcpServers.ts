@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
+import { MCP_ALL_TOOLS_WILDCARD } from "../mcp_tools/constants";
 
 // Mirrors the backend resolver's union (direct + access_group + tool_perm + toolset), so the
 // editor shows exactly the servers this permission level entitles.
@@ -155,6 +156,12 @@ export const mcpToolOverridesFor = (
     deny: [...new Set(entries.flatMap((entry) => entry.deny ?? []))],
   };
 };
+
+// An allowed-tools union carrying the wildcard grants every current and future tool on the
+// server; `undefined` (no entry at all) is unrestricted for a different reason and is not a
+// wildcard grant the editor should expand.
+export const mcpGrantsAllTools = (allowed: readonly string[] | undefined): boolean =>
+  allowed !== undefined && allowed.includes(MCP_ALL_TOOLS_WILDCARD);
 
 // Tool names the given toolsets grant on this server, `undefined` when they grant none.
 const mcpToolsetToolsFor = (

@@ -3014,6 +3014,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-coroutine"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
@@ -3040,6 +3049,7 @@ name = "litellm-host"
 version = "0.1.0"
 dependencies = [
  "litellm-auth",
+ "litellm-coroutine",
  "rstest",
  "serde_json",
  "tokio",
@@ -3049,6 +3059,7 @@ dependencies = [
 name = "litellm-host-python"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "litellm-host",
  "pyo3",

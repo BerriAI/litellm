@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -92,7 +93,9 @@ def level_allowed_tools(
     answer from this level and intersects with the rest.
 
     1. A legacy ``mcp_tool_permissions`` entry for the server stays a closed
-       allowlist (``[]`` denies all): allowed = legacy ∪ toolset tools.
+       allowlist (``[]`` denies all): allowed = legacy ∪ toolset tools. An
+       entry containing ``MCP_ALL_TOOLS_WILDCARD`` grants every current and
+       future tool, so the level places no restriction at all.
     2. An unconverted row (``mcp_permission_version`` falsy) keeps pre-overrides
        behavior: unrestricted unless a toolset names the server.
     3. A converted row that does not grant the server places no restriction.
@@ -109,6 +112,8 @@ def level_allowed_tools(
     toolset: Final[frozenset[str]] = frozenset(toolset_tools or ())
     legacy: Final = global_mcp_server_manager.expand_tool_permissions(row.mcp_tool_permissions).get(server_id)
     if legacy is not None:
+        if MCP_ALL_TOOLS_WILDCARD in legacy:
+            return None
         return frozenset(legacy) | toolset
     if not row.mcp_permission_version:
         return frozenset(toolset) if toolset_tools is not None else None
@@ -2196,7 +2201,11 @@ class MCPRequestHandler:
         via_toolsets: Sequence[str] | None,
     ) -> Sequence[str] | None:
         """Union of one level's direct tool grants and its toolset-granted tools on one server,
-        ``None`` when neither source restricts (allow-all from this level)."""
+        ``None`` when neither source restricts (allow-all from this level). A direct grant
+        containing ``MCP_ALL_TOOLS_WILDCARD`` makes the level unrestricted, so it returns
+        ``None`` whatever the toolsets name."""
+        if direct is not None and MCP_ALL_TOOLS_WILDCARD in direct:
+            return None
         if direct is None and via_toolsets is None:
             return None
         return tuple({*(direct or ()), *(via_toolsets or ())})

@@ -7,6 +7,7 @@ import {
   emptyMcpAccessGroups,
   isConventionServer,
   mcpAllowedToolsFor,
+  mcpGrantsAllTools,
   mcpServersForIdentifier,
   mcpToolOverridesFor,
   mcpToolPermissionKeyFor,
@@ -69,6 +70,16 @@ describe("mcpServersForIdentifier", () => {
     const catalog = idOwnerFirst ? [byId, byName] : [byName, byId];
 
     expect(mcpServersForIdentifier(catalog, "collide").map((match) => match.server_id)).toEqual(["collide"]);
+  });
+});
+
+describe("mcpGrantsAllTools", () => {
+  it("is true only when the union carries the wildcard, never for an absent grant", () => {
+    expect(mcpGrantsAllTools(["*"])).toBe(true);
+    expect(mcpGrantsAllTools(["read_file", "*"])).toBe(true);
+    expect(mcpGrantsAllTools(["read_file"])).toBe(false);
+    expect(mcpGrantsAllTools([])).toBe(false);
+    expect(mcpGrantsAllTools(undefined)).toBe(false);
   });
 });
 
