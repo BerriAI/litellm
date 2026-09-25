@@ -15,14 +15,39 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         let (mut stream, _) = listener.accept().expect("connection");
         let mut request = Vec::new();
         let mut buffer = [0_u8; 16_384];
-        let count = stream.read(&mut buffer).expect("request");
-        request.extend_from_slice(&buffer[..count]);
+        loop {
+            let count = stream.read(&mut buffer).expect("request");
+            assert!(
+                count > 0,
+                "request stream closed before the full body arrived"
+            );
+            request.extend_from_slice(&buffer[..count]);
+            let Some(headers_end) = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..headers_end]).to_ascii_uppercase();
+            let content_length: usize = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("CONTENT-LENGTH:"))
+                .expect("content-length header")
+                .trim()
+                .parse()
+                .expect("content-length");
+            if request.len() >= headers_end + content_length {
+                break;
+            }
+        }
         let request = String::from_utf8_lossy(&request);
         assert!(request.contains("POST /model/mistral.voxtral-mini-3b-2507/converse"));
         assert!(request.contains("authorization: AWS4-HMAC-SHA256"));
         assert!(request.contains("x-amz-date:"));
         assert!(request.contains("\"bytes\":\"AQI=\""));
         assert!(request.contains("Transcribe the audio. Respond with only the transcript."));
+        assert!(!request.contains("\"system\""));
         let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 53\r\nConnection: close\r\n\r\n{\"output\":{\"message\":{\"content\":[{\"text\":\"hello\"}]}}}";
         stream.write_all(response).expect("response");
     });
