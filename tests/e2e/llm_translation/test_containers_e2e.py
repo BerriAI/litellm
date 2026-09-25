@@ -57,17 +57,7 @@ from openai.types.responses.tool_param import CodeInterpreter
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
-AZURE_API_BASE: Final = os.environ.get("AZURE_API_BASE", "")
-AZURE_API_KEY: Final = os.environ.get("AZURE_API_KEY", "")
-
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.provider_live,
-    pytest.mark.skipif(
-        not AZURE_API_BASE or not AZURE_API_KEY,
-        reason="set AZURE_API_BASE and AZURE_API_KEY in the pytest env; the deployments are registered with them",
-    ),
-]
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 AZURE_BACKEND: Final = "azure/gpt-5.4-nano"
 AZURE_API_VERSION: Final = "v1"
@@ -77,17 +67,26 @@ PROMPT: Final = "Use python to compute 6*7 and reply with just the number."
 CODE_INTERPRETER_TIMEOUT: Final = 3 * REQUEST_TIMEOUT
 
 
+def _azure_credentials() -> tuple[str, str]:
+    api_base: Final = os.environ.get("AZURE_API_BASE", "")
+    api_key: Final = os.environ.get("AZURE_API_KEY", "")
+    if not api_base or not api_key:
+        pytest.fail("set AZURE_API_BASE and AZURE_API_KEY in the pytest env; the deployments are registered with them")
+    return api_base, api_key
+
+
 def _azure_params(api_base: str, api_key: str) -> LiteLLMParamsBody:
     return LiteLLMParamsBody(model=AZURE_BACKEND, api_base=api_base, api_key=api_key, api_version=AZURE_API_VERSION)
 
 
 def _register_two_azure_deployments(proxy: ProxyClient, resources: ResourceManager, marker: str) -> str:
+    api_base, api_key = _azure_credentials()
     decoy_id: Final = proxy.create_model(
-        f"e2e-containers-decoy-{marker}", _azure_params(AZURE_API_BASE, f"decoy-{marker}"), provider_live=True
+        f"e2e-containers-decoy-{marker}", _azure_params(api_base, f"decoy-{marker}"), provider_live=True
     )
     resources.defer(lambda: proxy.delete_model(decoy_id))
     model: Final = f"e2e-containers-{marker}"
-    model_id: Final = proxy.create_model(model, _azure_params(AZURE_API_BASE, AZURE_API_KEY), provider_live=True)
+    model_id: Final = proxy.create_model(model, _azure_params(api_base, api_key), provider_live=True)
     resources.defer(lambda: proxy.delete_model(model_id))
     return model
 
