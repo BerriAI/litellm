@@ -272,6 +272,25 @@ def test_get_oci_base_url_without_sdk_uses_regions_config_file(isolated_region_m
     assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
 
 
+@pytest.mark.usefixtures("without_oci_sdk")
+def test_get_oci_base_url_without_sdk_keeps_valid_regions_config_entries_next_to_a_bad_one(isolated_region_metadata):
+    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir.mkdir()
+    (oci_dir / "regions-config.json").write_text(f'[{{"regionIdentifier": "us-langley-1"}}, {_LUKE_METADATA}]')
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+@pytest.mark.parametrize("content", [b"\xff\xfe\x00[", b'{"regionIdentifier": "us-luke-1"}', b"not json"])
+def test_get_oci_base_url_without_sdk_ignores_unusable_regions_config_file(isolated_region_metadata, content):
+    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir.mkdir()
+    (oci_dir / "regions-config.json").write_bytes(content)
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclecloud.com"
+
+
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_without_sdk_defaults_to_commercial_realm():
     url = get_oci_base_url({"oci_region": "us-luke-1"})
