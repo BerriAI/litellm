@@ -142,6 +142,24 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
 
 
 _REALTIME_STREAMING_HOOKS: Final = frozenset({GuardrailEventHooks.realtime_input_transcription})
+_SERVER_STREAMING_CLASSIFICATION_KEY: Final = "is_streaming_request"
+_SERVER_STREAMING_CLASSIFICATION_MARKER: Final = object()
+
+
+def guardrail_request_data_with_streaming(
+    data: Mapping[str, object],
+    *,
+    is_streaming: bool,
+) -> dict[str, object]:
+    data_without_client_classification: Final = {
+        key: value for key, value in data.items() if key != _SERVER_STREAMING_CLASSIFICATION_KEY
+    }
+    if not is_streaming:
+        return data_without_client_classification
+    return {
+        **data_without_client_classification,
+        _SERVER_STREAMING_CLASSIFICATION_KEY: _SERVER_STREAMING_CLASSIFICATION_MARKER,
+    }
 
 
 def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
@@ -149,7 +167,10 @@ def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None =
         return True
     if not isinstance(data, Mapping):
         return False
-    return data.get("stream") is True or data.get("is_streaming_request") is True
+    return (
+        data.get("stream") is True
+        or data.get(_SERVER_STREAMING_CLASSIFICATION_KEY) is _SERVER_STREAMING_CLASSIFICATION_MARKER
+    )
 
 
 class CustomGuardrail(CustomLogger):

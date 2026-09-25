@@ -8,6 +8,7 @@ import pytest
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    guardrail_request_data_with_streaming,
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -646,7 +647,7 @@ class TestCustomGuardrailStreamScope:
             is False
         )
 
-    def test_path_defined_streaming_flag_runs_streaming_only_guardrail(self):
+    def test_path_defined_streaming_classification_cannot_be_spoofed(self):
         generate_content_body: Final = {"contents": [{"parts": [{"text": "hi"}]}]}
         streaming_only = CustomGuardrail(
             guardrail_name="test_guardrail",
@@ -660,6 +661,17 @@ class TestCustomGuardrailStreamScope:
                 {**generate_content_body, "is_streaming_request": True},
                 GuardrailEventHooks.pre_call,
             )
+            is False
+        )
+        server_streaming_data: Final = guardrail_request_data_with_streaming(
+            generate_content_body,
+            is_streaming=True,
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                server_streaming_data,
+                GuardrailEventHooks.pre_call,
+            )
             is True
         )
         non_streaming_only = CustomGuardrail(
@@ -670,7 +682,7 @@ class TestCustomGuardrailStreamScope:
         )
         assert (
             non_streaming_only.should_run_guardrail(
-                {**generate_content_body, "is_streaming_request": True},
+                server_streaming_data,
                 GuardrailEventHooks.pre_call,
             )
             is False

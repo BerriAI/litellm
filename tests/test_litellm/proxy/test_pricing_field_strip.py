@@ -26,7 +26,6 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
-
 def _make_request_mock() -> Request:
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
@@ -208,6 +207,26 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
 
     assert "input_cost_per_token" not in updated
     assert "output_cost_per_token" not in updated
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_client_streaming_classification():
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "is_streaming_request": True,
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "is_streaming_request" not in updated
 
 
 @pytest.mark.asyncio
