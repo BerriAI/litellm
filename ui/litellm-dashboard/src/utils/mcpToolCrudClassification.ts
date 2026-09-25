@@ -98,9 +98,14 @@ const tokenVariants = (token: string): string[] =>
     (variant) => variant.length > 0,
   );
 
+const CONJUNCTION_TOKENS = new Set(["and", "then", "or", "n"]);
+
 // Matches litellm/proxy/_experimental/mcp_server/tool_classification.py, fixture-pinned.
 const classifyTokens = (tokens: string[]): CrudOp => {
-  if (tokens.some((token) => DELETE_TOKENS.has(token))) return "delete";
+  const hasBareDeleteVerb = tokens.some(
+    (token, index) => DELETE_TOKENS.has(token) && (index === 0 || CONJUNCTION_TOKENS.has(tokens[index - 1])),
+  );
+  if (hasBareDeleteVerb) return "delete";
   const variants = new Set(tokens.flatMap((token) => tokenVariants(token)));
   if ([...variants].some((variant) => READ_TOKENS.has(variant))) return "read";
   if ([...variants].some((variant) => DELETE_TOKENS.has(variant))) return "delete";

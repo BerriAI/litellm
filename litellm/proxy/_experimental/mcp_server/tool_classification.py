@@ -116,9 +116,19 @@ def _token_variants(token: str) -> frozenset[str]:
     return frozenset(variant for variant in variants if variant)
 
 
+_CONJUNCTION_TOKENS: Final = frozenset({"and", "then", "or", "n"})
+
+
+def _has_bare_delete_verb(tokens: tuple[str, ...]) -> bool:
+    return any(
+        token in _DELETE_TOKENS and (index == 0 or tokens[index - 1] in _CONJUNCTION_TOKENS)
+        for index, token in enumerate(tokens)
+    )
+
+
 def _classify_tokens(tokens: Iterable[str]) -> ToolOperation:
     token_tuple: Final = tuple(tokens)
-    if frozenset(token_tuple) & _DELETE_TOKENS:
+    if _has_bare_delete_verb(token_tuple):
         return "delete"
     token_set: Final = frozenset(chain.from_iterable(map(_token_variants, token_tuple)))
     if token_set & _READ_TOKENS:
@@ -136,10 +146,11 @@ def classify_tool_op(name: str, description: str | None = None) -> ToolOperation
     """Classify a tool by exact token match on its name, falling back to the
     description's words only when the name yields no recognized token.
 
-    A bare destructive verb outranks read tokens, so ``get_and_delete_item``
-    is delete while inflected forms only match through variants: precedence
-    is then read > delete > update > create, keeping ``get_removed_entries``
-    read. A misleading description cannot override a recognized name."""
+    A bare destructive verb outranks read tokens only when it leads the name
+    or follows a conjunction, so ``get_and_delete_item`` is delete while
+    ``describe_purge_job`` and ``getDeleteStatus`` are read. Inflected forms
+    only match through variants under read > delete > update > create, and a
+    misleading description cannot override a recognized name."""
     by_name: Final = _classify_tokens(_name_tokens(name))
     if by_name != "unknown":
         return by_name

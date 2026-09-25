@@ -9,7 +9,7 @@
   {"name": "get_removed_entries", "description": null, "expected": "read"},
   {"name": "list_deleted_items", "description": null, "expected": "read"},
   {"name": "find_deleted", "description": null, "expected": "read"},
-  {"name": "describe_purge_job", "description": null, "expected": "delete"},
+  {"name": "describe_purge_job", "description": null, "expected": "read"},
   {"name": "updateItem", "description": null, "expected": "update"},
   {"name": "create-record", "description": null, "expected": "create"},
   {"name": "foo", "description": "Deletes the file", "expected": "delete"},
@@ -24,5 +24,6 @@
   {"name": "settings", "description": null, "expected": "unknown"},
   {"name": "get_and_delete_item", "description": null, "expected": "delete"},
   {"name": "fetchAndDelete", "description": null, "expected": "delete"},
-  {"name": "read_then_remove", "description": null, "expected": "delete"}
+  {"name": "read_then_remove", "description": null, "expected": "delete"},
+  {"name": "getDeleteStatus", "description": null, "expected": "read"}
 ]
