@@ -5,7 +5,7 @@ This test suite validates the CompletionRequest model and its compatibility with
 OpenAI ChatCompletion API message formats.
 
 Usage:
-    pytest tests/test_litellm/types/test_completion.py -v
+    pytest tests/unit/types/test_completion.py -v
 """
 
 import dataclasses

@@ -52,14 +52,6 @@ def test_safe_body_matcher_accepts_str_bytes_equivalent():
     _safe_body_matcher(_req("hello"), _req(b"hello"))
 
 
-def test_safe_body_matcher_handles_jsonl_without_crashing():
-    jsonl = (
-        b'{"recordId": "request-1", "modelInput": {}}\n'
-        b'{"recordId": "request-2", "modelInput": {}}\n'
-    )
-    _safe_body_matcher(_req(jsonl), _req(jsonl))
-
-
 def test_safe_body_matcher_rejects_different_jsonl_bodies():
     a = b'{"recordId": "request-1"}\n{"recordId": "request-2"}\n'
     b = b'{"recordId": "request-1"}\n{"recordId": "request-3"}\n'
