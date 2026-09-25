@@ -2209,6 +2209,13 @@
         "search": true
       }
     },
+    "serply": {
+      "display_name": "Serply (`serply`)",
+      "url": "https://serply.io/docs",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",

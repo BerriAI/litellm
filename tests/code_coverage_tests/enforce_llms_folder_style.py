@@ -18,6 +18,7 @@ SEARCH_PROVIDERS = [
     "duckduckgo",
     "searchapi",
     "serper",
+    "serply",
     "apiserpent",
     "tinyfish",
     "nimble",

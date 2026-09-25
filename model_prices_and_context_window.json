@@ -22120,6 +22120,14 @@
             "notes": "Serper Google Search API. Pricing: $1.00/1k queries (Starter), $0.75/1k (Standard), $0.50/1k (Scale), $0.30/1k (Ultimate)."
         }
     },
+    "serply/search": {
+        "input_cost_per_query": 0.002,
+        "litellm_provider": "serply",
+        "mode": "search",
+        "metadata": {
+            "notes": "Serply Google Search API. Prepaid credits that do not expire: $2.00/1k queries at the $5 entry pack, down to $0.75/1k at volume. 2,500 credits free without a card; cached queries are not billed."
+        }
+    },
     "apiserpent/search": {
         "input_cost_per_query": 0.0006,
         "litellm_provider": "apiserpent",
