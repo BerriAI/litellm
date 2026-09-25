@@ -13,13 +13,14 @@ import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
-from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
+from litellm.types.agents import AgentConfig, AgentKillSwitchConfig, AgentResponse, PatchAgentRequest
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -31,6 +32,10 @@ class AgentObjectPermissionRecord(Protocol):
     def dict(self) -> dict[str, object]: ...
 
 
+class AgentIdWhere(TypedDict):
+    agent_id: ReadOnly[str]
+
+
 class AgentRecordDump(TypedDict):
     agent_id: str
     agent_name: str
@@ -38,6 +43,7 @@ class AgentRecordDump(TypedDict):
     agent_card_params: dict[str, object]
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    kill_switch: ReadOnly[AgentKillSwitchConfig | None]
     access_group_ids: ReadOnly[Sequence[str] | None]
     object_permission: dict[str, object] | None
     spend: float
@@ -69,6 +75,9 @@ class AgentRecord(Protocol):
 
     @property
     def access_group_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def kill_switch(self) -> Mapping[str, object] | None: ...
 
     @property
     def spend(self) -> float: ...
@@ -211,6 +220,29 @@ def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
     return _EMPTY_LITELLM_PARAMS
 
 
+_KILL_SWITCH_ADAPTER: Final[TypeAdapter[AgentKillSwitchConfig | None]] = TypeAdapter(AgentKillSwitchConfig | None)
+
+
+def parse_agent_kill_switch(value: object) -> AgentKillSwitchConfig | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            return _KILL_SWITCH_ADAPTER.validate_json(value)
+        return _KILL_SWITCH_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def serialize_agent_kill_switch(incoming: object, existing: object) -> str:
+    """prisma-client-py drops ``None`` from update data, so a cleared kill switch is stored as the JSON literal
+    ``null`` (read back as ``None``), the same convention ``memory_endpoints`` uses for ``Json?`` columns."""
+    restored: Final = restore_kill_switch(
+        _KILL_SWITCH_ADAPTER.validate_python(incoming), parse_agent_kill_switch(existing)
+    )
+    return safe_dumps(restored.model_dump() if restored is not None else None)
+
+
 _MISSING_AGENT_PARAM: Final = object()
 _RESTORE_AGENT_PARAMS_MAX_DEPTH: Final = 10
 
@@ -291,6 +323,12 @@ def _patched_access_group_ids(agent: PatchAgentRequest) -> Mapping[str, object]:
     if "access_group_ids" not in agent:
         return MappingProxyType({})
     return MappingProxyType({"access_group_ids": tuple(dict.fromkeys(agent.get("access_group_ids") or ()))})
+
+
+def _patched_kill_switch(agent: PatchAgentRequest, existing: object) -> Mapping[str, object]:
+    if "kill_switch" not in agent:
+        return MappingProxyType({})
+    return MappingProxyType({"kill_switch": serialize_agent_kill_switch(agent.get("kill_switch"), existing)})
 
 
 def _restore_redacted_litellm_params(
@@ -531,6 +569,7 @@ class AgentRegistry:
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
+                "kill_switch": serialize_agent_kill_switch(agent.get("kill_switch"), None),
                 "created_by": created_by,
                 "updated_by": created_by,
                 "created_at": datetime.now(timezone.utc),
@@ -613,7 +652,10 @@ class AgentRegistry:
             existing_agent: Final[Mapping[str, object]] = dict(existing_record)
 
             augment_agent: Final = {**existing_agent, **agent}
-            update_data: Final[dict[str, object]] = {**_patched_access_group_ids(agent)}
+            update_data: Final[dict[str, object]] = {
+                **_patched_access_group_ids(agent),
+                **_patched_kill_switch(agent, existing_agent.get("kill_switch")),
+            }
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
             if "litellm_params" in agent:
@@ -716,6 +758,9 @@ class AgentRegistry:
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
             access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))
+            kill_switch_val_u: Final = serialize_agent_kill_switch(
+                agent.get("kill_switch"), existing_row.kill_switch if existing_row is not None else None
+            )
 
             update_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
@@ -723,6 +768,7 @@ class AgentRegistry:
                 "agent_card_params": agent_card_params,
                 "static_headers": static_headers_val_u,
                 "extra_headers": extra_headers_val_u,
+                "kill_switch": kill_switch_val_u,
                 "access_group_ids": access_group_ids_val_u,
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
