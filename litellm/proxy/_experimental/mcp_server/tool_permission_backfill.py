@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
+from prisma.fields import Json
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -266,14 +267,14 @@ async def _convert_one_row(
     if isinstance(conversion, Unavailable):
         return conversion.server_ids
     stored_fields: Final = (
-        ("mcp_servers", raw_row.mcp_servers),
-        ("mcp_access_groups", raw_row.mcp_access_groups),
-        ("mcp_toolsets", raw_row.mcp_toolsets),
-        ("mcp_tool_permissions", raw_row.mcp_tool_permissions),
+        ("mcp_servers", raw_row.mcp_servers, False),
+        ("mcp_access_groups", raw_row.mcp_access_groups, False),
+        ("mcp_toolsets", raw_row.mcp_toolsets, False),
+        ("mcp_tool_permissions", raw_row.mcp_tool_permissions, True),
     )
     equals_filters: Final = {  # mutable-ok: prisma where kwarg requires a JSON-serializable dict
-        field: {"equals": value}  # mutable-ok: prisma where filter shape
-        for field, value in stored_fields
+        field: {"equals": Json(value) if is_json else value}  # mutable-ok: prisma where filter shape
+        for field, value, is_json in stored_fields
         if value is not None
     }
     where: Final[dict[str, object]] = {  # mutable-ok: prisma where kwarg requires a JSON-serializable dict
