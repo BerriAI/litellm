@@ -5308,6 +5308,19 @@ def test_handle_anthropic_messages_response_logging_passes_model_response_throug
     assert logging_obj._handle_anthropic_messages_response_logging(result=model_response) is model_response
 
 
+def test_anthropic_messages_logged_response_tolerates_a_stream_that_assembled_nothing():
+    """A /v1/messages stream whose upstream yielded no chunks assembles to None; the spend
+    row must still land under the message id the caller was served instead of crashing."""
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_streamed_anthropic_message_id("msg_served")
+
+    result = logging_obj._anthropic_messages_logged_response(result=None)
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_served"
+    assert result.model == "openai/my-local"
+
+
 def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_responses_payload():
     """If the Responses translation raises (eg. empty output on an incomplete response),
     the row must still land: a minimal ModelResponse with model + usage is returned."""
