@@ -3208,10 +3208,10 @@ def _user_export_csv(export_type: UserDailyActivityExportType, rows: Sequence[Us
     "/user/daily/activity/export",
     response_model=UserDailyActivityExportResponse,
     responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
-    tags=[
+    tags=[  # mutable-ok: fastapi's decorator signature types tags as a list
         "Budget & Spend Tracking",
         "Internal User management",
-    ],  # mutable-ok: fastapi's decorator signature types tags as a list
+    ],
 )
 async def get_user_daily_activity_export(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
