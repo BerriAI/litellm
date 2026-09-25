@@ -2513,6 +2513,7 @@ def _element(payload: dict[str, object], key_suffix: str) -> s3BatchLoggingEleme
 def _ok_response() -> MagicMock:
     response = MagicMock()
     response.status_code = 200
+    response.text = ""
     response.raise_for_status = MagicMock()
     return response
 
@@ -2683,19 +2684,21 @@ def test_env_backed_false_string_keeps_per_request_uploads() -> None:
 
 @pytest.mark.parametrize("bad", [0, -3, "0", "abc", ""])
 def test_invalid_concurrency_falls_back_to_default(bad: object) -> None:
-    from litellm.constants import DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+    from litellm.constants import DEFAULT_S3_INITIAL_CONCURRENT_UPLOADS, DEFAULT_S3_MAX_CONCURRENT_UPLOADS
 
     logger = _override_logger(s3_max_concurrent_uploads=bad)
 
     assert logger.s3_max_concurrent_uploads == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
-    assert logger._upload_semaphore._value == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+    assert logger._upload_limiter._ceiling == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+    assert logger._upload_limiter.limit == DEFAULT_S3_INITIAL_CONCURRENT_UPLOADS
 
 
 def test_env_backed_concurrency_string_is_parsed() -> None:
     logger = _override_logger(s3_max_concurrent_uploads="4")
 
     assert logger.s3_max_concurrent_uploads == 4
-    assert logger._upload_semaphore._value == 4
+    assert logger._upload_limiter._ceiling == 4
+    assert logger._upload_limiter.limit == 4
 
 
 @pytest.mark.parametrize("empty", [None, ""])
@@ -2710,12 +2713,14 @@ def test_empty_config_concurrency_falls_back_to_constructor_value(empty: object)
     )
 
     assert logger.s3_max_concurrent_uploads == 4
-    assert logger._upload_semaphore._value == 4
+    assert logger._upload_limiter._ceiling == 4
+    assert logger._upload_limiter.limit == 4
 
 
 def _transient_failure_response(status: int = 503) -> MagicMock:
     response = MagicMock()
     response.status_code = status
+    response.text = "<Error><Code>SlowDown</Code></Error>"
     response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError(str(status), request=MagicMock(), response=response)
     )
@@ -2945,9 +2950,11 @@ async def test_elements_appended_after_failed_batch_file_get_their_own_file() ->
     assert logger.log_queue == []
     assert len(put.calls) == 5
     assert put.calls[0] == put.calls[1]
-    assert put.calls[3] == put.calls[0]
-    assert put.calls[4][0] != put.calls[0][0]
-    assert put.calls[4][1] == json.dumps({"id": "late"})
+    second_flush: Final = put.calls[3:]
+    assert put.calls[0] in second_flush
+    late_call: Final = next(call for call in second_flush if call != put.calls[0])
+    assert late_call[0] != put.calls[0][0]
+    assert late_call[1] == json.dumps({"id": "late"})
 
 
 @pytest.mark.asyncio
@@ -3208,3 +3215,110 @@ def test_invalid_callback_params_flush_attempts_falls_back_to_constructor_value(
     )
 
     assert logger.s3_max_flush_attempts == 2
+
+
+class _StatusPut:
+    def __init__(self, responses: "list[MagicMock | Exception]") -> None:
+        self.responses = responses
+        self.calls = 0
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.calls += 1
+        outcome = self.responses[min(self.calls - 1, len(self.responses) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _slow_down_response(status: int = 200) -> MagicMock:
+    response = _ok_response() if status == 200 else _transient_failure_response(status)
+    response.text = "<Error><Code>SlowDown</Code></Error>"
+    return response
+
+
+@pytest.mark.asyncio
+async def test_503_response_lowers_the_adaptive_limit() -> None:
+    logger = _override_logger()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _StatusPut([_transient_failure_response(503)])
+
+    before = logger._upload_limiter.limit
+    logger.log_queue = [_element({"i": 0}, "0")]
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert logger._upload_limiter.limit < before
+
+
+@pytest.mark.asyncio
+async def test_429_response_lowers_the_adaptive_limit() -> None:
+    logger = _override_logger()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _StatusPut([_transient_failure_response(429)])
+
+    before = logger._upload_limiter.limit
+    logger.log_queue = [_element({"i": 0}, "0")]
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert logger._upload_limiter.limit < before
+
+
+@pytest.mark.asyncio
+async def test_slow_down_body_code_lowers_the_adaptive_limit() -> None:
+    logger = _override_logger()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _StatusPut([_slow_down_response()])
+
+    before = logger._upload_limiter.limit
+    logger.log_queue = [_element({"i": 0}, "0")]
+    await logger.async_send_batch()
+
+    assert logger._upload_limiter.limit < before
+
+
+@pytest.mark.asyncio
+async def test_transport_error_lowers_the_adaptive_limit() -> None:
+    logger = _override_logger()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _StatusPut(
+        [httpx.ConnectError("connect refused", request=MagicMock()), _ok_response()]
+    )
+
+    before = logger._upload_limiter.limit
+    logger.log_queue = [_element({"i": 0}, "0")]
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert logger._upload_limiter.limit < before
+
+
+@pytest.mark.asyncio
+async def test_fast_uploads_raise_the_adaptive_limit() -> None:
+    logger = _override_logger()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _RecordingPut()
+
+    before = logger._upload_limiter.limit
+    logger.log_queue = [_element({"i": i}, f"{i}") for i in range(before * 2)]
+    await logger.async_send_batch()
+
+    assert logger._upload_limiter.limit > before
+
+
+@pytest.mark.asyncio
+async def test_configured_concurrency_stays_the_adaptive_ceiling() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_concurrent_uploads=4,
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _RecordingPut()
+
+    logger.log_queue = [_element({"i": i}, f"{i}") for i in range(100)]
+    await logger.async_send_batch()
+
+    assert logger._upload_limiter.limit <= 4

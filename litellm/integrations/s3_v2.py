@@ -3,13 +3,13 @@ s3 Bucket Logging Integration
 
 async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
 async_log_failure_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
-NOTE 1: S3 does not provide a BATCH PUT API endpoint; by default each element is uploaded concurrently (bounded by s3_max_concurrent_uploads), or with s3_batch_file_upload the whole flush is written as one .jsonl file
+NOTE 1: S3 does not provide a BATCH PUT API endpoint; by default each element is uploaded concurrently with an adaptive AIMD bound (up to s3_max_concurrent_uploads, backing off on throttling or rising latency), or with s3_batch_file_upload the whole flush is written as one .jsonl file
 """
 
 import asyncio
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
@@ -23,9 +23,11 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_S3_BATCH_SIZE,
     DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
+    DEFAULT_S3_INITIAL_CONCURRENT_UPLOADS,
     DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
     DEFAULT_S3_MAX_FLUSH_ATTEMPTS,
 )
+from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
 from litellm.integrations.s3 import (
     get_s3_object_download_filename,
     get_s3_object_key,
@@ -72,7 +74,8 @@ _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
 
 
 def _s3_error_code(response: httpx.Response) -> str | None:
-    match: Final = _S3_ERROR_CODE.search(response.text)
+    text: Final = response.text if isinstance(response.text, str) else ""
+    match: Final = _S3_ERROR_CODE.search(text)
     return match.group(1) if match else None
 
 
@@ -171,7 +174,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_max_flush_attempts=s3_max_flush_attempts,
                 s3_batch_file_upload=s3_batch_file_upload,
             )
-            self._upload_semaphore = asyncio.Semaphore(self.s3_max_concurrent_uploads)
+            self._upload_limiter = AdaptiveConcurrencyLimiter(
+                initial=min(DEFAULT_S3_INITIAL_CONCURRENT_UPLOADS, self.s3_max_concurrent_uploads),
+                floor=1,
+                ceiling=self.s3_max_concurrent_uploads,
+            )
             verbose_logger.debug("s3 logger using endpoint url %s", s3_endpoint_url)
 
             # IMPORTANT
@@ -503,7 +510,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             max_retries: Final = 3
             for attempt in range(max_retries):
-                response = await signed_put()
+                response = await self._timed_put(signed_put)
                 if _is_transient(response) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
@@ -588,8 +595,23 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return True
 
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> UploadOutcome:
-        async with self._upload_semaphore:
+        async with self._upload_limiter:
             return await self.async_upload_data_to_s3(element)
+
+    async def _timed_put(self, signed_put: "Callable[[], Awaitable[httpx.Response]]") -> httpx.Response:
+        started: Final = time.monotonic()
+        try:
+            response: Final = await signed_put()
+        except Exception:
+            self._upload_limiter.record(PutSample(rtt_seconds=time.monotonic() - started, throttled=True))
+            raise
+        self._upload_limiter.record(
+            PutSample(
+                rtt_seconds=time.monotonic() - started,
+                throttled=response.status_code in (429, 503) or _s3_error_code(response) == "SlowDown",
+            )
+        )
+        return response
 
     def _batch_file_elements(self, batch: tuple[s3BatchLoggingElement, ...]) -> tuple[s3BatchLoggingElement, ...]:
         now: Final = datetime.now(timezone.utc)

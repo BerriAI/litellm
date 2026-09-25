@@ -119,8 +119,8 @@ BATCH_KEY: Final = re.compile(
 )
 
 
-@pytest.mark.covers("other.observability.s3_v2.flush_bounds_concurrent_puts_to_default_and_keeps_every_log")
-def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_of_sixteen(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.covers("other.observability.s3_v2.flush_bounds_concurrent_puts_to_default_ceiling_and_keeps_every_log")
+def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_ceiling(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3fan" + uuid.uuid4().hex[:8]
     sink: Final = S3Sink()
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
@@ -134,7 +134,7 @@ def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_of_sixteen(gateway: G
             ids: Final = _burst(candidate, model, key, marker)
             puts: Final = _collect(bucket, count_lines=False, expected=REQUESTS)
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
-    assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the default bound for {REQUESTS} queued logs"
+    assert sink.peak <= 200, f"peak concurrent PUTs {sink.peak} exceeded the default ceiling for {REQUESTS} queued logs"
     assert all(PER_REQUEST_KEY.match(put.target) for put in puts), [put.target for put in puts]
     assert frozenset(json.loads(put.body)["id"] for put in puts) == ids
     assert len({put.target for put in puts}) == REQUESTS
@@ -272,7 +272,7 @@ def test_s3_v2_upstream_failure_events_land_alongside_successes(gateway: Gateway
     assert all("synthetic upstream rejection" in json.dumps(payload["error_information"]) for payload in failures)
 
 
-@pytest.mark.covers("other.observability.s3_v2.invalid_or_empty_bound_falls_back_to_sixteen")
+@pytest.mark.covers("other.observability.s3_v2.invalid_or_empty_bound_falls_back_to_default_ceiling")
 @pytest.mark.parametrize(
     ("bad", "warns"),
     [
@@ -281,7 +281,7 @@ def test_s3_v2_upstream_failure_events_land_alongside_successes(gateway: Gateway
         pytest.param("", False, id="empty"),
     ],
 )
-def test_s3_v2_invalid_or_empty_bound_falls_back_to_sixteen(
+def test_s3_v2_invalid_or_empty_bound_falls_back_to_default_ceiling(
     gateway: Gateway, tmp_path: Path, bad: JsonValue, warns: bool
 ) -> None:
     marker: Final = "s3bound" + uuid.uuid4().hex[:8]
@@ -305,7 +305,7 @@ def test_s3_v2_invalid_or_empty_bound_falls_back_to_sixteen(
             else:
                 assert "s3_max_concurrent_uploads" not in owned.log.read_text()
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
-    assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the fallback bound"
+    assert sink.peak <= 200, f"peak concurrent PUTs {sink.peak} exceeded the fallback ceiling"
     assert frozenset(payload["id"] for payload in payloads) == ids
 
 
@@ -585,7 +585,7 @@ def test_s3_v2_two_workers_bound_and_deliver_every_id(gateway: Gateway, tmp_path
             ids: Final = _burst(candidate, model, key, marker)
             payloads: Final = collect_payloads(sink, REQUESTS)
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
-    assert sink.peak <= 32, f"peak concurrent PUTs {sink.peak} exceeded two workers at the default bound"
+    assert sink.peak <= 400, f"peak concurrent PUTs {sink.peak} exceeded two workers at the default ceiling"
     assert len(sink.objects()) == REQUESTS
     assert frozenset(payload["id"] for payload in payloads) == ids
 
@@ -726,3 +726,88 @@ def test_s3_v2_sigterm_mid_burst_loses_only_inflight_without_duplicates(gateway:
     )
     targets: Final = tuple(sink.objects())
     assert len(set(targets)) == len(targets), "the same object was PUT more than once"
+
+
+RAMP_REQUESTS: Final = 400
+RAMP_PUT_DELAY_SECONDS: Final = 1.0
+
+
+def _push(candidate: Gateway, model: str, key: str, marker: str, count: int) -> frozenset[str]:
+    ids: Final = tuple(f"{marker}-{index}" for index in range(count))
+
+    def request(identity: str) -> str:
+        response: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": identity}], "cache": {"no-cache": True}},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["id"]
+
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        returned: Final = frozenset(pool.map(request, ids))
+    assert returned == frozenset(ids)
+    return returned
+
+
+@pytest.mark.covers("other.observability.s3_v2.adaptive_concurrency_ramps_on_healthy_slow_sink")
+def test_s3_v2_slow_sink_ramps_concurrency_and_drains_the_backlog(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3ramp" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(delay_seconds=RAMP_PUT_DELAY_SECONDS)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1", "DEFAULT_S3_BATCH_SIZE": "5000"},
+                config=config,
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            ids: Final = _push(candidate, model, key, marker, RAMP_REQUESTS)
+            drain_started: Final = time.monotonic()
+            payloads: Final = collect_payloads(sink, RAMP_REQUESTS, seconds=180)
+            drained_seconds: Final = time.monotonic() - drain_started
+    fixed_sixteen_estimate: Final = RAMP_REQUESTS * RAMP_PUT_DELAY_SECONDS / 16
+    assert sum(1 for r in provider.drain() if r.method == "POST") == RAMP_REQUESTS
+    assert frozenset(payload["id"] for payload in payloads) == ids
+    assert sink.peak > 16, f"adaptive limiter never ramped past the old fixed bound: peak {sink.peak}"
+    assert drained_seconds < 2 * fixed_sixteen_estimate, (
+        f"backlog of {RAMP_REQUESTS} drained in {drained_seconds:.1f}s with peak concurrency {sink.peak}; "
+        f"even a fixed bound of 16 would need only ~{fixed_sixteen_estimate:.1f}s, so the uploads stalled"
+    )
+
+
+@pytest.mark.covers("other.observability.s3_v2.adaptive_concurrency_backs_off_on_slowdown")
+def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3throt" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_status=503, fail_code="SlowDown", delay_seconds=0.3)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            healthy_ids: Final = _push(candidate, model, key, f"{marker}-healthy", REQUESTS)
+            collect_payloads(sink, REQUESTS)
+            healthy_peak: Final = sink.peak
+            throttled_ids: Final = _push(candidate, model, key, f"{marker}-throttled", REQUESTS)
+            window_start: Final = time.time()
+            sink.fail_until = window_start + 8
+            payloads: Final = collect_payloads(sink, 2 * REQUESTS, seconds=120)
+            first_fail_at: Final = next(when for when, _ in sink.attempt_log if when >= window_start)
+            throttled_peak: Final = sink.peak_between(first_fail_at + 0.6, sink.fail_until)
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 2 * REQUESTS
+    assert healthy_peak >= 8, f"healthy peak {healthy_peak} too low to compare back-off against"
+    assert throttled_peak < healthy_peak, (
+        f"in-flight PUTs during the SlowDown window peaked at {throttled_peak}, not below the healthy peak "
+        f"{healthy_peak}; the limiter did not back off"
+    )
+    assert frozenset(payload["id"] for payload in payloads) == healthy_ids | throttled_ids
+    assert len(sink.objects()) == 2 * REQUESTS

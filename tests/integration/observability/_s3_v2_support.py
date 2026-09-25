@@ -27,11 +27,13 @@ class RecordingS3Sink:
     fail_attempts: int = 0
     fail_until: float = 0.0
     fail_status: int = 503
+    fail_code: str = "SinkFailure"
     delay_seconds: float = 0.5
     lock: threading.Lock = field(default_factory=threading.Lock)
     in_flight: int = 0
     peak: int = 0
     attempts: int = 0
+    attempt_log: list[tuple[float, int]] = field(default_factory=list)  # mutable-ok: appended under lock per PUT
     store: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: GET reads must see writes from earlier PUTs
 
     def respond(self, request: Request) -> Reply:
@@ -44,19 +46,27 @@ class RecordingS3Sink:
         assert request.target.startswith(f"/{BUCKET}/{PREFIX}/"), request.target
         with self.lock:
             self.attempts += 1
-            if self.attempts <= self.fail_attempts or time.time() < self.fail_until:
-                return Reply(
-                    status=self.fail_status,
-                    body=b"<Error><Code>SinkFailure</Code></Error>",
-                    content_type="application/xml",
-                )
             self.in_flight += 1
             self.peak = max(self.peak, self.in_flight)
-            self.store[request.target] = request.body
+            self.attempt_log.append((time.time(), self.in_flight))
+            failing: Final = self.attempts <= self.fail_attempts or time.time() < self.fail_until
+            if not failing:
+                self.store[request.target] = request.body
         time.sleep(self.delay_seconds)
         with self.lock:
             self.in_flight -= 1
+        if failing:
+            return Reply(
+                status=self.fail_status,
+                body=f"<Error><Code>{self.fail_code}</Code></Error>".encode(),
+                content_type="application/xml",
+            )
         return Reply()
+
+    def peak_between(self, start: float, end: float) -> int:
+        with self.lock:
+            samples: Final = tuple(in_flight for when, in_flight in self.attempt_log if start <= when < end)
+        return max(samples, default=0)
 
     def objects(self) -> Mapping[str, bytes]:
         with self.lock:
