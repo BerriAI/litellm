@@ -8877,7 +8877,13 @@ def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> 
 
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
+    # Non-positive leftovers (common on Vertex Anthropic stream assembly) are not
+    # real provider totals; leave them absent so token-based pricing runs.
+    if (
+        isinstance(usage_cost, (int, float))
+        and usage_cost > 0
+        and not _reported_cost_is_priced_by_calculator(logging_obj)
+    ):
         return float(usage_cost)
     if logging_obj is not None:
         return None
@@ -8910,16 +8916,21 @@ def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
 
 def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj)
-    if response_cost is None:
-        return
     hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    if response_cost is None:
+        # Non-positive usage.cost (or a logging_obj deferral) must leave the field
+        # absent so token-based pricing can run — clear any earlier stamp.
+        hidden_params.pop("response_cost", None)
+        return
     hidden_params["response_cost"] = response_cost
 
 
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    existing_cost: Final = getattr(usage, "cost", None)
+    # Treat non-positive assembled costs as absent so token pricing can stamp a real total.
+    if isinstance(existing_cost, (int, float)) and existing_cost > 0:
         return
     computed_cost: Final = logging_obj._response_cost_calculator(result=response)
     if isinstance(computed_cost, (int, float)) and computed_cost > 0:
