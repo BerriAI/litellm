@@ -67,10 +67,10 @@ describe("CredentialsTable", () => {
     ];
     render(<CredentialsTable {...defaultProps} credentials={credentials} />);
 
-    const aliasedRow = screen.getByText("aliased").closest("tr")!;
+    const aliasedRow = screen.getByRole("row", { name: /^aliased/ });
     expect(within(aliasedRow).getByText("Prod OpenAI")).toBeInTheDocument();
 
-    const unaliasedRow = screen.getByText("unaliased").closest("tr")!;
+    const unaliasedRow = screen.getByRole("row", { name: /^unaliased/ });
     expect(within(unaliasedRow).getByText("-")).toBeInTheDocument();
   });
 
