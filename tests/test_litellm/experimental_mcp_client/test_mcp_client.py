@@ -2770,6 +2770,7 @@ async def test_cancellation_delivers_termination_over_tcp(
     cancel_mode: str, concurrency: int, termination: str, raise_on_error: bool, protocol_version: str
 ) -> None:
     started: Final = asyncio.Event()
+    cancellation_scope: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
     terminations: Final[list[bytes]] = []
     starts: Final[list[bytes]] = []
     stop: Final = asyncio.Event()
@@ -2820,6 +2821,8 @@ async def test_cancellation_delivers_termination_over_tcp(
                     await stop.wait()
                     return
                 if payload["method"] == "initialize":
+                    if cancel_mode != "read_timeout":
+                        await asyncio.sleep(0.75)
                     response: Final = json.dumps(
                         {
                             "jsonrpc": "2.0",
@@ -2846,7 +2849,7 @@ async def test_cancellation_delivers_termination_over_tcp(
     listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port: Final = listener.sockets[0].getsockname()[1]
     client: Final = MCPClient(
-        server_url=f"http://127.0.0.1:{port}/mcp", protocol_version=protocol_version, timeout=2 if cancel_mode == "read_timeout" else 0.5 if termination != "ok" else 30
+        server_url=f"http://127.0.0.1:{port}/mcp", protocol_version=protocol_version, timeout=2 if cancel_mode == "read_timeout" else 30
     )
 
     async def calls():
@@ -2866,13 +2869,16 @@ async def test_cancellation_delivers_termination_over_tcp(
 
     async def invoke():
         if cancel_mode == "scope":
-            with anyio.fail_after(0.2):
+            with anyio.fail_after(None) as scope:
+                cancellation_scope.set_result(scope)
                 return await calls()
         return await calls()
 
     try:
         task: Final = asyncio.create_task(invoke())
-        await asyncio.wait_for(started.wait(), 3)
+        await asyncio.wait_for(started.wait(), 30)
+        if cancel_mode == "scope":
+            cancellation_scope.result().deadline = anyio.current_time() + 0.2
         if cancel_mode == "task":
             task.cancel()
         expected_error: Final = (
