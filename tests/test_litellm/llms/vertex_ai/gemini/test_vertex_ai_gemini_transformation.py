@@ -1,4 +1,9 @@
 import base64
+import json
+from copy import deepcopy
+from contextlib import nullcontext
+from unittest.mock import patch
+from typing import Final
 
 import pytest
 
@@ -2781,3 +2786,98 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize("multimodal", [False, True])
+@pytest.mark.parametrize("reuse_converted_contents", [False, True])
+def test_request_body_serializes_canonical_tool_parts(provider, multimodal, reuse_converted_contents):
+    signatures: Final = tuple(base64.b64encode(f"synthetic-signature-{step}".encode()).decode() for step in (1, 2))
+    responses: Final = tuple(
+        {"function_call": {"keep": True}, "function_response": {"keep": True}, "next_nonce": f"nonce-{step + 1}"}
+        for step in (1, 2)
+    )
+    messages: Final = [
+        {"role": "user", "content": "Complete three sequential tool steps"},
+        *(
+            message
+            for step in (1, 2)
+            for message in (
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": f"call_step_{step}__thought__{signatures[step - 1]}",
+                            "type": "function",
+                            "function": {
+                                "name": "get_step",
+                                "arguments": json.dumps(
+                                    {
+                                        "n": step,
+                                        "nonce": f"nonce-{step}",
+                                        "function_call": {"keep": True},
+                                        "function_response": {"keep": True},
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": f"call_step_{step}__thought__{signatures[step - 1]}",
+                    "content": [
+                        {"type": "text", "text": json.dumps(responses[step - 1])},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+                    ]
+                    if multimodal
+                    else json.dumps(responses[step - 1]),
+                },
+            )
+        ),
+    ]
+    messages_before: Final = deepcopy(messages)
+    internal_contents: Final = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3.8-flash", custom_llm_provider=provider
+    )
+    internal_before: Final = deepcopy(internal_contents)
+    converter_path: Final = (
+        "litellm.llms.gemini.chat.transformation._gemini_convert_messages_with_history"
+        if provider == "gemini"
+        else "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini._gemini_convert_messages_with_history"
+    )
+    with patch(converter_path, return_value=internal_contents) if reuse_converted_contents else nullcontext():
+        request: Final = _transform_request_body(
+            messages=messages,
+            model="gemini-3.8-flash",
+            optional_params={},
+            custom_llm_provider=provider,
+            litellm_params={},
+            cached_content=None,
+        )
+    assert internal_contents == internal_before
+    assert messages == messages_before
+    contents: Final = json.loads(json.dumps(request))["contents"]
+    assert tuple(content["role"] for content in contents) == ("user", "model", "user", "model", "user")
+    for step in (1, 2):
+        call_part: Final = contents[2 * step - 1]["parts"][0]
+        assert frozenset(call_part) == frozenset(("functionCall", "thoughtSignature"))
+        assert call_part["thoughtSignature"] == signatures[step - 1]
+        assert call_part["functionCall"] == {
+            "id": f"call_step_{step}",
+            "name": "get_step",
+            "args": {
+                "n": step,
+                "nonce": f"nonce-{step}",
+                "function_call": {"keep": True},
+                "function_response": {"keep": True},
+            },
+        }
+        result_part: Final = contents[2 * step]["parts"][0]
+        assert tuple(result_part) == ("functionResponse",)
+        function_response: Final = result_part["functionResponse"]
+        assert function_response["name"] == "get_step"
+        assert function_response["id"] == f"call_step_{step}"
+        assert function_response["response"] == responses[step - 1]
+        if multimodal:
+            assert function_response["parts"] == [{"inline_data": {"mime_type": "image/png", "data": "aGVsbG8="}}]
