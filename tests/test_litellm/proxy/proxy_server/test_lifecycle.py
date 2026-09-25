@@ -287,6 +287,44 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
     assert "Error flushing spend counters on shutdown: db gone" in caplog.text
 
 
+def test_shutdown_drains_passthrough_error_reports_before_spend_flushes():
+    """Passthrough error report callbacks write spend rows through the logging
+    worker, so the drain must complete before the spend producer, counters and
+    spend-log queue are flushed or the delivered rows can be skipped. The drain
+    lives inside the ``proxy_startup_event`` lifespan teardown which cannot be
+    driven without running the whole startup, so assert the await order in
+    source: a revert of the ordering is what this guards.
+    """
+    import ast
+
+    parsed = ast.parse(inspect.getsource(ps))
+    startup = next(
+        node
+        for node in parsed.body
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "proxy_startup_event"
+    )
+    awaited = tuple(
+        child.value.func.id
+        for child in sorted(
+            (
+                node
+                for node in ast.walk(startup)
+                if isinstance(node, ast.Await)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+            ),
+            key=lambda node: node.lineno,
+        )
+    )
+    drain_at = awaited.index("drain_passthrough_upstream_error_reports")
+    for flush in (
+        "_drain_spend_event_producer_on_shutdown",
+        "flush_spend_counters_on_shutdown",
+        "_flush_spend_logs_queue_on_shutdown",
+    ):
+        assert drain_at < awaited.index(flush), f"report drain must run before {flush}"
+
+
 # ---------------------------------------------------------------------------
 # _initialize_shared_aiohttp_session
 # ---------------------------------------------------------------------------

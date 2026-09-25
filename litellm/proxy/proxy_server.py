@@ -1574,6 +1574,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
+    try:
+        await drain_passthrough_upstream_error_reports()
+    except Exception as e:  # noqa: BLE001  # shutdown must continue when a report drain fails
+        verbose_proxy_logger.error("Error draining passthrough upstream error reports: %s", e)
+
     await _drain_spend_event_producer_on_shutdown()
 
     # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
@@ -1584,11 +1589,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
     await flush_spend_counters_on_shutdown()
-
-    try:
-        await drain_passthrough_upstream_error_reports()
-    except Exception as e:  # noqa: BLE001  # shutdown must continue when a report drain fails
-        verbose_proxy_logger.error("Error draining passthrough upstream error reports: %s", e)
 
     await _flush_spend_logs_queue_on_shutdown()
 

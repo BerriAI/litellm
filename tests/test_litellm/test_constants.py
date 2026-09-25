@@ -68,3 +68,14 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
+
+
+def test_passthrough_error_report_concurrency_env_zero_clamps_to_one(monkeypatch):
+    """A zero/negative concurrency would deadlock every report; the constant clamps to 1."""
+    monkeypatch.setenv("PASSTHROUGH_UPSTREAM_ERROR_REPORT_CONCURRENCY", "0")
+    try:
+        reloaded = importlib.reload(constants)
+        assert reloaded.PASSTHROUGH_UPSTREAM_ERROR_REPORT_CONCURRENCY == 1
+    finally:
+        monkeypatch.undo()
+        importlib.reload(constants)
