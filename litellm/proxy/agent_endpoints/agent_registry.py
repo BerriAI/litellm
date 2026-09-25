@@ -14,7 +14,7 @@ import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy.agent_endpoints.identity import preserve_identity
+from litellm.proxy.agent_endpoints.identity_store import forget_unbound_claims
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -635,6 +635,7 @@ class AgentRegistry:
                 data={**create_data, **_managed_fields(agent, None, created_by)},
                 include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
+            forget_unbound_claims()
 
             return AgentResponse.model_validate(created_agent.model_dump())
         except HTTPException:
@@ -713,10 +714,7 @@ class AgentRegistry:
                 existing_litellm_params: Final = parse_agent_litellm_params(existing_agent.get("litellm_params"))
                 update_data["litellm_params"] = safe_dumps(
                     _restore_redacted_litellm_params(
-                        preserve_identity(
-                            _dump_agent_params(agent.get("litellm_params") or _EMPTY_LITELLM_PARAMS),
-                            existing_litellm_params,
-                        ),
+                        _dump_agent_params(agent.get("litellm_params") or _EMPTY_LITELLM_PARAMS),
                         existing_litellm_params,
                     )
                 )
@@ -755,6 +753,7 @@ class AgentRegistry:
             )
             if patched_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
+            forget_unbound_claims()
             return AgentResponse.model_validate(patched_agent.model_dump())
         except HTTPException:
             raise
@@ -790,8 +789,7 @@ class AgentRegistry:
             # Serialize litellm_params
             litellm_params_obj: Final = agent.get("litellm_params", {})
             litellm_params_dict: Final = _restore_redacted_litellm_params(
-                preserve_identity(_dump_agent_params(litellm_params_obj), existing_litellm_params),
-                existing_litellm_params,
+                _dump_agent_params(litellm_params_obj), existing_litellm_params
             )
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
@@ -855,6 +853,7 @@ class AgentRegistry:
 
             if updated_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
+            forget_unbound_claims()
             return AgentResponse.model_validate(updated_agent.model_dump())
         except HTTPException:
             raise

@@ -22,6 +22,7 @@ from prisma.types import (
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.identity_store import forget_unbound_claims
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.table_repositories import SCIMSourceRepository
@@ -387,7 +388,8 @@ class AgentProvisioningService:
                     verified_via="scim",
                 )
                 await tx.litellm_verifiedsubject.create(data=subject_data)
-                return document
+            forget_unbound_claims()
+            return document
         except Exception as exc:
             if is_unique_violation(exc):
                 raise HTTPException(409, "The subject, parent identity or agent name is already registered") from exc

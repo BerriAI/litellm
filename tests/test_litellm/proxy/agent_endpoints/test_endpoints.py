@@ -596,6 +596,24 @@ class TestAgentRBACProxyAdmin:
             )
             assert resp.status_code == 200
 
+    def test_create_agent_rejects_legacy_litellm_params_identity(self):
+        with patch("litellm.proxy.proxy_server.prisma_client"):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+            self.mock_registry.add_agent_to_db = AsyncMock(return_value=_sample_agent_response())
+            config = _sample_agent_config()
+            config["litellm_params"] = {
+                **config["litellm_params"],
+                "identity": {
+                    "provider": "microsoft_entra",
+                    "tenant_id": "11111111-1111-4111-8111-111111111111",
+                    "client_id": "22222222-2222-4222-8222-222222222222",
+                },
+            }
+            resp = self.admin_client.post("/v1/agents", json=config, headers={"Authorization": "Bearer k"})
+            assert resp.status_code == 400, resp.text
+            assert "top-level identity field" in resp.json()["detail"]
+            self.mock_registry.add_agent_to_db.assert_not_awaited()
+
     def test_create_agent_applies_litellm_merge_to_stored_card(self):
         """The card stored in the DB must reflect the LiteLLM-fronting merge."""
         with patch("litellm.proxy.proxy_server.prisma_client"):

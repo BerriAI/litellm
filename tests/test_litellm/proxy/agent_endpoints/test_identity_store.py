@@ -2,12 +2,13 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from prisma.models import LiteLLM_VerifiedSubject
 
-from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.agent_endpoints.identity_store import UNBOUND_CLAIMS, AgentIdentityStore, forget_unbound_claims
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
@@ -169,6 +170,75 @@ async def test_unrelated_non_entra_claims_do_not_query_identity_store() -> None:
     assert await store.resolve_verified_claims({"sub": "ordinary-user"}) is None
     identities.find_unique.assert_not_awaited()
     agents.find_unique.assert_not_awaited()
+
+
+HUMAN_CLAIMS: Final = {"iss": ISSUER, "tid": TENANT, "azp": CLIENT, "oid": HUMAN, "scp": "user_impersonation"}
+
+
+def unbound_store(clock: MagicMock) -> tuple[AgentIdentityStore, AsyncMock, AsyncMock]:
+    _, agents, identities, humans = setup_store(agent=None)
+    identities.find_unique.return_value = None
+    cache: Final = InMemoryCache(default_ttl=60, clock=clock)
+    db: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_agentstable=agents, litellm_agentidentity=identities, litellm_verifiedsubject=humans)
+    )
+    store: Final = AgentIdentityStore(
+        AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), unbound=cache
+    )
+    return store, identities, humans
+
+
+@pytest.mark.asyncio
+async def test_unbound_human_token_reads_identity_store_once_per_ttl() -> None:
+    clock: Final = MagicMock(return_value=1_000.0)
+    store, identities, humans = unbound_store(clock)
+    assert await store.resolve_verified_claims(HUMAN_CLAIMS) is None
+    assert await store.resolve_verified_claims(HUMAN_CLAIMS) is None
+    assert identities.find_unique.await_count == 1
+    assert humans.find_unique.await_count == 1
+    identities.find_unique.side_effect = ConnectionError("database down")
+    assert await store.resolve_verified_claims(HUMAN_CLAIMS) is None, "cached miss must not turn into a 503"
+    assert await store.resolve_verified_claims({**HUMAN_CLAIMS, "oid": PRINCIPAL}) == AgentIdentityFailure(
+        code="policy_unavailable", message="Agent identity could not be loaded"
+    ), "another subject is not covered by the first subject's cached miss"
+    clock.return_value = 1_061.0
+    expired: Final = await store.resolve_verified_claims(HUMAN_CLAIMS)
+    assert isinstance(expired, AgentIdentityFailure) and expired.code == "policy_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_bound_agents_and_policy_failures_are_never_served_from_the_miss_cache() -> None:
+    clock: Final = MagicMock(return_value=1_000.0)
+    store, _, identities, _ = setup_store()
+    store.unbound = InMemoryCache(default_ttl=60, clock=clock)
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), ManagedAgentContext)
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), ManagedAgentContext)
+    assert identities.find_unique.await_count == 2
+    identities.find_unique.side_effect = ConnectionError("database down")
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), AgentIdentityFailure)
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), AgentIdentityFailure)
+    assert identities.find_unique.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_binding_writes_forget_cached_misses() -> None:
+    forget_unbound_claims()
+    _, agents, identities, humans = setup_store(agent=None)
+    identities.find_unique.return_value = None
+    db: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_agentstable=agents, litellm_agentidentity=identities, litellm_verifiedsubject=humans)
+    )
+    store: Final = AgentIdentityStore(
+        AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), unbound=UNBOUND_CLAIMS
+    )
+    assert await store.resolve_verified_claims(HUMAN_CLAIMS) is None
+    assert await store.resolve_verified_claims(HUMAN_CLAIMS) is None
+    assert identities.find_unique.await_count == 1
+    forget_unbound_claims()
+    identities.find_unique.return_value = BINDING
+    agents.find_unique.return_value = stored_agent()
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), ManagedAgentContext)
+    assert identities.find_unique.await_count == 2
 
 
 @pytest.mark.asyncio

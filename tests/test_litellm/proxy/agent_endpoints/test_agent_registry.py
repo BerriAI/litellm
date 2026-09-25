@@ -1035,7 +1035,7 @@ async def test_patch_agent_in_db_preserves_secret_when_echoed_back_redacted():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["patch", "put"])
-async def test_runtime_update_keeps_identity_binding_and_agent_id(operation: str) -> None:
+async def test_runtime_update_drops_legacy_identity_and_keeps_agent_id(operation: str) -> None:
     registry: Final = AgentRegistry()
     prisma: Final = MagicMock()
     identity: Final = {
@@ -1056,7 +1056,7 @@ async def test_runtime_update_keeps_identity_binding_and_agent_id(operation: str
         "agent_id": "unchanged-id",
         "agent_name": "Renamed agent",
         "agent_card_params": {},
-        "litellm_params": {"identity": identity, "model": "new"},
+        "litellm_params": {"model": "new"},
     }
     prisma.db.litellm_agentstable.update = AsyncMock(return_value=saved)
     update: Final = registry.patch_agent_in_db if operation == "patch" else registry.update_agent_in_db
@@ -1068,7 +1068,9 @@ async def test_runtime_update_keeps_identity_binding_and_agent_id(operation: str
     )
     stored: Final = prisma.db.litellm_agentstable.update.call_args.kwargs
     assert stored["where"] == {"agent_id": "unchanged-id"}
-    assert json.loads(stored["data"]["litellm_params"]) == {"identity": identity, "model": "new"}
+    assert json.loads(stored["data"]["litellm_params"]) == {"model": "new"}, (
+        "a stored litellm_params.identity must not be resurrected once the JWT path no longer honours it"
+    )
     assert result.agent_id == "unchanged-id"
     assert "object_permission_id" not in stored["data"]
 

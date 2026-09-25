@@ -53,7 +53,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
-from litellm.proxy.agent_endpoints.identity import agent_identity
+from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.auth_checks import can_team_access_model
@@ -1511,7 +1511,7 @@ class JWTAuthManager:
             agent is None
             or agent.identity_managed
             or agent.identity is not None
-            or agent_identity(agent.litellm_params) is not None
+            or has_legacy_identity(agent.litellm_params)
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

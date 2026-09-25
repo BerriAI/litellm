@@ -4,6 +4,8 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import AGENT_IDENTITY_MISS_CACHE_MAX_ITEMS, AGENT_IDENTITY_MISS_CACHE_TTL
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
@@ -36,6 +38,14 @@ if TYPE_CHECKING:
         LiteLLM_VerifiedSubjectWhereUniqueInput,
     )
 
+UNBOUND_CLAIMS: Final = InMemoryCache(
+    max_size_in_memory=AGENT_IDENTITY_MISS_CACHE_MAX_ITEMS, default_ttl=AGENT_IDENTITY_MISS_CACHE_TTL
+)
+
+
+def forget_unbound_claims() -> None:
+    UNBOUND_CLAIMS.flush_cache()
+
 
 class AgentIdentityStore:
     @classmethod
@@ -48,6 +58,7 @@ class AgentIdentityStore:
             SCIMSourceRepository(client, use_writer=True),
             SCIMResourceRepository(client, use_writer=True),
             RetiredAgentRepository(client, use_writer=True),
+            UNBOUND_CLAIMS,
         )
 
     def __init__(
@@ -59,6 +70,7 @@ class AgentIdentityStore:
         sources: SCIMSourceRepository | None = None,
         resources: SCIMResourceRepository | None = None,
         retired_agents: RetiredAgentRepository | None = None,
+        unbound: InMemoryCache | None = None,
     ) -> None:
         self.agents = agents
         self.identities = identities
@@ -67,6 +79,7 @@ class AgentIdentityStore:
         self.sources = sources
         self.resources = resources
         self.retired_agents = retired_agents
+        self.unbound = unbound
 
     async def agent(self, agent_id: str) -> AgentResponse | AgentIdentityFailure | None:
         try:
@@ -86,6 +99,22 @@ class AgentIdentityStore:
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent policy could not be loaded")
 
+    async def unbound_client(
+        self, where: "LiteLLM_AgentIdentityWhereUniqueInput", miss_key: str
+    ) -> AgentIdentityFailure | None:
+        if self.retired is not None:
+            try:
+                retired: Final = await self.retired.table.find_unique(where=where)
+            except Exception:
+                return AgentIdentityFailure(
+                    code="policy_unavailable", message="Retired agent identity could not be checked"
+                )
+            if retired is not None:
+                return AgentIdentityFailure(message="This agent identity binding has been retired")
+        if self.unbound is not None:
+            self.unbound.set_cache(miss_key, True)
+        return None
+
     async def resolve_verified_claims(
         self, claims: Mapping[str, object]
     ) -> ManagedAgentContext | AgentIdentityFailure | None:
@@ -93,6 +122,9 @@ class AgentIdentityStore:
         tenant: Final = claims.get("tid")
         client: Final = claims.get("azp")
         if not isinstance(issuer, str) or not isinstance(tenant, str) or not isinstance(client, str):
+            return None
+        miss_key: Final = f"agent-identity-miss:{issuer}|{tenant}|{client}|{claims.get('oid')}"
+        if self.unbound is not None and self.unbound.get_cache(miss_key) is not None:
             return None
         where: Final[LiteLLM_AgentIdentityWhereUniqueInput] = {
             "provider_tenant_id_client_id": {"provider": "microsoft_entra", "tenant_id": tenant, "client_id": client}
@@ -111,16 +143,7 @@ class AgentIdentityStore:
         ):
             return AgentIdentityFailure(message="Provisioned subject does not match an active agent binding")
         if row is None:
-            if self.retired is not None:
-                try:
-                    retired: Final = await self.retired.table.find_unique(where=where)
-                except Exception:
-                    return AgentIdentityFailure(
-                        code="policy_unavailable", message="Retired agent identity could not be checked"
-                    )
-                if retired is not None:
-                    return AgentIdentityFailure(message="This agent identity binding has been retired")
-            return None
+            return await self.unbound_client(where, miss_key)
         agent: Final = await self.agent(row.agent_id)
         if isinstance(agent, AgentIdentityFailure):
             return agent

@@ -48,9 +48,7 @@ from litellm.proxy.agent_endpoints.agent_search import (
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
-from litellm.proxy.agent_endpoints.identity import (
-    validate_identity_binding,
-)
+from litellm.proxy.agent_endpoints.identity import reject_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.proxy.agent_endpoints.kill_switch import (
     KillSwitchAuditLogWriter,
@@ -576,9 +574,7 @@ async def create_agent(
         created_by: Final = user_api_key_dict.user_id or "unknown"
 
         _validate_managed_identity_request(request)
-        validate_identity_binding(
-            request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers()
-        )
+        reject_legacy_identity(request.get("litellm_params"))
 
         # check for naming conflicts
         existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(agent_name=request.get("agent_name"))
@@ -780,9 +776,7 @@ async def update_agent(
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
-        validate_identity_binding(
-            request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
-        )
+        reject_legacy_identity(request.get("litellm_params"))
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -889,9 +883,7 @@ async def patch_agent(
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
-        validate_identity_binding(
-            request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
-        )
+        reject_legacy_identity(request.get("litellm_params"))
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
