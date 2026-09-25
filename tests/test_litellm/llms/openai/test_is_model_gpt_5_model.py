@@ -32,6 +32,7 @@ name (not a prefix check), which correctly distinguishes the two families.
 
 import pytest
 
+import litellm
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -74,9 +75,9 @@ NON_GPT5_MODELS = [
     "gpt-5-chat",  # gpt-5-chat family — regular chat path
     "gpt-5-chat-latest",  # gpt-5-chat family with alias suffix
     "gpt-5-chat-2025-08-07",  # gpt-5-chat family with date suffix
-    "ft:gpt-5-chat-latest:org:abc",  # fine-tuned gpt-5-chat alias
-    "my-custom-gpt-5-chat",  # custom deployment name containing gpt-5-chat
-    "openai/ft:gpt-5-chat-latest:org:abc",  # provider-prefixed fine-tuned alias
+    "ft:gpt-5-chat-latest:org:abc",
+    "my-custom-gpt-5-chat",
+    "openai/ft:gpt-5-chat-latest:org:abc",
     "gpt-4",
     "gpt-4o",
     "gpt-4-turbo",
@@ -126,6 +127,15 @@ class TestOpenAIGPT5ConfigIsModelGpt5Model:
             assert not OpenAIResponsesAPIConfig._is_gpt_5_model(
                 model
             ), f"Expected Responses API '{model}' NOT to be on the GPT-5 path"
+
+    @pytest.mark.parametrize("model", ["ft:gpt-5-chat-latest:org:abc", "my-custom-gpt-5-chat"])
+    def test_gpt5_chat_aliases_keep_non_default_temperature(self, model: str):
+        chat_params = litellm.get_optional_params(model=model, custom_llm_provider="openai", temperature=0.7)
+        responses_params = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.7}, model=model, drop_params=False
+        )
+        assert chat_params["temperature"] == 0.7, f"chat completions dropped or rejected temperature for '{model}'"
+        assert responses_params["temperature"] == 0.7, f"responses dropped or rejected temperature for '{model}'"
 
 
 # Models that are gpt-5.4 or newer. main.py gates the automatic switch to the
