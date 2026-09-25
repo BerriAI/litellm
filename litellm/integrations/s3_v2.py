@@ -444,7 +444,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_object_download_filename=f"audit-{audit_log_id}.json",
             )
 
-            self.log_queue.append(element)  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+            self.log_queue.append(element)
 
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
@@ -471,9 +471,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             verbose_logger.debug("\ns3 Logger - Logging payload = %s", s3_batch_logging_element)
 
-            self.log_queue.append(
-                s3_batch_logging_element
-            )  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+            self.log_queue.append(s3_batch_logging_element)
             verbose_logger.debug(
                 "s3 logging: queue length %s, batch size %s",
                 len(self.log_queue),
