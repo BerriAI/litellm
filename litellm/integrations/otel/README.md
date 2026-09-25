@@ -69,16 +69,21 @@ trace.
 and the spend-counter increment all run after the response is on the wire, so they
 add nothing to the request's latency. Parenting them under the (already ended)
 server span stretched the request trace past the request itself, which is what a
-viewer shows as trace duration. `context.resolve_service_span_context` compares
-the call's end time with the resolved parent's end time: a call that finished
-after its parent ended starts a **new root trace** carrying a **span link** back
+viewer shows as trace duration. `context.resolve_service_span_context` keys off
+the request phase: `Logging.async_success_handler` / `async_failure_handler` and
+the cache write task mark themselves post-response
+(`litellm_core_utils.post_response_phase`), and a service call made in that phase
+starts a **new root trace** regardless of whether the server span has closed yet
+(a streaming body finishes after those tasks are spawned, so the clock alone gets
+it wrong). A call that finished after its parent ended detaches the same way, and
+both carry a **span link** back
 to the request span (the `FollowsFrom` relationship of OpenTracing; the default
 `:link` propagation style of the OTel Ruby ActiveJob and Sidekiq
 instrumentations). Identity Baggage still rides along, so the detached span keeps
-its team / key / user attributes. Only an SDK span that has really ended detaches:
-a sampled-out or remote `NonRecordingSpan` is never recording but is still the
-right parent. A call that ended before the server span did stays a child even when
-its `asyncio.create_task`-dispatched hook runs after the response.
+its team / key / user attributes. Only an SDK-recorded parent detaches: a
+sampled-out or remote `NonRecordingSpan` is never recording but is still the
+right parent. A call the request waited on stays a child even when its
+`asyncio.create_task`-dispatched hook runs after the response.
 
 Caller-supplied `event_metadata` is **sanitized** before it reaches a span
 (primitives only, no live objects, no secrets/headers, bounded) — see

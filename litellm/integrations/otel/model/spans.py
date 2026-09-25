@@ -198,10 +198,16 @@ def guardrail_span_name(data: "GuardrailSpanData") -> str:
     return f"execute_guardrail {data.guardrail_name}".strip()
 
 
+_CALLER_CHAIN_SEPARATOR: Final = " <- "
+
+
 def service_span_name(data: "ServiceSpanData") -> str:
-    """``"{service} {call_type}"`` e.g. ``"redis set"`` — service name alone when
-    no call type is known, so identically-named calls stay distinguishable."""
-    return f"{data.service_name} {data.call_type or ''}".strip()
+    """``"{service} {operation}"`` e.g. ``"redis async_set_cache"``, service name
+    alone when no call type is known. A Redis ``call_type`` carries the caller
+    chain (``"async_set_cache <- async_set_cache <- async_add_cache"``): only its
+    head names the span, the full chain stays in ``litellm.service.call_type``."""
+    operation: Final = (data.call_type or "").split(_CALLER_CHAIN_SEPARATOR, 1)[0]
+    return f"{data.service_name} {operation}".strip()
 
 
 def root_roles() -> list[SpanRole]:

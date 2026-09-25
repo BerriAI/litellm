@@ -2086,6 +2086,122 @@ def test_service_call_under_a_remote_parent_is_never_detached():
     assert list(span.links) == []
 
 
+_REDIS_SET_CALLER_CHAIN = "async_set_cache <- async_set_cache <- async_add_cache"
+
+
+def _assert_linked_root(span, request_span):
+    assert span.parent is None, f"still nested under {span.parent}"
+    assert span.context.trace_id != request_span.get_span_context().trace_id
+    (link,) = span.links
+    assert link.context.span_id == request_span.get_span_context().span_id
+
+
+def test_cache_write_task_roots_its_redis_span_while_the_server_span_is_still_open():
+    """The streaming response cache write is spawned as the last chunk goes out, so
+    it usually finishes BEFORE the ASGI server span closes. Post-response work is
+    decided by phase, not by who closed first."""
+    from litellm.caching.caching_handler import create_cache_write_task
+
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+    now = datetime.now().timestamp()
+
+    async def _write_then_close_server():
+        await create_cache_write_task(
+            lambda: logger.async_service_success_hook(
+                payload=_ServicePayload("redis", _REDIS_SET_CALLER_CHAIN),
+                parent_otel_span=server,
+                start_time=now - 0.2,
+                end_time=now - 0.1,
+            )
+        )
+        server.end()
+
+    asyncio.run(_write_then_close_server())
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    span = by_name["redis async_set_cache"]
+    _assert_linked_root(span, server)
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == _REDIS_SET_CALLER_CHAIN
+
+
+def test_success_logging_service_call_roots_its_own_trace_while_the_server_span_is_still_open(monkeypatch):
+    """Spend tracking runs inside ``Logging.async_success_handler``. A Redis
+    increment it makes while the server span is still open is post-response work
+    and must not stretch the request trace."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+    now = datetime.now().timestamp()
+
+    class _SpendTracker(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_increment <- async_increment_cache"),
+                parent_otel_span=server,
+                start_time=now - 0.2,
+                end_time=now - 0.1,
+            )
+
+    monkeypatch.setattr(litellm, "input_callback", [], raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_success_callback", [_SpendTracker()], raising=False)
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="post_response_phase",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={}, model="gpt-4o")
+    logging_obj.model_call_details["standard_logging_object"] = _payload(litellm_call_id="post_response_phase")
+
+    async def _log_then_close_server():
+        await logging_obj.async_success_handler(result=None, start_time=datetime.now(), end_time=datetime.now())
+        server.end()
+
+    asyncio.run(_log_then_close_server())
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    _assert_linked_root(by_name["redis async_increment"], server)
+
+
+def test_post_response_phase_does_not_detach_from_a_remote_parent():
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+    from litellm.litellm_core_utils.post_response_phase import post_response_phase
+
+    logger, exporter = _logger()
+    remote = NonRecordingSpan(
+        SpanContext(trace_id=0xABC, span_id=0x123, is_remote=True, trace_flags=TraceFlags(TraceFlags.SAMPLED))
+    )
+    with post_response_phase():
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "get"),
+                parent_otel_span=remote,
+                start_time=_REQUEST_END - 0.5,
+                end_time=_REQUEST_END - 0.1,
+            )
+        )
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis get"]
+    assert span.parent.span_id == 0x123
+    assert list(span.links) == []
+
+
+def test_post_response_phase_is_scoped_to_the_handler():
+    """A service call issued after the handler returns (the next request on the
+    same task) parents normally again."""
+    from litellm.litellm_core_utils.post_response_phase import in_post_response_phase, post_response_phase
+
+    with post_response_phase():
+        assert in_post_response_phase() is True
+    assert in_post_response_phase() is False
+
+
 # --------------------------------------------------------------------------- #
 #  Proxy SERVER span lifecycle
 # --------------------------------------------------------------------------- #

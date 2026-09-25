@@ -22,6 +22,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from litellm.integrations.otel.model.semconv import HTTP
+from litellm.litellm_core_utils.post_response_phase import in_post_response_phase
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -231,21 +232,24 @@ def resolve_service_span_context(
 ) -> tuple[Context, tuple[Link, ...]]:
     """Parent context + links for a service/DB span that ended at ``end_time_ns``.
 
-    A call that finished after its parent ended (post-response spend tracking)
-    starts its own root trace with a span link back to the parent instead of
-    stretching the parent's trace. Baggage stays on the returned context.
+    Post-response work (success logging, spend tracking, the response cache
+    write) and any call that finished after its parent ended start their own
+    root trace with a span link back to the parent instead of stretching the
+    parent's trace. Baggage stays on the returned context.
     """
     ctx: Final = resolve_parent_context(threaded)
     parent: Final = get_current_span(ctx)
-    if not _ended_before(parent, end_time_ns):
+    if not _detaches_from(parent, end_time_ns):
         return ctx, ()
     return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
 
 
-def _ended_before(span: Span, end_time_ns: int | None) -> bool:
-    if not isinstance(span, ReadableSpan) or span.end_time is None:
+def _detaches_from(parent: Span, end_time_ns: int | None) -> bool:
+    if not isinstance(parent, ReadableSpan):
         return False
-    return end_time_ns is None or end_time_ns > span.end_time
+    if in_post_response_phase():
+        return True
+    return parent.end_time is not None and (end_time_ns is None or end_time_ns > parent.end_time)
 
 
 def resolve_request_span_context() -> Context:

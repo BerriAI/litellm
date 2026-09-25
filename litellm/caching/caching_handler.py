@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
+from litellm.litellm_core_utils.post_response_phase import post_response_phase
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -145,6 +146,11 @@ _PENDING_CACHE_WRITES: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: s
 
 
 async def _complete_cache_write_despite_cancellation(write_factory: Callable[[], Awaitable[None]]) -> None:
+    with post_response_phase():
+        await _complete_cache_write(write_factory)
+
+
+async def _complete_cache_write(write_factory: Callable[[], Awaitable[None]]) -> None:
     try:
         await write_factory()
     except asyncio.CancelledError:
