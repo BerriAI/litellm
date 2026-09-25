@@ -1411,14 +1411,33 @@ describe("UsagePage", () => {
 
       fireEvent.click(screen.getByTestId("run-server-export"));
 
+      const expectedExportArgs = {
+        accessToken: "test-token",
+        exportType: "daily_with_keys",
+        format: "csv",
+        userId: null,
+      };
       await waitFor(() => {
-        expect(mockUserDailyActivityExportCall).toHaveBeenCalledWith(
-          expect.objectContaining({
-            accessToken: "test-token",
-            exportType: "daily_with_keys",
-            format: "csv",
-          }),
-        );
+        expect(mockUserDailyActivityExportCall).toHaveBeenCalledWith(expect.objectContaining(expectedExportArgs));
+      });
+    });
+
+    it("scopes the server export to the signed-in user for a non-admin", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      mockUserDailyActivityAggregatedCall.mockResolvedValue(truncatedSpendData);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      const exportButton = await screen.findByRole("button", { name: /Export Data/i });
+      await waitFor(() => {
+        expect(exportButton).toBeEnabled();
+      });
+
+      fireEvent.click(exportButton);
+      fireEvent.click(screen.getByTestId("run-server-export"));
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityExportCall).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-123" }));
       });
     });
   });

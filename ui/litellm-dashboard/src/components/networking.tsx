@@ -1504,12 +1504,14 @@ export const userDailyActivityExportCall = async ({
   endTime,
   exportType,
   format,
+  userId,
 }: {
   accessToken: string;
   startTime: Date;
   endTime: Date;
   exportType: ExportScope;
   format: ExportFormat;
+  userId?: string | null;
 }): Promise<Blob> => {
   return apiClient.get<Blob>(`/user/daily/activity/export`, {
     accessToken,
@@ -1520,6 +1522,7 @@ export const userDailyActivityExportCall = async ({
       timezone: new Date().getTimezoneOffset().toString(),
       export_type: exportType,
       format,
+      user_id: userId ? userId : undefined,
     },
   });
 };
