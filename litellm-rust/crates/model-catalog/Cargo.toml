@@ -14,12 +14,8 @@ schemars = { version = "1.0", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
+jsonschema = { version = "0.55.1", default-features = false }
 rstest.workspace = true
-litellm-model-catalog = { path = ".", features = ["schema"] }
-
-[[bench]]
-name = "catalog"
-harness = false
