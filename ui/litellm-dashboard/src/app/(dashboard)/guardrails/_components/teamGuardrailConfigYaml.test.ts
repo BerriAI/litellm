@@ -59,6 +59,15 @@ describe("buildEquivalentConfigYaml unreachable_fallback line", () => {
     expect(untyped).toContain("        guardrail: generic_guardrail_api");
   });
 
+  it("treats a null fallback from the API as unset and shows the per-guardrail default", () => {
+    expect(
+      fallbackLine(buildEquivalentConfigYaml(guardrail({ guardrailType: "agent_365", unreachable_fallback: null }))),
+    ).toBe("unreachable_fallback: fail_open");
+    expect(
+      fallbackLine(buildEquivalentConfigYaml(guardrail({ guardrailType: "akto", unreachable_fallback: null }))),
+    ).toBe("unreachable_fallback: fail_closed");
+  });
+
   it("keeps an explicit override over the per-guardrail default", () => {
     expect(
       fallbackLine(

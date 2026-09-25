@@ -18,7 +18,7 @@ export type TeamGuardrail = {
   submittedAt: string;
   submittedBy: string;
   mode?: string;
-  unreachable_fallback?: string;
+  unreachable_fallback?: string | null;
   additionalProviderParams?: Record<string, unknown>;
   guardrailType?: string;
 };
@@ -33,7 +33,7 @@ export function defaultUnreachableFallback(guardrailType: string | undefined): "
 
 function unreachableFallbackLine(g: TeamGuardrail): string {
   const hint = "fail_closed blocks, fail_open proceeds when the guardrail endpoint is unreachable";
-  if (g.unreachable_fallback !== undefined) {
+  if (g.unreachable_fallback) {
     return `        unreachable_fallback: ${g.unreachable_fallback}  # ${hint}`;
   }
   return `        unreachable_fallback: ${defaultUnreachableFallback(g.guardrailType)}  # ${hint}. Shown value is this guardrail's default.`;

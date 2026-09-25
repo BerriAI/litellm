@@ -307,6 +307,14 @@ class TestInitializeGuardrail:
         )
         assert explicit.authority_host == "http://127.0.0.1:9"
 
+    def test_scheme_less_authority_host_env_gets_https(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AUTHORITY_HOST", " login.microsoftonline.us/ ")
+        guardrail: Final = initialize_guardrail(
+            LitellmParams(guardrail="agent_365", mode="pre_mcp_call", tenant_id="t", client_id="c", client_secret="s"),
+            {"guardrail_name": "a365-bare-host"},
+        )
+        assert guardrail.authority_host == "https://login.microsoftonline.us"
+
     def test_explicit_params_win(self, monkeypatch):
         monkeypatch.setenv("AGENT365_TENANT_ID", "env-tenant")
         params: Final = LitellmParams(
@@ -380,6 +388,13 @@ class TestAllowFlow:
         await _run(guardrail, _mcp_data())
         assert handler.calls[0].url == "https://login.microsoftonline.us/tenant-abc/oauth2/v2.0/token"
         assert handler.calls[1].url == EVALUATE_URL
+
+    @pytest.mark.asyncio
+    async def test_obo_exchange_adds_https_to_a_bare_authority_host(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, authority_host="login.microsoftonline.us")
+        await _run(guardrail, _mcp_data())
+        assert handler.calls[0].url == "https://login.microsoftonline.us/tenant-abc/oauth2/v2.0/token"
 
     @pytest.mark.asyncio
     async def test_evaluate_payload(self):

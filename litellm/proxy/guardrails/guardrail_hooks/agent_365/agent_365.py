@@ -178,7 +178,8 @@ class Agent365Guardrail(CustomGuardrail):
         self.api_base = api_base.rstrip("/")
         self.resource_app_id = resource_app_id
         self.agent_id = agent_id
-        self.authority_host = authority_host.rstrip("/")
+        authority: Final = authority_host.strip().rstrip("/")
+        self.authority_host = authority if "://" in authority else f"https://{authority}"
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_closed" if unreachable_fallback == "fail_closed" else "fail_open"

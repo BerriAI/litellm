@@ -150,7 +150,7 @@ function submissionToTeamGuardrail(item: GuardrailSubmissionItem): TeamGuardrail
     submittedAt: formatSubmissionDate(item.submitted_at),
     submittedBy: item.submitted_by_email ?? item.submitted_by_user_id ?? "—",
     mode: params.mode as string | undefined,
-    unreachable_fallback: params.unreachable_fallback as string | undefined,
+    unreachable_fallback: params.unreachable_fallback as string | null | undefined,
     additionalProviderParams: params.additional_provider_specific_params as Record<string, unknown> | undefined,
     guardrailType: params.guardrail as string | undefined,
   };
