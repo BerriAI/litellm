@@ -14615,6 +14615,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/capture_rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend Capture Rate
+         * @description Compare the spend LiteLLM captured for a provider against that provider's own bill, per UTC day.
+         *
+         *     Admin only. Reads the provider's billing API with the billing credential set on the proxy
+         *     (OpenAI: `OPENAI_ADMIN_KEY`) and sums `LiteLLM_DailyUserSpend` for the same days.
+         *
+         *     Example:
+         *     ```
+         *     curl -H "Authorization: Bearer sk-1234"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+         *     ```
+         */
+        get: operations["get_spend_capture_rate_spend_capture_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/keys": {
         parameters: {
             query?: never;
@@ -15658,6 +15686,32 @@ export interface paths {
          *     see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
          */
         get: operations["search_team_daily_activity_keys_team_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Export
+         * @description Server-side Team Usage export, not subject to USAGE_TOP_API_KEYS_LIMIT.
+         *
+         *     Same scoping as /team/daily/activity/aggregated, answered by one unbounded
+         *     rollup query, returned as CSV or JSON. For daily_with_keys,
+         *     daily_with_users and daily_with_models the PTU sentinel flat-cost rows are
+         *     excluded, so metadata totals under those export types cover request spend
+         *     only; the plain daily export includes them.
+         */
+        get: operations["get_team_daily_activity_export_team_daily_activity_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -18164,6 +18218,37 @@ export interface paths {
          *     ```
          */
         patch: operations["patch_agent_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/kill_switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Agent Kill Switch
+         * @description Fire the agent's configured kill switch webhook. Proxy admin only.
+         *
+         *     LiteLLM only makes the configured HTTP call and reports what came back; it
+         *     does not change the agent's state in LiteLLM. Returns 200 when the webhook
+         *     answered 2xx, 502 with the same result body otherwise. Every attempt is
+         *     written to the audit log as a `kill_switch_fired` row against the agent.
+         *
+         *     Example Request:
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch" \
+         *         -H "Authorization: Bearer <your_api_key>"
+         *     ```
+         */
+        post: operations["trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/agents/{agent_id}/make_public": {
@@ -24126,6 +24211,7 @@ export interface components {
             agent_name: string;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -24230,6 +24316,90 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** AgentKillSwitchApiKeyAuth */
+        AgentKillSwitchApiKeyAuth: {
+            /** Api Key */
+            api_key: string;
+            /**
+             * Header Name
+             * @default x-api-key
+             */
+            header_name: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "api_key";
+        };
+        /** AgentKillSwitchBasicAuth */
+        AgentKillSwitchBasicAuth: {
+            /** Password */
+            password: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "basic";
+            /** Username */
+            username: string;
+        };
+        /** AgentKillSwitchBearerAuth */
+        AgentKillSwitchBearerAuth: {
+            /** Token */
+            token: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "bearer";
+        };
+        /**
+         * AgentKillSwitchConfig
+         * @description Webhook an admin fires to shut an agent down out of band. LiteLLM only
+         *     makes the call; whatever the endpoint does with it is the agent's business.
+         */
+        AgentKillSwitchConfig: {
+            /** Auth */
+            auth?: (components["schemas"]["AgentKillSwitchBearerAuth"] | components["schemas"]["AgentKillSwitchApiKeyAuth"] | components["schemas"]["AgentKillSwitchBasicAuth"]) | null;
+            /** Body */
+            body?: {
+                [key: string]: unknown;
+            } | null;
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            };
+            /**
+             * Method
+             * @default POST
+             * @enum {string}
+             */
+            method: "POST" | "PUT" | "PATCH" | "DELETE" | "GET";
+            /** Query Params */
+            query_params?: {
+                [key: string]: string;
+            };
+            /** Url */
+            url: string;
+        };
+        /** AgentKillSwitchResult */
+        AgentKillSwitchResult: {
+            /** Agent Id */
+            agent_id: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "POST" | "PUT" | "PATCH" | "DELETE" | "GET";
+            /** Response Body */
+            response_body?: string | null;
+            /** Status Code */
+            status_code?: number | null;
+            /** Url */
+            url: string;
+        };
         /** AgentMakePublicResponse */
         AgentMakePublicResponse: {
             /** Message */
@@ -24286,6 +24456,7 @@ export interface components {
             extra_headers?: string[] | null;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -26716,6 +26887,41 @@ export interface components {
              */
             threshold_step: number;
         };
+        /** CaptureRateDay */
+        CaptureRateDay: {
+            /** Capture Rate */
+            capture_rate: number | null;
+            /** Captured Spend */
+            captured_spend: number;
+            /** Date */
+            date: string;
+            /** Provider Spend */
+            provider_spend: number;
+        };
+        /** CaptureRateReport */
+        CaptureRateReport: {
+            /** Below Threshold */
+            below_threshold: boolean;
+            /** Capture Rate */
+            capture_rate: number | null;
+            /** Captured Spend */
+            captured_spend: number;
+            /** Days */
+            days: components["schemas"]["CaptureRateDay"][];
+            /** End Date */
+            end_date: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "openai";
+            /** Provider Spend */
+            provider_spend: number;
+            /** Start Date */
+            start_date: string;
+            /** Threshold */
+            threshold: number;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Current Password */
@@ -28252,6 +28458,8 @@ export interface components {
             reject_clientside_metadata_tags?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
+            spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -31404,7 +31612,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -37386,6 +37594,7 @@ export interface components {
             agent_name?: string;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -42231,6 +42440,35 @@ export interface components {
             /** Model */
             model?: string | null;
         };
+        /**
+         * SpendCaptureRateCheckSettings
+         * @description ``general_settings.spend_capture_rate_check``: the daily check of captured spend against the provider bill.
+         */
+        SpendCaptureRateCheckSettings: {
+            /**
+             * Lookback Days
+             * @default 7
+             */
+            lookback_days: number;
+            /**
+             * Openai Project Ids
+             * @description Scope the OpenAI bill to these project ids; empty compares against the whole organization. Captured spend is never scoped, so list every project LiteLLM's OpenAI keys belong to
+             * @default []
+             */
+            openai_project_ids: string[];
+            /**
+             * Providers
+             * @default [
+             *       "openai"
+             *     ]
+             */
+            providers: "openai"[];
+            /**
+             * Threshold
+             * @default 0.9
+             */
+            threshold: number;
+        };
         /** SpendMetrics */
         SpendMetrics: {
             /**
@@ -42816,6 +43054,87 @@ export interface components {
             success_callbacks: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamDailyActivityExportMetadata */
+        TeamDailyActivityExportMetadata: {
+            /** End Date */
+            end_date: string;
+            /** Export Date */
+            export_date: string;
+            /**
+             * Export Type
+             * @enum {string}
+             */
+            export_type: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+            /** Start Date */
+            start_date: string;
+            /** Team Ids */
+            team_ids: string[] | null;
+            /** Total Api Requests */
+            total_api_requests: number;
+            /** Total Failed Requests */
+            total_failed_requests: number;
+            /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /** Total Spend */
+            total_spend: number;
+            /** Total Successful Requests */
+            total_successful_requests: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** TeamDailyActivityExportResponse */
+        TeamDailyActivityExportResponse: {
+            /** Data */
+            data: components["schemas"]["TeamDailyActivityExportRow"][];
+            metadata: components["schemas"]["TeamDailyActivityExportMetadata"];
+        };
+        /** TeamDailyActivityExportRow */
+        TeamDailyActivityExportRow: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Keys */
+            keys?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id: string;
+            /** Total Tokens */
+            total_tokens: number;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * TeamListItem
@@ -65404,6 +65723,46 @@ export interface operations {
             };
         };
     };
+    get_spend_capture_rate_spend_capture_rate_get: {
+        parameters: {
+            query: {
+                /** @description First UTC day of the range, YYYY-MM-DD */
+                start_date: string;
+                /** @description Last UTC day of the range, YYYY-MM-DD, inclusive */
+                end_date: string;
+                /** @description Provider whose bill to compare against; needs OPENAI_ADMIN_KEY set on the proxy */
+                provider?: "openai";
+                /** @description Ratio under which the report flags below_threshold */
+                threshold?: number;
+                /** @description Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to */
+                project_ids?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureRateReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     spend_key_fn_spend_keys_get: {
         parameters: {
             query?: never;
@@ -66674,6 +67033,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_export_team_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                team_id?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamDailyActivityExportResponse"];
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
@@ -69790,6 +70187,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentKillSwitchResult"];
                 };
             };
             /** @description Validation Error */

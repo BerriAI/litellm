@@ -1,5 +1,5 @@
 import os
-from typing import Final
+from typing import Final, LiteralString
 
 import psycopg
 from psycopg.rows import dict_row
@@ -14,3 +14,8 @@ def read_rows(
     with psycopg.connect(database_url or os.environ["DATABASE_URL"], row_factory=dict_row) as connection:
         connection.execute("SET TRANSACTION READ ONLY")
         return ROWS.validate_python(connection.execute(query, parameters).fetchall())
+
+
+def write_rows(query: LiteralString, parameters: tuple[str, ...], *, database_url: str | None = None) -> None:
+    with psycopg.connect(database_url or os.environ["DATABASE_URL"]) as connection:
+        connection.execute(query, parameters)

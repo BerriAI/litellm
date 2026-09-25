@@ -13,6 +13,15 @@ on:
           have its path existence-checked like any other token.
         required: true
         type: string
+      fork-flag:
+        description: >-
+          Codecov flag of the `.circleci/tests.yml` job that now owns part of
+          this shard. CircleCI does not run on pull requests from forks, so on
+          those events this shard also runs the files
+          `.circleci/scripts/unit_selection.sh` lists for the flag.
+        required: false
+        type: string
+        default: ""
       workers:
         description: "Number of pytest-xdist workers"
         required: false
@@ -92,6 +101,7 @@ jobs:
       pull-requests: read
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
+      has-coverage: ${{ steps.tests.outputs.has-coverage }}
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -160,10 +170,13 @@ jobs:
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
+        id: tests
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
+          FORK_FLAG: ${{ inputs.fork-flag }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
@@ -171,9 +184,18 @@ jobs:
           DIST: ${{ inputs.dist }}
           COVERAGE_CORE: sysmon
         run: |
+          echo "has-coverage=false" >> "$GITHUB_OUTPUT"
+          selection="${TEST_PATH}"
+          if [ "${IS_FORK}" = "true" ] && [ -n "${FORK_FLAG}" ]; then
+            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${FORK_FLAG}" | tr '\n' ' ')"
+          fi
+          if [ -z "${selection// /}" ]; then
+            echo "shard selection is empty on this event (CircleCI flag ${FORK_FLAG:-none} owns it); nothing to run"
+            exit 0
+          fi
           pytest_args=()
           existing_paths=0
-          for token in ${TEST_PATH:?}; do
+          for token in ${selection}; do
             case "${token}" in
               -*) pytest_args+=("${token}") ;;
               *)
@@ -187,7 +209,7 @@ jobs:
             esac
           done
           if [ "${existing_paths}" -eq 0 ]; then
-            echo "No path in TEST_PATH exists (${TEST_PATH}); nothing to run"
+            echo "No path in the selection exists (${selection}); nothing to run"
             exit 0
           fi
           xdist_args=()
@@ -209,8 +231,11 @@ jobs:
             --cov-config=pyproject.toml
           status=$?
           set -e
+          if [ -f coverage.xml ]; then
+            echo "has-coverage=true" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$status" -eq 5 ]; then
-            echo "pytest collected no tests from ${TEST_PATH}; passing"
+            echo "pytest collected no tests from ${selection}; passing"
             exit 0
           fi
           exit "$status"
@@ -226,7 +251,7 @@ jobs:
   upload-coverage:
     name: Upload coverage to Codecov
     needs: run
-    if: always() && needs.run.outputs.decision != 'skip'
+    if: always() && needs.run.outputs.decision != 'skip' && needs.run.outputs.has-coverage == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

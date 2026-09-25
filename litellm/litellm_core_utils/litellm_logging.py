@@ -36,7 +36,7 @@ from litellm._logging import (
 )
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch, batch_cost_is_final
-from litellm.caching.caching import DualCache, InMemoryCache
+from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
@@ -221,6 +221,7 @@ from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
+from .specialty_caches.service_trace_id_cache import in_memory_trace_id_cache
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
@@ -349,21 +350,6 @@ last_fetched_at_keys: Final = None
 
 
 ####
-class ServiceTraceIDCache:
-    def __init__(self) -> None:
-        self.cache = InMemoryCache()
-
-    def get_cache(self, litellm_call_id: str, service_name: str) -> str | None:
-        key_name: Final = f"{service_name}:{litellm_call_id}"
-        response: Final = self.cache.get_cache(key=key_name)
-        return response
-
-    def set_cache(self, litellm_call_id: str, service_name: str, trace_id: str) -> None:
-        key_name: Final = f"{service_name}:{litellm_call_id}"
-        self.cache.set_cache(key=key_name, value=trace_id)
-
-
-in_memory_trace_id_cache: Final = ServiceTraceIDCache()
 in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
 
 # Cached lazy import for PrometheusLogger
@@ -383,6 +369,10 @@ def _get_cached_prometheus_logger():
 
         _PrometheusLogger = PrometheusLogger
     return _PrometheusLogger
+
+
+class RawRequestCaptured(Exception):
+    pass
 
 
 _DEPLOYMENT_PRICING_KEYS: Final = (
@@ -591,6 +581,7 @@ class Logging(LiteLLMLoggingBaseClass):
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
+        raw_request_only: bool = False,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -650,6 +641,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
+        self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
@@ -1475,6 +1467,9 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.error("LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception)
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
+
+        if self.raw_request_only:
+            raise RawRequestCaptured()
 
     def _print_llm_call_debugging_log(
         self,
@@ -3969,40 +3964,6 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
         return trace_id
-
-    def _get_callback_object(self, service_name: Literal["langfuse"]) -> Any | None:
-        """
-        Return dynamic callback object.
-
-        Meant to solve issue when doing key-based/team-based logging
-        """
-        global langFuseLogger
-
-        if service_name == "langfuse":
-            if langFuseLogger is None or (
-                (
-                    self.standard_callback_dynamic_params.get("langfuse_public_key") is not None
-                    and self.standard_callback_dynamic_params.get("langfuse_public_key") != langFuseLogger.public_key
-                )
-                or (
-                    self.standard_callback_dynamic_params.get("langfuse_public_key") is not None
-                    and self.standard_callback_dynamic_params.get("langfuse_public_key") != langFuseLogger.public_key
-                )
-                or (
-                    self.standard_callback_dynamic_params.get("langfuse_host") is not None
-                    and self.standard_callback_dynamic_params.get("langfuse_host") != langFuseLogger.langfuse_host
-                )
-            ):
-                return LangFuseLogger(
-                    langfuse_public_key=self.standard_callback_dynamic_params.get("langfuse_public_key"),
-                    langfuse_secret=self.standard_callback_dynamic_params.get("langfuse_secret")
-                    or self.standard_callback_dynamic_params.get("langfuse_secret_key"),
-                    langfuse_host=self.standard_callback_dynamic_params.get("langfuse_host"),
-                    allow_env_credentials=self.standard_callback_dynamic_params.get("langfuse_host") is None,
-                )
-            return langFuseLogger
-
-        return None
 
     def handle_sync_success_callbacks_for_async_calls(
         self,

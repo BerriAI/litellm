@@ -46,6 +46,3 @@ pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesR
         )),
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -3,6 +3,7 @@ Test cases for spend log cleanup functionality
 """
 
 import asyncio
+import logging
 import math
 import time
 from contextlib import asynccontextmanager
@@ -1444,7 +1445,10 @@ def test_the_reported_run_outcome_is_the_most_significant_reason_in_any_order(st
     results into one answer: a first-match-wins implementation would pass on
     whichever order happened to be written and fail on its mirror.
     """
-    results = tuple(TableCleanupResult(rows_deleted=0, stop_reason=reason) for reason in stop_reasons)
+    results = tuple(
+        TableCleanupResult(table_name=f"t{i}", rows_deleted=0, stop_reason=reason)
+        for i, reason in enumerate(stop_reasons)
+    )
     assert SpendLogCleanup._run_outcome(results) == expected
 
 
@@ -1568,3 +1572,91 @@ async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
     (error_call,) = mock_logger.error.call_args_list
     rendered = error_call[0][0] % error_call[0][1:]
     assert "(rows_deleted=100, batches=1)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
+    """
+    Both spend-log tables share one run budget. Before the fix the spend-log
+    loop ran against the whole deadline, so a backlog that outlasted the budget
+    meant LiteLLM_SpendLogToolIndex never received a single delete batch, run
+    after run. The index table must still get its own share of the budget.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_spend_logs_cleanup_max_batches": 500,
+            "maximum_spend_logs_cleanup_run_budget": "1s",
+        }
+    )
+    cleaner.pod_lock_manager = None
+
+    started_at = time.monotonic()
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+    elapsed = time.monotonic() - started_at
+
+    tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
+    assert tables.count("LiteLLM_SpendLogs") > 0
+    assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
+    assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
+
+
+@pytest.mark.asyncio
+async def test_run_that_leaves_backlog_logs_a_warning_summary_naming_each_table(caplog):
+    """
+    Operators running at warning or error level saw nothing when a run stopped
+    with expired rows still present. A run that ends on a bound must emit one
+    WARNING line that names every table, its rows deleted and its stop reason.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_spend_logs_cleanup_max_batches": 2,
+        }
+    )
+    cleaner.pod_lock_manager = None
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    summaries = [record for record in caplog.records if "Spend log cleanup run finished" in record.getMessage()]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.levelno == logging.WARNING
+    message = summary.getMessage()
+    assert "outcome=batch_cap_reached" in message
+    assert "LiteLLM_SpendLogs: deleted=2000 stop_reason=batch_cap_reached" in message
+    assert "LiteLLM_SpendLogToolIndex: deleted=2000 stop_reason=batch_cap_reached" in message
+
+
+@pytest.mark.asyncio
+async def test_run_that_drains_every_table_logs_the_summary_at_info_not_warning(caplog):
+    """A healthy run must not page anyone: the summary stays at INFO."""
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    summaries = [record for record in caplog.records if "Spend log cleanup run finished" in record.getMessage()]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == logging.INFO
+    assert "outcome=completed" in summaries[0].getMessage()
