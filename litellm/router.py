@@ -259,6 +259,7 @@ from litellm.router_utils.routing_groups import (
     validate_routing_strategy,
 )
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
@@ -796,15 +797,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
-        routing_strategy: Literal[
-            "simple-shuffle",
-            "least-busy",
-            "usage-based-routing",
-            "latency-based-routing",
-            "cost-based-routing",
-            "usage-based-routing-v2",
-            "lar1",
-        ] = "simple-shuffle",
+        routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
         routing_groups: list[RoutingGroup | dict] | None = None,
