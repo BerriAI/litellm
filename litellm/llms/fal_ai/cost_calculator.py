@@ -142,13 +142,22 @@ def _resolution_key(resolution: object) -> str | None:
     return str(resolution)
 
 
+def _resolution_cost_per_image(entry: Mapping[str, object] | None, resolution: object) -> float | None:
+    resolution_key: Final = _resolution_key(resolution)
+    if entry is None or resolution_key is None:
+        return None
+    cost: Final = entry.get(f"output_cost_per_image_{resolution_key}")
+    return float(cost) if isinstance(cost, (int, float)) else None
+
+
 def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
     entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
     if entry is None:
         return None
-    resolution: Final = _resolution_key(request_body.get("resolution"))
-    keyed_cost: Final = entry.get(f"output_cost_per_image_{resolution}") if resolution is not None else None
-    cost: Final = keyed_cost if isinstance(keyed_cost, (int, float)) else entry.get("output_cost_per_image")
+    resolution_cost: Final = _resolution_cost_per_image(entry, request_body.get("resolution"))
+    if resolution_cost is not None:
+        return resolution_cost
+    cost: Final = entry.get("output_cost_per_image")
     return float(cost) if isinstance(cost, (int, float)) else None
 
 
@@ -172,6 +181,11 @@ def cost_calculator(
     if deployment_cost_per_image is not None:
         return deployment_cost_per_image * len(images)
     params: Final[Mapping[str, object]] = optional_params or MappingProxyType({})
+    resolution_cost_per_image: Final = _resolution_cost_per_image(
+        _entry(f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}"), params.get("resolution")
+    )
+    if resolution_cost_per_image is not None:
+        return resolution_cost_per_image * len(images)
     keyed_costs: Final = tuple(
         _keyed_cost_per_image(
             model=normalized_model,
