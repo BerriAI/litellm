@@ -227,6 +227,9 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
 )
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+    EncryptedContentAffinityCheck,
+)
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
@@ -438,6 +441,7 @@ _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = M
     {
         "prompt_caching": PromptCachingDeploymentCheck,
         "enforce_model_rate_limits": ModelRateLimitingCheck,
+        "encrypted_content_affinity": EncryptedContentAffinityCheck,
     }
 )
 
@@ -2207,10 +2211,6 @@ class Router:
                 )
 
     def _add_encrypted_content_affinity_check(self, enable_global_affinity: bool) -> None:
-        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-            EncryptedContentAffinityCheck,
-        )
-
         def _move_before_deployment_affinity(
             callback_list: list[Any],
             callback_to_move: EncryptedContentAffinityCheck,
