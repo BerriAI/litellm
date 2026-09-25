@@ -475,6 +475,7 @@ describe("UserEditView", () => {
         "budget_duration",
         "max_budget",
         "mcp_servers_and_groups",
+        "mcp_tool_overrides",
         "mcp_tool_permissions",
         "metadata",
         "models",
@@ -494,6 +495,7 @@ describe("UserEditView", () => {
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
+        mcp_tool_overrides: {},
       });
       expect(typeof payload.max_budget).toBe("number");
     });
@@ -620,8 +622,8 @@ describe("UserEditView", () => {
 
       expect(await screen.findByText("Via access group: group-a")).toBeInTheDocument();
       expect(await screen.findByText("Via toolset: Toolset A")).toBeInTheDocument();
-      expect(networking.listMCPTools).toHaveBeenCalledWith("test-token", "srv-group");
-      expect(networking.listMCPTools).toHaveBeenCalledWith("test-token", "srv-toolset");
+      expect(networking.listMCPTools).toHaveBeenCalledWith("test-token", "srv-group", undefined, true);
+      expect(networking.listMCPTools).toHaveBeenCalledWith("test-token", "srv-toolset", undefined, true);
     });
 
     it("should send objects for the mcp keys seeded from objectPermission", async () => {

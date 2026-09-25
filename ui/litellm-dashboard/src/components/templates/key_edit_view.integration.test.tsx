@@ -244,7 +244,7 @@ describe("KeyEditView", () => {
       mcp_servers: [],
       mcp_access_groups: [],
       mcp_tool_permissions: {},
-    mcp_tool_overrides: {},
+      mcp_tool_overrides: {},
       vector_stores: [],
     },
     auto_rotate: false,

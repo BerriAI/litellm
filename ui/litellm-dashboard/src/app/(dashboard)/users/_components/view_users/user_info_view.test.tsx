@@ -330,6 +330,7 @@ describe("UserInfoView", () => {
         mcp_access_groups: ["dev-group"],
         mcp_toolsets: [],
         mcp_tool_permissions: { "srv-1": ["list_issues"] },
+        mcp_tool_overrides: {},
       };
       expect(payload.object_permission).toEqual(expectedObjectPermission);
       expect(payload).not.toHaveProperty("mcp_servers_and_groups");
@@ -343,7 +344,7 @@ describe("UserInfoView", () => {
 
       await screen.findByText("Save Changes");
       await waitFor(() => {
-        expect(mockListMCPTools).toHaveBeenCalledWith("test-token", "srv-1");
+        expect(mockListMCPTools).toHaveBeenCalledWith("test-token", "srv-1", undefined, true);
       });
       await waitFor(() => {
         expect(screen.queryByText("Loading tools...")).not.toBeInTheDocument();

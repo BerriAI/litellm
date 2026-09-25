@@ -99,7 +99,13 @@ describe("AgentInfoView settings", () => {
     expect(token).toBe("sk-test");
     expect(agentId).toBe("agent-1");
     expect(payload.tpm_limit).toBe(42);
-    const clearedMcpGrants = { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} };
+    const clearedMcpGrants = {
+      mcp_servers: [],
+      mcp_access_groups: [],
+      mcp_toolsets: [],
+      mcp_tool_permissions: {},
+      mcp_tool_overrides: {},
+    };
     expect(payload.object_permission).toEqual(clearedMcpGrants);
     expect(payload.access_group_ids).toEqual([]);
   });

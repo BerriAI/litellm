@@ -179,7 +179,13 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {}, mcp_tool_overrides: {} },
+      object_permission: {
+        mcp_servers: [],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: {},
+        mcp_tool_overrides: {},
+      },
       access_group_ids: [],
     });
   });
@@ -221,7 +227,13 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {}, mcp_tool_overrides: {} },
+      object_permission: {
+        mcp_servers: [],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: {},
+        mcp_tool_overrides: {},
+      },
       access_group_ids: [],
     });
   });
@@ -300,7 +312,13 @@ describe("AgentInfoView update payload", () => {
         api_base: "https://other.example.com",
         model: "langgraph/asst_1",
       },
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {}, mcp_tool_overrides: {} },
+      object_permission: {
+        mcp_servers: [],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: {},
+        mcp_tool_overrides: {},
+      },
       access_group_ids: [],
     });
   });
