@@ -82,16 +82,28 @@ pub fn finalize(
     Ok(())
 }
 
-pub struct DeploymentHooks;
+/// The awaitables that run one hook of every registered callback.
+pub struct CallbackHooks;
 
-impl DeploymentHooks {
+impl CallbackHooks {
+    pub fn pre_request(
+        py: Python<'_>,
+        model: &str,
+        messages: &Bound<'_, PyAny>,
+        kwargs: &Bound<'_, PyDict>,
+    ) -> PyResult<Py<PyAny>> {
+        python::CallbackHooks::PreRequest
+            .call(py, (model, messages, kwargs))
+            .map(Bound::unbind)
+    }
+
     pub fn before_call(
         py: Python<'_>,
         logger: &PythonLogger,
         kwargs: &Py<PyDict>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::BeforeDeploymentCall
+        python::CallbackHooks::BeforeDeploymentCall
             .call(py, (logger.object(py), kwargs, call_type))
             .map(Bound::unbind)
     }
@@ -102,7 +114,7 @@ impl DeploymentHooks {
         response: &Option<Py<PyAny>>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::AfterDeploymentSuccess
+        python::CallbackHooks::AfterDeploymentSuccess
             .call(py, (kwargs, response, call_type))
             .map(Bound::unbind)
     }
@@ -113,7 +125,7 @@ impl DeploymentHooks {
         error: &Py<PyBaseException>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::AfterDeploymentFailure
+        python::CallbackHooks::AfterDeploymentFailure
             .call(py, (kwargs, error, call_type))
             .map(Bound::unbind)
     }

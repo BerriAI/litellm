@@ -6,7 +6,7 @@ use litellm_host::event::{
     FailureOrigin, MachineEvent, PublicRequest, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
-    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
+    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, json_fields, missing_state, to_py,
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -17,7 +17,7 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
+    CallbackHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
     python::Streaming,
@@ -300,7 +300,7 @@ impl PythonLifecycle for LegacyLogging {
             .set_item("litellm_logging_obj", self.logger()?.object(py))?;
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
+            return Ok(LifecycleStep::Await(CallbackHooks::before_call(
                 py,
                 self.logger()?,
                 self.call.kwargs(),
@@ -326,12 +326,10 @@ impl PythonLifecycle for LegacyLogging {
         params.set_item("custom_llm_provider", &request.custom_llm_provider)?;
         kwargs.set_item("litellm_params", params)?;
         let messages = match self.call.lookup(py, "messages")? {
-            Some(messages) => messages.unbind(),
-            None => to_py(py, &request.messages)?,
+            Some(messages) => messages,
+            None => to_py(py, &request.messages)?.into_bound(py),
         };
-        let awaitable = crate::python::DeploymentHooks::PreRequest
-            .call(py, (&request.model, messages, kwargs))?
-            .unbind();
+        let awaitable = CallbackHooks::pre_request(py, &request.model, &messages, &kwargs)?;
         self.pending = Some(Pending::PreRequest(Box::new(request)));
         Ok(LifecycleStep::Await(awaitable))
     }
@@ -390,7 +388,7 @@ impl PythonLifecycle for LegacyLogging {
         self.response = Some(response);
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::after_success(
+            return Ok(LifecycleStep::Await(CallbackHooks::after_success(
                 py,
                 self.call.kwargs(),
                 &self.response,
@@ -443,7 +441,7 @@ impl PythonLifecycle for LegacyLogging {
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
                     self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(LifecycleStep::Await(DeploymentHooks::after_failure(
+                    return Ok(LifecycleStep::Await(CallbackHooks::after_failure(
                         py,
                         self.call.kwargs(),
                         error,
@@ -486,18 +484,9 @@ impl PythonLifecycle for LegacyLogging {
                 if view.contains("litellm_params")? {
                     view.del_item("litellm_params")?;
                 }
+                let params =
+                    json_fields(request.fields.iter().copied(), |name| view.get_item(name))?;
                 self.call.set_kwargs(view.unbind());
-                let params = request
-                    .fields
-                    .iter()
-                    .filter_map(|name| match self.call.kwargs().bind(py).get_item(name) {
-                        Ok(Some(value)) => {
-                            Some(from_py(&value).map(|value| (name.to_string(), value)))
-                        }
-                        Ok(None) => None,
-                        Err(error) => Some(Err(error)),
-                    })
-                    .collect::<PyResult<_>>()?;
                 Ok(LifecycleStep::Params(params))
             }
             Pending::DeploymentPreCall => {

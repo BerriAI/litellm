@@ -18,7 +18,7 @@ use litellm_core::messages::{
     },
     types::MessagesShaping,
 };
-use litellm_host_python::{InvokeError, ProtocolHost, from_py, to_py};
+use litellm_host_python::{InvokeError, ProtocolHost, json_fields, to_py};
 use litellm_secrets::{SecretValue, source::SecretSource};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -99,16 +99,9 @@ impl ProtocolHost for MessagesHost {
         _py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<MessagesCall, InvokeError<Error>> {
-        let body = ["model"]
-            .iter()
-            .chain(BODY_FIELDS.iter())
-            .filter_map(|name| {
-                arguments
-                    .get_item(name)
-                    .transpose()
-                    .map(|value| value.and_then(|value| Ok((name.to_string(), from_py(&value)?))))
-            })
-            .collect::<PyResult<_>>()?;
+        let body = json_fields(["model"].into_iter().chain(BODY_FIELDS), |name| {
+            arguments.get_item(name)
+        })?;
         Ok(MessagesCall {
             model: arguments.get_item("model")?.unwrap().extract()?,
             body,
