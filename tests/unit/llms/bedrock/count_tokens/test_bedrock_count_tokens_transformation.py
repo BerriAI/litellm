@@ -73,6 +73,34 @@ def test_transform_to_invoke_model_format_base64_encodes_body():
     assert body["max_tokens"] == DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
 
 
+def test_transform_to_invoke_model_format_strips_extensions_bedrock_invoke_rejects():
+    config = BedrockCountTokensConfig()
+    tool_addition = {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "mcp__linear__list_issues"}}
+    terse = {"type": "text", "text": "Answer tersely."}
+    request = {
+        "model": "us.anthropic.claude-sonnet-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi!"}]},
+            {"role": "system", "content": [], "output_config": {"effort": "low"}},
+            {"role": "user", "content": [{"type": "text", "text": "go"}]},
+            {"role": "system", "content": [terse, tool_addition]},
+        ],
+    }
+    snapshot = json.loads(json.dumps(request))
+
+    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+
+    body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
+    assert body["messages"] == [
+        snapshot["messages"][0],
+        snapshot["messages"][1],
+        snapshot["messages"][3],
+        {"role": "system", "content": [terse]},
+    ]
+    assert request == snapshot
+
+
 def test_transform_to_invoke_model_format_raw_body_unchanged():
     """Non-messages bodies (e.g. Titan inputText) must not get Anthropic fields."""
     config = BedrockCountTokensConfig()
