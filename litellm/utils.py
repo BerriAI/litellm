@@ -5414,6 +5414,21 @@ def get_utc_datetime() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _get_max_tokens_from_provider_alias(model: str, custom_llm_provider: str | None) -> int | None:
+    if not (custom_llm_provider and custom_llm_provider in LlmProvidersSet):
+        return None
+    provider_model_info: Final = ProviderConfigManager.get_provider_model_info(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
+    cost_key: Final = provider_model_info.get_model_cost_key(model) if provider_model_info is not None else None
+    if cost_key and cost_key in litellm.model_cost:
+        if "max_output_tokens" in litellm.model_cost[cost_key]:
+            return litellm.model_cost[cost_key]["max_output_tokens"]
+        elif "max_tokens" in litellm.model_cost[cost_key]:
+            return litellm.model_cost[cost_key]["max_tokens"]
+    return None
+
+
 def get_max_tokens(model: str) -> int | None:
     """
     Get the maximum number of output tokens allowed for a given model.
@@ -5467,8 +5482,10 @@ def get_max_tokens(model: str) -> int | None:
                 return litellm.model_cost[model]["max_output_tokens"]
             elif "max_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_tokens"]
-        else:
-            raise Exception()
+        alias_tokens: Final = _get_max_tokens_from_provider_alias(model, custom_llm_provider)
+        if alias_tokens is not None:
+            return alias_tokens
+        raise Exception()
         return None
     except Exception:
         raise Exception(
@@ -9258,6 +9275,8 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif LlmProviders.DATABRICKS == provider:
+            return litellm.DatabricksConfig()
         return None
 
     @staticmethod

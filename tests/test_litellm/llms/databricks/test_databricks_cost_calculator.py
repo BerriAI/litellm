@@ -265,3 +265,17 @@ def test_databricks_provider_models_advertises_unity_catalog_sonnet_5(
     models: Final = get_known_models_from_wildcard("databricks/*")
     assert "databricks/system.ai.claude-sonnet-5" in models
     assert "databricks/databricks-claude-sonnet-5" not in models
+
+
+def test_sonnet_5_legacy_metadata_and_max_tokens_lookup(local_model_cost_map: None) -> None:
+    legacy_model: Final = "databricks/databricks-claude-sonnet-5"
+    system_ai_model: Final = "databricks/system.ai.claude-sonnet-5"
+
+    info: Final = litellm.get_model_info(legacy_model, custom_llm_provider="databricks")
+    assert info["key"] == system_ai_model
+    assert info["max_tokens"] == 128000
+    input_cost: Final = info["input_cost_per_token"]
+    assert input_cost is not None and input_cost > 0
+
+    assert litellm.get_max_tokens(legacy_model) == 128000
+    assert litellm.get_max_tokens(system_ai_model) == 128000

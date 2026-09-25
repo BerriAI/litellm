@@ -191,6 +191,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def get_config(cls, *, model: str | None = None):
         return super().get_config()
 
+    def get_model_cost_key(self, model: str) -> str | None:
+        if model in ("databricks-claude-sonnet-5", "databricks/databricks-claude-sonnet-5"):
+            return "databricks/system.ai.claude-sonnet-5"
+        return None
+
     def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
