@@ -1,6 +1,9 @@
 import base64
 import json
+import struct
+import zlib
 from collections.abc import Mapping
+from io import BytesIO
 from typing import Final
 
 import httpx
@@ -175,7 +178,106 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
         **dimensions,
     )
 
-    assert response._hidden_params["response_cost"] == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    catalog_rate: Final = litellm.get_model_info(model="azure_ai/FLUX.2-flex", custom_llm_provider="azure_ai")[
+        "input_cost_per_pixel"
+    ]
+    # the reference b"image" decodes to non-image content and is not metered; generated pixels only
+    assert response._hidden_params["response_cost"] == pytest.approx(catalog_rate * 2048 * 1024 * 2)
+
+
+def test_flux2_image_edit_encodes_a_mid_position_stream_from_the_start():
+    stream: Final = BytesIO(b"prefix" + b"image")
+    stream.seek(6)
+
+    request, files = AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+        model="FLUX.2-flex",
+        prompt="Blend every reference",
+        image=[stream],
+        image_edit_optional_request_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["input_image"] == base64.b64encode(b"prefiximage").decode()
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    """Smallest well-formed PNG carrying real IHDR dimensions."""
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + tag
+            + payload
+            + struct.pack(">I", zlib.crc32(tag + payload))
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00"))
+        + chunk(b"IEND", b"")
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_flux2_image_edit_bills_every_uploaded_reference():
+    """Each input_image field the transform builds and posts is metered at input_cost_per_pixel."""
+    catalog_rate: Final = litellm.get_model_info(model="azure_ai/FLUX.2-flex", custom_llm_provider="azure_ai")[
+        "input_cost_per_pixel"
+    ]
+
+    client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]})
+            )
+        )
+    )
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[_png_bytes(1024, 1024), _png_bytes(1024, 1024)],
+        prompt="Blend the references",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=client,
+        size="1024x1024",
+    )
+
+    assert response.reference_pixels == 2 * 1024 * 1024
+    assert response._hidden_params["response_cost"] == pytest.approx(catalog_rate * 3 * 1024 * 1024)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_mai_image_edit_bills_only_the_reference_it_uploads():
+    """MAI-Image uploads only the first caller image, so billing must follow the uploaded set,
+    not the requested set: two passed images bill one uploaded reference."""
+    deployment_rate: Final = 5e-08
+
+    client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]})
+            )
+        )
+    )
+    response: Final = litellm.image_edit(
+        model="azure_ai/MAI-Image-2.5",
+        image=[_png_bytes(1024, 1024), _png_bytes(1024, 1024)],
+        prompt="Add a hat",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=client,
+        input_cost_per_pixel=deployment_rate,
+    )
+
+    catalog_price_per_image: Final = litellm.get_model_info(
+        model="azure_ai/MAI-Image-2.5", custom_llm_provider="azure_ai"
+    )["output_cost_per_image"]
+    assert response.reference_pixels == 1024 * 1024
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        catalog_price_per_image + deployment_rate * 1024 * 1024
+    )
 
 
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():

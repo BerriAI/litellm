@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 import litellm
 from litellm.images.main import image_generation
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
 
 class TestImageGenerationExtraHeaders:
@@ -73,3 +73,36 @@ class TestImageGenerationExtraHeaders:
         )
 
         assert "extra_headers" not in optional_params
+
+    @patch("litellm.images.main.openai_chat_completions")
+    def test_image_generation_forwards_custom_pricing_kwargs_to_logging(
+        self, mock_openai_chat_completions
+    ):
+        """Pricing a deployment declares under litellm_params (e.g. input_cost_per_pixel)
+        reaches self.litellm_params so use_custom_pricing_for_model fires on generations."""
+        mock_openai_chat_completions.image_generation.return_value = litellm.utils.ImageResponse(
+            created=1234567890,
+            data=[{"url": "https://example.com/image.png"}],
+        )
+        captured_litellm_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {}
+
+        original_update = mock_logging_obj.update_from_kwargs
+
+        def capturing_update(**update_kwargs):
+            captured_litellm_params.update(update_kwargs.get("litellm_params", {}))
+            return original_update(**update_kwargs)
+
+        mock_logging_obj.update_from_kwargs = capturing_update
+
+        image_generation(
+            model="openai/dall-e-3",
+            prompt="A red circle",
+            litellm_logging_obj=mock_logging_obj,
+            input_cost_per_pixel=4.76837158203125e-08,
+        )
+
+        assert captured_litellm_params["input_cost_per_pixel"] == pytest.approx(4.76837158203125e-08)
+        assert use_custom_pricing_for_model(captured_litellm_params) is True

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import struct
 import threading
 import time
 from typing import Final
@@ -1378,9 +1379,7 @@ def test_sync_delete_responses_sets_json_content_type():
         ({}, True, None, None),
     ],
 )
-def test_resolve_anthropic_messages_timeout(
-    monkeypatch, litellm_params_kwargs, stream, global_timeout, expected
-):
+def test_resolve_anthropic_messages_timeout(monkeypatch, litellm_params_kwargs, stream, global_timeout, expected):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
     if global_timeout is None:
@@ -1396,9 +1395,7 @@ def test_resolve_anthropic_messages_timeout(
         )
     else:
         monkeypatch.setattr("litellm.request_timeout", global_timeout, raising=False)
-        monkeypatch.setattr(
-            "litellm.request_timeout_explicitly_set", True, raising=False
-        )
+        monkeypatch.setattr("litellm.request_timeout_explicitly_set", True, raising=False)
 
     resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
         litellm_params=GenericLiteLLMParams(**litellm_params_kwargs),
@@ -1423,9 +1420,7 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
         return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
     )
     mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
-    mock_config.transform_anthropic_messages_request = Mock(
-        return_value={"model": "claude", "messages": []}
-    )
+    mock_config.transform_anthropic_messages_request = Mock(return_value={"model": "claude", "messages": []})
     mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
     mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
     mock_config.max_retry_on_anthropic_messages_http_error = 1
@@ -1471,9 +1466,7 @@ async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypa
         return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
     )
     mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
-    mock_config.transform_anthropic_messages_request = Mock(
-        return_value={"model": "claude", "messages": []}
-    )
+    mock_config.transform_anthropic_messages_request = Mock(return_value={"model": "claude", "messages": []})
     mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
     mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
     mock_config.max_retry_on_anthropic_messages_http_error = 1
@@ -1883,7 +1876,13 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     )
     mock_config.sign_request = Mock(return_value=({}, None))
 
-    fake_raw_response = {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "stop_reason": "end_turn"}
+    fake_raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "stop_reason": "end_turn",
+    }
     mock_config.transform_anthropic_messages_response = Mock(return_value=fake_raw_response)
 
     mock_logging_obj = Mock()
@@ -1903,10 +1902,17 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     mock_httpx_response.status_code = 200
 
     with (
-        patch.object(handler, "_async_post_anthropic_messages_with_http_error_retry", new=AsyncMock(return_value=mock_httpx_response)),
+        patch.object(
+            handler,
+            "_async_post_anthropic_messages_with_http_error_retry",
+            new=AsyncMock(return_value=mock_httpx_response),
+        ),
         patch.object(handler, "_call_agentic_completion_hooks", side_effect=fake_agentic_hooks),
         patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"),
-        patch("litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers", return_value=None),
+        patch(
+            "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers",
+            return_value=None,
+        ),
     ):
         result = await handler.async_anthropic_messages_handler(
             model="claude-haiku",
@@ -1965,7 +1971,9 @@ async def test_async_anthropic_messages_handler_passes_deployment_api_base_to_ag
             super().__init__()
             self.hook_kwargs: dict | None = None
 
-        async def async_should_run_agentic_loop(self, response, model, messages, tools, stream, custom_llm_provider, kwargs):
+        async def async_should_run_agentic_loop(
+            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        ):
             self.hook_kwargs = dict(kwargs)
             return False, {}
 
@@ -2239,7 +2247,9 @@ def test_audio_transcriptions_sends_dict_data_as_json_body():
     form-encodes it and silently ignores json=; JSON-body providers (e.g.
     Google Speech-to-Text) need an application/json body."""
     captured = {}
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured))))
+    client = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+    )
 
     response = BaseLLMHTTPHandler().audio_transcriptions(
         client=client,
@@ -2323,9 +2333,7 @@ def _transform_subtitle_response(payload):
 
 
 def test_subtitle_synthesis_fallback_without_timings_drops_words():
-    response = _transform_subtitle_response(
-        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
-    )
+    response = _transform_subtitle_response({"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]})
 
     assert response.text == "hello world"
     assert "words" not in response
@@ -2545,9 +2553,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     ok_response = httpx.Response(200, json={"id": "msg_1"}, request=httpx.Request("POST", request_url))
 
     class FakeAsyncClient:
-        async def post(
-            self, url, headers, data, stream=False, logging_obj=None, timeout=None
-        ):
+        async def post(self, url, headers, data, stream=False, logging_obj=None, timeout=None):
             posts.append({"headers": dict(headers), "data": data})
             return invalid_signature_response if len(posts) == 1 else ok_response
 
@@ -3164,7 +3170,13 @@ def _capture_video_create_request(captured):
         captured["body"] = request.content
         return httpx.Response(
             200,
-            json={"id": "video_123", "object": "video", "status": "queued", "created_at": 1712697600, "model": "sora-2"},
+            json={
+                "id": "video_123",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+                "model": "sora-2",
+            },
         )
 
     return respond
@@ -3187,7 +3199,9 @@ def test_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(OpenAIVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
+    )
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -3227,7 +3241,9 @@ def test_azure_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(AzureVideoConfig())
+    )
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -3242,7 +3258,9 @@ def test_video_generation_json_provider_keeps_json_body():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig())
+    )
 
     assert captured["content_type"] == "application/json"
     assert json.loads(captured["body"]) == {"model": "sora-2", "prompt": "a cat surfing", "seconds": "4"}
@@ -3272,6 +3290,7 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
@@ -3279,14 +3298,13 @@ def _a_tool_with_an_unsupported_field() -> dict:
         "strict": True,
     }
 
+
 A_COMPLETION = {
     "id": "chatcmpl-1",
     "object": "chat.completion",
     "created": 1,
     "model": "grok-3",
-    "choices": [
-        {"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}
-    ],
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
 
@@ -3330,9 +3348,7 @@ def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
 
 
 def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     response = _call_azure_ai(recorder)
 
@@ -3343,9 +3359,7 @@ def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
 
 
 def test_the_retry_changes_only_the_field_the_provider_named():
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     _call_azure_ai(recorder)
 
@@ -3384,9 +3398,7 @@ def test_an_extra_input_outside_a_tool_is_not_retried_unless_dropping_params_was
 
 
 def test_an_extra_input_outside_a_tool_is_retried_when_dropping_params_was_asked_for():
-    recorder = _RecordedAzureAI(
-        [_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     response = _call_azure_ai(recorder, drop_params=True)
 
@@ -3400,9 +3412,7 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
 ):
     import respx
 
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     with respx.mock(assert_all_called=True) as router:
         router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
@@ -3607,7 +3617,9 @@ def _start_async_completion(config, logging_obj=None):
         custom_llm_provider="openai",
         model_response=ModelResponse(),
         encoding=None,
-        logging_obj=logging_obj if logging_obj is not None else Mock(dynamic_success_callbacks=None, model_call_details={}),
+        logging_obj=logging_obj
+        if logging_obj is not None
+        else Mock(dynamic_success_callbacks=None, model_call_details={}),
         optional_params={},
         timeout=10.0,
         litellm_params={},
@@ -3787,6 +3799,57 @@ def _echo_json_transport(captured):
     return httpx.MockTransport(handle)
 
 
+def _fixed_json_transport():
+    return httpx.MockTransport(lambda request: httpx.Response(200, json={"transformed_by": "sync"}))
+
+
+class _ImageEditForwardingConfig(_ImageEditRecordingConfig):
+    """Uploads the caller's images inside the JSON body, like the FLUX.2 transform."""
+
+    def _forwarded_images(self, image):
+        images = image if isinstance(image, list) else [image]
+        return [
+            base64.b64encode(item if isinstance(item, bytes) else item[1]).decode()
+            for item in images
+            if item is not None
+        ]
+
+    def transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync", "image": self._forwarded_images(image)}, []
+
+    async def async_transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async", "image": self._forwarded_images(image)}, []
+
+
+class _ImageEditMultipartConfig(_ImageEditRecordingConfig):
+    """Uploads the caller's images as multipart file parts, like the MAI transform."""
+
+    def use_multipart_form_data(self):
+        return True
+
+    def _file_parts_for(self, image):
+        images = image if isinstance(image, list) else [image]
+        return [("image", ("image.png", item, "image/png")) for item in images if item is not None]
+
+    def transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync"}, self._file_parts_for(image)
+
+    async def async_transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async"}, self._file_parts_for(image)
+
+
 async def test_async_image_edit_handler_awaits_the_async_transform():
     config = _ImageEditRecordingConfig()
     captured = {}
@@ -3833,6 +3896,118 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert config.transform_calls == ["sync"]
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.data[0].b64_json == "sync"
+
+
+def _tiny_png(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x06\x00\x00\x00"
+        + bytes(4)
+    )
+
+
+def test_image_edit_handler_stamps_measured_reference_pixels():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_echo_json_transport({}))
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=[_tiny_png(4, 2), _tiny_png(1, 1)],
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditForwardingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 4 * 2 + 1 * 1
+    assert "reference_pixels" not in response.model_dump()
+
+
+async def test_async_image_edit_handler_stamps_measured_reference_pixels():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_echo_json_transport({}))
+
+    response = await BaseLLMHTTPHandler().async_image_edit_handler(
+        model="edit-model",
+        image=_tiny_png(4, 2),
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditForwardingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 8
+
+
+def test_image_edit_handler_bills_every_multipart_reference_it_uploads():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_fixed_json_transport())
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=[_tiny_png(4, 2), _tiny_png(1, 1)],
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditMultipartConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 4 * 2 + 1 * 1
+
+
+def test_image_edit_handler_does_not_bill_references_the_transform_dropped():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_fixed_json_transport())
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=[_tiny_png(4, 2), _tiny_png(1, 1)],
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 0
+
+
+def test_image_edit_handler_bills_unmeasurable_reference_as_one_megapixel():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_fixed_json_transport())
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=b"not-an-image",
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditMultipartConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 1024 * 1024
 
 
 class _ScriptedClientWebSocket(_FakeClientWebSocket):
@@ -3947,7 +4122,9 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     logging_obj.dispatch_failure_handlers = AsyncMock()
     handler = BaseLLMHTTPHandler()
 
-    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))) as dial:
+    with patch.object(
+        handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))
+    ) as dial:
         await handler.async_realtime(
             model="chirp_3",
             websocket=client_ws,

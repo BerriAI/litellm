@@ -854,8 +854,9 @@ def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
 
 
 def prices_tokens(model_info: ModelInfo) -> bool:
-    """Whether the price table carries any token rate, so a token-priced calculator can bill from usage."""
-    return any(model_info.get(key) is not None for key in _IMAGE_TOKEN_RATE_KEYS)
+    """Whether the price table carries a billable token rate, so a token-priced calculator can bill
+    from usage. get_model_info fills absent rates with 0, which cannot bill anything."""
+    return any(bool(model_info.get(key)) for key in _IMAGE_TOKEN_RATE_KEYS)
 
 
 def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse) -> float:

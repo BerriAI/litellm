@@ -3,6 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
 if TYPE_CHECKING:
@@ -51,6 +52,7 @@ from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
+    CustomPricingLiteLLMParams,
     LlmProviders,
     all_litellm_params,
 )
@@ -292,6 +294,7 @@ def image_generation(
                 "model_info": model_info,
                 "preset_cache_key": None,
                 "stream_response": {},
+                **MappingProxyType({k: v for k, v in kwargs.items() if k in CustomPricingLiteLLMParams.model_fields}),
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -885,6 +888,7 @@ def image_edit(
                 **image_edit_request_params,
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
+                **MappingProxyType({k: v for k, v in kwargs.items() if k in CustomPricingLiteLLMParams.model_fields}),
             },
             custom_llm_provider=custom_llm_provider,
         )

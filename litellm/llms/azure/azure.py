@@ -16,6 +16,7 @@ from openai import (
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
+from litellm.images.dimensions import uploaded_reference_pixels, with_reference_pixels
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
@@ -1185,18 +1186,22 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers=headers,
                 deployment_name=model,
             )
+            reference_pixels: Final = uploaded_reference_pixels(None, data)
 
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if provider_config is not None:
-                return provider_config.transform_image_generation_response(
-                    model=data.get("model", "dall-e-2"),
-                    raw_response=httpx_response,
-                    model_response=model_response or ImageResponse(),
-                    logging_obj=logging_obj,
-                    request_data=data,
-                    optional_params=data,
-                    litellm_params=data,
-                    encoding=litellm.encoding,
+                return with_reference_pixels(
+                    provider_config.transform_image_generation_response(
+                        model=data.get("model", "dall-e-2"),
+                        raw_response=httpx_response,
+                        model_response=model_response or ImageResponse(),
+                        logging_obj=logging_obj,
+                        request_data=data,
+                        optional_params=data,
+                        litellm_params=data,
+                        encoding=litellm.encoding,
+                    ),
+                    reference_pixels,
                 )
 
             else:
@@ -1210,10 +1215,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     additional_args={"complete_input_dict": data},
                     original_response=stringified_response,
                 )
-                return convert_to_model_response_object(
-                    response_object=stringified_response,
-                    model_response_object=model_response,
-                    response_type="image_generation",
+                return with_reference_pixels(
+                    convert_to_model_response_object(
+                        response_object=stringified_response,
+                        model_response_object=model_response,
+                        response_type="image_generation",
+                    ),
+                    reference_pixels,
                 )
         except Exception as e:
             ## LOGGING
@@ -1265,6 +1273,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             max_retries: Final = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(status_code=422, message="max retries must be an int")
+            reference_pixels: Final = uploaded_reference_pixels(None, data)
 
             auth_params: Final[dict[str, object]] = {**(litellm_params or {})}  # mutable-ok: SDK init takes a dict
             if azure_ad_token is not None:
@@ -1324,15 +1333,18 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             )
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
-                return provider_config.transform_image_generation_response(
-                    model=data.get("model", "dall-e-2"),
-                    raw_response=httpx_response,
-                    model_response=model_response or ImageResponse(),
-                    logging_obj=logging_obj,
-                    request_data=data,
-                    optional_params=data,
-                    litellm_params=data,
-                    encoding=litellm.encoding,
+                return with_reference_pixels(
+                    provider_config.transform_image_generation_response(
+                        model=data.get("model", "dall-e-2"),
+                        raw_response=httpx_response,
+                        model_response=model_response or ImageResponse(),
+                        logging_obj=logging_obj,
+                        request_data=data,
+                        optional_params=data,
+                        litellm_params=data,
+                        encoding=litellm.encoding,
+                    ),
+                    reference_pixels,
                 )
 
             response: Final = httpx_response.json()
@@ -1345,10 +1357,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(
-                response_object=response,
-                model_response_object=model_response,
-                response_type="image_generation",
+            return with_reference_pixels(
+                convert_to_model_response_object(
+                    response_object=response,
+                    model_response_object=model_response,
+                    response_type="image_generation",
+                ),
+                reference_pixels,
             )
         except AzureOpenAIError as e:
             raise e

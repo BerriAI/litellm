@@ -1,6 +1,5 @@
 import base64
 from collections.abc import Mapping, Sequence
-from io import BufferedReader
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -123,12 +122,11 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 
     def _convert_image_to_base64(self, image: Any) -> str:
         """Convert image file to base64 string"""
-        if isinstance(image, BufferedReader):
-            image_bytes = image.read()
-            image.seek(0)  # Reset file pointer for potential reuse
-        elif isinstance(image, bytes):
+        if isinstance(image, bytes):
             image_bytes = image
         elif hasattr(image, "read"):
+            if hasattr(image, "seekable") and image.seekable():  # pyright: ignore[reportAny]  # image is a duck-typed file-like object by contract
+                image.seek(0)
             image_bytes = image.read()
         else:
             raise ValueError(f"Unsupported image type: {type(image)}")

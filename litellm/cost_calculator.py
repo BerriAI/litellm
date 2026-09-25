@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _DEPLOYMENT_PRICING_KEYS,  # pyright: ignore[reportPrivateUsage]  # declared-pricing key set shared with sibling calculators
     BilledTokenRates,
     CostCalculatorUtils,
     _generic_cost_per_character,
@@ -2027,14 +2028,19 @@ def _deployment_model_info(
     litellm_params: Final = litellm_logging_obj.litellm_params
     if not litellm_params:
         return None
-    return next(
+    declared: Final = MappingProxyType(
+        {key: value for key in _DEPLOYMENT_PRICING_KEYS if (value := litellm_params.get(key)) is not None}
+    )
+    nested: Final = next(
         (
             model_info
             for metadata_key in ("metadata", "litellm_metadata")
             if (metadata := litellm_params.get(metadata_key)) and (model_info := metadata.get("model_info")) is not None
         ),
-        None,
+        MappingProxyType({}),
     )
+    merged: Final = MappingProxyType({**nested, **declared})
+    return cast(ModelInfo, merged) if merged else None  # cast-ok: declared pricing is a sparse ModelInfo subset
 
 
 def _ocr_model_info(
