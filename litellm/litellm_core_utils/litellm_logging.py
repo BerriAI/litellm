@@ -638,8 +638,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self._own_session_id: str = session_id_var.get()
 
         self.function_id = function_id
-        self.streaming_chunks: list[Any] = []  # for generating complete stream response
-        self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
+        self.streaming_chunks: list[object] = []  # for generating complete stream response
+        self.sync_streaming_chunks: list[object] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
 
@@ -2297,7 +2297,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
 
-    def normalize_logging_result(self, result: Any) -> object:
+    def normalize_logging_result(self, result: object) -> object:
         """
         Some endpoints return a different type of result than what is expected by the logging system.
         This function is used to normalize the result to the expected type.
@@ -2442,7 +2442,7 @@ class Logging(LiteLLMLoggingBaseClass):
         await invalidate_baseline_cache(self, reason, completed=completed)
 
     def _build_standard_logging_payload(
-        self, init_response_obj: object, start_time: Any, end_time: Any
+        self, init_response_obj: object, start_time: dt_object, end_time: dt_object
     ) -> StandardLoggingPayload | None:
         """Build StandardLoggingPayload and accumulate its construction time."""
         _start: Final = time.time()
@@ -3562,7 +3562,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
 
-    def _handle_callback_failure(self, callback: Any):
+    def _handle_callback_failure(self, callback: object):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
 
@@ -3967,7 +3967,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def handle_sync_success_callbacks_for_async_calls(
         self,
-        result: Any,
+        result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         cache_hit: Any | None = None,
@@ -4173,7 +4173,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return logged
         return logged.model_copy(update={"id": streamed_message_id})
 
-    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(self, result: object) -> ModelResponse:
         """
         Handles logging for Anthropic messages responses.
 
@@ -4279,7 +4279,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             return model_response
 
-    def _handle_non_streaming_google_genai_generate_content_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_non_streaming_google_genai_generate_content_response_logging(self, result: object) -> ModelResponse:
         """
         Handles logging for Google GenAI generate content responses.
         """
@@ -4354,7 +4354,7 @@ def _get_masked_values(
         "passwd",
     ]
 
-    def _mask_value(v: Any) -> Any:
+    def _mask_value(v: object) -> object:
         if isinstance(v, dict):
             if _depth >= _max_depth:
                 return v
