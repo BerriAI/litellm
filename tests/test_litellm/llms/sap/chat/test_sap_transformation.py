@@ -1,4 +1,5 @@
 import warnings
+
 import pytest
 from pydantic import ValidationError
 
@@ -611,31 +612,295 @@ class TestSAPTransformationIntegration:
             assert translation["input"]["config"]["source_language"] == "en-US"
             assert translation["input"]["config"]["target_language"] == "de-DE"
             assert translation["output"]["config"]["target_language"] == "fr-FR"
+            assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
             assert (
-                config["config"]["modules"][1]["prompt_templating"]["model"]["name"]
-                == "gpt-5"
-            )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["model"]["name"]
-                == "gpt-4o"
-            )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["model"]["params"]
-                == {}
-            )
-            assert (
-                config["config"]["modules"][1]["prompt_templating"]["prompt"][
-                    "template"
-                ][0]["content"]
+                config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"]
                 == "Hello world!"
             )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["prompt"][
-                    "template"
-                ][0]["content"]
-                == "Hello."
-            )
-            assert (
-                config["config"]["modules"][1]["translation"]["input"]["type"]
-                == "sap_document_translation"
-            )
+            assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
+            assert config["config"]["modules"][1]["translation"]["input"]["type"] == "sap_document_translation"
+
+
+class TestCacheControl:
+    """Unit tests for cache_control preservation on message content parts."""
+
+    def _transform(self, model: str, messages: list) -> dict:
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        return cfg.transform_request(
+            model=model,
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+    def _template(self, body: dict) -> list:
+        return body["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+
+    def test_cache_control_preserved_on_text_content(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        content = template[0]["content"]
+        assert isinstance(content, list)
+        assert content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_plain_text_content_unaffected(self):
+        messages = [{"role": "user", "content": "Hello"}]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        assert template[0]["content"] == "Hello"
+
+    def test_cache_control_preserved_on_multiple_parts(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Part A", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "Part B"},
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert content[0].get("cache_control") == {"type": "ephemeral"}
+        assert "cache_control" not in content[1]
+
+    def test_cache_control_preserved_on_system_message(self):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a helpful assistant.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        system_content = template[0]["content"]
+        assert isinstance(system_content, list)
+        assert system_content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_system_message_without_cache_control_stays_string(self):
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        assert isinstance(template[0]["content"], str)
+
+    def test_cache_control_preserved_on_tool_definition(self):
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            "cache_control": {"type": "ephemeral"},
+        }
+        messages = [{"role": "user", "content": "Hi"}]
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        body = cfg.transform_request(
+            model="anthropic--claude-3-5-sonnet",
+            messages=messages,
+            optional_params={"tools": [tool]},
+            litellm_params={},
+            headers={},
+        )
+        tools = body["config"]["modules"]["prompt_templating"]["prompt"]["tools"]
+        assert tools[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_tool_without_cache_control_omits_field(self):
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        messages = [{"role": "user", "content": "Hi"}]
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        body = cfg.transform_request(
+            model="anthropic--claude-3-5-sonnet",
+            messages=messages,
+            optional_params={"tools": [tool]},
+            litellm_params={},
+            headers={},
+        )
+        tools = body["config"]["modules"]["prompt_templating"]["prompt"]["tools"]
+        assert "cache_control" not in tools[0]
+
+    def test_message_level_cache_control_folded_onto_string_content(self):
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        system_content = template[0]["content"]
+        assert isinstance(system_content, list), "string content should have been promoted to a list"
+        assert system_content[0]["text"] == "You are a helpful assistant."
+        assert system_content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_null_cache_control_on_content_block_is_omitted(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "cache_control": None},
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert isinstance(content, list)
+        assert "cache_control" not in content[0]
+
+    def test_message_level_cache_control_folded_on_user_message(self):
+        messages = [
+            {
+                "role": "user",
+                "content": "What is the weather today?",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert isinstance(content, list), "string content should have been promoted to a list"
+        assert content[0]["text"] == "What is the weather today?"
+        assert content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_cache_control_ttl_omitted_when_absent(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}},
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        cc = self._template(body)[0]["content"][0]["cache_control"]
+        assert cc == {"type": "ephemeral"}
+        assert "ttl" not in cc
+
+    def test_cache_control_ttl_preserved_when_set(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        cc = self._template(body)[0]["content"][0]["cache_control"]
+        assert cc == {"type": "ephemeral", "ttl": "5m"}
+
+    def test_message_level_cache_control_folded_on_assistant_message(self):
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": "Hello! How can I help?",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "Continue"},
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        assistant_content = template[1]["content"]
+        assert isinstance(assistant_content, list), "string content should have been promoted to a list"
+        assert assistant_content[0]["text"] == "Hello! How can I help?"
+        assert assistant_content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_message_level_cache_control_folded_on_tool_message(self):
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "Sunny, 22C",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        tool_content = template[2]["content"]
+        assert isinstance(tool_content, list), "string content should have been promoted to a list"
+        assert tool_content[0]["text"] == "Sunny, 22C"
+        assert tool_content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_message_level_cache_control_folded_onto_last_list_element(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Part A"},
+                    {"type": "text", "text": "Part B"},
+                ],
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert "cache_control" not in content[0]
+        assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+    def test_message_level_cache_control_folded_onto_trailing_image_block(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc="}},
+                ],
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert "cache_control" not in content[0]
+        assert content[1].get("cache_control") == {"type": "ephemeral"}
