@@ -1504,7 +1504,8 @@ export interface paths {
          * Get Auto Router Usage
          * @description Requests and destination-model spend from retained logs in inclusive UTC days.
          *
-         *     Select one model or one router. Internal classifier and shadow-evaluation calls
+         *     Select one model or one router over at most 93 inclusive UTC days.
+         *     Internal classifier and shadow-evaluation calls
          *     are excluded. Non-admins can only see requests attributed to their own user.
          */
         get: operations["get_auto_router_usage_auto_router_usage_get"];

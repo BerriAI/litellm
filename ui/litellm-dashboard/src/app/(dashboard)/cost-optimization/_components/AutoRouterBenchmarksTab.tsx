@@ -277,7 +277,7 @@ const CachingCard: React.FC<{ cache: AutoRouterCacheStats }> = ({ cache }) => {
 
 interface BenchmarksBodyProps {
   usage?: readonly RoutingUsage[];
-  usageUnavailable?: boolean;
+  usageError?: unknown;
   isPending: boolean;
   error: unknown;
   data: AutoRouterBenchmarksResponse | undefined;
@@ -292,7 +292,7 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({
   selectedKey,
   autoRouters,
   usage,
-  usageUnavailable,
+  usageError,
 }) => {
   if (isPending) return <Message>Loading auto-router usage...</Message>;
   if (error instanceof ApiError && error.status === 403) {
@@ -306,7 +306,7 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({
     <>
       <HeroCard view={view} />
 
-      <TierTurnsChart view={view} autoRouters={autoRouters} usage={usage} usageUnavailable={usageUnavailable} />
+      <TierTurnsChart view={view} autoRouters={autoRouters} usage={usage} usageError={usageError} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Metric
@@ -414,7 +414,7 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
         data={data}
         selectedKey={selectedKey}
         usage={usage.data}
-        usageUnavailable={usage.isError}
+        usageError={usage.error}
         autoRouters={autoRouters ?? []}
       />
     </div>

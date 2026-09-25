@@ -1,6 +1,3 @@
-vi.mock("@/components/UsagePage/useRoutingUsage", () => ({
-  useRoutingUsage: () => ({ data: undefined, isError: false }),
-}));
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import React from "react";
@@ -35,6 +32,10 @@ import type {
   AutoRouterCacheStats,
 } from "./autoRouterBenchmarks";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+
+vi.mock("@/components/UsagePage/useRoutingUsage", () => ({
+  useRoutingUsage: () => ({ data: undefined, error: null }),
+}));
 
 type HookResult = ReturnType<typeof useAutoRouterBenchmarks>;
 

@@ -2,11 +2,17 @@ import { useRoutingUsage } from "../useRoutingUsage";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { routingSources, routingSpend, trafficShare, type RoutingUsageScope } from "../routingUsage";
+import { ApiError } from "@/lib/http/client";
 
 export default function ModelRoutingShare({ model, scope }: { model: string; scope: RoutingUsageScope }) {
-  const { data, isPending, isError } = useRoutingUsage({ ...scope, destination_model: model });
+  const { data, isPending, isError, error } = useRoutingUsage({ ...scope, destination_model: model });
   if (isPending) return <p className="text-xs text-muted-foreground">Loading traffic sources...</p>;
-  if (isError) return <p className="text-xs text-muted-foreground">Traffic sources unavailable</p>;
+  if (isError)
+    return (
+      <p className="text-xs text-muted-foreground">
+        {error instanceof ApiError && error.status === 400 ? error.message : "Traffic sources unavailable"}
+      </p>
+    );
   const sources = routingSources(data ?? []);
   const total = sources.reduce((sum, source) => sum + source.requests, 0);
   if (total === 0) return <p className="text-xs text-muted-foreground">No retained requests for traffic sources</p>;

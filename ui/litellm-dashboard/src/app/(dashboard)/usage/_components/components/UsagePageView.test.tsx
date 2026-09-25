@@ -24,7 +24,8 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("@/components/networking", () => ({
+vi.mock("@/components/networking", async (importOriginal) => ({
+  formatDate: (await importOriginal<typeof import("@/components/networking")>()).formatDate,
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),

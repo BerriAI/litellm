@@ -60,6 +60,7 @@ ORDER BY spend DESC, model, router_name, tier
 """
 
 _USAGE_ROWS: Final = TypeAdapter(tuple[AutoRouterUsage, ...])
+MAX_ROUTING_USAGE_DAYS: Final = 93
 
 
 @router.get(
@@ -80,13 +81,16 @@ async def get_auto_router_usage(
 ) -> tuple[AutoRouterUsage, ...]:
     """Requests and destination-model spend from retained logs in inclusive UTC days.
 
-    Select one model or one router. Internal classifier and shadow-evaluation calls
+    Select one model or one router over at most 93 inclusive UTC days.
+    Internal classifier and shadow-evaluation calls
     are excluded. Non-admins can only see requests attributed to their own user.
     """
     if (destination_model is None) == (router_name is None):
         raise HTTPException(status_code=400, detail="Select exactly one model or router")
     if end_date < start_date or end_date == date.max:
         raise HTTPException(status_code=400, detail="Invalid date range")
+    if (end_date - start_date).days >= MAX_ROUTING_USAGE_DAYS:
+        raise HTTPException(status_code=400, detail=f"Select a range of {MAX_ROUTING_USAGE_DAYS} days or fewer")
     if router_type is not None and router_name is None:
         raise HTTPException(status_code=400, detail="router_type requires router_name")
     scoped_user: Final = (

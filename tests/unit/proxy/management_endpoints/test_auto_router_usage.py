@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -88,6 +89,40 @@ async def test_query_requires_one_specific_model_or_router(model: str | None, ro
             db,
             destination_model=model,
             router_name=router_name,
+        )
+    assert error.value.status_code == 400
+    db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("end", [date(2025, 12, 31), date.max, date(2026, 4, 4)])
+async def test_invalid_or_overlong_ranges_never_query_spend_logs(end: date) -> None:
+    db: Final = Database()
+    with pytest.raises(HTTPException) as error:
+        await get_auto_router_usage(
+            date(2026, 1, 1), end, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), db, destination_model="fast"
+        )
+    assert error.value.status_code == 400
+    db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_maximum_range_includes_its_last_day() -> None:
+    db: Final = Database()
+    await get_auto_router_usage(
+        date(2026, 1, 1), date(2026, 4, 3), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), db,
+        destination_model="fast",
+    )
+    assert db.query_raw.call_args.args[1:3] == ("2026-01-01T00:00:00", "2026-04-04T00:00:00")
+
+
+@pytest.mark.asyncio
+async def test_router_type_cannot_filter_a_destination_model() -> None:
+    db: Final = Database()
+    with pytest.raises(HTTPException) as error:
+        await get_auto_router_usage(
+            date(2026, 1, 1), date(2026, 1, 1), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), db,
+            destination_model="fast", router_type="complexity",
         )
     assert error.value.status_code == 400
     db.query_raw.assert_not_called()

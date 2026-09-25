@@ -12,6 +12,22 @@ const rows = [
 afterEach(() => vi.restoreAllMocks());
 
 describe("model traffic sources", () => {
+  it("explains how to recover from a date range rejected by the gateway", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Select a range of 93 days or fewer" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ModelRoutingShare model="fast" scope={scope} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Select a range of 93 days or fewer")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /via auto-router/ })).not.toBeInTheDocument();
+  });
+
   it("loads the selected model and user, then opens direct and router request/spend figures", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify(rows), {

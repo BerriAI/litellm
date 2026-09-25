@@ -3,6 +3,7 @@ import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
+import { ApiError } from "@/lib/http/client";
 
 vi.mock("@/components/shared/charts", () => ({
   DonutChart: ({ label }: { label: string }) => <div data-testid="donut">{label}</div>,
@@ -204,4 +205,58 @@ it("switches the existing donut to actual spend and shows each destination model
   expect(screen.getByTestId("donut")).toHaveTextContent("$10.00");
   expect(screen.getByText("Simple 60% · $6.00")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Spend" })).toHaveAttribute("aria-pressed", "true");
+});
+
+it("keeps configured aliases and unused tiers visible separately from recorded destinations", () => {
+  render(
+    <TierTurnsChart
+      view={groupView()}
+      autoRouters={[deployment({ tiers: { SIMPLE: ["public-fast", "unused"], COMPLEX: "public-strong" } })]}
+      usage={[
+        {
+          model: "provider/fast",
+          router_name: "claude-auto",
+          router_type: "complexity",
+          tier: "SIMPLE",
+          requests: 3,
+          spend: 1,
+        },
+      ]}
+    />,
+  );
+  expect(screen.getByText("Configured: public-fast, unused")).toBeVisible();
+  expect(screen.getByText("provider/fast · 3 requests (100%) · $1.00")).toBeVisible();
+  expect(screen.getByText("Configured: public-strong")).toBeVisible();
+  expect(screen.getByText("No retained requests for this tier")).toBeVisible();
+  expect(screen.getByTestId("donut")).toHaveTextContent("3 total requests");
+});
+
+it("keeps traffic visible when requests have no spend, including after changing the range in Spend mode", () => {
+  const usage = [
+    { model: "fast", router_name: "claude-auto", router_type: "complexity", tier: "SIMPLE", requests: 3, spend: 1 },
+    { model: "strong", router_name: "claude-auto", router_type: "complexity", tier: "COMPLEX", requests: 1, spend: 2 },
+  ];
+  const { rerender } = render(<TierTurnsChart view={groupView()} autoRouters={[]} usage={usage} />);
+  fireEvent.click(screen.getByRole("button", { name: "Spend" }));
+  expect(screen.getByTestId("donut")).toHaveTextContent("$3.00");
+  rerender(<TierTurnsChart view={groupView()} autoRouters={[]} usage={usage.map((row) => ({ ...row, spend: 0 }))} />);
+  expect(screen.getByRole("button", { name: "Spend" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Traffic" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText(/No model spend recorded; showing traffic/)).toBeVisible();
+  expect(screen.getByText("Simple 75% · $0.00")).toBeVisible();
+  expect(screen.getByText("Complex 25% · $0.00")).toBeVisible();
+  expect(screen.getByTestId("donut")).toHaveTextContent("4 total requests");
+});
+
+it("explains the date limit while retaining the existing tier traffic chart", () => {
+  render(
+    <TierTurnsChart
+      view={groupView()}
+      autoRouters={[]}
+      usageError={new ApiError("Select a range of 93 days or fewer", 400, {})}
+    />,
+  );
+  expect(screen.getByText(/Select a range of 93 days or fewer/)).toBeVisible();
+  expect(screen.getByTestId("donut")).toHaveTextContent("4 total turns");
+  expect(screen.queryByRole("button", { name: "Spend" })).not.toBeInTheDocument();
 });
