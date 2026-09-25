@@ -14,7 +14,7 @@ from litellm.utils import ProviderConfigManager
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
-from ..common_utils import _OPENAI_HTTPX_DEFAULT_TIMEOUT, OpenAIError, _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
+from ..common_utils import OpenAIError, _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
 
 
 class OpenAIImageVariationsHandler:
@@ -28,9 +28,7 @@ class OpenAIImageVariationsHandler:
             openai_client = OpenAI(
                 **{
                     **init_client_params,
-                    "http_client": http_client
-                    if http_client is not None
-                    else _OpenAIHTTPClient(timeout=init_client_params.get("timeout", _OPENAI_HTTPX_DEFAULT_TIMEOUT)),
+                    "http_client": http_client if http_client is not None else _OpenAIHTTPClient(),
                 },
             )
         else:
@@ -43,11 +41,7 @@ class OpenAIImageVariationsHandler:
             openai_client = AsyncOpenAI(
                 **{
                     **init_client_params,
-                    "http_client": http_client
-                    if http_client is not None
-                    else _OpenAIAsyncHTTPClient(
-                        timeout=init_client_params.get("timeout", _OPENAI_HTTPX_DEFAULT_TIMEOUT)
-                    ),
+                    "http_client": http_client if http_client is not None else _OpenAIAsyncHTTPClient(),
                 },
             )
         else:

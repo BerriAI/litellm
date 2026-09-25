@@ -727,7 +727,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "base_url": f"{api_base}",
                 "http_client": http_client
                 if http_client is not None
-                else (_OpenAIAsyncHTTPClient(timeout=timeout) if acompletion else _OpenAIHTTPClient(timeout=timeout)),
+                else (_OpenAIAsyncHTTPClient() if acompletion else _OpenAIHTTPClient()),
                 "max_retries": max_retries,
                 "timeout": timeout,
             }

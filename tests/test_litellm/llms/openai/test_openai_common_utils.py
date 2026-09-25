@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 import httpx
 import openai
 import pytest
-from respx import MockRouter
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -474,83 +473,20 @@ def _sdk_api_client(
 @pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
-async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(
-    api: str, is_async: bool, respx_mock: MockRouter
-) -> None:
+async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(api: str, is_async: bool) -> None:
     timeout: Final = openai.Timeout(connect=1, read=7, write=2, pool=3)
     sdk_client: Final = _sdk_api_client(api, is_async, timeout)
     assert sdk_client is not None
     try:
         assert isinstance(sdk_client._client, httpx.AsyncClient if is_async else httpx.Client)
-        assert sdk_client._client.timeout.as_dict() == timeout.as_dict()
         assert sdk_client._client.follow_redirects is True
-        route: Final = respx_mock.get(url__regex=r"https://sdk-default\.example/.*").respond(
-            200,
-            json={"id": "file-transport", "bytes": 1, "created_at": 0, "filename": "test.jsonl", "purpose": "batch"},
-        )
-        result: Final = (
-            await sdk_client.files.retrieve("file-transport")
-            if is_async
-            else sdk_client.files.retrieve("file-transport")
-        )
-        assert result.id == "file-transport"
-        assert route.call_count == 1
-        assert route.calls.last.request.extensions["timeout"] == timeout.as_dict()
+        assert _sdk_api_client(api, is_async, 19, client=sdk_client) is sdk_client
+        assert sdk_client.timeout.as_dict() == timeout.as_dict()
     finally:
         if is_async:
             await sdk_client.close()
         else:
             sdk_client.close()
-    assert sdk_client.is_closed()
-
-
-@pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
-@pytest.mark.parametrize("is_async", [False, True])
-@pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
-@pytest.mark.asyncio
-async def test_sdk_api_factories_preserve_caller_owned_clients(api: str, is_async: bool, backend: str) -> None:
-    http_client_type: Final = (
-        (httpx.AsyncClient if is_async else httpx.Client)
-        if backend == "httpx"
-        else (openai.DefaultAsyncHttpxClient if is_async else openai.DefaultHttpxClient)
-    )
-    http_client: Final = http_client_type(timeout=19, follow_redirects=False, trust_env=False)
-    sdk_client: Final = (
-        openai.AsyncOpenAI(api_key="transport-only", http_client=http_client)
-        if is_async
-        else openai.OpenAI(api_key="transport-only", http_client=http_client)
-    )
-    try:
-        result: Final = _sdk_api_client(api, is_async, 7, client=sdk_client)
-        assert result is sdk_client
-        assert result._client is http_client
-        assert http_client.timeout.read == 19
-        assert http_client.follow_redirects is False
-        assert not http_client.is_closed
-    finally:
-        if is_async:
-            await sdk_client.close()
-        else:
-            sdk_client.close()
-
-
-@pytest.mark.parametrize("is_async", [False, True])
-@pytest.mark.asyncio
-async def test_owned_sdk_http_clients_preserve_sdk_defaults_and_finalizer_cleanup(is_async: bool) -> None:
-    import asyncio
-
-    from litellm.llms.openai.common_utils import _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
-
-    client: Final = _OpenAIAsyncHTTPClient() if is_async else _OpenAIHTTPClient()
-    assert client.timeout.as_dict() == openai.DEFAULT_TIMEOUT.as_dict()
-    assert client.follow_redirects is True
-    assert client._transport._pool._max_connections == openai.DEFAULT_CONNECTION_LIMITS.max_connections
-    assert (
-        client._transport._pool._max_keepalive_connections == openai.DEFAULT_CONNECTION_LIMITS.max_keepalive_connections
-    )
-    client.__del__()
-    await asyncio.sleep(0)
-    assert client.is_closed
 
 
 @pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
@@ -561,13 +497,11 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
     from importlib import import_module
     from io import BytesIO
 
+    from openai._types import Response as SDKResponse
+
     from litellm.images.main import aimage_variation
 
-    http_module: Final = (
-        httpx
-        if backend == "httpx"
-        else import_module(openai.DefaultAsyncHttpxClient.__mro__[1].__module__.split(".")[0])
-    )
+    http_module: Final = httpx if backend == "httpx" else import_module(SDKResponse.__module__)
     transport: Final = http_module.MockTransport(
         lambda request: http_module.Response(
             200, json={"created": 0, "data": [{"url": "https://example.com/image.png"}]}

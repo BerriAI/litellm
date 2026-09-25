@@ -18,7 +18,6 @@ from urllib.parse import urlsplit
 import httpx
 import openai
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
-from openai import Timeout as SDKTimeout
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
@@ -61,11 +60,9 @@ _OPENAI_HTTPX_CONNECTION_LIMITS: Final = httpx.Limits(
 
 
 class _OpenAIHTTPClient(httpx.Client):
-    def __init__(self, timeout: float | httpx.Timeout | SDKTimeout | None = _OPENAI_HTTPX_DEFAULT_TIMEOUT) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            timeout=CompletionTimeout.normalize(timeout)
-            if isinstance(timeout, (httpx.Timeout, SDKTimeout))
-            else timeout,
+            timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
         )
@@ -77,11 +74,9 @@ class _OpenAIHTTPClient(httpx.Client):
 
 
 class _OpenAIAsyncHTTPClient(httpx.AsyncClient):
-    def __init__(self, timeout: float | httpx.Timeout | SDKTimeout | None = _OPENAI_HTTPX_DEFAULT_TIMEOUT) -> None:
+    def __init__(self) -> None:
         super().__init__(
-            timeout=CompletionTimeout.normalize(timeout)
-            if isinstance(timeout, (httpx.Timeout, SDKTimeout))
-            else timeout,
+            timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
         )

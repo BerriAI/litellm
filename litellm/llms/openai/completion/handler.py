@@ -130,9 +130,7 @@ class OpenAITextCompletion(BaseLLM):
                         api_key=api_key,
                         base_url=api_base,
                         http_client=(
-                            litellm.client_session
-                            if litellm.client_session is not None
-                            else _OpenAIHTTPClient(timeout=timeout)
+                            litellm.client_session if litellm.client_session is not None else _OpenAIHTTPClient()
                         ),
                         timeout=timeout,
                         max_retries=max_retries,
@@ -237,9 +235,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=(
-                    litellm.client_session if litellm.client_session is not None else _OpenAIHTTPClient(timeout=timeout)
-                ),
+                http_client=(litellm.client_session if litellm.client_session is not None else _OpenAIHTTPClient()),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -297,9 +293,7 @@ class OpenAITextCompletion(BaseLLM):
                 api_key=api_key,
                 base_url=api_base,
                 http_client=(
-                    litellm.aclient_session
-                    if litellm.aclient_session is not None
-                    else _OpenAIAsyncHTTPClient(timeout=timeout)
+                    litellm.aclient_session if litellm.aclient_session is not None else _OpenAIAsyncHTTPClient()
                 ),
                 timeout=timeout,
                 max_retries=max_retries,

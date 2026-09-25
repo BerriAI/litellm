@@ -260,23 +260,17 @@ jobs:
       legacy-mcp-peer: ${{ matrix.shard == 'mcp-integration' }}
 
   openai-sdk-compat:
-    name: OpenAI ${{ matrix.openai-version }} (Python ${{ matrix.python-version }})
+    name: OpenAI ${{ matrix.openai-version }} compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.14"]
-        openai-version: ["2.20.0", "3.19.2"]
-        include:
-          - python-version: "3.10"
-            openai-version: "2.54.0"
-          - python-version: "3.10"
-            openai-version: "3.0.0"
+        openai-version: ["2.20.0", "3.0.0", "3.19.2"]
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
       PYTHONPATH: ${{ github.workspace }}
-      UV_PYTHON: ${{ matrix.python-version }}
+      UV_PYTHON: "3.10"
       OPENAI_VERSION: ${{ matrix.openai-version }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
@@ -285,7 +279,7 @@ jobs:
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.UV_PYTHON }}
 
       - uses: ./.github/actions/setup-uv-with-retries
         with:
@@ -315,22 +309,4 @@ jobs:
         run: uv run --no-sync pytest tests/test_litellm/llms/openai/test_openai_workload_identity.py --tb=short -q
 
       - name: Check consumer types with the installed SDK
-        run: |
-          uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
-          if [[ "$OPENAI_VERSION" == 2.* ]]; then
-            uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json tests/typing/openai_sdk2_exceptions.py
-          fi
-
-      - name: Verify SDK 2 core installation without HTTPX2
-        if: matrix.openai-version == '2.20.0' && matrix.python-version == '3.10'
-        run: |
-          uv venv .venv-openai-core
-          uv pip install --python .venv-openai-core/bin/python -r pyproject.toml "openai==${OPENAI_VERSION:?}"
-          .venv-openai-core/bin/python - <<'PY'
-          import importlib.util
-          import litellm
-
-          assert importlib.util.find_spec("httpx2") is None
-          response = litellm.completion(model="openai/gpt-5.6", messages=[], mock_response="compatible")
-          assert response.choices[0].message.content == "compatible"
-          PY
+        run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json

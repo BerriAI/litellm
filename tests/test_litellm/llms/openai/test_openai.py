@@ -131,35 +131,24 @@ async def test_acompletion_returns_json_reply_over_injected_transport(http_backe
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "expected_error"),
-    ((400, litellm.BadRequestError), (429, litellm.RateLimitError), (503, litellm.ServiceUnavailableError)),
+    (
+        (400, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+        (None, litellm.Timeout),
+    ),
 )
 async def test_acompletion_preserves_public_errors_for_both_http_clients(
-    http_backend: ModuleType, status: int, expected_error: type[Exception]
+    http_backend: ModuleType, status: int | None, expected_error: type[Exception]
 ) -> None:
     def respond(request: _Request) -> httpx.Response | SDKResponse:
+        if status is None:
+            raise http_backend.ReadTimeout("upstream timeout", request=request)
         return http_backend.Response(status, json={"error": {"message": "upstream failure", "type": "api_error"}})
 
     async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
         sdk_client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
-        with pytest.raises(expected_error, match="upstream failure"):
-            await litellm.acompletion(
-                model="openai/gpt-5.6",
-                client=sdk_client,
-                messages=[{"role": "user", "content": "request"}],
-                num_retries=0,
-                max_retries=0,
-            )
-        assert not http_client.is_closed
-
-
-@pytest.mark.asyncio
-async def test_acompletion_maps_both_transport_timeouts_to_litellm_timeout(http_backend: ModuleType) -> None:
-    def respond(request: _Request) -> httpx.Response | SDKResponse:
-        raise http_backend.ReadTimeout("upstream timeout", request=request)
-
-    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
-        sdk_client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
-        with pytest.raises(litellm.Timeout):
+        with pytest.raises(expected_error, match="timed out" if status is None else "upstream failure"):
             await litellm.acompletion(
                 model="openai/gpt-5.6",
                 client=sdk_client,
