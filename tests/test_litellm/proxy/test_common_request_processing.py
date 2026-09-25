@@ -61,6 +61,7 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -7280,14 +7281,21 @@ class TestStreamingClientDisconnectBilling:
     @pytest.mark.asyncio
     async def test_disconnect_bills_partial_spend_for_anthropic_adapter_stream(self):
         """
-        /v1/messages wraps the chat stream in AnthropicStreamWrapper, which
-        hides the CustomStreamWrapper's collected chunks behind
-        .completion_stream; the partial-billing helper reads response.chunks,
-        so the wrapper must delegate inward or a disconnect bills nothing.
+        The proxy's cleanup gets the FallbackAwareAnthropicMessagesStream the
+        router returns for /v1/messages; its chunks/messages must delegate
+        through the translate_completion_output_params_streaming result to the
+        inner chat stream's collected chunks or a disconnect bills nothing.
         """
         from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
-            AnthropicStreamWrapper,
+            AnthropicSSEStream,
         )
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            AnthropicAdapter,
+        )
+        from litellm.router import FallbackAwareAnthropicMessagesStream
+
+        async def _sse_frames() -> AsyncGenerator[bytes, None]:
+            yield b"event: message_start\n\n"
 
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks
@@ -7295,14 +7303,20 @@ class TestStreamingClientDisconnectBilling:
         try:
             response = await self._start_partial_stream()
             setattr(response.chunks[-1], "service_tier", "priority")  # noqa: B010  # pydantic extra, not a declared field
-            wrapped: Final = AnthropicStreamWrapper(
-                completion_stream=response,
+            source_iterator: Final = AnthropicAdapter().translate_completion_output_params_streaming(
+                response,
                 model=response.model or "gpt-4o-mini",
+                is_async=True,
+                litellm_logging_obj=response.logging_obj,
+            )
+            assert isinstance(source_iterator, AnthropicSSEStream)
+            streamed: Final = prepare_response_for_header_attachment(
+                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator)
             )
 
             billed: Final = await _bill_partial_streamed_spend_on_disconnect(
                 {"litellm_logging_obj": response.logging_obj},
-                wrapped,
+                streamed,
             )
 
             for _ in range(50):

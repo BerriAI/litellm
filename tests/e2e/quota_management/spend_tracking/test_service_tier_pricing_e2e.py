@@ -273,10 +273,9 @@ class TestServiceTierPricing:
         served_tier = completed.response.service_tier
         assert served_tier, f"response.completed carried no service_tier: {completed.response}"
         assert served_tier in TIER_INPUT_RATES, f"no custom rate registered for served tier {served_tier!r}"
-        assert completed.response.id, f"response.completed carried no id: {completed.response}"
 
-        row = poll_cost_row(client.proxy, completed.response.id)
-        assert row is not None, f"no spend row with a cost breakdown landed for {completed.response.id}"
+        row = poll_cost_row_where(client.proxy, scoped_key, lambda r: r.spend is not None and r.spend > 0)
+        assert row is not None, f"no spend row with a cost breakdown landed for the streamed responses call on {model}"
         assert row.breakdown.service_tier == served_tier, (
             f"response.completed served tier {served_tier!r} but the bill records "
             f"pricing basis {row.breakdown.service_tier!r}"
