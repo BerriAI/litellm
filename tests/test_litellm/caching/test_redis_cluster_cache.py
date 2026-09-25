@@ -180,11 +180,10 @@ def test_router_create_redis_cache_cluster_detection(
 
 
 def _isolated_redis_cache(host: str) -> RedisCache:
-    """RedisCache whose sync client, pool, and health pings are stubbed out."""
+    """RedisCache whose sync client and pool are stubbed out."""
     with (
         patch("litellm._redis.get_redis_client", return_value=MagicMock()),
         patch("litellm._redis.get_redis_connection_pool", return_value=MagicMock()),
-        patch.object(RedisCache, "_setup_health_pings", lambda self: None),
     ):
         return RedisCache(host=host, port=6379)
 
