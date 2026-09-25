@@ -954,7 +954,7 @@ def _map_bedrock_exception(
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
         )
-    elif "Could not process image" in error_str:
+    elif "Could not process image" in error_str and getattr(original_exception, "status_code", 500) == 500:
         raise litellm.InternalServerError(
             message=f"BedrockException - {error_str}",
             model=model,
