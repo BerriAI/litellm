@@ -383,3 +383,26 @@ def test_databricks_get_valid_models_security_guard(requests_mock) -> None:
     )
     assert len(models) > 0
     assert not any(req.url.startswith("https://api.openai.com") for req in requests_mock.request_history)
+
+
+def test_databricks_model_info_provider_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.databricks.common_utils import DatabricksModelInfo
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    provider_info: Final = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders.DATABRICKS,
+    )
+    assert isinstance(provider_info, DatabricksModelInfo)
+    assert provider_info.get_model_cost_key("databricks-claude-sonnet-5") == "databricks/system.ai.claude-sonnet-5"
+    assert provider_info.get_model_cost_key("unknown-model") is None
+    assert provider_info.get_base_model("system.ai.claude-sonnet-5") == "system.ai.claude-sonnet-5"
+    assert provider_info.validate_environment({"h": "1"}, "m", [], {}, {}) == {"h": "1"}
+
+    monkeypatch.setenv("DATABRICKS_API_KEY", "env_key")
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://env.example.com")
+    assert provider_info.get_api_key(None) == "env_key"
+    assert provider_info.get_api_key("explicit_key") == "explicit_key"
+    assert provider_info.get_api_base(None) == "https://env.example.com"
+    assert provider_info.get_api_base("https://explicit.example.com") == "https://explicit.example.com"

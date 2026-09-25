@@ -5414,29 +5414,13 @@ def get_utc_datetime() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def _get_databricks_cost_key_from_model(model: str) -> str | None:
-    from litellm.llms.databricks.cost_calculator import get_databricks_cost_key
-
-    return get_databricks_cost_key(model)
-
-
 def _get_max_tokens_from_provider_alias(model: str, custom_llm_provider: str | None) -> int | None:
     if not (custom_llm_provider and custom_llm_provider in LlmProvidersSet):
         return None
-    cost_key: Final = (
-        _get_databricks_cost_key_from_model(model)
-        if custom_llm_provider == "databricks"
-        else (
-            provider_model_info.get_model_cost_key(model)
-            if (
-                provider_model_info := ProviderConfigManager.get_provider_model_info(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
-            )
-            is not None
-            else None
-        )
+    provider_model_info: Final = ProviderConfigManager.get_provider_model_info(
+        model=model, provider=LlmProviders(custom_llm_provider)
     )
+    cost_key: Final = provider_model_info.get_model_cost_key(model) if provider_model_info is not None else None
     if cost_key and cost_key in litellm.model_cost:
         if "max_output_tokens" in litellm.model_cost[cost_key]:
             return litellm.model_cost[cost_key]["max_output_tokens"]
@@ -5834,17 +5818,14 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         if custom_llm_provider == "bedrock_mantle"
         else combined_stripped_model_name
     )
-    databricks_cost_key: Final = (
-        _get_databricks_cost_key_from_model(region_free_split_model) if custom_llm_provider == "databricks" else None
-    )
     provider_model_info: Final = (
         ProviderConfigManager.get_provider_model_info(
             model=region_free_split_model, provider=LlmProviders(custom_llm_provider)
         )
-        if custom_llm_provider in LlmProvidersSet and custom_llm_provider != "databricks"
+        if custom_llm_provider in LlmProvidersSet
         else None
     )
-    provider_cost_key: Final = databricks_cost_key or (
+    provider_cost_key: Final = (
         provider_model_info.get_model_cost_key(region_free_split_model) if provider_model_info is not None else None
     )
 
@@ -9294,6 +9275,10 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif LlmProviders.DATABRICKS == provider:
+            from litellm.llms.databricks.common_utils import DatabricksModelInfo
+
+            return DatabricksModelInfo()
         return None
 
     @staticmethod
