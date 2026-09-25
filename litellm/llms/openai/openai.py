@@ -52,8 +52,11 @@ from .chat.gpt_5_transformation import OpenAIGPT5Config
 from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
+    _OPENAI_HTTPX_DEFAULT_TIMEOUT,
     BaseOpenAILLM,
     OpenAIError,
+    _OpenAIAsyncHTTPClient,
+    _OpenAIHTTPClient,
     build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
@@ -1704,9 +1707,19 @@ class OpenAIFilesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(
+                    **data,
+                    http_client=_OpenAIAsyncHTTPClient(
+                        timeout=timeout if timeout is not None else _OPENAI_HTTPX_DEFAULT_TIMEOUT
+                    ),
+                )
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(
+                    **data,
+                    http_client=_OpenAIHTTPClient(
+                        timeout=timeout if timeout is not None else _OPENAI_HTTPX_DEFAULT_TIMEOUT
+                    ),
+                )
         else:
             openai_client = client
 
@@ -2062,9 +2075,19 @@ class OpenAIBatchesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(
+                    **data,
+                    http_client=_OpenAIAsyncHTTPClient(
+                        timeout=timeout if timeout is not None else _OPENAI_HTTPX_DEFAULT_TIMEOUT
+                    ),
+                )
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(
+                    **data,
+                    http_client=_OpenAIHTTPClient(
+                        timeout=timeout if timeout is not None else _OPENAI_HTTPX_DEFAULT_TIMEOUT
+                    ),
+                )
         else:
             openai_client = client
 
@@ -2272,7 +2295,12 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = OpenAI(**data)
+            openai_client = OpenAI(
+                **data,
+                http_client=_OpenAIHTTPClient(
+                    timeout=timeout if timeout is not None else _OPENAI_HTTPX_DEFAULT_TIMEOUT
+                ),
+            )
         else:
             openai_client = client
 
@@ -2297,7 +2325,12 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = AsyncOpenAI(**data)
+            openai_client = AsyncOpenAI(
+                **data,
+                http_client=_OpenAIAsyncHTTPClient(
+                    timeout=timeout if timeout is not None else _OPENAI_HTTPX_DEFAULT_TIMEOUT
+                ),
+            )
         else:
             openai_client = client
 

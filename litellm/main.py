@@ -403,7 +403,7 @@ async def acompletion(
     messages: list = [],
     functions: list | None = None,
     function_call: str | None = None,
-    timeout: float | None = None,
+    timeout: float | httpx.Timeout | openai.Timeout | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
@@ -5114,7 +5114,7 @@ def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: list = [],
-    timeout: float | str | httpx.Timeout | None = None,
+    timeout: float | str | httpx.Timeout | openai.Timeout | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
@@ -7725,6 +7725,8 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
+    from litellm.llms.openai.common_utils import _OpenAIHTTPClient
+
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
@@ -7734,9 +7736,9 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
     openai_client = kwargs.get("client", None)
     if openai_client is None:
         if api_base is not None:
-            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base)
+            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=_OpenAIHTTPClient())
         else:
-            openai_client = openai.OpenAI(api_key=api_key)
+            openai_client = openai.OpenAI(api_key=api_key, http_client=_OpenAIHTTPClient())
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -8205,7 +8207,7 @@ def speech(
     project: str | None = None,
     max_retries: int | None = None,
     metadata: dict | None = None,
-    timeout: float | httpx.Timeout | None = None,
+    timeout: float | httpx.Timeout | openai.Timeout | None = None,
     response_format: str | None = None,
     speed: int | None = None,
     instructions: str | None = None,
@@ -8237,6 +8239,8 @@ def speech(
     if timeout is None:
         timeout = litellm.request_timeout
 
+    if isinstance(timeout, openai.Timeout):
+        timeout = CompletionTimeout.normalize(timeout)
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
     litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)

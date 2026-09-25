@@ -1,11 +1,15 @@
 import asyncio
+import importlib
 import json
-from typing import Final
+from collections.abc import Mapping
+from types import ModuleType
+from typing import Final, Protocol
 from unittest.mock import Mock
 
 import httpx
 import pytest
 from openai import AsyncOpenAI, OpenAI
+from openai._types import Response as SDKResponse
 
 import litellm
 from litellm.llms.openai.openai import OpenAIChatCompletion
@@ -61,13 +65,27 @@ def test_get_stream_options_passes_caller_stream_options_through_on_any_host(api
     }
 
 
+@pytest.fixture(params=("httpx", "sdk"))
+def http_backend(request: pytest.FixtureRequest) -> ModuleType:
+    return importlib.import_module("httpx" if request.param == "httpx" else SDKResponse.__module__)
+
+
+class _Request(Protocol):
+    @property
+    def content(self) -> bytes: ...
+
+    @property
+    def extensions(self) -> Mapping[str, object]: ...
+
+
 @pytest.mark.asyncio
-async def test_acompletion_returns_json_reply_over_injected_transport():
+async def test_acompletion_returns_json_reply_over_injected_transport(http_backend: ModuleType):
     outbound: Final = asyncio.Queue()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert request.extensions["timeout"] == {"connect": 1, "read": None, "write": 2, "pool": 3}
         outbound.put_nowait(json.loads(request.content))
-        return httpx.Response(
+        return http_backend.Response(
             200,
             json={
                 "id": "chatcmpl-smoke",
@@ -85,7 +103,7 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
             },
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
         client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
         response: Final = await asyncio.wait_for(
             litellm.acompletion(
@@ -93,6 +111,7 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
                 api_key="transport-only",
                 client=client,
                 messages=[{"role": "user", "content": "smoke-json-request"}],
+                timeout=http_backend.Timeout(connect=1, read=None, write=2, pool=3),
                 num_retries=0,
                 max_retries=0,
             ),
@@ -106,10 +125,53 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
         assert response.choices[0].message.content == "smoke-json-reply"
         assert response.choices[0].finish_reason == "stop"
         assert response.usage.total_tokens == 15
+        assert not http_client.is_closed
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streams_text_deltas_over_injected_transport():
+@pytest.mark.parametrize(
+    ("status", "expected_error"),
+    ((400, litellm.BadRequestError), (429, litellm.RateLimitError), (503, litellm.ServiceUnavailableError)),
+)
+async def test_acompletion_preserves_public_errors_for_both_http_clients(
+    http_backend: ModuleType, status: int, expected_error: type[Exception]
+) -> None:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        return http_backend.Response(status, json={"error": {"message": "upstream failure", "type": "api_error"}})
+
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        sdk_client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
+        with pytest.raises(expected_error, match="upstream failure"):
+            await litellm.acompletion(
+                model="openai/gpt-5.6",
+                client=sdk_client,
+                messages=[{"role": "user", "content": "request"}],
+                num_retries=0,
+                max_retries=0,
+            )
+        assert not http_client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_acompletion_maps_both_transport_timeouts_to_litellm_timeout(http_backend: ModuleType) -> None:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        raise http_backend.ReadTimeout("upstream timeout", request=request)
+
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        sdk_client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
+        with pytest.raises(litellm.Timeout):
+            await litellm.acompletion(
+                model="openai/gpt-5.6",
+                client=sdk_client,
+                messages=[{"role": "user", "content": "request"}],
+                num_retries=0,
+                max_retries=0,
+            )
+        assert not http_client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streams_text_deltas_over_injected_transport(http_backend: ModuleType):
     outbound: Final = asyncio.Queue()
 
     def chunk(delta: dict, finish: str | None) -> bytes:
@@ -122,7 +184,7 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
         }
         return f"data: {json.dumps(body)}\n\n".encode()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
         outbound.put_nowait(json.loads(request.content))
         usage: Final = {
             "id": "chatcmpl-smoke",
@@ -140,9 +202,9 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
                 b"data: [DONE]\n\n",
             )
         )
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+        return http_backend.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
         client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
         stream: Final = await litellm.acompletion(
             model="openai/gpt-5.6",
@@ -174,7 +236,7 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streams_tool_call_arguments_over_injected_transport():
+async def test_acompletion_streams_tool_call_arguments_over_injected_transport(http_backend: ModuleType):
     outbound: Final = asyncio.Queue()
     tools: Final = [
         {
@@ -201,7 +263,7 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
         }
         return f"data: {json.dumps(body)}\n\n".encode()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
         outbound.put_nowait(json.loads(request.content))
         content: Final = b"".join(
             (
@@ -223,9 +285,9 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
                 b"data: [DONE]\n\n",
             )
         )
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+        return http_backend.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
         client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
         messages: Final = [{"role": "user", "content": "weather in Paris"}]
         stream: Final = await litellm.acompletion(

@@ -14,7 +14,7 @@ from litellm.utils import ProviderConfigManager
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
-from ..common_utils import OpenAIError
+from ..common_utils import _OPENAI_HTTPX_DEFAULT_TIMEOUT, OpenAIError, _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
 
 
 class OpenAIImageVariationsHandler:
@@ -24,8 +24,14 @@ class OpenAIImageVariationsHandler:
         init_client_params: dict,
     ):
         if client is None:
+            http_client: Final = init_client_params.get("http_client")
             openai_client = OpenAI(
-                **init_client_params,
+                **{
+                    **init_client_params,
+                    "http_client": http_client
+                    if http_client is not None
+                    else _OpenAIHTTPClient(timeout=init_client_params.get("timeout", _OPENAI_HTTPX_DEFAULT_TIMEOUT)),
+                },
             )
         else:
             openai_client = client
@@ -33,8 +39,16 @@ class OpenAIImageVariationsHandler:
 
     def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
         if client is None:
+            http_client: Final = init_client_params.get("http_client")
             openai_client = AsyncOpenAI(
-                **init_client_params,
+                **{
+                    **init_client_params,
+                    "http_client": http_client
+                    if http_client is not None
+                    else _OpenAIAsyncHTTPClient(
+                        timeout=init_client_params.get("timeout", _OPENAI_HTTPX_DEFAULT_TIMEOUT)
+                    ),
+                },
             )
         else:
             openai_client = client
@@ -62,7 +76,7 @@ class OpenAIImageVariationsHandler:
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
-                "http_client": litellm.client_session,
+                "http_client": litellm.aclient_session,
                 "timeout": timeout,
                 "max_retries": max_retries,
                 "organization": organization,

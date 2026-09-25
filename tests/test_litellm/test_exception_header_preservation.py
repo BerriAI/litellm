@@ -14,10 +14,12 @@ import httpx
 import pytest
 
 from litellm.exceptions import (
+    BadGatewayError,
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     ImageFetchError,
+    InternalServerError,
     MidStreamFallbackError,
     RateLimitError,
     ServiceUnavailableError,
@@ -41,6 +43,24 @@ class TestExceptionHeaderPreservation:
             },
             request=transport.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
+
+    @pytest.mark.parametrize("error_type", (RateLimitError, BadGatewayError, InternalServerError))
+    def test_synthesized_errors_keep_httpx_response_and_request(
+        self,
+        error_type: type[RateLimitError | BadGatewayError | InternalServerError],
+        mock_response_with_headers: httpx.Response,
+    ) -> None:
+        error: Final = error_type(
+            message="Provider error",
+            model="test-model",
+            llm_provider="openai",
+            response=mock_response_with_headers,
+        )
+
+        assert isinstance(error.response, httpx.Response)
+        assert isinstance(error.request, httpx.Request)
+        assert error.request is error.response.request
+        assert dict(error.response.headers) == dict(mock_response_with_headers.headers)
 
     def test_bad_request_error_preserves_headers(
         self, mock_response_with_headers: httpx.Response

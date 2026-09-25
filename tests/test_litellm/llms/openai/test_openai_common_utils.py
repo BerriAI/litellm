@@ -1,9 +1,10 @@
-from unittest.mock import MagicMock, call, patch
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
 import pytest
-
+from respx import MockRouter
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -413,3 +414,173 @@ def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
 
 
+def _sdk_api_client(
+    api: str,
+    is_async: bool,
+    timeout: float | httpx.Timeout | openai.Timeout | None,
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
+) -> openai.OpenAI | openai.AsyncOpenAI | None:
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+    from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
+    from litellm.llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+    from litellm.llms.openai.openai import OpenAIAssistantsAPI, OpenAIBatchesAPI, OpenAIFilesAPI
+
+    kwargs: Final = {
+        "api_key": "transport-only",
+        "api_base": "https://sdk-default.example/v1",
+        "timeout": timeout,
+        "max_retries": 0,
+        "organization": None,
+        "client": client,
+    }
+    if api == "assistants":
+        assistant_factory: Final = OpenAIAssistantsAPI()
+        return (
+            assistant_factory.async_get_openai_client(**kwargs)
+            if is_async
+            else assistant_factory.get_openai_client(**kwargs)
+        )
+    if api == "image_variations":
+        variation_factory: Final = OpenAIImageVariationsHandler()
+        params: Final = {
+            "api_key": "transport-only",
+            "base_url": kwargs["api_base"],
+            "timeout": timeout,
+            "http_client": None,
+        }
+        return (
+            variation_factory.get_async_client(client=client, init_client_params=params)
+            if is_async
+            else variation_factory.get_sync_client(client=client, init_client_params=params)
+        )
+    if api == "azure_gateway":
+        return BaseAzureLLM()._init_azure_client_for_cloudflare_ai_gateway(
+            api_base="https://sdk-default.example",
+            model="deployment",
+            api_version="2024-02-01",
+            max_retries=0,
+            timeout=timeout,
+            litellm_params={},
+            api_key="transport-only",
+            azure_ad_token=None,
+            azure_ad_token_provider=None,
+            acompletion=is_async,
+            client=client,
+        )
+    factory: Final = {"files": OpenAIFilesAPI, "batches": OpenAIBatchesAPI, "fine_tuning": OpenAIFineTuningAPI}[api]()
+    return factory.get_openai_client(**kwargs, _is_async=is_async)
+
+
+@pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(
+    api: str, is_async: bool, respx_mock: MockRouter
+) -> None:
+    timeout: Final = openai.Timeout(connect=1, read=7, write=2, pool=3)
+    sdk_client: Final = _sdk_api_client(api, is_async, timeout)
+    assert sdk_client is not None
+    try:
+        assert isinstance(sdk_client._client, httpx.AsyncClient if is_async else httpx.Client)
+        assert sdk_client._client.timeout.as_dict() == timeout.as_dict()
+        assert sdk_client._client.follow_redirects is True
+        route: Final = respx_mock.get(url__regex=r"https://sdk-default\.example/.*").respond(
+            200,
+            json={"id": "file-transport", "bytes": 1, "created_at": 0, "filename": "test.jsonl", "purpose": "batch"},
+        )
+        result: Final = (
+            await sdk_client.files.retrieve("file-transport")
+            if is_async
+            else sdk_client.files.retrieve("file-transport")
+        )
+        assert result.id == "file-transport"
+        assert route.call_count == 1
+        assert route.calls.last.request.extensions["timeout"] == timeout.as_dict()
+    finally:
+        if is_async:
+            await sdk_client.close()
+        else:
+            sdk_client.close()
+    assert sdk_client.is_closed()
+
+
+@pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
+@pytest.mark.asyncio
+async def test_sdk_api_factories_preserve_caller_owned_clients(api: str, is_async: bool, backend: str) -> None:
+    http_client_type: Final = (
+        (httpx.AsyncClient if is_async else httpx.Client)
+        if backend == "httpx"
+        else (openai.DefaultAsyncHttpxClient if is_async else openai.DefaultHttpxClient)
+    )
+    http_client: Final = http_client_type(timeout=19, follow_redirects=False, trust_env=False)
+    sdk_client: Final = (
+        openai.AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        if is_async
+        else openai.OpenAI(api_key="transport-only", http_client=http_client)
+    )
+    try:
+        result: Final = _sdk_api_client(api, is_async, 7, client=sdk_client)
+        assert result is sdk_client
+        assert result._client is http_client
+        assert http_client.timeout.read == 19
+        assert http_client.follow_redirects is False
+        assert not http_client.is_closed
+    finally:
+        if is_async:
+            await sdk_client.close()
+        else:
+            sdk_client.close()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_owned_sdk_http_clients_preserve_sdk_defaults_and_finalizer_cleanup(is_async: bool) -> None:
+    import asyncio
+
+    from litellm.llms.openai.common_utils import _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
+
+    client: Final = _OpenAIAsyncHTTPClient() if is_async else _OpenAIHTTPClient()
+    assert client.timeout.as_dict() == openai.DEFAULT_TIMEOUT.as_dict()
+    assert client.follow_redirects is True
+    assert client._transport._pool._max_connections == openai.DEFAULT_CONNECTION_LIMITS.max_connections
+    assert (
+        client._transport._pool._max_keepalive_connections == openai.DEFAULT_CONNECTION_LIMITS.max_keepalive_connections
+    )
+    client.__del__()
+    await asyncio.sleep(0)
+    assert client.is_closed
+
+
+@pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
+@pytest.mark.asyncio
+async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
+    backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from importlib import import_module
+    from io import BytesIO
+
+    from litellm.images.main import aimage_variation
+
+    http_module: Final = (
+        httpx
+        if backend == "httpx"
+        else import_module(openai.DefaultAsyncHttpxClient.__mro__[1].__module__.split(".")[0])
+    )
+    transport: Final = http_module.MockTransport(
+        lambda request: http_module.Response(
+            200, json={"created": 0, "data": [{"url": "https://example.com/image.png"}]}
+        )
+    )
+    async with http_module.AsyncClient(transport=transport) as session:
+        monkeypatch.setattr(litellm, "aclient_session", session)
+        monkeypatch.setattr(litellm, "client_session", None)
+        azure_client: Final = _sdk_api_client("azure_gateway", True, 7)
+        assert azure_client is not None
+        assert azure_client._client is session
+        response: Final = await aimage_variation(
+            image=BytesIO(b"image-bytes"), api_key="transport-only", api_base="https://sdk-default.example/v1"
+        )
+        assert response.data[0].url == "https://example.com/image.png"
+        assert not session.is_closed

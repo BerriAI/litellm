@@ -12,7 +12,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
 
-from ..common_utils import BaseOpenAILLM, OpenAIError
+from ..common_utils import BaseOpenAILLM, OpenAIError, _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
 from .transformation import OpenAITextCompletionConfig
 
 
@@ -129,7 +129,11 @@ class OpenAITextCompletion(BaseLLM):
                     openai_client = OpenAI(
                         api_key=api_key,
                         base_url=api_base,
-                        http_client=litellm.client_session,
+                        http_client=(
+                            litellm.client_session
+                            if litellm.client_session is not None
+                            else _OpenAIHTTPClient(timeout=timeout)
+                        ),
                         timeout=timeout,
                         max_retries=max_retries,
                         organization=organization,
@@ -233,7 +237,9 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.client_session,
+                http_client=(
+                    litellm.client_session if litellm.client_session is not None else _OpenAIHTTPClient(timeout=timeout)
+                ),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -290,7 +296,11 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.aclient_session,
+                http_client=(
+                    litellm.aclient_session
+                    if litellm.aclient_session is not None
+                    else _OpenAIAsyncHTTPClient(timeout=timeout)
+                ),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,

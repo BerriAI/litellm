@@ -10,11 +10,13 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Lite
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
+from openai import Timeout as SDKTimeout
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.router_weights import RouterWeights
@@ -387,7 +389,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
-    timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
+    timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: int | None = None
     drop_params: bool | str | None = None
@@ -465,6 +467,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("timeout")
+    @classmethod
+    def normalize_timeout(
+        cls, value: float | str | httpx.Timeout | SDKTimeout | None
+    ) -> float | str | httpx.Timeout | None:
+        return CompletionTimeout.normalize(value) if isinstance(value, (httpx.Timeout, SDKTimeout)) else value
 
     @field_validator("provider_affinity_header")
     @classmethod
@@ -571,7 +580,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     api_key: str | None
     api_base: str | None
     api_version: str | None
-    timeout: float | str | httpx.Timeout | None
+    timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
     max_retries: int | None
     organization: list | str | None  # for openai orgs
