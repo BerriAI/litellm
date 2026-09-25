@@ -891,6 +891,17 @@ def test_an_upstream_status_maps_to_one_exception_per_provider(provider, status_
     assert raised.value.status_code == expected_status
 
 
+def test_mapped_exception_preserves_provider_status_provenance(quiet_exception_mapping):
+    with pytest.raises(litellm.Timeout) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=408),
+            custom_llm_provider="openai",
+        )
+
+    assert raised.value.provider_status_code == 408
+
+
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
 def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(provider, status_code, quiet_exception_mapping):
@@ -916,6 +927,7 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, 
     )
 
     assert returned is already_mapped
+    assert not hasattr(returned, "provider_status_code")
 
 
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)

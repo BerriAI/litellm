@@ -16567,6 +16567,7 @@ async def test_router_retry_policy_400_keeps_upstream_error_on_order_fallback_ho
         num_retries=2,
         retry_policy={"BadRequestErrorRetries": 2},
         disable_cooldowns=True,
+        order_fallback_status_codes=[400],
     )
 
     with respx.mock as respx_mock:

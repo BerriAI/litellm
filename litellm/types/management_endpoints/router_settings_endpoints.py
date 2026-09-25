@@ -150,6 +150,16 @@ ROUTER_SETTINGS_FIELDS: Final[list[RouterSettingsField]] = [
         ui_field_name="Max Fallbacks",
     ),
     RouterSettingsField(
+        field_name="order_fallback_status_codes",
+        field_type="List",
+        field_value=None,
+        field_description=(
+            'HTTP status codes that allow fallback to a higher deployment order. Use "5xx" for 500-599.'
+        ),
+        field_default=None,
+        ui_field_name="Order Fallback Status Codes",
+    ),
+    RouterSettingsField(
         field_name="fallbacks",
         field_type="List",
         field_value=None,

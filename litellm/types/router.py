@@ -143,6 +143,9 @@ OptionalPreCallChecks = list[
     ]
 ]
 
+OrderFallbackStatusCode = Annotated[int, Field(strict=True, ge=100, le=599)] | Literal["5xx"]
+OrderFallbackStatusCodes = list[OrderFallbackStatusCode]
+
 
 class UpdateRouterConfig(BaseModel):
     """
@@ -160,6 +163,7 @@ class UpdateRouterConfig(BaseModel):
     num_retries: int | None = None
     timeout: float | None = None
     max_retries: int | None = None
+    order_fallback_status_codes: OrderFallbackStatusCodes | None = None
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
