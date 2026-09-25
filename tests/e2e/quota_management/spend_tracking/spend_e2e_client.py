@@ -20,6 +20,7 @@ from typing import Final
 
 from e2e_config import unique_marker
 from e2e_http import (
+    AuthHeaders,
     FileUploadForm,
     Headers,
     NoBody,
@@ -36,6 +37,7 @@ from models import (
     ChatMessage,
     ChatMetadata,
     ChatResponse,
+    CustomerInfoParams,
     DateRangeParams,
     EmbedBody,
     EmbedResponse,
@@ -63,9 +65,10 @@ METRICS_PATH: Final = "/metrics/"
 
 __all__ = [
     "BatchCreateBody",
+    "BatchObject",
     "CallbackLogMetadata",
     "CallbackLogPayload",
-    "BatchObject",
+    "ClientAttributionHeaders",
     "DailyActivityKeyBreakdown",
     "FileObject",
     "ProbeResult",
@@ -78,6 +81,16 @@ __all__ = [
     "unique_marker",
     "unwrap",
 ]
+
+
+class ClientAttributionHeaders(AuthHeaders):
+    """The attribution headers a coding agent attaches to every call from its own
+    config (Codex CLI's config.toml ``http_headers``, Claude Code's
+    ``ANTHROPIC_CUSTOM_HEADERS``) because it has no body field for the end user."""
+
+    x_litellm_customer_id: str | None = Field(default=None, alias="x-litellm-customer-id")
+    x_litellm_end_user_id: str | None = Field(default=None, alias="x-litellm-end-user-id")
+    x_litellm_tags: str | None = Field(default=None, alias="x-litellm-tags")
 
 
 class GeminiApiKeyHeaders(Headers):
@@ -220,6 +233,10 @@ class TeamInfoSpend(BaseModel):
 
 class TeamInfoSpendResponse(BaseModel):
     team_info: TeamInfoSpend
+
+
+class CustomerSpendResponse(BaseModel):
+    spend: float | None = None
 
 
 def _chat_body(
@@ -371,6 +388,31 @@ class SpendClient:
         )
         return outcome.result if isinstance(outcome, Converged) else outcome.last_result
 
+    def customer_spend(self, customer_id: str) -> float:
+        """0.0 until the spend writer has upserted the end-user row, which /customer/info 404s before."""
+        looked_up: Final = self.proxy.transport.get(
+            "/customer/info",
+            headers=self.proxy.transport.master,
+            params=CustomerInfoParams(end_user_id=customer_id),
+            response_type=CustomerSpendResponse,
+        )
+        match looked_up:
+            case Success(data=data):
+                return data.spend or 0.0
+            case _:
+                return 0.0
+
+    def poll_customer_spend(self, customer_id: str, *, minimum: float = 0.0) -> float:
+        outcome: Final = await_converged(
+            lambda: self.customer_spend(customer_id),
+            converged=lambda spend: spend > minimum,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
     def scrape_metrics(self) -> Mapping[str, ProbeResult]:
         """GET /metrics/ on every replica in PROXY_REPLICA_URLS, keyed by replica. The
         counter is per pod, so the union of the replicas is the fleet's exposition; the
@@ -479,9 +521,12 @@ class SpendClient:
         )
 
     def send_responses(self, key: str, model: str, content: str) -> StreamingResponse:
+        return self.send_responses_with_headers(self.proxy.transport.bearer(key), model, content)
+
+    def send_responses_with_headers(self, headers: AuthHeaders, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/v1/responses",
-            headers=self.proxy.transport.bearer(key),
+            headers=headers,
             json=ResponsesBody(model=model, input=content),
         )
 
