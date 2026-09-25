@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import httpx
 import pytest
+from pytest_socket import _remove_restrictions
 
 import asyncio
 
@@ -507,6 +508,14 @@ def setup_and_teardown():
 
     # Teardown - no need to manually manage event loops with pytest-asyncio auto mode
     print(f"[conftest] Module teardown complete (worker: {worker_id or 'master'})")
+
+
+def pytest_collectstart():
+    _remove_restrictions()
+
+
+def pytest_runtest_setup():
+    _remove_restrictions()
 
 
 def pytest_collection_modifyitems(config, items):
