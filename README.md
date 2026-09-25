@@ -378,6 +378,7 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 | [Watsonx Text (`watsonx_text`)](https://docs.litellm.ai/docs/providers/watsonx) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [xAI (`xai`)](https://docs.litellm.ai/docs/providers/xai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Xinference (`xinference`)](https://docs.litellm.ai/docs/providers/xinference) |  |  |  | ✅ |  |  |  |  |  |  |
+| [ZeroGPU (`zerogpu`)](https://docs.litellm.ai/docs/providers/zerogpu) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 

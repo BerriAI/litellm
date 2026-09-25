@@ -200,5 +200,11 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "zerogpu": {
+    "base_url": "https://api.zerogpu.ai/v1",
+    "api_key_env": "ZEROGPU_API_KEY",
+    "api_base_env": "ZEROGPU_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
