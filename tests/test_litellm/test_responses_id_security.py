@@ -1094,3 +1094,39 @@ class TestClientSuppliedRetainedIdCannotBypassAuthorization:
 
         assert result["response_id"] == "resp_strangerownprovideridcccccccc"
         assert result["response_id"] != victim_provider_id
+
+
+class TestStreamingIteratorNonStreamingResponse:
+    """A streaming chat request can still hand this hook a single, non-streaming
+    ModelResponse — e.g. when an agentic loop (websearch_interception) resolves the
+    turn without streaming. That object has no __aiter__, so `async for` used to
+    raise `TypeError: 'async for' requires ... got ModelResponse` (#41411). The hook
+    must pass such a response through as one item."""
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_response_passed_through(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        response = ModelResponse(
+            choices=[Choices(index=0, message=Message(role="assistant", content="hi"))]
+        )
+        assert not hasattr(response, "__aiter__")
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "user-a"
+        mock_auth.team_id = "team-a"
+        mock_auth.request_route = "/chat/completions"
+
+        hook = ResponsesIDSecurity()
+        collected = [
+            out
+            async for out in hook.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_auth,
+                response=response,
+                request_data={},
+            )
+        ]
+
+        assert len(collected) == 1
+        assert collected[0] is response

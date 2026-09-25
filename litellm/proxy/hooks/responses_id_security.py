@@ -104,6 +104,12 @@ def _is_responses_api_create_route(request_route: str | None) -> bool:
     return canonical in _RESPONSES_API_CREATE_ROUTES
 
 
+async def _single_chunk(response: object) -> AsyncGenerator[object, None]:
+    """Wrap one non-streaming response as a one-item async stream so the
+    streaming iterator hook can treat it uniformly."""
+    yield response
+
+
 class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
@@ -333,7 +339,13 @@ class ResponsesIDSecurity(CustomLogger):
         # Create a request-scoped cache for consistent encryption across streaming chunks.
         request_encryption_cache: Final[dict[str, str]] = {}
 
-        async for chunk in response:
+        # A streaming request can still yield a single non-streaming ModelResponse
+        # here — e.g. when an agentic loop (websearch_interception) resolves the
+        # turn without streaming. Such an object is not async-iterable, so collect
+        # the chunks from the real stream, or fall back to the one response.
+        chunks = response if hasattr(response, "__aiter__") else _single_chunk(response)
+
+        async for chunk in chunks:
             if (
                 isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
                 and _is_responses_api_create_route(user_api_key_dict.request_route)
