@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from litellm.types.utils import LlmProviders
+
 
 class NormalizedTokenWeights(Protocol):
     @property
@@ -35,6 +37,9 @@ class PTUCapacity:
     @property
     def normalized_tokens_per_ptu_hour(self) -> int:
         return self.input_tpm_per_ptu * 60
+
+    def input_tpm_for(self, ptus: int) -> int:
+        return ptus * self.input_tpm_per_ptu
 
 
 AZURE_PTU_CAPACITY: Final[Mapping[str, PTUCapacity]] = MappingProxyType(
@@ -68,6 +73,7 @@ AZURE_PTU_CAPACITY: Final[Mapping[str, PTUCapacity]] = MappingProxyType(
 )
 
 _VERSION_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+_AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 
 def azure_ptu_capacity(model: str) -> PTUCapacity | None:
@@ -95,6 +101,19 @@ def deployment_ptu_capacity(deployment: Mapping[str, object]) -> PTUCapacity | N
         if isinstance(value, str) and value
     )
     return next((capacity for capacity in map(azure_ptu_capacity, candidates) if capacity is not None), None)
+
+
+def is_azure_deployment(deployment: Mapping[str, object]) -> bool:
+    """Whether ``litellm_params`` route this deployment to Azure OpenAI or Azure AI, by
+    ``custom_llm_provider`` first and the ``model`` prefix otherwise."""
+    litellm_params: Final = deployment.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    provider: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(provider, str):
+        return provider in _AZURE_PROVIDERS
+    model: Final = litellm_params.get("model")
+    return isinstance(model, str) and model.partition("/")[0] in _AZURE_PROVIDERS
 
 
 def normalized_tokens(

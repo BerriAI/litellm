@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -134,6 +135,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
 )
+from litellm.types.proxy.management_endpoints.team_endpoints import TeamIdSearchFilter
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
@@ -238,13 +240,22 @@ class _ExistingModelRow(Protocol):
 
 class _TeamRow(Protocol):
     @property
+    def team_id(self) -> str: ...
+
+    @property
     def models(self) -> Sequence[str]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
 
 
+class _TeamIdsWhere(TypedDict):
+    team_id: ReadOnly[TeamIdSearchFilter]
+
+
 class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
+
+    def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_TeamRow]]: ...
 
 
 class _TeamTable(_TeamLookupTable, Protocol):
@@ -788,9 +799,10 @@ async def _raise_if_ptu_share_teams_missing(
     shares: Final = parsed_ptu_shares(model_info.get("ptu_shares"))
     if shares is None:
         return
-    table: Final = team_table()
-    rows: Final = await asyncio.gather(*(table.find_unique(where={"team_id": team_id}) for team_id in shares))
-    missing: Final = tuple(team_id for team_id, row in zip(shares, rows, strict=True) if row is None)
+    where: Final[_TeamIdsWhere] = {"team_id": {"in": tuple(shares)}}
+    rows: Final = await team_table().find_many(where=where)
+    found: Final = frozenset(row.team_id for row in rows)
+    missing: Final = tuple(team_id for team_id in shares if team_id not in found)
     if not missing:
         return
     raise HTTPException(status_code=400, detail={"error": f"Team id={', '.join(missing)} does not exist in db"})

@@ -2,9 +2,9 @@
 
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from unittest.mock import patch as patch_ctx
 
@@ -1339,9 +1339,14 @@ class _TeamLookup:
         self.looked_up: tuple[str, ...] = ()
 
     async def find_unique(self, *, where: Mapping[str, object]) -> LiteLLM_TeamTable | None:
-        team_id: Final = str(where["team_id"])
-        self.looked_up = (*self.looked_up, team_id)
-        return LiteLLM_TeamTable(team_id=team_id) if team_id in self.existing else None
+        raise AssertionError(f"one lookup per team is what the review asked to avoid: {where}")
+
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[LiteLLM_TeamTable]:
+        team_filter: Final = where["team_id"]
+        assert isinstance(team_filter, Mapping)
+        requested: Final = tuple(str(team_id) for team_id in cast(Sequence[object], team_filter["in"]))
+        self.looked_up = (*self.looked_up, *requested)
+        return tuple(LiteLLM_TeamTable(team_id=team_id) for team_id in requested if team_id in self.existing)
 
 
 def _shared_model_info(shares: Mapping[str, int]) -> Mapping[str, object]:
@@ -1367,7 +1372,7 @@ async def test_share_team_check_refuses_a_team_that_does_not_exist():
 async def test_share_team_check_accepts_shares_naming_existing_teams():
     lookup: Final = _TeamLookup(frozenset({"team-a", "team-b"}))
     await _raise_if_ptu_share_teams_missing(_shared_model_info({"team-a": 3, "team-b": 2}), lambda: lookup)
-    assert sorted(lookup.looked_up) == ["team-a", "team-b"]
+    assert lookup.looked_up == ("team-a", "team-b")
 
 
 @pytest.mark.asyncio
@@ -1384,7 +1389,7 @@ async def test_share_team_check_leaves_a_team_id_holder_to_the_team_model_check(
 async def test_model_new_refuses_shares_naming_a_team_that_does_not_exist(monkeypatch):
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
     prisma_client = MagicMock()
-    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
     (add_model_to_db, add_team_model_to_db), patches = TestAddNewModelPtuGate._patched_proxy(
         "ptu-shared-model", prisma_client=prisma_client
     )
@@ -1401,7 +1406,7 @@ async def test_model_new_refuses_shares_naming_a_team_that_does_not_exist(monkey
             await add_new_model(model_params=shared, user_api_key_dict=admin)
 
     assert exc.value.code == "400"
-    prisma_client.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "ghost-team"})
+    prisma_client.db.litellm_teamtable.find_many.assert_awaited_once_with(where={"team_id": {"in": ("ghost-team",)}})
     add_model_to_db.assert_not_called()
     add_team_model_to_db.assert_not_called()
 

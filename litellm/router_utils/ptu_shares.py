@@ -11,10 +11,7 @@ from dataclasses import dataclass
 from typing import Final, Generic, TypeVar
 
 from litellm.litellm_core_utils.ptu_pricing import parsed_ptu_shares, ptu_terms
-from litellm.llms.azure.ptu_capacity import PTUCapacity, deployment_ptu_capacity
-from litellm.types.utils import LlmProviders
-
-_AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
+from litellm.llms.azure.ptu_capacity import PTUCapacity, deployment_ptu_capacity, is_azure_deployment
 
 _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
@@ -76,7 +73,7 @@ def team_ptu_ceiling(deployments: Sequence[Mapping[str, object]], team_id: str) 
     if not priced:
         return None
     return PTUTeamCeiling(
-        tpm_limit=sum(share * capacity.input_tpm_per_ptu for share, capacity in priced),
+        tpm_limit=sum(capacity.input_tpm_for(share) for share, capacity in priced),
         output_to_input_ratio=max(capacity.output_to_input_ratio for _, capacity in priced),
         cached_input_ratio=max(capacity.cached_input_ratio for _, capacity in priced),
     )
@@ -112,17 +109,6 @@ def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]]) -> PTU
     )
 
 
-def _is_azure_deployment(deployment: Mapping[str, object]) -> bool:
-    litellm_params: Final = deployment.get("litellm_params")
-    if not isinstance(litellm_params, Mapping):
-        return False
-    provider: Final = litellm_params.get("custom_llm_provider")
-    if isinstance(provider, str):
-        return provider in _AZURE_PROVIDERS
-    model: Final = litellm_params.get("model")
-    return isinstance(model, str) and model.partition("/")[0] in _AZURE_PROVIDERS
-
-
 def ptu_capacity_warning(model_name: str, deployment: Mapping[str, object]) -> str | None:
     """Why this reserved deployment's tokens cannot be converted to PTUs, else None.
 
@@ -141,7 +127,7 @@ def ptu_capacity_warning(model_name: str, deployment: Mapping[str, object]) -> s
             f"PTU deployment '{model_name}' has no Azure sizing row for its model, so its PTU shares set no "
             "team ceiling and its usage reports no PTU hours; set model_info.base_model to the Azure model name"
         )
-    if _is_azure_deployment(deployment):
+    if is_azure_deployment(deployment):
         return (
             f"PTU deployment '{model_name}' has no Azure sizing row for its model, so its usage reports no "
             "PTU hours; set model_info.base_model to the Azure model name"
