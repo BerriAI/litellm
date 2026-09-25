@@ -3,7 +3,7 @@ export const NO_MCP_SERVERS_SENTINEL = "no-mcp-servers";
 
 export const ALL_PROXY_MCP_SERVERS_SENTINEL = "all-proxy-mcpservers";
 
-// Must match the backend MCP_ALL_TOOLS_WILDCARD constant in litellm/types/mcp.py.
+// Must match the backend MCP_ALL_TOOLS_WILDCARD constant in litellm/constants.py.
 export const MCP_ALL_TOOLS_WILDCARD = "*";
 
 export const MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE =
