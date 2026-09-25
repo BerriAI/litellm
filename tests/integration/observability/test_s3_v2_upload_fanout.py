@@ -909,9 +909,15 @@ def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: 
             payloads: Final = collect_payloads(sink, 2 * REQUESTS, seconds=120)
             first_fail_at: Final = next(when for when, _ in sink.attempt_log if when >= window_start)
             throttled_peak: Final = sink.peak_between(first_fail_at + 5.0, sink.fail_until)
+            throttled_attempts: Final = sum(
+                1 for when, _ in sink.attempt_log if first_fail_at + 5.0 <= when < sink.fail_until
+            )
     assert sum(1 for r in provider.drain() if r.method == "POST") == 2 * REQUESTS
     assert healthy_peak > 4, (
         f"healthy peak {healthy_peak} never rose above the configured width 4; nothing to back off from"
+    )
+    assert throttled_attempts > 0, (
+        "no PUTs observed in the measured SlowDown window; the back-off assertion would be vacuous"
     )
     assert throttled_peak < healthy_peak, (
         f"in-flight PUTs during the SlowDown window peaked at {throttled_peak}, not below the healthy peak "
