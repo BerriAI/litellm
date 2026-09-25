@@ -144,7 +144,9 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
         )
 
 
-@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
+@pytest.mark.parametrize(
+    "dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"})
+)
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     def respond(request: httpx.Request) -> httpx.Response:
@@ -176,21 +178,32 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     )
 
     rate: Final = litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"]
-    assert response._hidden_params["response_cost"] == pytest.approx(rate * (2048 * 1024 * 2 + 1024 * 1024))
+    assert response._hidden_params["response_cost"] == pytest.approx(rate * 2048 * 1024 * 2)
 
 
-@pytest.mark.parametrize("reference_images", (1, 3, 10))
+@pytest.mark.parametrize(
+    ("input_mp", "output_mp"),
+    ((0.39, 1.0), (3.0, 1.0), (11.63, 1.0), (2.0, 0.75)),
+)
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_flux2_image_edit_bills_each_reference_image_as_one_megapixel(reference_images: int):
+def test_flux2_image_edit_bills_the_megapixels_azure_reports(input_mp: float, output_mp: float):
     client: Final = HTTPHandler(
         client=httpx.Client(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]}))
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "data": [{"b64_json": "aW1n"}],
+                        "request_meta": {"cost": 5.0, "input_mp": input_mp, "output_mp": output_mp},
+                    },
+                )
+            )
         )
     )
 
     response: Final = litellm.image_edit(
         model="azure_ai/FLUX.2-flex",
-        image=[b"image"] * reference_images,
+        image=[b"one", b"two"],
         prompt="Blend every reference",
         api_key="test-key",
         api_base="https://example.services.ai.azure.com",
@@ -199,7 +212,7 @@ def test_flux2_image_edit_bills_each_reference_image_as_one_megapixel(reference_
     )
 
     rate: Final = litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"]
-    assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 * (1 + reference_images))
+    assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 * (input_mp + output_mp))
 
 
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():

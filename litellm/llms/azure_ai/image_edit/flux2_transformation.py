@@ -2,8 +2,9 @@ import base64
 from collections.abc import Mapping, Sequence
 from io import BufferedReader
 from types import MappingProxyType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
+import httpx
 from httpx._types import RequestFiles
 
 import litellm
@@ -13,12 +14,17 @@ from litellm.llms.azure_ai.common_utils import (
 )
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
+    with_flux2_billed_megapixels,
 )
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ImageResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
@@ -120,6 +126,17 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
             **image_edit_optional_request_params,
         }
         return request_body, []
+
+    def transform_image_edit_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> ImageResponse:
+        return with_flux2_billed_megapixels(
+            super().transform_image_edit_response(model=model, raw_response=raw_response, logging_obj=logging_obj),
+            raw_response,
+        )
 
     def _convert_image_to_base64(self, image: Any) -> str:
         """Convert image file to base64 string"""

@@ -6968,7 +6968,6 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
         set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
-        image_edit_response.set_input_image_count(len(image) if isinstance(image, list) else 1)
         return image_edit_response
 
     async def async_image_edit_handler(
@@ -7070,7 +7069,6 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
         set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
-        image_edit_response.set_input_image_count(len(image) if isinstance(image, list) else 1)
         return image_edit_response
 
     def image_generation_handler(

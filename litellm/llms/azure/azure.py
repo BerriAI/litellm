@@ -19,6 +19,7 @@ from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRI
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
+from litellm.llms.azure_ai.image_generation import AzureFoundryFluxImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -1323,7 +1324,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 deployment_name=model,
             )
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
-            if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
+            if isinstance(
+                provider_config, (AzureFoundryMAIImageGenerationConfig, AzureFoundryFluxImageGenerationConfig)
+            ):
                 return provider_config.transform_image_generation_response(
                     model=data.get("model", "dall-e-2"),
                     raw_response=httpx_response,
