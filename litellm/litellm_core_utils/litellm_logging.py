@@ -1351,7 +1351,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 _litellm_params: Final = self.model_call_details.get("litellm_params", {})
                 _metadata: Final = _litellm_params.get("metadata", {}) or {}
                 try:
-                    # split up, so it's easier to parse in the UI
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
                         raw_request_body=self._get_raw_request_body(additional_args.get("complete_input_dict", {})),
