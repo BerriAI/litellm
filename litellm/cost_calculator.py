@@ -966,8 +966,6 @@ def _extract_service_tier(source: object) -> str | None:
 
 
 def _completion_window_value(metadata: object) -> str | None:
-    """Return ``metadata["completion_window"]`` only when it names a completion
-    window ("asap", "flex" or "balanced")."""
     if not isinstance(metadata, dict):
         return None
     window: Final[object] = metadata.get("completion_window")
@@ -984,8 +982,6 @@ def _hidden_optional_params(completion_response: object) -> Mapping[str, object]
 
 
 def _provider_bills_by_completion_window(custom_llm_provider: str | None) -> bool:
-    """True only for JSON-configured providers that translate ``service_tier`` into a
-    provider ``metadata.completion_window`` on the wire (currently Sail)."""
     if custom_llm_provider is None:
         return False
     provider: Final = JSONProviderRegistry.get(custom_llm_provider)
@@ -993,11 +989,17 @@ def _provider_bills_by_completion_window(custom_llm_provider: str | None) -> boo
 
 
 def _service_tier_from_completion_window(optional_params: Mapping[str, object]) -> str | None:
-    """Read ``metadata.completion_window`` from ``extra_body`` or a top-level ``metadata``
-    param (the two shapes callers use to pick a provider completion window directly)."""
     extra_body: Final = optional_params.get("extra_body")
     extra_metadata: Final[object] = extra_body.get("metadata") if isinstance(extra_body, dict) else None
     return _completion_window_value(extra_metadata) or _completion_window_value(optional_params.get("metadata"))
+
+
+def _traffic_type_service_tier(hidden_params: object, service_tier: str | None) -> str | None:
+    if service_tier is not None or not isinstance(hidden_params, dict):
+        return service_tier
+    provider_specific: Final = hidden_params.get("provider_specific_fields")
+    raw_traffic_type: Final = provider_specific.get("traffic_type") if isinstance(provider_specific, dict) else None
+    return _map_traffic_type_to_service_tier(raw_traffic_type) if raw_traffic_type else service_tier
 
 
 def _service_tier_billed_by_completion_window(
@@ -1009,22 +1011,17 @@ def _service_tier_billed_by_completion_window(
         return service_tier
     window: Final = _service_tier_from_completion_window(optional_params)
     if window is None:
-        if service_tier is None:
-            return _normalize_service_tier(optional_params.get("service_tier"))
-        return service_tier
+        return _normalize_service_tier(optional_params.get("service_tier")) or service_tier
     return None if window == "asap" else window
 
 
 def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
-    usage_obj: Final = cast(
-        Usage | ResponseAPIUsage | dict | BaseModel,
-        (
-            completion_response.get("usage")
-            if isinstance(completion_response, dict)
-            else getattr(completion_response, "get", lambda x: None)("usage")
-        ),
+    usage_obj: Final = (
+        completion_response.get("usage")
+        if isinstance(completion_response, dict)
+        else getattr(completion_response, "get", lambda x: None)("usage")
     )
 
     if usage_obj is None:
@@ -1428,22 +1425,23 @@ def completion_cost(
         window_params: Final[Mapping[str, object] | None] = (
             optional_params if optional_params is not None else _hidden_optional_params(completion_response)
         )
-        if service_tier is None and optional_params is not None:
-            service_tier = _normalize_service_tier(optional_params.get("service_tier"))
+        params_service_tier: Final[str | None] = _normalize_service_tier(
+            _normalize_service_tier(optional_params.get("service_tier"))
+            if service_tier is None and optional_params is not None
+            else service_tier
+        )
 
-        service_tier = _normalize_service_tier(service_tier)
+        echoed_service_tier: Final[str | None] = _normalize_service_tier(
+            _extract_service_tier(completion_response)
+            if params_service_tier is None and completion_response is not None
+            else params_service_tier
+        )
 
-        # Extract service_tier from completion_response if not provided
-        if service_tier is None and completion_response is not None:
-            service_tier = _extract_service_tier(completion_response)
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from usage object if not provided
-        if service_tier is None and cost_per_token_usage_object is not None:
-            service_tier = _extract_service_tier(cost_per_token_usage_object)
-
-        service_tier = _normalize_service_tier(service_tier)
+        resolved_service_tier: Final[str | None] = _normalize_service_tier(
+            _extract_service_tier(cost_per_token_usage_object)
+            if echoed_service_tier is None and cost_per_token_usage_object is not None
+            else echoed_service_tier
+        )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         selected_model: Final = _select_model_name_for_cost_calc(
@@ -1533,15 +1531,6 @@ def completion_cost(
                         custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
                         region_name = hidden_params.get("region_name", region_name)
 
-                        # For Gemini/Vertex AI responses, trafficType is stored in
-                        # provider_specific_fields.  Map it to the service_tier used
-                        # by the cost key lookup (_priority / _flex suffixes) so that
-                        # ON_DEMAND_PRIORITY requests are billed at priority prices.
-                        if service_tier is None:
-                            provider_specific = hidden_params.get("provider_specific_fields") or {}
-                            raw_traffic_type = provider_specific.get("traffic_type")
-                            if raw_traffic_type:
-                                service_tier = _map_traffic_type_to_service_tier(raw_traffic_type)
                 else:
                     if model is None:
                         raise ValueError(
@@ -1573,10 +1562,15 @@ def completion_cost(
                             "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
                             e,
                         )
-                service_tier = _service_tier_billed_by_completion_window(
-                    service_tier=service_tier,
-                    optional_params=window_params,
-                    custom_llm_provider=custom_llm_provider,
+                (hidden_params_for_tier,) = (
+                    (getattr(completion_response, "_hidden_params", None) if completion_response is not None else None),
+                )
+                (billed_service_tier,) = (
+                    _service_tier_billed_by_completion_window(
+                        service_tier=_traffic_type_service_tier(hidden_params_for_tier, resolved_service_tier),
+                        optional_params=window_params,
+                        custom_llm_provider=custom_llm_provider,
+                    ),
                 )
                 if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
@@ -1739,7 +1733,7 @@ def completion_cost(
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
-                        service_tier=service_tier,
+                        service_tier=billed_service_tier,
                         data_residency=data_residency,
                     )
 
@@ -1824,7 +1818,7 @@ def completion_cost(
                     call_type=call_type,
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
-                    service_tier=service_tier,
+                    service_tier=billed_service_tier,
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
@@ -1913,7 +1907,7 @@ def completion_cost(
                             model=model,
                             custom_llm_provider=_breakdown_provider,
                             usage=cost_per_token_usage_object,
-                            service_tier=service_tier,
+                            service_tier=billed_service_tier,
                             data_residency=data_residency,
                             vertex_location=vertex_location,
                             custom_cost_per_token=custom_cost_per_token,
@@ -1938,7 +1932,7 @@ def completion_cost(
                         cache_read_cost=_cache_read_cost,
                         cache_creation_cost=_cache_creation_cost,
                         reasoning_cost=_reasoning_cost,
-                        service_tier=service_tier,
+                        service_tier=billed_service_tier,
                         data_residency=data_residency,
                         vertex_location=vertex_location,
                         billed_token_rates=_billed_token_rates,

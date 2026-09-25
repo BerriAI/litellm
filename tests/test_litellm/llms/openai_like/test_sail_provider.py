@@ -1138,11 +1138,15 @@ def test_model_info_balanced_fields_are_none_off_sail_and_set_on_sail():
     assert sail_info["output_cost_per_token_balanced"] is not None
 
 
-_UNKNOWN_TIER_MESSAGE = (
-    "litellm.UnsupportedParamsError: sail does not support service_tier 'bogus'. "
-    "Supported values: auto, default, flex, balanced, priority. "
-    "To drop unsupported params set litellm.drop_params=True"
-)
+def _unknown_tier_message(tier: object) -> str:
+    return (
+        f"litellm.UnsupportedParamsError: sail does not support service_tier '{tier}'. "
+        "Supported values: auto, default, flex, balanced, priority. "
+        "To drop unsupported params set litellm.drop_params=True"
+    )
+
+
+_UNKNOWN_TIER_MESSAGE = _unknown_tier_message("bogus")
 
 
 def _bad_window_message(window: object) -> str:
@@ -1299,36 +1303,30 @@ class TestSailUnknownServiceTierRejected:
         assert "extra_body" not in bodies[0]
 
     @pytest.mark.respx()
-    def test_chat_uppercase_tier_maps_to_window(self, respx_mock: respx.Router):
-        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+    def test_chat_uppercase_tier_raises_400_before_the_wire(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="FLEX")
 
-        litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="FLEX")
-
-        body = json.loads(respx_mock.calls[0].request.content)
-        assert body["metadata"] == {"completion_window": "flex"}
-        assert "service_tier" not in body
+        assert str(exc.value) == _unknown_tier_message("FLEX")
+        assert respx_mock.calls.call_count == 0
 
     @pytest.mark.asyncio
     @pytest.mark.respx()
-    async def test_responses_uppercase_tier_maps_to_window(self, respx_mock: respx.Router):
-        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+    async def test_responses_uppercase_tier_raises_400_before_the_wire(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            await litellm.aresponses(model=MODEL, input="hi", service_tier="FLEX")
 
-        await litellm.aresponses(model=MODEL, input="hi", service_tier="FLEX")
-
-        body = json.loads(respx_mock.calls[0].request.content)
-        assert body["metadata"] == {"completion_window": "flex"}
-        assert "service_tier" not in body
+        assert str(exc.value) == _unknown_tier_message("FLEX")
+        assert respx_mock.calls.call_count == 0
 
     @pytest.mark.asyncio
     @pytest.mark.respx()
-    async def test_messages_uppercase_tier_maps_to_window(self, respx_mock: respx.Router):
-        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+    async def test_messages_uppercase_tier_raises_400_before_the_wire(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            await litellm.anthropic_messages(model=MODEL, messages=_MESSAGES, max_tokens=50, service_tier="FLEX")
 
-        await litellm.anthropic_messages(model=MODEL, messages=_MESSAGES, max_tokens=50, service_tier="FLEX")
-
-        body = json.loads(respx_mock.calls[0].request.content)
-        assert body["metadata"] == {"completion_window": "flex"}
-        assert "service_tier" not in body
+        assert str(exc.value) == _unknown_tier_message("FLEX")
+        assert respx_mock.calls.call_count == 0
 
     @pytest.mark.respx()
     def test_chat_auto_tier_sends_no_tier_no_metadata(self, respx_mock: respx.Router):
@@ -1380,3 +1378,148 @@ class TestSailUnknownServiceTierRejected:
         assert messages_config.translate_passthrough_params(
             optional, {"service_tier": "bogus", "extra_body": {"a": 1}}
         ) == dict(optional)
+
+
+def _chat_completion_stream_with_usage() -> str:
+    chunks = [
+        {
+            "id": "chatcmpl-sail-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "zai-org/GLM-5.3",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "sail"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-sail-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "zai-org/GLM-5.3",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "chatcmpl-sail-stream",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "zai-org/GLM-5.3",
+            "choices": [],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+        },
+    ]
+    return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+
+
+class TestSailCallerWindowOnMergeExtraBody:
+    @pytest.mark.parametrize(
+        "experimental_handler", ["true", "false"], ids=["experimental_handler", "default_handler"]
+    )
+    @pytest.mark.respx(assert_all_called=False)
+    def test_chat_extra_body_empty_window_raises_400(
+        self, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch, experimental_handler: str
+    ):
+        monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", experimental_handler)
+
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            litellm.completion(
+                model=MODEL,
+                messages=_MESSAGES,
+                extra_body={"metadata": {"completion_window": ""}},
+            )
+
+        assert str(exc.value) == _bad_window_message("")
+        assert respx_mock.calls.call_count == 0
+
+
+class TestSailStreamingRebuildCost:
+    @staticmethod
+    def _expected_cost(suffix: str, prompt_tokens: int = 2, completion_tokens: int = 2) -> float:
+        rates = litellm.model_cost[MODEL]
+        return (
+            prompt_tokens * rates[f"input_cost_per_token{suffix}"]
+            + completion_tokens * rates[f"output_cost_per_token{suffix}"]
+        )
+
+    @pytest.mark.respx()
+    def test_stream_chunk_builder_bills_by_wire_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(
+            content=_chat_completion_stream_with_usage(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+        response = litellm.completion(
+            model=MODEL,
+            messages=_MESSAGES,
+            stream=True,
+            stream_options={"include_usage": True},
+            service_tier="flex",
+        )
+        chunks = list(response)
+
+        rebuilt = litellm.stream_chunk_builder(chunks)
+        rebuilt_cost = litellm.completion_cost(completion_response=rebuilt, model=MODEL)
+        assert rebuilt_cost == pytest.approx(self._expected_cost("_flex"))
+        assert rebuilt_cost != pytest.approx(self._expected_cost(""))
+        logged_cost = rebuilt._hidden_params.get("response_cost") or chunks[-1]._hidden_params.get("response_cost")
+        assert rebuilt_cost == pytest.approx(logged_cost)
+
+    @pytest.mark.respx()
+    def test_stream_chunk_builder_openai_cost_unchanged(self, respx_mock: respx.Router):
+        respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+            content=_chat_completion_stream_with_usage(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+        response = litellm.completion(
+            model="openai/gpt-4.1-mini",
+            messages=_MESSAGES,
+            stream=True,
+            stream_options={"include_usage": True},
+            api_key="sk-test",
+        )
+        chunks = list(response)
+
+        rebuilt = litellm.stream_chunk_builder(chunks)
+        rates = litellm.model_cost["gpt-4.1-mini"]
+        expected = 2 * rates["input_cost_per_token"] + 2 * rates["output_cost_per_token"]
+        assert litellm.completion_cost(completion_response=rebuilt, model="gpt-4.1-mini") == pytest.approx(expected)
+
+
+class TestSailHiddenTierPrecedence:
+    def test_hidden_optional_params_tier_beats_echoed_tier(self):
+        response = _sail_completion_response(1000, 200)
+        response.service_tier = "balanced"
+        response._hidden_params["optional_params"] = {"service_tier": "flex"}
+
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=MODEL,
+            custom_llm_provider="sail",
+        )
+
+        rates = litellm.model_cost[MODEL]
+        flex_cost = 1000 * rates["input_cost_per_token_flex"] + 200 * rates["output_cost_per_token_flex"]
+        balanced_cost = 1000 * rates["input_cost_per_token_balanced"] + 200 * rates[
+            "output_cost_per_token_balanced"
+        ]
+        assert cost == pytest.approx(flex_cost)
+        assert cost != pytest.approx(balanced_cost)
+
+
+class TestNonSailTranscription:
+    @pytest.mark.respx(assert_all_called=False)
+    def test_anthropic_transcription_raises_bad_request_without_upstream_call(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.transcription(
+                model="anthropic/claude-sonnet-4-5",
+                file=_wav_file(),
+                api_key="sk-test",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "does not support audio transcription" in str(exc_info.value)
+        assert respx_mock.calls.call_count == 0

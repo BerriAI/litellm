@@ -212,8 +212,9 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         extra_metadata: Final[object] = extra_body.get("metadata") if isinstance(extra_body, dict) else None
         if isinstance(extra_metadata, dict):
             wire_metadata: Final[object] = stripped.get("metadata")
-            return {  # mutable-ok: matches dict-typed base signature
-                **stripped,
-                "metadata": {**(wire_metadata if isinstance(wire_metadata, dict) else {}), **extra_metadata},
-            }
+            merged_metadata: Final = wire_metadata.copy() if isinstance(wire_metadata, dict) else extra_metadata.copy()
+            merged_metadata.update(extra_metadata)
+            out: Final = stripped.copy()
+            out["metadata"] = merged_metadata
+            return out
         return stripped

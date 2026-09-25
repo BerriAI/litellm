@@ -2420,7 +2420,7 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        data = responses_api_provider_config.merge_extra_body(data, extra_body)
+        data.update(responses_api_provider_config.merge_extra_body(data, extra_body))
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2607,7 +2607,7 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        data = responses_api_provider_config.merge_extra_body(data, extra_body)
+        data.update(responses_api_provider_config.merge_extra_body(data, extra_body))
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming

@@ -79,7 +79,7 @@ def apply_service_tier_as_completion_window(
 ) -> dict[str, object]:  # mutable-ok: transform_request returns a plain dict
     service_tier: Final = body.get("service_tier")
     mapped_window: Final[str | None] = (
-        _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier.lower()) if isinstance(service_tier, str) else None
+        _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier) if isinstance(service_tier, str) else None
     )
     validate_caller_completion_window(body, provider, model)
     metadata, extra_metadata = _completion_window_metadata_maps(body)
@@ -138,7 +138,7 @@ def service_tier_completion_window_drop(
 ) -> bool:
     if not service_tier_as_completion_window_enabled(provider):
         return False
-    if service_tier is None or (isinstance(service_tier, str) and service_tier.lower() in _SUPPORTED_SERVICE_TIERS):
+    if service_tier is None or (isinstance(service_tier, str) and service_tier in _SUPPORTED_SERVICE_TIERS):
         return False
     if drop_params or litellm.drop_params:
         return True
@@ -251,6 +251,17 @@ def create_config_class(provider: SimpleProviderConfig):
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if service_tier_as_completion_window_enabled(provider):
+                raw_model: Final = request.get("model")
+                validate_caller_completion_window(
+                    MappingProxyType(
+                        {
+                            **request,
+                            **(MappingProxyType({"extra_body": extra_body}) if extra_body else MappingProxyType({})),
+                        }
+                    ),
+                    provider,
+                    raw_model if isinstance(raw_model, str) else "",
+                )
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 
@@ -367,13 +378,14 @@ def _json_responses_request_body(
 ) -> "dict[str, object]":  # mutable-ok: matches base signature
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
+    request_params: Final = params.copy() if provider.special_handling.get("force_store_false") else params
     if provider.special_handling.get("force_store_false"):
-        params["store"] = False
+        request_params["store"] = False
     body: Final = OpenAILikeResponsesConfig.transform_responses_api_request(
         config,
         model=model,
         input=input,
-        response_api_optional_request_params=params,
+        response_api_optional_request_params=request_params,
         litellm_params=litellm_params,
         headers=headers,
     )
@@ -466,7 +478,12 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             if service_tier_as_completion_window_enabled(provider):
                 raw_model: Final = request.get("model")
                 validate_caller_completion_window(
-                    {**request, **({"extra_body": extra_body} if extra_body else {})},
+                    MappingProxyType(
+                        {
+                            **request,
+                            **(MappingProxyType({"extra_body": extra_body}) if extra_body else MappingProxyType({})),
+                        }
+                    ),
                     provider,
                     raw_model if isinstance(raw_model, str) else "",
                 )
