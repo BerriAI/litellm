@@ -3,7 +3,7 @@ import json
 from litellm.integrations.zerobus.row import TRACE_TABLE_COLUMNS, create_table_sql, trace_row
 
 
-def _payload() -> dict:
+def _payload() -> dict[str, object]:
     return {
         "id": "chatcmpl-1",
         "trace_id": "trace-1",
