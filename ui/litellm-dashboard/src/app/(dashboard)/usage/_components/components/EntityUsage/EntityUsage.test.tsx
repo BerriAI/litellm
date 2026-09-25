@@ -664,7 +664,6 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText("Key Activity"));
     });
 
-    // processActivityData is mocked to a single-entry record here, so the loaded count reads 1
     expect(await screen.findByText("Showing 1 of 3,000 keys")).toBeInTheDocument();
   });
 

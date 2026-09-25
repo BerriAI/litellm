@@ -903,7 +903,7 @@ def _build_aggregated_sql_query(
         if cursor is None
         else (
             f"WHERE key_spend < {cursor_spend_param}::float8 "
-            f"OR (key_spend = {cursor_spend_param}::float8 AND api_key > {cursor_key_param})"
+            f'OR (key_spend = {cursor_spend_param}::float8 AND api_key COLLATE "C" > {cursor_key_param})'
         )
     )
     metric_select: Final = _rollup_metric_select(table_name)
@@ -949,7 +949,7 @@ def _build_aggregated_sql_query(
                 COUNT(*) OVER () AS remaining_api_keys
             FROM ranked_api_keys
             {cursor_clause}
-            ORDER BY key_spend DESC, api_key
+            ORDER BY key_spend DESC, api_key COLLATE "C"
             LIMIT {USAGE_TOP_API_KEYS_LIMIT}
         )
         SELECT

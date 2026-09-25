@@ -194,4 +194,29 @@ describe("KeyActivityPanel", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Loading more keys failed");
   });
+
+  it("clears a stale load-more status when the page callback changes", async () => {
+    const staleLoadMoreKeys = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("boom"));
+    const { rerender } = render(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={staleLoadMoreKeys}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Loading more keys failed");
+
+    const freshLoadMoreKeys = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    rerender(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={freshLoadMoreKeys}
+      />,
+    );
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

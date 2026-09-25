@@ -24,7 +24,7 @@ type RemoteSearch =
   | { status: "done"; query: string; searchKeys: SearchKeys; keys: Record<string, ModelActivityData> }
   | { status: "error"; query: string; searchKeys: SearchKeys };
 
-type LoadMoreState = { status: "idle" } | { status: "loading" } | { status: "error" };
+type LoadMoreState = { status: "idle" } | { status: "loading" | "error"; loadMoreKeys: () => Promise<void> };
 
 const REMOTE_SEARCH_DEBOUNCE_MS = 300;
 
@@ -38,6 +38,8 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
   const [query, setQuery] = useState("");
   const [remote, setRemote] = useState<RemoteSearch>({ status: "idle" });
   const [loadMore, setLoadMore] = useState<LoadMoreState>({ status: "idle" });
+  const currentLoadMore: LoadMoreState =
+    "loadMoreKeys" in loadMore && loadMore.loadMoreKeys === loadMoreKeys ? loadMore : { status: "idle" };
   const filtered = useMemo(() => filterKeyActivity(keyMetrics, query), [keyMetrics, query]);
   const trimmedQuery = query.trim();
   const remoteEnabled = searchKeys !== undefined && apiKeyTruncation !== undefined && trimmedQuery !== "";
@@ -119,23 +121,23 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
           <button
             type="button"
             className="text-sm text-muted-foreground underline disabled:no-underline disabled:opacity-50"
-            disabled={loadMore.status === "loading"}
+            disabled={currentLoadMore.status === "loading"}
             onClick={() => {
-              setLoadMore({ status: "loading" });
+              setLoadMore({ status: "loading", loadMoreKeys });
               loadMoreKeys()
                 .then(() => setLoadMore({ status: "idle" }))
-                .catch(() => setLoadMore({ status: "error" }));
+                .catch(() => setLoadMore({ status: "error", loadMoreKeys }));
             }}
           >
             Load more keys
           </button>
         )}
-        {loadMore.status === "loading" && (
+        {currentLoadMore.status === "loading" && (
           <span role="status" className="text-sm text-muted-foreground">
             Loading more keys...
           </span>
         )}
-        {loadMore.status === "error" && (
+        {currentLoadMore.status === "error" && (
           <span role="alert" className="text-sm text-muted-foreground">
             Loading more keys failed
           </span>

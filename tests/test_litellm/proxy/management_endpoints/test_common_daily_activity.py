@@ -3249,7 +3249,7 @@ class TestBuildAggregatedSqlQueryCursor:
         )
         assert params[-2:] == [6.0, "key-004"]
         assert "key_spend < $5::float8" in sql
-        assert "key_spend = $5::float8 AND api_key > $6" in sql
+        assert 'key_spend = $5::float8 AND api_key COLLATE "C" > $6' in sql
 
     def test_cursor_placeholders_follow_the_marker_param(self):
         sql, params = _build_aggregated_sql_query(
@@ -3266,7 +3266,7 @@ class TestBuildAggregatedSqlQueryCursor:
         )
         assert params[-3:] == ["2026-05-30", 6.0, "key-004"]
         assert "key_spend < $5::float8" in sql
-        assert "key_spend = $5::float8 AND api_key > $6" in sql
+        assert 'key_spend = $5::float8 AND api_key COLLATE "C" > $6' in sql
 
 
 @pytest.mark.asyncio
