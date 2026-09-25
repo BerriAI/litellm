@@ -42,7 +42,7 @@ from models import (
     UserNewBody,
     UserUpdateBody,
 )
-from proxy_client import Converged, await_converged
+from proxy_client import Caller, Converged, await_converged
 
 pytestmark = pytest.mark.e2e
 
@@ -591,6 +591,38 @@ class TestOrganizationRoutes:
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
+
+    @pytest.mark.covers("mgmt.organization.new.admin_unrestricted_models")
+    def test_new_without_models_succeeds_for_proxy_admin_key_with_restricted_models(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        marker = unique_marker()
+        user_id = _create_user(
+            client,
+            resources,
+            UserNewBody(
+                user_email=f"e2e-mgmt-{marker}@example.com",
+                user_id=f"e2e-mgmt-{marker}",
+                user_role="proxy_admin",
+                models=["gemini-2.5-flash"],
+            ),
+        )
+        session_key = _generate_key(
+            client, resources, KeyGenerateBody(user_id=user_id, models=["gemini-2.5-flash"])
+        )
+
+        admin_client: Final = client.with_caller(
+            Caller(credential=session_key, kind="virtual_key", role="proxy_admin")
+        )
+        alias = f"e2e-mgmt-org-{marker}"
+        org_id = admin_client.create_org(OrgNewBody(organization_alias=alias))
+        resources.defer(lambda: client.delete_org(org_id))
+
+        info = client.org_info(org_id)
+        assert info.organization_alias == alias, (
+            f"/organization/info reports alias {info.organization_alias!r}, configured {alias!r}"
+        )
+        assert info.models == [], f"/organization/info reports models {info.models}, expected unrestricted []"
 
     @pytest.mark.covers("mgmt.organization.update.persists")
     def test_update_alias_persists_to_organization_info(

@@ -1487,6 +1487,7 @@ class UserNewBody(BaseModel):
     user_role: UserRole
     user_id: str | None = None
     auto_create_key: bool | None = None
+    models: list[str] = []
 
 
 class UserNewResponse(BaseModel):
