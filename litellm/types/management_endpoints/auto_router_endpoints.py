@@ -210,6 +210,15 @@ class AutoRouterCacheStats(BaseModel):
     ttl_1h_turns: int = Field(description="Turns whose cache write used the one-hour TTL")
 
 
+class AutoRouterUsage(BaseModel):
+    model: str
+    router_name: str | None
+    router_type: str | None
+    tier: str | None
+    requests: int
+    spend: float
+
+
 class AutoRouterBenchmarkTotals(BaseModel):
     """Session-shape and savings aggregates over auto-routed traffic in the window."""
 

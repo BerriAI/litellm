@@ -51,6 +51,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -239,6 +240,7 @@ from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterUsage
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -283,6 +285,33 @@ class _ViewCountRow(TypedDict):
 class _RelTuplesRow(TypedDict):
     reltuples: ReadOnly[int]
 
+
+_ROUTING_USAGE_SQL: Final = f"""
+WITH requests AS (
+    SELECT model, spend,
+        CASE WHEN jsonb_typeof(metadata->'routing_decision') = 'object'
+            AND metadata->'routing_decision' <> '{{}}'::jsonb
+            THEN COALESCE(NULLIF(metadata#>>'{{routing_decision,router_model_name}}', ''), NULLIF(model_group, ''))
+        END AS router_name,
+        NULLIF(metadata#>>'{{routing_decision,router_type}}', '') AS router_type,
+        NULLIF(metadata#>>'{{routing_decision,tier}}', '') AS tier
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" >= $1::timestamp AND "startTime" < $2::timestamp
+        AND ($3::text IS NULL OR "user" = $3)
+        AND ($4::text IS NULL OR api_key = $4)
+        AND NULLIF(metadata->>'{INTERNAL_CALL_ORIGIN_METADATA_KEY}', '') IS NULL
+        AND ($7::text IS NULL OR model = $7)
+)
+SELECT model, router_name, router_type, tier, COUNT(*)::int AS requests,
+    COALESCE(SUM(spend), 0)::float8 AS spend
+FROM requests
+WHERE ($5::text IS NULL OR router_name = $5)
+    AND ($6::text IS NULL OR router_type = $6)
+GROUP BY model, router_name, router_type, tier
+ORDER BY spend DESC, model, router_name, tier
+"""
+
+_AUTO_ROUTER_USAGE_ROWS: Final = TypeAdapter(tuple[AutoRouterUsage, ...])
 
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
@@ -4773,6 +4802,29 @@ class PrismaClient:
             )
 
             raise e
+
+    async def get_auto_router_usage(
+        self,
+        *,
+        start_time: datetime,
+        end_time: datetime,
+        user_id: str | None = None,
+        api_key: str | None = None,
+        router_name: str | None = None,
+        router_type: str | None = None,
+        destination_model: str | None = None,
+    ) -> tuple[AutoRouterUsage, ...]:
+        rows: Final[object] = await self.db.query_raw(  # pyright: ignore[reportAny]  # wrappers forward query_raw through __getattr__; validate rows below
+            _ROUTING_USAGE_SQL,
+            start_time.isoformat(),
+            end_time.isoformat(),
+            user_id,
+            api_key,
+            router_name,
+            router_type,
+            destination_model,
+        )
+        return _AUTO_ROUTER_USAGE_ROWS.validate_python(rows)
 
     async def _query_first_with_cached_plan_fallback(self, sql_query: str, *args) -> dict | None:
         """

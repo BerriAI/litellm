@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -11,12 +11,12 @@ from litellm.proxy.management_endpoints.auto_router_usage import get_auto_router
 
 class Database:
     def __init__(self) -> None:
-        self.query_raw = AsyncMock(return_value=[])
+        self.get_auto_router_usage = AsyncMock(return_value=())
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
-async def test_admin_filters_reach_query_as_parameters(role: LitellmUserRoles) -> None:
+async def test_admin_filters_reach_prisma_client(role: LitellmUserRoles) -> None:
     db = Database()
     await get_auto_router_usage(
         date(2026, 1, 1),
@@ -28,14 +28,14 @@ async def test_admin_filters_reach_query_as_parameters(role: LitellmUserRoles) -
         user_id="owner",
         api_key="key-hash",
     )
-    assert db.query_raw.call_args.args[1:] == (
-        "2026-01-01T00:00:00",
-        "2026-01-03T00:00:00",
-        "owner",
-        "key-hash",
-        "router'quoted",
-        "complexity",
-        None,
+    db.get_auto_router_usage.assert_awaited_once_with(
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 3),
+        user_id="owner",
+        api_key="key-hash",
+        router_name="router'quoted",
+        router_type="complexity",
+        destination_model=None,
     )
 
 
@@ -49,14 +49,14 @@ async def test_non_admin_is_scoped_to_own_user_when_filter_omitted() -> None:
         db,
         destination_model="model-a",
     )
-    assert db.query_raw.call_args.args[1:] == (
-        "2026-01-01T00:00:00",
-        "2026-01-02T00:00:00",
-        "own-user",
-        None,
-        None,
-        None,
-        "model-a",
+    db.get_auto_router_usage.assert_awaited_once_with(
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 2),
+        user_id="own-user",
+        api_key=None,
+        router_name=None,
+        router_type=None,
+        destination_model="model-a",
     )
 
 
@@ -74,7 +74,7 @@ async def test_non_admin_cannot_read_other_users_or_unbound_service_account(call
             user_id="another-user",
         )
     assert error.value.status_code == 403
-    db.query_raw.assert_not_called()
+    db.get_auto_router_usage.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_query_requires_one_specific_model_or_router(model: str | None, ro
             router_name=router_name,
         )
     assert error.value.status_code == 400
-    db.query_raw.assert_not_called()
+    db.get_auto_router_usage.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_invalid_or_overlong_ranges_never_query_spend_logs(end: date) -> N
             date(2026, 1, 1), end, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), db, destination_model="fast"
         )
     assert error.value.status_code == 400
-    db.query_raw.assert_not_called()
+    db.get_auto_router_usage.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,8 @@ async def test_maximum_range_includes_its_last_day() -> None:
         date(2026, 1, 1), date(2026, 4, 3), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), db,
         destination_model="fast",
     )
-    assert db.query_raw.call_args.args[1:3] == ("2026-01-01T00:00:00", "2026-04-04T00:00:00")
+    assert db.get_auto_router_usage.call_args.kwargs["start_time"] == datetime(2026, 1, 1)
+    assert db.get_auto_router_usage.call_args.kwargs["end_time"] == datetime(2026, 4, 4)
 
 
 @pytest.mark.asyncio
@@ -125,4 +126,4 @@ async def test_router_type_cannot_filter_a_destination_model() -> None:
             destination_model="fast", router_type="complexity",
         )
     assert error.value.status_code == 400
-    db.query_raw.assert_not_called()
+    db.get_auto_router_usage.assert_not_called()
