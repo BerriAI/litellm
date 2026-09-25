@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
-from litellm.router_utils import pattern_match_deployments
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 
 
@@ -26,7 +26,7 @@ def test_get_pattern_never_resolves_declared_authenticating_providers(monkeypatc
         resolution_attempts.append(model)
         raise AssertionError("get_llm_provider would run the OAuth device flow")
 
-    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _oauth_tripwire)
 
     unmatched_router = PatternMatchRouter()
     unmatched_router.add_pattern("anthropic/*", _wildcard_deployment("anthropic/*"))
@@ -49,7 +49,7 @@ def test_get_pattern_bare_provider_name_never_matches_that_providers_wildcard(mo
     def _unknown_provider(model, *args, **kwargs):
         raise ValueError(f"unknown provider for {model}")
 
-    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _unknown_provider)
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _unknown_provider)
     router = PatternMatchRouter()
     router.add_pattern("github_copilot/*", _wildcard_deployment("github_copilot/*"))
     assert router.get_pattern("github_copilot") is None
@@ -63,7 +63,7 @@ def test_get_pattern_missing_model_returns_none(monkeypatch):
     def _unknown_provider(model, *args, **kwargs):
         raise ValueError(f"unknown provider for {model}")
 
-    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _unknown_provider)
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _unknown_provider)
     router = PatternMatchRouter()
     router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
     assert router.get_pattern(None) is None
@@ -71,7 +71,7 @@ def test_get_pattern_missing_model_returns_none(monkeypatch):
 
 def test_get_pattern_still_resolves_unqualified_names(monkeypatch):
     monkeypatch.setattr(
-        pattern_match_deployments,
+        get_llm_provider_logic,
         "get_llm_provider",
         lambda model, **kwargs: (model, "openai", None, None),
     )
