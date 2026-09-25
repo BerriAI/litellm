@@ -3451,6 +3451,37 @@ def test_google_ai_studio_presence_penalty_supported():
     assert "presence_penalty" in supported_params
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_google_ai_studio_forwards_seed_to_generation_config(drop_params: bool):
+    captured: dict[str, dict] = {}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        seed=42,
+        drop_params=drop_params,
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert captured["body"]["generationConfig"]["seed"] == 42
+
+
 # ==================== Tool Type Separation Tests ====================
 # These tests verify that each Tool object contains exactly one type per Vertex AI API spec
 # Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/Tool
