@@ -25,7 +25,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
-VERTEX_OPENAI_COMPATIBLE_UNSUPPORTED_PARAMS: Final = frozenset(
+VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS: Final = frozenset(
     {
         "audio",
         "max_retries",
@@ -383,6 +383,27 @@ def get_vertex_base_model_name(model: str) -> str:
             return model.replace(route, "", 1)
 
     return model
+
+
+def vertex_model_garden_model_id_in_json_body(model: str) -> bool:
+    """
+    Vertex catalog / publisher models are addressed as publisher/model (e.g.
+    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
+
+    Deployed Model Garden endpoints are typically a single segment (often numeric)
+    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
+    """
+    return "/" in model
+
+
+def is_vertex_self_deployed_openai_compatible_endpoint(model: str) -> bool:
+    local_model: Final = model.removeprefix("vertex_ai/")
+    route: Final = get_vertex_ai_model_route(local_model)
+    if route == VertexAIModelRoute.GEMMA:
+        return True
+    return route == VertexAIModelRoute.MODEL_GARDEN and not vertex_model_garden_model_id_in_json_body(
+        get_vertex_base_model_name(local_model)
+    )
 
 
 def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:

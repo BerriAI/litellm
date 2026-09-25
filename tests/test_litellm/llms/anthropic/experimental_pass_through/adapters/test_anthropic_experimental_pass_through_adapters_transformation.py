@@ -1047,13 +1047,25 @@ def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: st
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
+        "vertex_ai/moonshotai/kimi-k2-thinking-maas",
+        "vertex_ai/xai/grok-4.1-fast-non-reasoning",
+    ],
+)
+def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_vertex_maas_models(model: str):
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, "vertex_ai")
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
         ("gemini/gemini-2.5-pro", "gemini"),
         ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
         ("vertex_ai/gemma/gemma-2-2b-it", "vertex_ai"),
         ("vertex_ai/openai/mg-endpoint-lit8592", "vertex_ai"),
-        ("vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas", "vertex_ai"),
         ("anthropic/claude-sonnet-4-5", "anthropic"),
         ("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
         ("no-such-model-lit5875", "no-such-provider-lit5875"),
