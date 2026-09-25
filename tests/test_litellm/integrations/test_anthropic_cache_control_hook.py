@@ -2924,7 +2924,7 @@ class TestOpenAIPromptCacheBreakpoint:
         }
         assert processed[1] == {"role": "user", "content": "hi"}
         assert returned is params
-        assert returned == {"prompt_cache_options": self.EXPLICIT}
+        assert returned == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_chat_list_content_marks_last_block(self):
         messages = [
@@ -2946,21 +2946,22 @@ class TestOpenAIPromptCacheBreakpoint:
                 "prompt_cache_breakpoint": self.EXPLICIT,
             },
         ]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_chat_unprefixed_model_resolves_to_openai(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
         _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model="gpt-5.6")
         assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
-    def test_chat_keeps_caller_prompt_cache_options(self):
+    @pytest.mark.parametrize("mode", ["explicit", "implicit"])
+    def test_chat_keeps_caller_prompt_cache_options(self, mode):
         params = {
             "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
-            "prompt_cache_options": {"mode": "implicit"},
+            "prompt_cache_options": {"mode": mode, "ttl": "24h"},
         }
         self._chat([{"role": "system", "content": "sys"}], params)
-        assert params["prompt_cache_options"] == {"mode": "implicit"}
+        assert params["prompt_cache_options"] == {"mode": mode, "ttl": "24h"}
 
     def test_chat_no_prompt_cache_options_when_nothing_injected(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -2994,7 +2995,7 @@ class TestOpenAIPromptCacheBreakpoint:
         _, processed, _ = self._chat(messages, params)
         assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert processed[1] == messages[1]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_cap_counts_client_breakpoints_of_both_kinds(self):
         messages = [
@@ -3046,7 +3047,7 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
         ]
         out, params = self._chat(messages, [{"location": "message", "index": -1}])
         assert out[2]["content"] == [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_tool_result_only_turn_is_skipped_on_v1_messages(self):
         messages = [
@@ -3158,12 +3159,12 @@ class TestChatPathProviderStamp:
     def test_explicit_openai_provider_uses_openai_dialect(self):
         out, params = self._seed_and_run("gpt-5.6", "openai")
         assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_bare_gpt_model_without_provider_resolves_to_openai(self):
         out, params = self._seed_and_run("gpt-5.6", None)
         assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_points_keep_identity_for_models_below_gpt_5_6(self):
         points = copy.deepcopy(self.POINTS)
@@ -3204,7 +3205,7 @@ class TestChatPathProviderStamp:
     def test_regional_openai_api_base_uses_openai_dialect(self):
         out, params = self._seed_and_run("gpt-5.6", None, api_base="https://eu.api.openai.com/v1")
         assert out[0]["content"] == self.OPENAI_STYLE
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
     def test_env_api_base_override_keeps_anthropic_style_markers(self, monkeypatch, env_var):
@@ -3223,7 +3224,7 @@ class TestChatPathProviderStamp:
         monkeypatch.setenv("OPENAI_BASE_URL", self.CUSTOM_API_BASE)
         out, params = self._seed_and_run("gpt-5.6", None, api_base="https://api.openai.com/v1")
         assert out[0]["content"] == self.OPENAI_STYLE
-        assert params["prompt_cache_options"] == {"mode": "explicit"}
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize(
         "api_base,expected",
@@ -3314,7 +3315,7 @@ class TestResponsesInputPartsEligible:
             "text": "second",
             "prompt_cache_breakpoint": self.EXPLICIT,
         }
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     @pytest.mark.parametrize(
         "part",
@@ -3326,7 +3327,7 @@ class TestResponsesInputPartsEligible:
     def test_input_image_and_input_file_parts_are_eligible(self, part):
         out, params = self._chat([{"role": "user", "content": [part]}], [{"location": "message", "index": -1}])
         assert out[0]["content"][0] == {**part, "prompt_cache_breakpoint": self.EXPLICIT}
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestMessagesPathApiBaseGate:
@@ -3397,7 +3398,7 @@ class TestToolConfigSlotInOpenAIDialect:
             dynamic_callback_params={},
         )
         assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
-        assert params["prompt_cache_options"] == self.EXPLICIT
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_messages_path_marks_all_four_messages(self):
         out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
@@ -3460,7 +3461,7 @@ class TestPromptCacheBreakpointCapability:
         assert chat_messages[0]["content"] == [
             {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
         ]
-        assert chat_params["prompt_cache_options"] == {"mode": "explicit"}
+        assert chat_params["prompt_cache_options"] == {"mode": "implicit"}
 
         kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
         _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
