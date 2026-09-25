@@ -1096,7 +1096,16 @@ class ChunkProcessor:
                 + (reasoning_tokens or 0)
             )
         )
-        returned_usage.total_tokens = returned_usage.prompt_tokens + returned_usage.completion_tokens
+        reported_total_tokens: Final = next(
+            (
+                usage.total_tokens
+                for chunk in reversed(chunks)
+                if (usage := self._extract_usage_chunk(chunk)) is not None and usage.total_tokens > 0
+            ),
+            0,
+        )
+        calculated_total_tokens: Final = returned_usage.prompt_tokens + returned_usage.completion_tokens
+        returned_usage.total_tokens = max(reported_total_tokens, calculated_total_tokens)
 
         if cache_creation_input_tokens is not None:
             returned_usage._cache_creation_input_tokens = cache_creation_input_tokens

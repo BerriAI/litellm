@@ -586,7 +586,8 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.total_tokens == 77
 
 
-def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
+@pytest.mark.parametrize("upstream_total", [80, 140])
+def test_calculate_usage_honors_openai_sdk_completion_usage_chunks(upstream_total: int) -> None:
     from openai.types.completion_usage import CompletionUsage
 
     content_chunk = ModelResponseStream(
@@ -624,7 +625,7 @@ def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
         stream_options={"include_usage": True},
     )
     usage_chunk.usage = CompletionUsage(
-        prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704
+        prompt_tokens=20, completion_tokens=60, total_tokens=upstream_total, cost=0.000704
     )
     assert type(usage_chunk.usage) is CompletionUsage
 
@@ -635,8 +636,69 @@ def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
 
     assert usage.prompt_tokens == 20
     assert usage.completion_tokens == 60
-    assert usage.total_tokens == 80
+    assert usage.total_tokens == upstream_total
     assert getattr(usage, "cost", None) == pytest.approx(0.000704)
+
+
+@pytest.mark.parametrize(
+    ("usage_chunks", "expected_total"),
+    [
+        pytest.param((Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1063),), 1063, id="upstream-total"),
+        pytest.param(
+            (
+                Usage(prompt_tokens=35, completion_tokens=24, total_tokens=937),
+                Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1063),
+            ),
+            1063,
+            id="cumulative-not-summed",
+        ),
+        pytest.param(
+            (
+                Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1200),
+                Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1063),
+            ),
+            1063,
+            id="last-positive-not-maximum",
+        ),
+        pytest.param(
+            (Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1063), Usage()),
+            1063,
+            id="tail-missing-total",
+        ),
+        pytest.param(
+            (Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1063), Usage(total_tokens=None)),
+            1063,
+            id="tail-null-total",
+        ),
+        pytest.param(
+            (Usage(prompt_tokens=35, completion_tokens=150, total_tokens=1063), Usage(total_tokens=0)),
+            1063,
+            id="tail-zero-total",
+        ),
+        pytest.param(
+            (
+                Usage(prompt_tokens=35, completion_tokens=24, total_tokens=59),
+                Usage(prompt_tokens=35, completion_tokens=150),
+            ),
+            185,
+            id="stale-total-after-completion-growth",
+        ),
+        pytest.param((Usage(prompt_tokens=35, completion_tokens=150, total_tokens=150),), 185, id="partial-total"),
+        pytest.param((Usage(prompt_tokens=35, completion_tokens=150, total_tokens=-1),), 185, id="negative-total"),
+        pytest.param((Usage(prompt_tokens=35, completion_tokens=150),), 185, id="missing-total"),
+    ],
+)
+def test_calculate_usage_preserves_valid_upstream_total(usage_chunks: tuple[Usage, ...], expected_total: int) -> None:
+    chunks: Final = [
+        ModelResponseStream(model="test-model", choices=[], usage=chunk_usage) for chunk_usage in usage_chunks
+    ]
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="test-model", completion_output=""
+    )
+
+    assert usage.prompt_tokens == 35
+    assert usage.completion_tokens == 150
+    assert usage.total_tokens == expected_total
 
 
 def test_get_model_from_chunks_azure_model_router():
