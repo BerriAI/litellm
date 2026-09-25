@@ -12,6 +12,7 @@ import {
   mcpToolPermissionKeyFor,
   mcpToolState,
   resolveEffectiveMcpServers,
+  retainedMcpToolOverrides,
 } from "./effectiveMcpServers";
 
 const server = (overrides: Partial<MCPServer> & { server_id: string }): MCPServer =>
@@ -713,5 +714,31 @@ describe("convention servers and tool overrides", () => {
     };
 
     expect(applyToolOverrideWrites(deselectAll)).toEqual({ "srv-1": { allow: [], deny: ["list_pages"] } });
+  });
+});
+
+describe("retainedMcpToolOverrides", () => {
+  const catalog = [server({ server_id: "srv-1" }), server({ server_id: "srv-2", alias: "shared" })];
+
+  it("drops the override for a server the save no longer grants", () => {
+    expect(
+      retainedMcpToolOverrides(
+        { "srv-1": { allow: [], deny: ["list_pages"] }, "srv-2": { allow: ["delete_page"], deny: [] } },
+        new Set(["srv-2"]),
+        catalog,
+      ),
+    ).toEqual({ "srv-2": { allow: ["delete_page"], deny: [] } });
+  });
+
+  it("keeps an override while any server the key names stays granted", () => {
+    expect(
+      retainedMcpToolOverrides({ shared: { allow: [], deny: ["t"] } }, new Set(["srv-2"]), catalog),
+    ).toEqual({ shared: { allow: [], deny: ["t"] } });
+  });
+
+  it("keeps an override whose key resolves to nothing, so an unloaded catalog prunes nothing", () => {
+    expect(retainedMcpToolOverrides({ "not-yet-loaded": { allow: [], deny: ["t"] } }, new Set(), catalog)).toEqual(
+      { "not-yet-loaded": { allow: [], deny: ["t"] } },
+    );
   });
 });

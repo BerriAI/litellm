@@ -40,6 +40,9 @@ import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_avail
 import type { Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
+import { extractMcpEntitlement } from "./mcp_server_management/mcpEntitlement";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { toast } from "@/lib/toast";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import BudgetDurationDropdown, {
@@ -259,6 +262,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
   const watchedToolOverrides = form.watch("mcp_tool_overrides");
+  const { data: allMcpServers = [] } = useMCPServers();
+  const { data: allMcpToolsets = [] } = useMCPToolsets();
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
@@ -485,7 +490,17 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             delete formValues.mcp_tool_permissions;
           }
           if (formValues.mcp_tool_overrides && Object.keys(formValues.mcp_tool_overrides).length > 0) {
-            formValues.object_permission.mcp_tool_overrides = formValues.mcp_tool_overrides;
+            const entitlement = extractMcpEntitlement(
+              {
+                mcp_servers_and_groups: formValues.allowed_mcp_servers_and_groups,
+                mcp_tool_overrides: formValues.mcp_tool_overrides,
+              },
+              allMcpServers,
+              allMcpToolsets,
+            );
+            if (entitlement && Object.keys(entitlement.mcp_tool_overrides).length > 0) {
+              formValues.object_permission.mcp_tool_overrides = entitlement.mcp_tool_overrides;
+            }
             delete formValues.mcp_tool_overrides;
           }
         }

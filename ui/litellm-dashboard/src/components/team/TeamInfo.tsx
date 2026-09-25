@@ -94,6 +94,7 @@ import {
   mcpServersForIdentifier,
   normalizeMcpToolOverrides,
   resolveEffectiveMcpServers,
+  retainedMcpToolOverrides,
   type EffectiveMcpServer,
 } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
@@ -1109,6 +1110,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         mcpResolution.kind === "resolved"
           ? retainedMcpToolPermissions(submittedToolPermissions, mcpResolution.serverIds, allMcpServers)
           : submittedToolPermissions;
+      const submittedToolOverrides = values.mcp_tool_overrides || {};
+      const mcpToolOverrides =
+        mcpResolution.kind === "resolved"
+          ? retainedMcpToolOverrides(submittedToolOverrides, mcpResolution.serverIds, allMcpServers)
+          : submittedToolOverrides;
 
       updateData.object_permission = {};
       if (servers) {
@@ -1120,8 +1126,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (mcpToolPermissions) {
         updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
       }
-      if (values.mcp_tool_overrides && Object.keys(values.mcp_tool_overrides).length > 0) {
-        updateData.object_permission.mcp_tool_overrides = values.mcp_tool_overrides;
+      if (Object.keys(mcpToolOverrides).length > 0) {
+        updateData.object_permission.mcp_tool_overrides = mcpToolOverrides;
       }
       if (toolsets) {
         updateData.object_permission.mcp_toolsets = toolsets;

@@ -271,8 +271,14 @@ export const mcpToolState = (
   isDeleteTool: boolean,
 ): McpToolState => {
   const denied = (entry.overrides?.deny ?? []).includes(toolName);
+  if (denied) {
+    if (entry.keyedTools !== undefined) {
+      return { checked: entry.keyedTools.includes(toolName), locked: false };
+    }
+    return { checked: false, locked: entry.toolsetTools !== undefined };
+  }
   if ((entry.toolsetTools ?? []).includes(toolName)) {
-    return { checked: !denied, locked: true };
+    return { checked: true, locked: true };
   }
   if (entry.keyedTools !== undefined) {
     return { checked: entry.keyedTools.includes(toolName), locked: false };
@@ -281,11 +287,23 @@ export const mcpToolState = (
     return { checked: false, locked: true };
   }
   const allowed = (entry.overrides?.allow ?? []).includes(toolName);
-  return { checked: (isDeleteTool ? false : !denied) || (allowed && !denied), locked: false };
+  return { checked: !isDeleteTool || allowed, locked: false };
 };
 
 export const isConventionServer = (entry: EffectiveMcpServer): boolean =>
   entry.keyedTools === undefined && entry.toolsetTools === undefined;
+
+export const retainedMcpToolOverrides = (
+  toolOverrides: Readonly<Record<string, McpToolOverrideEntry>>,
+  grantedServerIds: ReadonlySet<string>,
+  knownServers: readonly MCPServer[],
+): Record<string, McpToolOverrideEntry> =>
+  Object.fromEntries(
+    Object.entries(toolOverrides).filter(([permissionKey]) => {
+      const named = mcpServersForIdentifier(knownServers, permissionKey);
+      return named.length === 0 || named.some((server) => grantedServerIds.has(server.server_id));
+    }),
+  );
 
 export const applyToolOverrideWrite = ({
   toolOverrides,

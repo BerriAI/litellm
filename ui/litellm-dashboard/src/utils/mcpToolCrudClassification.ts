@@ -100,6 +100,7 @@ const tokenVariants = (token: string): string[] =>
 
 // Matches litellm/proxy/_experimental/mcp_server/tool_classification.py, fixture-pinned.
 const classifyTokens = (tokens: string[]): CrudOp => {
+  if (tokens.some((token) => DELETE_TOKENS.has(token))) return "delete";
   const variants = new Set(tokens.flatMap((token) => tokenVariants(token)));
   if ([...variants].some((variant) => READ_TOKENS.has(variant))) return "read";
   if ([...variants].some((variant) => DELETE_TOKENS.has(variant))) return "delete";
