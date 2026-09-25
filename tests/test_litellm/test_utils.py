@@ -642,6 +642,10 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_image_512",
         "output_cost_per_image_1024",
         "output_cost_per_image_1536",
+        "output_cost_per_image_0.5K",
+        "output_cost_per_image_1K",
+        "output_cost_per_image_2K",
+        "output_cost_per_image_4K",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
         "input_cost_per_second",
@@ -755,6 +759,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
@@ -766,6 +771,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
@@ -789,6 +795,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_video_token": {"type": "number"},
+                "input_cost_per_token_above_32k_tokens": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
@@ -872,6 +879,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_image_512": {"type": "number"},
                 "output_cost_per_image_1024": {"type": "number"},
                 "output_cost_per_image_1536": {"type": "number"},
+                "output_cost_per_image_0.5K": {"type": "number"},
+                "output_cost_per_image_1K": {"type": "number"},
+                "output_cost_per_image_2K": {"type": "number"},
+                "output_cost_per_image_4K": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
@@ -883,6 +894,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
+                "output_cost_per_token_above_32k_tokens": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
@@ -1188,22 +1200,52 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     """Regression LIT-4056: with the bedrock/ routing prefix (plain, converse/, or
     invoke/), the exact regional cost-map entry must win over the region-stripped
     base entry, matching the unprefixed control form."""
-    regional = litellm.model_cost["au.anthropic.claude-opus-4-8"]
-    base = litellm.model_cost["anthropic.claude-opus-4-8"]
+    regional = litellm.model_cost["eu.amazon.nova-pro-v1:0"]
+    base = litellm.model_cost["amazon.nova-pro-v1:0"]
     assert regional["input_cost_per_token"] > base["input_cost_per_token"]
 
     for model in (
-        "bedrock/au.anthropic.claude-opus-4-8",
-        "bedrock/converse/au.anthropic.claude-opus-4-8",
-        "bedrock/invoke/au.anthropic.claude-opus-4-8",
+        "bedrock/eu.amazon.nova-pro-v1:0",
+        "bedrock/converse/eu.amazon.nova-pro-v1:0",
+        "bedrock/invoke/eu.amazon.nova-pro-v1:0",
     ):
         info = litellm.get_model_info(model=model)
-        assert info["key"] == "au.anthropic.claude-opus-4-8", model
+        assert info["key"] == "eu.amazon.nova-pro-v1:0", model
         assert info["input_cost_per_token"] == regional["input_cost_per_token"], model
         assert info["output_cost_per_token"] == regional["output_cost_per_token"], model
 
-    control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
-    assert control["key"] == "au.anthropic.claude-opus-4-8"
+    control = litellm.get_model_info(model="eu.amazon.nova-pro-v1:0", custom_llm_provider="bedrock")
+    assert control["key"] == "eu.amazon.nova-pro-v1:0"
+
+
+@pytest.mark.parametrize(
+    "bare_key",
+    [
+        "anthropic.claude-fable-5",
+        "anthropic.claude-fable-5-1",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-opus-4-5-20251101-v1:0",
+        "anthropic.claude-opus-4-6-v1",
+        "anthropic.claude-opus-4-7",
+        "anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-5",
+        "anthropic.claude-opus-5-5",
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-sonnet-4-6",
+        "anthropic.claude-sonnet-5",
+    ],
+)
+def test_bedrock_bare_claude_id_is_priced_global(local_model_cost_map, bare_key):
+    """A bare Bedrock Claude id is billed at the Global SKU, so it carries the same
+    rate as its global. inference profile and sits below the regional us. rate."""
+    bare = litellm.model_cost[bare_key]
+    us = litellm.model_cost[f"us.{bare_key}"]
+    global_ = litellm.model_cost[f"global.{bare_key}"]
+    cost_fields = [f for f in bare if "cost" in f]
+    assert cost_fields
+    for field in cost_fields:
+        assert bare[field] == global_[field], field
+    assert bare["input_cost_per_token"] < us["input_cost_per_token"]
 
 
 def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
@@ -6142,6 +6184,8 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "3.8-flash-tts" not in model
+            and "3.8-flash-lite-tts" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"

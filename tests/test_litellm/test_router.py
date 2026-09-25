@@ -529,6 +529,39 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_passthrough_keeps_the_file_and_forwards_the_flag():
+    """A passthrough batch upload must reach the provider byte for byte: the router
+    neither rewrites body.model to the deployment model nor drops the flag."""
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    jsonl_content = b'{"custom_id": "r1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "vertex-batch"}}\n'
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "vertex_project": "p"},
+            }
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="vertex-batch", purpose="batch", file=BytesIO(jsonl_content), passthrough=True
+        )
+        forwarded = mock_acreate_file.call_args.kwargs
+        assert forwarded["passthrough"] is True
+        forwarded["file"].seek(0)
+        assert forwarded["file"].read() == jsonl_content
+
+        mock_acreate_file.reset_mock()
+        await router.acreate_file(model="vertex-batch", purpose="batch", file=BytesIO(jsonl_content))
+        rewritten = mock_acreate_file.call_args.kwargs["file"]
+        rewritten.seek(0)
+        assert b'"gemini-2.5-flash"' in rewritten.read()
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_does_not_fall_back_across_model_groups():
     """A file created for batches only exists under the credentials of the model group
     the caller named. A cross-group fallback silently stores it with the wrong provider
@@ -17829,3 +17862,95 @@ def test_access_windows_filter_reserved_deployments_method():
             request_team_id="team-a",
         )
     ] == ["reserved-deployment", "open-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_fallback_key() -> None:
+    """Claude Code sends the bare "claude-sonnet-4-6" to /v1/messages; routing serves it through the
+    "anthropic/*" wildcard, so a fallback keyed the way that wildcard is written ("anthropic/claude-sonnet-4-6",
+    which is what the Admin UI offers) must catch the failure instead of surfacing the provider error."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "openai/gpt-5.5-pro",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5-pro",
+                    "api_key": "sk-fake",
+                    "mock_response": "served by the fallback",
+                },
+            },
+        ],
+        fallbacks=[{"anthropic/claude-sonnet-4-6": ["openai/gpt-5.5-pro"]}],
+        num_retries=0,
+    )
+
+    result = await router.aanthropic_messages(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+    )
+
+    assert result["content"][0]["text"] == "served by the fallback"
+
+
+@pytest.mark.asyncio
+async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_context_window_fallback_key() -> None:
+    """The context-window chain is keyed the same way the ordinary chain is, so a key spelled like the
+    wildcard deployment ("anthropic/claude-sonnet-4-6") must catch the bare group's context-window error too."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.ContextWindowExceededError",
+                },
+            },
+            {
+                "model_name": "openai/gpt-5.5-pro",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5-pro",
+                    "api_key": "sk-fake",
+                    "mock_response": "served by the context window fallback",
+                },
+            },
+        ],
+        context_window_fallbacks=[{"anthropic/claude-sonnet-4-6": ["openai/gpt-5.5-pro"]}],
+        num_retries=0,
+    )
+
+    result = await router.aanthropic_messages(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+    )
+
+    assert result["content"][0]["text"] == "served by the context window fallback"
+
+
+def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_content_policy_fallback() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "sk-fake"},
+            },
+            {
+                "model_name": "openai/gpt-5.5-pro",
+                "litellm_params": {"model": "openai/gpt-5.5-pro", "api_key": "sk-fake"},
+            },
+        ],
+        content_policy_fallbacks=[{"anthropic/claude-sonnet-4-6": ["openai/gpt-5.5-pro"]}],
+    )
+
+    assert router._has_content_policy_fallback("claude-sonnet-4-6", {}) is True
+    assert router._has_content_policy_fallback("claude-haiku-4-5", {}) is False

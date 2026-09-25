@@ -680,12 +680,12 @@ class RouterBudgetLimiting(CustomLogger):
             for key, value in redis_values.items():
                 if value is None:
                     continue
-                pending_spend = sum(  # rebind-ok: each cache key has independent queued spend
+                pending_spend = sum(
                     operation["increment_value"]
                     for operation in self.redis_increment_operation_queue
                     if operation["key"] == key
                 )
-                updated_spend = float(value) + pending_spend  # rebind-ok: each cache key has an independent total
+                updated_spend = float(value) + pending_spend
                 await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=updated_spend)
                 verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, updated_spend)
 

@@ -33,6 +33,7 @@ import {
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   type BuildComplexityRouterConfigParams,
+  type StoredComplexityRouterConfig,
   buildComplexityRouterConfig,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
@@ -152,6 +153,12 @@ const KEYWORD_MATCHING_KEYS = new Set([
   "match_threshold",
 ]);
 
+const UNEDITED_STORED_VALUE_KEYS: readonly (keyof ComplexityRouterConfigValue)[] = [
+  "route_housekeeping_to_cheapest_tier",
+  "reminder_markers",
+  "max_tokens_from_tier_model",
+];
+
 const toRecord = (value: unknown): Record<string, unknown> => {
   const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
   return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -179,7 +186,15 @@ export const buildUpdatedComplexityRouterConfig = (
   customTechnicalKeywords?: string[],
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
+  const stored = toRecord(storedConfig);
+  const hydratedFromStored = hydrateComplexityRouterConfig(stored as StoredComplexityRouterConfig, undefined);
+  const unedited = new Set<string>(
+    UNEDITED_STORED_VALUE_KEYS.filter(
+      (key) => key in stored && JSON.stringify(value[key]) === JSON.stringify(hydratedFromStored[key]),
+    ),
+  );
   const isManaged = (key: string): boolean => {
+    if (unedited.has(key)) return false;
     if (key === "classifier_context_per_turn_chars") {
       return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
     }
@@ -190,7 +205,7 @@ export const buildUpdatedComplexityRouterConfig = (
   };
   const dropped = customTierDroppedKeys(value);
   const preservedConfig = Object.fromEntries(
-    Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
+    Object.entries(stored).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
   );
 
   const builderParams: BuildComplexityRouterConfigParams = {
@@ -208,6 +223,7 @@ export const buildUpdatedComplexityRouterConfig = (
   const unowned: readonly string[] = [
     ...(keywordMatching === undefined ? [...KEYWORD_MATCHING_KEYS].filter((key) => !isManaged(key)) : []),
     ...(customTechnicalKeywords === undefined ? ["custom_technical_keywords"] : []),
+    ...unedited,
   ];
   return {
     ...preservedConfig,
