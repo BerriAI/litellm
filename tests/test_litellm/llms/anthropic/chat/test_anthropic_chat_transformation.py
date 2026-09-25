@@ -6018,6 +6018,49 @@ def test_sampling_param_gating_driven_by_model_map_flag(monkeypatch):
     assert flagged_on["top_p"] == 0.9
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("anthropic", "claude-opus-5"),
+        ("anthropic", "claude-opus-4-7"),
+        ("anthropic", "claude-sonnet-4-5"),
+        ("vertex_ai", "claude-opus-5"),
+        ("vertex_ai", "claude-sonnet-4-5"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-7"),
+        ("bedrock", "anthropic.claude-opus-5"),
+        ("bedrock", "global.anthropic.claude-opus-4-7"),
+        ("bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+    ],
+)
+def test_supported_openai_params_agree_with_sampling_param_gating(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+) -> None:
+    """``get_supported_openai_params`` must list ``top_p`` only where the request path forwards it, and keep
+    ``temperature`` because temperature=1 is still accepted on models that removed sampling params"""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    supported: Final = litellm.utils.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
+    assert supported is not None
+
+    if "top_p" in supported:
+        with_top_p: Final = litellm.utils.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, top_p=0.9
+        )
+        assert 0.9 in with_top_p.values()
+    else:
+        with pytest.raises(litellm.utils.UnsupportedParamsError, match=r"\['top_p'\]"):
+            litellm.utils.get_optional_params(model=model, custom_llm_provider=custom_llm_provider, top_p=0.9)
+        with pytest.raises(litellm.utils.UnsupportedParamsError, match=r"top_p=0\.9"):
+            litellm.utils.get_optional_params(
+                model=model, custom_llm_provider=custom_llm_provider, top_p=0.9, allowed_openai_params=["top_p"]
+            )
+
+    assert "temperature" in supported
+    with_temperature_1: Final = litellm.utils.get_optional_params(
+        model=model, custom_llm_provider=custom_llm_provider, temperature=1
+    )
+    assert with_temperature_1["temperature"] == 1
+
+
 def test_top_k_dropped_at_transform_for_models_that_removed_it():
     """``top_k`` is a provider-specific kwarg that bypasses
     ``map_openai_params``, so it must be stripped at the transform_request

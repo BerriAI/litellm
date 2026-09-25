@@ -498,7 +498,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "stream",
             "stop",
             "temperature",
-            "top_p",
+            *(("top_p",) if self._supports_sampling_params(model) else ()),
             "max_tokens",
             "max_completion_tokens",
             "tools",

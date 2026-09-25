@@ -6288,6 +6288,7 @@ def _get_model_info_helper(
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
+                supports_sampling_params=_model_info.get("supports_sampling_params", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
