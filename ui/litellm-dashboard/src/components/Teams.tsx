@@ -484,7 +484,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             if (toolsets && toolsets.length > 0) {
               formValues.object_permission.mcp_toolsets = toolsets;
             }
-            delete formValues.allowed_mcp_servers_and_groups;
           }
 
           if (formValues.mcp_tool_permissions && Object.keys(formValues.mcp_tool_permissions).length > 0) {
@@ -505,6 +504,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             }
             delete formValues.mcp_tool_overrides;
           }
+          delete formValues.allowed_mcp_servers_and_groups;
         }
 
         // Transform allowed_mcp_access_groups into object_permission

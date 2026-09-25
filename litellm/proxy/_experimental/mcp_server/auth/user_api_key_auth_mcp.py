@@ -3312,27 +3312,18 @@ class MCPRequestHandler:
         axis twin of ``_apply_agent_caller_ceiling``, so the headers only ever narrow. Denies every tool
         on the server when the caller's team cannot be loaded, since a caller we cannot resolve must not
         read as unrestricted."""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-
         caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
         if caller_auth is None:
             return allowed_tools
         try:
             team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(caller_auth)
-            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(team_obj_perm, server_id)
+            resolved_inventory: Final = await MCPRequestHandler._manager_inventory(server_id)
+            team_tools: Final = await MCPRequestHandler._row_level_tools(team_obj_perm, server_id, resolved_inventory)
         except Exception as e:  # noqa: BLE001  # an unresolved caller team must deny, not widen
             verbose_logger.warning(
                 "MCP agent caller team tool ceiling unresolvable, denying tools on %r: %s", server_id, e
             )
             return ()
-        team_direct_tools: Final = (
-            global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
-            if team_obj_perm
-            else None
-        )
-        team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
         team_capped: Final = (
             allowed_tools
             if team_tools is None
@@ -3340,7 +3331,9 @@ class MCPRequestHandler:
             if allowed_tools is None
             else tuple(frozenset(allowed_tools) & frozenset(team_tools))
         )
-        return await MCPRequestHandler._apply_user_tool_ceiling(team_capped, server_id, caller_auth)
+        return await MCPRequestHandler._apply_user_tool_ceiling(
+            team_capped, server_id, caller_auth, inventory=resolved_inventory
+        )
 
     @staticmethod
     async def _apply_end_user_tool_ceiling(

@@ -4384,6 +4384,48 @@ class TestAgentMCPPermissions:
             assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == ["ask_wiki_question"]
             assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) == []
 
+    async def test_agent_key_acting_for_a_user_is_capped_at_the_callers_convention_tools(self):
+        """A converted caller team granting server-a with no tool list still caps the agent to the
+        convention set: inventory non-deletes minus explicit denies."""
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        async def caller_team_permission(
+            user_api_key_auth: UserAPIKeyAuth | None = None,
+        ) -> LiteLLM_ObjectPermissionTable | None:
+            assert user_api_key_auth is not None
+            if user_api_key_auth.team_id != "callers":
+                return None
+            return LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-callers",
+                mcp_servers=["server-a"],
+                mcp_permission_version=1,
+            )
+
+        with (
+            patch.object(  # test-quality-ok: the level loaders read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which team is being asked about
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(side_effect=caller_team_permission)
+            ),
+            patch.object(  # test-quality-ok: same seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: the discovered catalog is process state with no injection seam
+                MCPRequestHandler,
+                "_manager_inventory",
+                AsyncMock(
+                    return_value={"read_wiki_structure": "reads a page", "delete_wiki_page": "deletes a page"}
+                ),
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == [
+                "read_wiki_structure"
+            ]
+
     async def test_agent_key_not_acting_for_anyone_ignores_the_caller_tool_ceiling(self):
         agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
 
