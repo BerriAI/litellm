@@ -279,6 +279,7 @@ class BaseOpenAILLM:
             "organization",
             "api_base",
             "workload_identity_config",
+            "ssl_verify",
         )
         openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
@@ -304,6 +305,7 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
+        ssl_verify: bool | str | ssl.SSLContext | None = None,
     ) -> httpx.AsyncClient | None:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
@@ -314,7 +316,7 @@ class BaseOpenAILLM:
             return httpx.AsyncClient(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration()
+        ssl_config: Final = get_ssl_configuration(ssl_verify=ssl_verify)
         transport: Final = AsyncHTTPHandler._create_async_transport(
             ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
@@ -330,7 +332,9 @@ class BaseOpenAILLM:
         )
 
     @staticmethod
-    def _get_sync_http_client() -> httpx.Client | None:
+    def _get_sync_http_client(
+        ssl_verify: bool | str | ssl.SSLContext | None = None,
+    ) -> httpx.Client | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
@@ -340,7 +344,7 @@ class BaseOpenAILLM:
             return httpx.Client(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration()
+        ssl_config: Final = get_ssl_configuration(ssl_verify=ssl_verify)
 
         return httpx.Client(
             verify=ssl_config,

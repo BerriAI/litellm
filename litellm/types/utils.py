@@ -3977,6 +3977,7 @@ all_litellm_params = (
         "prompt_version",
         "prompt_environment",
         "api_base",
+        "ssl_verify",
         "force_timeout",
         "logger_fn",
         "verbose",
