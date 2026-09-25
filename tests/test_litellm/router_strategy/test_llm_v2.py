@@ -521,6 +521,7 @@ _MESSAGE_LOGGING_OPT_OUTS: Final = (
     pytest.param({"turn_off_message_logging": "True"}, False, id="key-logging-settings-string"),
     pytest.param({"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}, False, id="redaction-header"),
     pytest.param({}, True, id="global-setting"),
+    pytest.param({"metadata": {"headers": None}}, False, id="undecidable-headers-fail-closed"),
 )
 
 

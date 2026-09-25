@@ -435,12 +435,15 @@ def _classifier_reply_is_private(request_kwargs: Mapping[str, object] | None) ->
     from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 
     kwargs: Final = dict(request_kwargs) if request_kwargs else {}
-    return should_redact_message_logging(
-        {
-            "litellm_params": kwargs,
-            "standard_callback_dynamic_params": initialize_standard_callback_dynamic_params(kwargs),
-        }
-    )
+    try:
+        return should_redact_message_logging(
+            {
+                "litellm_params": kwargs,
+                "standard_callback_dynamic_params": initialize_standard_callback_dynamic_params(kwargs),
+            }
+        )
+    except AttributeError:
+        return True
 
 
 def _validation_problem(detail: ErrorDetails) -> str:
