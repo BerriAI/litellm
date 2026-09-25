@@ -13501,6 +13501,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.gemini.count_tokens.transformation import gemini_contents_as_chat_messages
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -13603,21 +13604,23 @@ async def _try_provider_token_count(
             param="model",
             code=status_code,
         )
+    except (litellm.APIError, litellm.APIConnectionError) as e:
+        _raise_or_fall_back_to_local_count(message=e.message, status_code=e.status_code)
+        return None
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
-            raise ProxyException(
-                message=result.error_message or "Token counting failed",
-                type="token_counting_error",
-                param="model",
-                code=result.status_code or 500,
-            )
-        verbose_proxy_logger.warning(
-            "Provider token counting failed (%s): %s. Falling back to local tokenizer.",
-            result.status_code,
-            result.error_message,
+        _raise_or_fall_back_to_local_count(
+            message=result.error_message or "Token counting failed", status_code=result.status_code or 500
         )
         return None
     return result
+
+
+def _raise_or_fall_back_to_local_count(message: str, status_code: int) -> None:
+    if litellm.disable_token_counter is True:
+        raise ProxyException(message=message, type="token_counting_error", param="model", code=status_code)
+    verbose_proxy_logger.warning(
+        "Provider token counting failed (%s): %s. Falling back to local tokenizer.", status_code, message
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -13729,7 +13732,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
-        Sequence[AllMessageValues] | None, messages
+        Sequence[AllMessageValues] | None,
+        messages if messages is not None else gemini_contents_as_chat_messages(contents),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
