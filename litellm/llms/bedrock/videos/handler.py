@@ -41,7 +41,7 @@ from ..base_aws_llm import (
     bedrock_bearer_token,
     pop_aws_auth_params,
 )
-from ..common_utils import BedrockError, redact_bedrock_headers_for_logging
+from ..common_utils import BedrockError, BedrockModelInfo, redact_bedrock_headers_for_logging
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -617,11 +617,24 @@ class BedrockVideoGeneration(BaseAWSLLM):
             )
 
         bucket, prefix = _parse_s3_uri(s3_uri)
-        # Nova writes output.mp4 into a per-invocation folder (v1:1 docs); older
-        # v1:0 flows placed it directly under the configured prefix.
-        key_candidates: Final = [  # mutable-ok: candidate S3 keys are tried in order
+        # Nova Reel v1:1 writes output.mp4 into a per-invocation folder under the
+        # configured prefix (AWS docs); only the older v1:0 flows placed it flat
+        # under the prefix. With a shared prefix the flat key can hold a foreign
+        # or stale object, so the flat fallback is v1:0-only. The modelArn on the
+        # get-async-invoke response is authoritative over the id-encoded model
+        # (inference profiles can encode a base id while the ARN names the
+        # actually-invoked variant).
+        model_arn: Final[object] = raw.get("modelArn")
+        resolved_model: Final[str] = model_arn.rsplit("/", 1)[-1] if isinstance(model_arn, str) and model_arn else model
+        gate_model: Final[str] = resolved_model if "nova-reel" in resolved_model else model
+        allow_flat: Final[bool] = BedrockModelInfo.get_base_model(gate_model) == "amazon.nova-reel-v1:0"
+        key_candidates: Final[list[str]] = [  # mutable-ok: candidate S3 keys are tried in order
             f"{prefix}/{invocation_arn.rsplit('/', 1)[-1]}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/"),
-            f"{prefix}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/"),
+            *(
+                [f"{prefix}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/")]  # mutable-ok: v1:0-only flat fallback key
+                if allow_flat
+                else []
+            ),
         ]
         return self._download_s3_object(
             bucket,

@@ -631,6 +631,8 @@ def test_handler_video_content_downloads_from_s3(monkeypatch):
     handler = BedrockVideoGeneration()
     from litellm.types.videos.utils import encode_video_id_with_provider
 
+    # Pin a v1:0 model explicitly: the flat fallback key is v1:0-only.
+    assert TEST_MODEL == "amazon.nova-reel-v1:0"
     video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
     monkeypatch.setattr(
         handler,
@@ -663,6 +665,88 @@ def test_handler_video_content_downloads_from_s3(monkeypatch):
     # v1:1 per-invocation folder first, then the older v1:0 flat layout.
     assert downloaded_keys[0] == "out/abc123-def456/output.mp4"
     assert downloaded_keys[1] == "out/output.mp4"
+
+
+def _completed_content_setup(
+    monkeypatch,
+    handler: BedrockVideoGeneration,
+    encoded_model: str,
+    extra_status: dict,
+) -> tuple[str, list[str]]:
+    """Patch status+download for a Completed video_content run; returns (video_id, keys)."""
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", encoded_model)
+    monkeypatch.setattr(
+        handler,
+        "_status_request_parts",
+        lambda arn, params, api_base, api_key=None: (
+            "https://example.com/async-invoke/arn",
+            Mock(url="https://example.com/async-invoke/arn", headers={}),
+            "us-east-1",
+        ),
+    )
+    resp = httpx.Response(
+        200,
+        json={
+            "invocationArn": TEST_ARN,
+            "status": "Completed",
+            "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}},
+            **extra_status,
+        },
+    )
+    monkeypatch.setattr(handler, "_sync_get", lambda prepped, timeout=None: resp)
+
+    downloaded_keys: list[str] = []
+
+    def fake_download(bucket, key_candidates, litellm_params, raw, region_default=None, api_key=None, timeout=None):
+        downloaded_keys.extend(key_candidates)
+        return b"mp4-bytes"
+
+    monkeypatch.setattr(handler, "_download_s3_object", fake_download)
+    return video_id, downloaded_keys
+
+
+def test_video_content_v1_1_does_not_fall_back_to_flat_key(monkeypatch):
+    """v1:1 writes per-invocation folders only; the shared-prefix flat key must not
+    be tried (it can hold a foreign or stale object)."""
+    handler = BedrockVideoGeneration()
+    video_id, keys = _completed_content_setup(
+        monkeypatch,
+        handler,
+        "amazon.nova-reel-v1:1",
+        {"modelArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-reel-v1:1"},
+    )
+    assert handler.video_content(video_id=video_id, litellm_params={}) == b"mp4-bytes"
+    assert keys == ["out/abc123-def456/output.mp4"]
+
+
+def test_video_content_v1_0_keeps_flat_fallback(monkeypatch):
+    """A v1:0 invocation (cross-region id + foundation-model arn) keeps both candidate
+    keys, per-invocation folder first."""
+    handler = BedrockVideoGeneration()
+    video_id, keys = _completed_content_setup(
+        monkeypatch,
+        handler,
+        "us.amazon.nova-reel-v1:0",
+        {"modelArn": "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-reel-v1:0"},
+    )
+    assert handler.video_content(video_id=video_id, litellm_params={}) == b"mp4-bytes"
+    assert keys == ["out/abc123-def456/output.mp4", "out/output.mp4"]
+
+
+def test_video_content_model_arn_overrides_encoded_model(monkeypatch):
+    """modelArn on the status response is authoritative: a v1:0-encoded id whose
+    invocation actually ran v1:1 (per the arn) drops the flat fallback."""
+    handler = BedrockVideoGeneration()
+    video_id, keys = _completed_content_setup(
+        monkeypatch,
+        handler,
+        "amazon.nova-reel-v1:0",
+        {"modelArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-reel-v1:1"},
+    )
+    assert handler.video_content(video_id=video_id, litellm_params={}) == b"mp4-bytes"
+    assert keys == ["out/abc123-def456/output.mp4"]
 
 
 def test_handler_sync_create_passes_timeout(monkeypatch):
