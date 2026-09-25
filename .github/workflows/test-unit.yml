@@ -80,7 +80,8 @@ jobs:
 
           - shard: integrations
             artifact-name: integrations
-            test-path: "tests/test_litellm/integrations"
+            test-path: ""
+            unit-flag: integrations
             workers: 2
             reruns: 3
             timeout-minutes: 20
@@ -89,6 +90,7 @@ jobs:
           - shard: Vertex AI
             artifact-name: llm-vertex-ai
             test-path: "tests/test_litellm/llms/vertex_ai"
+            unit-flag: llm-vertex-ai
             workers: 1
             reruns: 2
             timeout-minutes: 20
@@ -97,6 +99,7 @@ jobs:
           - shard: All Other Providers
             artifact-name: llm-other-providers
             test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+            unit-flag: llm-other-providers
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -105,7 +108,6 @@ jobs:
           - shard: misc
             artifact-name: misc
             test-path: >-
-              tests/test_litellm/secret_managers
               tests/test_litellm/interactions
               tests/test_litellm/ocr
               tests/test_litellm/passthrough

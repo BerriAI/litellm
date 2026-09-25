@@ -1404,7 +1404,16 @@ if MCP_AVAILABLE:
             and headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
             else None
         )
-        return _StagedServerTest(request=request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers)
+        preview_request: Final = (
+            request.model_copy(
+                update={"mcp_info": {**(request.mcp_info or {}), "protocol_version": saved_server.protocol_version}}
+            )
+            if saved_server is not None and "protocol_version" not in (request.mcp_info or {})
+            else request
+        )
+        return _StagedServerTest(
+            request=preview_request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers
+        )
 
     async def _list_tools_within(client: MCPClient, deadline: float) -> list[MCPTool] | None:
         with anyio.move_on_after(deadline):
@@ -1541,6 +1550,7 @@ if MCP_AVAILABLE:
                     extra_headers=merged_headers,
                     stdio_env=stdio_env,
                     cred_provider=preview_cred_provider,
+                    protocol_version_override=server_model.protocol_version,
                 )
 
                 return await operation(client)

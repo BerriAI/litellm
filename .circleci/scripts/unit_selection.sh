@@ -7,6 +7,9 @@ legacy_flags=(
   caching-local
   enterprise-package
   enterprise-routing
+  integrations
+  llm-other-providers
+  llm-vertex-ai
   mcp-integration
   misc
   proxy-db-auth-checks
@@ -50,6 +53,9 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/test_file_deletion_blocking.py
       echo tests/unit/enterprise/proxy/test_managed_files_access_check.py
       echo tests/unit/enterprise/proxy/test_managed_files_hook.py ;;
+    integrations) echo tests/unit/integrations ;;
+    llm-other-providers) find tests/unit/llms -name 'test_*.py' -not -path 'tests/unit/llms/vertex_ai/*' ;;
+    llm-vertex-ai) echo tests/unit/llms/vertex_ai ;;
     mcp-integration)
       echo tests/unit/experimental_mcp_client
       echo tests/unit/proxy/_experimental/mcp_server
@@ -71,6 +77,7 @@ legacy_paths() {
       echo tests/unit/messages
       echo tests/unit/rag
       echo tests/unit/rerank_api
+      echo tests/unit/secret_managers
       echo tests/unit/vector_stores
       echo tests/unit/videos ;;
     proxy-db-auth-checks)

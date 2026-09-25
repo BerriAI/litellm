@@ -6,13 +6,14 @@ completion_start_time = end_time."""
 import json
 from datetime import datetime
 from typing import Final, Optional
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 from pydantic_core import PydanticSerializationError
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
@@ -249,6 +250,171 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+_DONE_MARKER: Final = b"data: [DONE]\n\n"
+_CREATED_EVENT: Final = _sse_event({"type": "response.created"})
+_IN_PROGRESS_EVENT: Final = _sse_event({"type": "response.in_progress"})
+_PARTIAL_OUTPUT_EVENTS: Final = _COMPLETE_STREAM_EVENTS[:-1]
+_PRE_OUTPUT_PREFIXES: Final = [
+    pytest.param([], True, id="nothing-yielded"),
+    pytest.param([_CREATED_EVENT], False, id="created"),
+    pytest.param([_CREATED_EVENT, _IN_PROGRESS_EVENT], False, id="created-and-in-progress"),
+]
+
+
+def _failure_tracking_logging_obj() -> Mock:
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj.async_failure_handler = AsyncMock()
+    return logging_obj
+
+
+def _assert_failure_logged_once(logging_obj: Mock, exception: Exception) -> None:
+    assert logging_obj.async_failure_handler.await_count == 1
+    assert logging_obj.async_failure_handler.await_args.kwargs["exception"] is exception
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix, pre_first_chunk", _PRE_OUTPUT_PREFIXES)
+@pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
+async def test_transport_error_before_any_output_raises_fallback_error(prefix, pre_first_chunk, trailing_error):
+    """A connection lost while only lifecycle events (response.created / response.in_progress)
+    have streamed is fallback-eligible, so it must surface as the MidStreamFallbackError the
+    router re-routes, carrying the raw transport error and no generated content."""
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=trailing_error)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        async for _ in iterator:
+            pass
+
+    assert exc_info.value.original_exception is trailing_error
+    assert exc_info.value.is_pre_first_chunk is pre_first_chunk
+    assert exc_info.value.generated_content == ""
+    _assert_failure_logged_once(logging_obj, trailing_error)
+
+
+@pytest.mark.asyncio
+async def test_transport_error_after_output_started_is_not_fallback_eligible():
+    logging_obj: Final = _failure_tracking_logging_obj()
+    trailing_error: Final = httpx.ReadError("Response payload is not completed")
+    iterator: Final = _make_iterator(
+        sse_events=_PARTIAL_OUTPUT_EVENTS, logging_obj=logging_obj, trailing_error=trailing_error
+    )
+
+    with pytest.raises(httpx.ReadError) as exc_info:
+        async for _ in iterator:
+            pass
+
+    assert exc_info.value is trailing_error
+    _assert_failure_logged_once(logging_obj, trailing_error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
+async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
+    """A clean EOF or `[DONE]` after output text but with no response.completed /
+    response.incomplete / response.failed is a truncated answer: the partial events still
+    reach the caller, then an explicit error follows instead of a normal end of stream."""
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_iterator(sse_events=[*_PARTIAL_OUTPUT_EVENTS, *trailer], logging_obj=logging_obj)
+
+    created: Final = await iterator.__anext__()
+    delta: Final = await iterator.__anext__()
+    with pytest.raises(litellm.APIConnectionError) as exc_info:
+        await iterator.__anext__()
+
+    assert (created.type, delta.type) == ("response.created", "response.output_text.delta")
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.llm_provider == "openai"
+    _assert_failure_logged_once(logging_obj, exc_info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix, pre_first_chunk", _PRE_OUTPUT_PREFIXES)
+@pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
+async def test_stream_ending_before_any_output_raises_fallback_error(prefix, pre_first_chunk, trailer):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_iterator(sse_events=[*prefix, *trailer], logging_obj=logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        async for _ in iterator:
+            pass
+
+    assert isinstance(exc_info.value.original_exception, litellm.APIConnectionError)
+    assert exc_info.value.is_pre_first_chunk is pre_first_chunk
+    assert exc_info.value.generated_content == ""
+    _assert_failure_logged_once(logging_obj, exc_info.value.original_exception)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
+async def test_complete_stream_still_ends_normally(trailer):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_iterator(sse_events=[*_COMPLETE_STREAM_EVENTS, *trailer], logging_obj=logging_obj)
+
+    seen: Final = [event.type async for event in iterator]
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert logging_obj.async_failure_handler.await_count == 0
+
+
+@pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
+def test_sync_transport_error_before_any_output_raises_fallback_error(trailing_error):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_sync_iterator(
+        sse_events=[_CREATED_EVENT, _IN_PROGRESS_EVENT],
+        logging_obj=logging_obj,
+        trailing_error=trailing_error,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        for _ in iterator:
+            pass
+
+    assert exc_info.value.original_exception is trailing_error
+    assert exc_info.value.is_pre_first_chunk is False
+    assert exc_info.value.generated_content == ""
+    _assert_failure_logged_once(logging_obj, trailing_error)
+
+
+@pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
+def test_sync_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_sync_iterator(sse_events=[*_PARTIAL_OUTPUT_EVENTS, *trailer], logging_obj=logging_obj)
+
+    created: Final = next(iterator)
+    delta: Final = next(iterator)
+    with pytest.raises(litellm.APIConnectionError) as exc_info:
+        next(iterator)
+
+    assert (created.type, delta.type) == ("response.created", "response.output_text.delta")
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    _assert_failure_logged_once(logging_obj, exc_info.value)
+
+
+def test_sync_stream_ending_before_any_output_raises_fallback_error():
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_sync_iterator(sse_events=[_CREATED_EVENT], logging_obj=logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        for _ in iterator:
+            pass
+
+    assert isinstance(exc_info.value.original_exception, litellm.APIConnectionError)
+    assert exc_info.value.is_pre_first_chunk is False
+    _assert_failure_logged_once(logging_obj, exc_info.value.original_exception)
+
+
+@pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
+def test_sync_complete_stream_still_ends_normally(trailer):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_sync_iterator(sse_events=[*_COMPLETE_STREAM_EVENTS, *trailer], logging_obj=logging_obj)
+
+    seen: Final = [event.type for event in iterator]
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert logging_obj.async_failure_handler.await_count == 0
 
 
 def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatch):
