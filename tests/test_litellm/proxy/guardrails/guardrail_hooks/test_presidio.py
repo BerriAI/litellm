@@ -4253,7 +4253,13 @@ _PERSON_NAME: Final = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
 
 def _person_spans(text: str) -> list[dict]:
     return [
-        {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85, "analysis_explanation": None}
+        {
+            "entity_type": "PERSON",
+            "start": match.start(),
+            "end": match.end(),
+            "score": 0.85,
+            "analysis_explanation": None,
+        }
         for match in _PERSON_NAME.finditer(text)
     ]
 
