@@ -103,6 +103,7 @@ type LiteLLMParams struct {
 	InputCostPerToken              float64                `json:"input_cost_per_token,omitempty"`
 	OutputCostPerToken             float64                `json:"output_cost_per_token,omitempty"`
 	InputCostPerPixel              float64                `json:"input_cost_per_pixel,omitempty"`
+	InputCostPerReferencePixel     float64                `json:"input_cost_per_reference_pixel,omitempty"`
 	OutputCostPerPixel             float64                `json:"output_cost_per_pixel,omitempty"`
 	InputCostPerSecond             float64                `json:"input_cost_per_second,omitempty"`
 	OutputCostPerSecond            float64                `json:"output_cost_per_second,omitempty"`

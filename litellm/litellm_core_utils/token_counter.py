@@ -248,15 +248,29 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
+    dimensions: Final = image_dimensions_from_bytes(img_data)
+    if dimensions is None:
+        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+    return dimensions
+
+
+def image_dimensions_from_bytes(img_data: bytes) -> tuple[int, int] | None:
+    try:
+        return _header_dimensions(img_data)
+    except (struct.error, TypeError):
+        return None
+
+
+def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
     img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
         w, h = _unpack_ints(">LL", img_data[16:24])
         return w, h
-    elif img_type == "gif":
+    if img_type == "gif":
         w, h = _unpack_ints("<HH", img_data[6:10])
         return w, h
-    elif img_type == "jpeg":
+    if img_type == "jpeg":
         with io.BytesIO(img_data) as fhandle:
             fhandle.seek(0)
             size = 2
@@ -271,27 +285,21 @@ def get_image_dimensions(
             fhandle.seek(1, 1)
             h, w = _unpack_ints(">HH", fhandle.read(4))
         return w, h
-    elif img_type == "webp":
-        # For WebP, the dimensions are stored at different offsets depending on the format
-        # Check for VP8X (extended format)
+    if img_type == "webp":
         if img_data[12:16] == b"VP8X":
             w = _unpack_ints("<I", img_data[24:27] + b"\x00")[0] + 1
             h = _unpack_ints("<I", img_data[27:30] + b"\x00")[0] + 1
             return w, h
-        # Check for VP8 (lossy format)
-        elif img_data[12:16] == b"VP8 ":
+        if img_data[12:16] == b"VP8 ":
             w = _unpack_ints("<H", img_data[26:28])[0] & 0x3FFF
             h = _unpack_ints("<H", img_data[28:30])[0] & 0x3FFF
             return w, h
-        # Check for VP8L (lossless format)
-        elif img_data[12:16] == b"VP8L":
+        if img_data[12:16] == b"VP8L":
             bits: Final = _unpack_ints("<I", img_data[21:25])[0]
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
-
-    # return sensible default image dimensions if unable to get dimensions
-    return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+    return None
 
 
 def calculate_img_tokens(

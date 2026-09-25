@@ -328,6 +328,11 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_reference_pixel": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per pixel of each reference image sent with an image edit."
+        },
         "input_cost_per_request": {
           "type": "number",
           "minimum": 0

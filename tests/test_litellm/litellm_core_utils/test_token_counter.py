@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import importlib
+import struct
 import threading
 import time
 import traceback
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_tiktoken_count_function,
     calculate_img_tokens,
     high_detail_image_token_upper_bound,
+    image_dimensions_from_bytes,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
@@ -1599,3 +1601,75 @@ def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int,
 def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
     assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x02\x00\x00\x00"
+    )
+
+
+def _gif_bytes(width: int, height: int) -> bytes:
+    return b"GIF89a" + struct.pack("<HH", width, height) + b"\x00\x00\x00"
+
+
+def _jpeg_bytes(width: int, height: int, sof_marker: bytes, app_segments: int) -> bytes:
+    app: Final = b"".join(
+        b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        for _ in range(app_segments)
+    )
+    sof: Final = (
+        b"\xff" + sof_marker + struct.pack(">HBHHB", 17, 8, height, width, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+    )
+    return b"\xff\xd8" + app + sof
+
+
+def _webp_bytes(chunk: bytes, payload: bytes) -> bytes:
+    body: Final = chunk + struct.pack("<I", len(payload)) + payload
+    return b"RIFF" + struct.pack("<I", 4 + len(body)) + b"WEBP" + body
+
+
+def _webp_vp8_bytes(width: int, height: int) -> bytes:
+    return _webp_bytes(b"VP8 ", b"\x00\x00\x00\x9d\x01\x2a" + struct.pack("<HH", width, height))
+
+
+def _webp_vp8l_bytes(width: int, height: int) -> bytes:
+    return _webp_bytes(b"VP8L", b"\x2f" + struct.pack("<I", (width - 1) | ((height - 1) << 14)))
+
+
+def _webp_vp8x_bytes(width: int, height: int) -> bytes:
+    return _webp_bytes(b"VP8X", b"\x00" * 4 + (width - 1).to_bytes(3, "little") + (height - 1).to_bytes(3, "little"))
+
+
+@pytest.mark.parametrize(
+    ("image", "expected"),
+    [
+        pytest.param(_png_bytes(1024, 768), (1024, 768), id="png"),
+        pytest.param(_gif_bytes(100, 50), (100, 50), id="gif"),
+        pytest.param(_jpeg_bytes(800, 600, b"\xc0", 1), (800, 600), id="jpeg-baseline"),
+        pytest.param(_jpeg_bytes(640, 480, b"\xc2", 3), (640, 480), id="jpeg-progressive-after-app-segments"),
+        pytest.param(_webp_vp8_bytes(640, 480), (640, 480), id="webp-vp8"),
+        pytest.param(_webp_vp8l_bytes(320, 240), (320, 240), id="webp-vp8l"),
+        pytest.param(_webp_vp8x_bytes(1920, 1080), (1920, 1080), id="webp-vp8x"),
+    ],
+)
+def test_image_dimensions_from_bytes_reads_each_header_format(image: bytes, expected: tuple[int, int]) -> None:
+    assert image_dimensions_from_bytes(image) == expected
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(b"BM" + b"\x00" * 30, id="unknown-format"),
+        pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00", id="png-truncated-before-ihdr"),
+        pytest.param(b"\xff\xd8\xff\xe0\x00\x10JFIF", id="jpeg-truncated-inside-app0"),
+        pytest.param(b"\xff\xd8\xff\xe0\x00\x04\x00\x00", id="jpeg-ends-before-sof"),
+    ],
+)
+def test_image_dimensions_from_bytes_returns_none_for_unreadable_headers(image: bytes) -> None:
+    assert image_dimensions_from_bytes(image) is None

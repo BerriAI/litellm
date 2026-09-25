@@ -11371,6 +11371,7 @@
         ]
     },
     "azure_ai/flux.2-pro": {
+        "input_cost_per_reference_pixel": 1.430511474609375e-08,
         "litellm_provider": "azure_ai",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
@@ -11380,7 +11381,8 @@
         ]
     },
     "azure_ai/FLUX.2-flex": {
-        "input_cost_per_pixel": 5e-08,
+        "input_cost_per_pixel": 4.76837158203125e-08,
+        "input_cost_per_reference_pixel": 4.76837158203125e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32000,
         "max_tokens": 32000,

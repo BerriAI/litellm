@@ -3705,6 +3705,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
+    input_cost_per_reference_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
     # Include all ModelInfoBase fields as optional
