@@ -2796,15 +2796,6 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                     )
                     if route_type == "aresponses":
-                        # Streaming /v1/responses returns here without
-                        # reaching the non-streaming ownership tail below.
-                        # Wrap the SSE generator so container ownership is
-                        # written once the upstream iterator finishes
-                        # assembling ``completed_response`` — otherwise
-                        # code-interpreter containers created during the
-                        # stream stay unregistered and follow-up file API
-                        # calls 403. Covers the background-polling path
-                        # too, which loops ``body_iterator`` end-to-end.
                         selected_data_generator = (
                             ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
                                 original_stream_response=response,
@@ -3026,50 +3017,50 @@ class ProxyBaseLLMRequestProcessing:
         wrapped_generator: Any,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        """Forward SSE chunks, then record container ownership at stream end.
+        """Forward SSE chunks and record container ownership before the terminal chunk goes out.
 
         Streaming ``/v1/responses`` short-circuits out of
         ``base_process_llm_request`` before the non-streaming ownership
-        tail runs, so without this wrap the
-        ``LiteLLM_ManagedObjectTable`` row for any container created
-        during the stream is never written and follow-up file API calls
-        return 403.
+        tail runs. The OpenAI SDK closes the connection at ``data: [DONE]``
+        and starlette cancels the body task on disconnect, so a write that
+        waits for the generator to finish never lands. The iterator sets
+        ``completed_response`` before it hands over its terminal chunk, so
+        the ``LiteLLM_ManagedObjectTable`` row is written the moment it
+        appears, ahead of the chunk carrying ``response.completed``.
         """
-        try:
-            async for chunk in wrapped_generator:
+        async for chunk in wrapped_generator:
+            completed_obj = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+                original_stream_response
+            )
+            if completed_obj is None:
                 yield chunk
-        finally:
-            try:
-                completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-                    original_stream_response
-                )
-                if completed_obj is not None:
-                    await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
-                        response=completed_obj,
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                else:
-                    # Silent skip caused #30210: the proxy's Router wrapper
-                    # of the responses streaming iterator wasn't propagating
-                    # ``completed_response``, so this hook recorded nothing
-                    # and follow-up /v1/containers/<id>/files calls 403'd
-                    # for non-admin keys with no proxy-side hint. Log a
-                    # warning so future regressions of the same shape
-                    # surface in operator logs.
-                    verbose_proxy_logger.warning(
-                        "Container ownership recording skipped on streaming "
-                        "/v1/responses: no completed_response on stream "
-                        "iterator %s. If this stream created any tool "
-                        "container (e.g. code_interpreter), follow-up "
-                        "/v1/containers/<id>/files calls will 403 for "
-                        "non-admin keys.",
-                        type(original_stream_response).__name__,
-                    )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Container ownership recording failed after streaming responses call: %s",
-                    e,
-                )
+                continue
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=completed_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+            yield chunk
+            async for remaining_chunk in wrapped_generator:
+                yield remaining_chunk
+            return
+        late_completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+            original_stream_response
+        )
+        if late_completed_obj is not None:
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=late_completed_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+            return
+        verbose_proxy_logger.warning(
+            "Container ownership recording skipped on streaming "
+            "/v1/responses: no completed_response on stream "
+            "iterator %s. If this stream created any tool "
+            "container (e.g. code_interpreter), follow-up "
+            "/v1/containers/<id>/files calls will 403 for "
+            "non-admin keys.",
+            type(original_stream_response).__name__,
+        )
 
     async def base_passthrough_process_llm_request(
         self,

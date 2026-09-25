@@ -10162,3 +10162,67 @@ class TestAnthropicMessagesStreamErrorFrame:
         assert isinstance(body, dict)
         assert body["type"] == "error"
         assert "upstream stopped sending" in body["error"]["message"]
+
+
+class TestStreamingContainerOwnershipRecordedBeforeDone:
+    """Regression for LIT-8612: the OpenAI SDK closes the connection at
+    ``data: [DONE]`` and starlette cancels the body task, so an ownership row
+    written after the SSE generator is exhausted never lands. The row must be
+    written before the chunk carrying ``response.completed`` is handed to the
+    client."""
+
+    CHUNKS: Final = (
+        'data: {"type":"response.created"}\n\n',
+        'data: {"type":"response.output_text.delta"}\n\n',
+        'data: {"type":"response.completed"}\n\n',
+        "data: [DONE]\n\n",
+    )
+    TERMINAL_INDEX: Final = 2
+
+    @staticmethod
+    def _completed_event() -> SimpleNamespace:
+        return SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id="resp_lit8612",
+                output=[SimpleNamespace(type="code_interpreter_call", container_id="cntr_lit8612")],
+            ),
+        )
+
+    async def _sse(self, stream: SimpleNamespace, populate_at: int) -> AsyncGenerator[str, None]:
+        for index, chunk in enumerate(self.CHUNKS):
+            if index == populate_at:
+                stream.completed_response = self._completed_event()
+            yield chunk
+        if populate_at == len(self.CHUNKS):
+            stream.completed_response = self._completed_event()
+
+    async def _await_counts_per_chunk(self, populate_at: int) -> tuple[tuple[tuple[str, int], ...], AsyncMock]:
+        stream: Final = SimpleNamespace(completed_response=None, _hidden_params={"custom_llm_provider": "azure"})
+        recorder: Final = AsyncMock(return_value=None)
+        with patch(
+            "litellm.proxy.container_endpoints.ownership.record_container_owners_from_responses_response", recorder
+        ):
+            wrapped: Final = ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                original_stream_response=stream,
+                wrapped_generator=self._sse(stream, populate_at),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", team_id="team-1"),
+            )
+            observed: Final = tuple([(chunk, recorder.await_count) async for chunk in wrapped])
+        return observed, recorder
+
+    async def test_row_is_written_before_the_terminal_chunk_reaches_the_client(self) -> None:
+        observed, recorder = await self._await_counts_per_chunk(populate_at=self.TERMINAL_INDEX)
+
+        assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
+        assert tuple(count for _, count in observed) == (0, 0, 1, 1)
+        recorder.assert_awaited_once()
+        assert recorder.await_args.kwargs["response"].output[0].container_id == "cntr_lit8612"
+        assert recorder.await_args.kwargs["user_api_key_dict"].team_id == "team-1"
+
+    async def test_row_is_still_written_when_the_iterator_completes_only_at_exhaustion(self) -> None:
+        observed, recorder = await self._await_counts_per_chunk(populate_at=len(self.CHUNKS))
+
+        assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
+        assert tuple(count for _, count in observed) == (0, 0, 0, 0)
+        recorder.assert_awaited_once()
