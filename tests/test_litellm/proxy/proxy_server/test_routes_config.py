@@ -14,10 +14,14 @@ Routes covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -942,6 +946,109 @@ def test_config_callback_delete_not_found(client, auth_as, mock_prisma, monkeypa
     # `Exception` becomes a 500 ProxyException), so pin 404 strictly.
     assert response.status_code == 404
     assert "langfuse" in str(response.json()).lower() or "not found" in str(response.json()).lower()
+
+
+def _delete_callback_roundtrip(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings: dict[str, object],
+    callback_name: str,
+) -> tuple[httpx.Response, dict[str, object]]:
+    """POST /config/callback/delete as admin against a stubbed config, and
+    return (response, saved litellm_settings) so each case pins the full body
+    plus the exact config persisted."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": litellm_settings})
+    fake_proxy_config.save_config = AsyncMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post("/config/callback/delete", json={"callback_name": callback_name})
+    saved = fake_proxy_config.save_config.await_args.kwargs["new_config"]["litellm_settings"]
+    return response, saved
+
+
+def test_config_callback_delete_from_failure_callback(client, auth_as, mock_prisma, monkeypatch):
+    """A callback configured only under litellm_settings.failure_callback is
+    listed by GET /get/config/callbacks, so the delete route must remove it."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["slack"], "failure_callback": ["datadog", "sentry"]},
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_callback"] == "datadog"
+    assert saved == {"success_callback": ["slack"], "failure_callback": ["sentry"]}
+    assert response.json()["remaining_callbacks"] == ["slack", "sentry"]
+
+
+def test_config_callback_delete_from_callbacks_list(client, auth_as, mock_prisma, monkeypatch):
+    """A callback configured only under litellm_settings.callbacks is deleted
+    while unrelated lists pass through untouched."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["langfuse"], "callbacks": ["datadog"], "drop_params": True},
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_callback"] == "datadog"
+    assert saved == {"success_callback": ["langfuse"], "callbacks": [], "drop_params": True}
+    assert response.json()["remaining_callbacks"] == ["langfuse"]
+
+
+def test_config_callback_delete_from_multiple_lists(client, auth_as, mock_prisma, monkeypatch):
+    """A name present in both success_callback and callbacks is removed from
+    both, and remaining_callbacks reports the leftovers of every list."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {
+            "success_callback": ["datadog", "slack"],
+            "failure_callback": ["sentry"],
+            "callbacks": ["langfuse", "datadog"],
+        },
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert saved == {
+        "success_callback": ["slack"],
+        "failure_callback": ["sentry"],
+        "callbacks": ["langfuse"],
+    }
+    assert response.json()["remaining_callbacks"] == ["slack", "sentry", "langfuse"]
+
+
+def test_config_callback_delete_case_insensitive(client, auth_as, mock_prisma, monkeypatch):
+    """A mixed-case request name still matches the configured lowercase entry."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"callbacks": ["datadog", "otel"]},
+        "DataDog",
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_callback"] == "datadog"
+    assert saved == {"callbacks": ["otel"]}
 
 
 # ---------------------------------------------------------------------------

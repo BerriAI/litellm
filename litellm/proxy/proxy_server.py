@@ -18657,6 +18657,21 @@ async def delete_config_general_settings(
     return response
 
 
+_CALLBACK_LIST_KEYS: Final = ("success_callback", "failure_callback", "callbacks")
+
+
+def _configured_callback_names(value: object) -> tuple[object, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple, dict)):
+        return tuple(value)
+    return ()
+
+
+def _is_callback_name(entry: object, callback_name: str) -> bool:
+    return isinstance(entry, str) and entry.lower() == callback_name
+
+
 @router.post(
     "/config/callback/delete",
     tags=["config.yaml"],
@@ -18697,19 +18712,27 @@ async def delete_callback(
 
         # Check if callback exists in current configuration
         litellm_settings: Final = config.get("litellm_settings", {})
-        success_callbacks: Final = litellm_settings.get("success_callback", [])
+        configured_lists: Final = {
+            key: _configured_callback_names(litellm_settings.get(key)) for key in _CALLBACK_LIST_KEYS
+        }
+        matching_keys: Final = tuple(
+            key
+            for key, names in configured_lists.items()
+            if any(_is_callback_name(entry, callback_name) for entry in names)
+        )
 
-        if callback_name not in success_callbacks:
+        if not matching_keys:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        before_success_callbacks: Final = list(success_callbacks)
-
-        # Remove callback from success_callback list
-        success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
+        before_callbacks: Final = {key: list(configured_lists[key]) for key in matching_keys}
+        after_callbacks: Final = {
+            key: [entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name)]
+            for key in matching_keys
+        }
+        config["litellm_settings"] = {**litellm_settings, **after_callbacks}
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -18718,8 +18741,8 @@ async def delete_callback(
             create_config_audit_log(
                 "litellm_settings",
                 "deleted",
-                {"success_callback": before_success_callbacks},
-                {"success_callback": success_callbacks},
+                before_callbacks,
+                after_callbacks,
                 user_api_key_dict,
             )
         )
@@ -18727,10 +18750,13 @@ async def delete_callback(
         # Restart the proxy to apply changes
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
+        updated_settings: Final = config["litellm_settings"]
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": success_callbacks,
+            "remaining_callbacks": [
+                entry for key in _CALLBACK_LIST_KEYS for entry in _configured_callback_names(updated_settings.get(key))
+            ],
             "deleted_at": datetime.now().isoformat(),
         }
 
