@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import reduce
 from typing import Final
 from uuid import uuid4
 
@@ -34,6 +36,29 @@ def changes_readonly_attribute(operation: SCIMPatchOperation) -> bool:
 def validate_human_patch(patch: SCIMPatchOp) -> None:
     if any(changes_readonly_attribute(operation) for operation in patch.Operations):
         raise HTTPException(400, "externalId is immutable; update group membership through this source's Groups")
+
+
+def patched_username(current: str | None, operation: SCIMPatchOperation) -> str | None:
+    direct: Final = bool(operation.path and operation.path.casefold() == "username")
+    fields: Final = (
+        TypeAdapter(Mapping[str, object]).validate_python(operation.value)
+        if operation.path is None and isinstance(operation.value, dict)
+        else None
+    )
+    if not direct and (fields is None or "userName" not in fields):
+        return current
+    candidate: Final = (
+        None
+        if operation.op == "remove"
+        else operation.value
+        if direct
+        else fields["userName"]
+        if fields is not None
+        else None
+    )
+    if not isinstance(candidate, str) or not candidate:
+        raise HTTPException(400, "userName is required")
+    return candidate
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +135,11 @@ class SourceHumanProvisioner:
 
         if row.local_id is None:
             raise HTTPException(409, "The human provisioned record is incomplete")
+        username: Final = (
+            change.userName
+            if isinstance(change, SCIMUser)
+            else reduce(patched_username, change.Operations, row.user_name)
+        )
         if isinstance(change, SCIMUser):
             await self.claim_email(row, human_email(change))
         else:
@@ -137,7 +167,7 @@ class SourceHumanProvisioner:
             if isinstance(change, SCIMPatchOp)
             else await scim_v2.update_user(user_id=row.local_id, user=change.model_copy(update={"groups": None}))
         )
-        document: Final = result.model_copy(update={"id": row.id, "externalId": row.external_id})
+        document: Final = result.model_copy(update={"id": row.id, "externalId": row.external_id, "userName": username})
         async with self.client.tx() as tx:
             await tx.litellm_scimresource.update(
                 where={"id": row.id},

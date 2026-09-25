@@ -227,3 +227,31 @@ async def test_source_cannot_adopt_an_existing_local_or_sso_user() -> None:
         await service.reserve(user)
     assert failure.value.status_code == 409
     tx.litellm_scimresource.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["put", "display", "username", "object"])
+async def test_source_username_is_independent_of_local_display_name(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    service, tx, row, user = human_fixture()
+    tx.litellm_usertable.find_unique.return_value = LiteLLM_UserTable(
+        user_id=row.local_id, user_email="human@example.com"
+    )
+    legacy: Final = user.model_copy(update={"userName": "Display Name", "displayName": "Display Name"})
+    monkeypatch.setattr(scim_v2, "update_user", AsyncMock(return_value=legacy))
+    monkeypatch.setattr(scim_v2, "patch_user", AsyncMock(return_value=legacy))
+    changes: Final = {
+        "put": user,
+        "display": SCIMPatchOp(Operations=[{"op": "replace", "path": "displayName", "value": "Display Name"}]),
+        "username": SCIMPatchOp(Operations=[{"op": "replace", "path": "userName", "value": "renamed@example.com"}]),
+        "object": SCIMPatchOp(Operations=[{"op": "replace", "value": {"userName": "renamed@example.com"}}]),
+    }
+    result: Final = await service.update(row, changes[operation])
+    expected: Final = "renamed@example.com" if operation in ("username", "object") else "human@example.com"
+    assert result.userName == expected
+    assert result.displayName == "Display Name"
+    assert result.id == row.id
+    assert tx.litellm_scimresource.update.call_args.kwargs["data"]["user_name"] == expected
