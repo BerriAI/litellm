@@ -10,7 +10,7 @@ docs: https://docs.litellm.ai/docs/data_security, https://docs.litellm.ai/docs/o
 code: `litellm/litellm_core_utils/secret_redaction.py`, `litellm/litellm_core_utils/redact_messages.py`, `litellm/litellm_core_utils/litellm_logging.py`
 tests: `tests/test_litellm/litellm_core_utils/test_redact_messages.py`
 registry: none
-verify: run a call whose prompt contains `sk-` plus a fake secret, then check spend logs and proxy logs contain the redacted placeholder, not the secret
+verify: set `litellm_settings: {turn_off_message_logging: false}` with a spend-logging callback enabled, send a prompt containing a 20+ char fake key like `sk-abcdefghijklmnopqrstuv`, and confirm the spend log and proxy log show the redacted placeholder, not the value
 
 ### security.request_validation: Input validation, max sizes, url allowlists (user_url_allowed_hosts, provider_url_destination_allowed_hosts)
 surfaces: config | flags: none
@@ -18,7 +18,7 @@ docs: https://docs.litellm.ai/docs/guides/security_settings
 code: `litellm/proxy/litellm_pre_call_utils.py`, `litellm/proxy/auth/auth_utils.py`, `litellm/litellm_core_utils/url_utils.py`, `litellm/proxy/_types.py` (`user_url_allowed_hosts`, `provider_url_destination_allowed_hosts`)
 tests: `tests/test_litellm/proxy/` (request validation files), `tests/e2e/access_control/`
 registry: llm_conversational.yaml llm.chat_completions.openai.input_validation.*, llm_nonconversational.yaml llm.*.input_validation
-verify: set `provider_url_destination_allowed_hosts` to a single host, send a request with a tool/image url pointing elsewhere, and confirm it is rejected
+verify: set `general_settings: {provider_url_destination_allowed_hosts: ["api.openai.com"]}`, send a request whose `model` is a URL pointing at another host, and confirm it is rejected; for media URLs use `user_url_allowed_hosts` with an image_url on a disallowed host instead
 
 ### security.compliance_checks: Compliance checks (/compliance)
 surfaces: api | flags: none
@@ -66,4 +66,4 @@ docs: https://docs.litellm.ai/docs/proxy/security_encryption_faq, https://docs.l
 code: `litellm/proxy/management_endpoints/key_management_endpoints.py` (POST `/credentials/migrate-encryption`), `litellm/proxy/common_utils/` (encrypt/decrypt helpers used by stored credentials)
 tests: `tests/test_litellm/proxy/management_endpoints/` (credential migration files)
 registry: mgmt.yaml mgmt.credential_migration.*
-verify: store a credential without LITELLM_SALT_KEY, set the salt key, run /credentials/migrate-encryption, and confirm old ciphertext still decrypts
+verify: with `general_settings: {encryption_algorithm: aes-256-gcm}` set and the same `LITELLM_SALT_KEY` (or master key) in place that encrypted the values, store a credential, POST /credentials/migrate-encryption?dry_run=true to scan, then the real run, and confirm the credential still decrypts and works on a completion

@@ -124,7 +124,7 @@ docs: https://docs.litellm.ai/docs/proxy/model_compare_ui, https://docs.litellm.
 code: `ui/litellm-dashboard/` (model compare components)
 tests: `ui/litellm-dashboard/` (component tests)
 registry: none
-verify: open http://localhost:4000/ui/?page=models-and-endpoints, pick two models, and run the same prompt in the compare view
+verify: open http://localhost:4000/ui/?page=models, pick two models, and run the same prompt in the compare view
 
 ### models.health_checks: Model health checks (/health, background health checks, health_check_routing)
 surfaces: api, config, ui | flags: none

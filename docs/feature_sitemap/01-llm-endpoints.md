@@ -106,7 +106,7 @@ docs: https://docs.litellm.ai/docs/completion/message_sanitization, https://docs
 code: `litellm/main.py` (`completion`, `trim_messages`)
 tests: `tests/test_litellm/` (message trimming related files)
 registry: none
-verify: send a chat completion with an invalid empty content message plus `litellm_settings: {message_sanitization: true}` and confirm the request is cleaned instead of 400ing
+verify: set `litellm_settings: {modify_params: true}`, send an OpenAI-style tool-calling conversation to an Anthropic model with an assistant message whose content is empty alongside tool_calls, and confirm it succeeds instead of a 400 from the provider
 
 ### llm.chat_completions.mock: Mock responses and testing
 surfaces: sdk, api | flags: none

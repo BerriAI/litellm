@@ -1,6 +1,6 @@
 # LiteLLM feature sitemap
 
-A machine-oriented map of every customer-facing feature in LiteLLM, written for agents verifying code changes. When you change code, find the domain in the table below, open only that file, locate the feature leaf, and use its `verify` recipe as your live proof. Each leaf lists the docs page a customer reads, the code entrypoints, the test dirs that cover it, the coverage-registry ids it feeds, and one concrete check you can run against a live proxy on `localhost:4000` (master key `sk-1234`)
+A machine-oriented map of every customer-facing feature in LiteLLM, written for agents verifying code changes. When you change code, find the domain in the table below, open only that file, locate the feature leaf, and use its `verify` recipe as your live proof. Each leaf lists the docs page a customer reads, the code entrypoints, the test dirs that cover it, the coverage-registry ids it feeds, and one concrete check you can run against a live proxy on `localhost:4000` (master key `sk-1234` in the examples; substitute whatever `LITELLM_MASTER_KEY` your local proxy runs with)
 
 ## How to use it
 

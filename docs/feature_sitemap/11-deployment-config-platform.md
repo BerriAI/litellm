@@ -140,7 +140,7 @@ docs: https://docs.litellm.ai/docs/proxy/architecture (API surface overview)
 code: `litellm/proxy/proxy_server.py` (FastAPI `/docs`, `_get_openapi_url`), `ui/litellm-dashboard/src/app/(dashboard)/api-reference/page.tsx`
 tests: `tests/test_litellm/proxy/`
 registry: none
-verify: open http://localhost:4000/docs (Swagger) and http://localhost:4000/ui/?page=api-ref in the Admin UI
+verify: open http://localhost:4000/docs (Swagger) and http://localhost:4000/ui/?page=api-reference in the Admin UI
 
 ### platform.license: Enterprise license and premium gating
 surfaces: config | flags: ent
