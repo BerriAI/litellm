@@ -63,6 +63,8 @@ from litellm.constants import (
     AUDIO_SPEECH_CHUNK_SIZE,
     BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
     BASE_MCP_ROUTE,
+    COORDINATION_REDIS_ENV_RETRY_ATTEMPTS,
+    COORDINATION_REDIS_ENV_RETRY_SECONDS,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
@@ -4687,6 +4689,95 @@ def _build_redis_usage_cache(redis_params: Mapping[str, object]) -> RedisCache:
     return RedisCache(**non_node_params)
 
 
+_coordination_redis_env_retry_task: "asyncio.Task | None" = None
+
+
+async def _probe_coordination_redis_from_environment() -> RedisCache | None:
+    """
+    Builds the Redis named by the REDIS_* env vars and pings it, off the event loop.
+
+    `RedisCache.__init__` talks to the server, and against a target that drops SYN
+    rather than refusing it redis-py's own retries take minutes, so it runs in a
+    worker thread.
+    """
+    try:
+        candidate: Final = await asyncio.to_thread(_build_redis_usage_cache_from_environment)
+    except Exception as e:  # noqa: BLE001  # a malformed inferred Redis env var must not block startup
+        verbose_proxy_logger.warning(
+            "coordination_redis: could not build a Redis client from REDIS_* environment variables "
+            "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+            "explicitly to require it.",
+            e,
+        )
+        return None
+    if candidate is None:
+        return None
+    try:
+        reachable: Final = await asyncio.wait_for(candidate.ping(), timeout=2.0)
+    except Exception as e:  # noqa: BLE001  # an unreachable inferred Redis must not block startup or writes
+        verbose_proxy_logger.warning(
+            "coordination_redis: REDIS_* environment variables named a Redis that is not reachable "
+            "(%s); retrying in the background. Set general_settings.coordination_redis explicitly to "
+            "require it.",
+            e,
+        )
+        return None
+    return candidate if reachable else None
+
+
+async def _retry_coordination_redis_from_environment(enable_redis_auth_cache: bool) -> None:
+    """
+    Re-probes the REDIS_* Redis after the boot-time probe found it unreachable, and
+    attaches it to every consumer a healthy boot would have wired, so budgets, rate
+    limits and auth cache invalidation stop being per-pod.
+
+    Gives up after the window: a REDIS_HOST left over from an unrelated service
+    must not be probed for the life of the pod.
+    """
+    for _ in range(COORDINATION_REDIS_ENV_RETRY_ATTEMPTS):
+        await asyncio.sleep(COORDINATION_REDIS_ENV_RETRY_SECONDS)
+        if redis_usage_cache is not None:
+            return
+        recovered = await _probe_coordination_redis_from_environment()  # rebind-ok: one probe per attempt
+        if recovered is None:
+            continue
+        if redis_usage_cache is not None:
+            return
+        _attach_redis_usage_cache(recovered, enable_redis_auth_cache=enable_redis_auth_cache)
+        _set_redis_usage_cache(recovered)
+        proxy_logging_obj.update_values(redis_cache=recovered)
+        if llm_router is not None and llm_router.cache.redis_cache is None:
+            llm_router._update_redis_cache(cache=recovered)
+        proxy_config.start_auth_cache_invalidation_subscriber(
+            redis_cache=recovered,
+            user_api_key_cache=user_api_key_cache,
+        )
+        verbose_proxy_logger.info(
+            "coordination_redis: REDIS_* Redis answered on a retry and is now attached for usage "
+            "tracking, rate limiting, and cross-pod coordination."
+        )
+        return
+    verbose_proxy_logger.warning(
+        "coordination_redis: REDIS_* environment variables named a Redis that stayed unreachable for "
+        "%s attempts; cross-pod coordination stays in-memory until this pod restarts.",
+        COORDINATION_REDIS_ENV_RETRY_ATTEMPTS,
+    )
+
+
+def _schedule_coordination_redis_env_retry(enable_redis_auth_cache: bool) -> None:
+    """Start the background re-probe, once per process."""
+    global _coordination_redis_env_retry_task  # rebind-ok: one retry task per process
+    if _coordination_redis_env_retry_task is not None and not _coordination_redis_env_retry_task.done():
+        return
+    try:
+        loop: Final = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _coordination_redis_env_retry_task = loop.create_task(
+        _retry_coordination_redis_from_environment(enable_redis_auth_cache=enable_redis_auth_cache)
+    )
+
+
 def _environment_has_redis_connection_target() -> bool:
     """
     Whether the REDIS_* environment variables name a Redis to connect to (host,
@@ -5605,36 +5696,23 @@ class ProxyConfig:
         job/service, or a REDIS_CLUSTER_NODES value nothing here ever asked to be
         parsed. Wrongly guessing "coordination available" must not turn a previously
         harmless in-memory-only proxy into one that fails to boot or raises on every
-        cache write, so a malformed value or a failed/slow ping are both treated the
-        same as no REDIS_* vars at all.
+        cache write, so a malformed value or a failed/slow ping both leave the proxy
+        in-memory rather than failing startup.
+
+        A ping can also fail because Redis is simply not up yet, which is the common
+        case on Kubernetes: the proxy and Redis start together. Giving up for the life
+        of the pod there multiplies every budget by the replica count, so when the env
+        does name a Redis, a background re-probe keeps looking for it.
         """
-        try:
-            env_coordination_redis_cache: Final = _build_redis_usage_cache_from_environment()
-        except Exception as e:  # noqa: BLE001  # a malformed inferred Redis env var must not block startup
-            verbose_proxy_logger.warning(
-                "coordination_redis: could not build a Redis client from REDIS_* environment variables "
-                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
-                "explicitly to require it.",
-                e,
-            )
-            return None
+        enable_redis_auth_cache: Final = litellm_settings.get("enable_redis_auth_cache", False) is True
+        env_coordination_redis_cache: Final = await _probe_coordination_redis_from_environment()
         if env_coordination_redis_cache is None:
-            return None
-        try:
-            reachable: Final = await asyncio.wait_for(env_coordination_redis_cache.ping(), timeout=2.0)
-        except Exception as e:  # noqa: BLE001  # an unreachable inferred Redis must not block startup or writes
-            verbose_proxy_logger.warning(
-                "coordination_redis: REDIS_* environment variables named a Redis that is not reachable "
-                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
-                "explicitly to require it.",
-                e,
-            )
-            return None
-        if not reachable:
+            if _environment_has_redis_connection_target():
+                _schedule_coordination_redis_env_retry(enable_redis_auth_cache=enable_redis_auth_cache)
             return None
         _attach_redis_usage_cache(
             env_coordination_redis_cache,
-            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+            enable_redis_auth_cache=enable_redis_auth_cache,
         )
         verbose_proxy_logger.info(
             "coordination_redis: using a standalone Redis built from REDIS_* "

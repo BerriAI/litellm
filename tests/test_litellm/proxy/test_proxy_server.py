@@ -13273,6 +13273,123 @@ async def test_init_coordination_redis_env_fallback_unreachable_stays_in_memory(
 
 
 @pytest.mark.asyncio
+async def test_env_fallback_schedules_a_retry_when_the_named_redis_is_unreachable():
+    """An unreachable Redis at boot is usually Redis starting next to the proxy, so
+    giving up for the life of the pod leaves coordination per-pod."""
+    with (
+        patch.object(proxy_server_module, "_environment_has_redis_connection_target", return_value=True),
+        patch.object(proxy_server_module, "_schedule_coordination_redis_env_retry") as scheduled,
+    ):
+        built, spend_redis = await _run_init_coordination_redis_env_fallback(
+            litellm_settings={},
+            redis_env_kwargs={"host": "unreachable-host", "port": "6390"},
+            redis_cache_class=_UnreachableRedisCache,
+        )
+
+    assert built is None
+    assert spend_redis is None
+    assert scheduled.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_env_fallback_does_not_schedule_a_retry_without_a_redis_target():
+    """With no REDIS_* connection info there is nothing to re-probe."""
+    with (
+        patch.object(proxy_server_module, "_environment_has_redis_connection_target", return_value=False),
+        patch.object(proxy_server_module, "_schedule_coordination_redis_env_retry") as scheduled,
+    ):
+        built, spend_redis = await _run_init_coordination_redis_env_fallback(
+            litellm_settings={},
+            redis_env_kwargs={},
+        )
+
+    assert built is None
+    assert spend_redis is None
+    assert scheduled.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_attaches_the_env_redis_once_it_answers():
+    """The retry has to leave the pod in the state a healthy boot would: spend
+    counters, the rate limiter and the router on Redis, and the auth cache
+    invalidation subscriber running, all of which startup wires only once."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+    recovered: Final = _EnvBuiltRedisCache(host="env-fallback-host", port="6390")
+    probe: Final = AsyncMock(side_effect=(None, recovered))
+    subscriber: Final = MagicMock()
+    rate_limiter_cache: Final = DualCache()
+    router: Final = MagicMock(cache=DualCache())
+
+    with (
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
+        patch.object(proxy_server_module, "COORDINATION_REDIS_ENV_RETRY_SECONDS", 0),
+        patch.object(proxy_server_module, "COORDINATION_REDIS_ENV_RETRY_ATTEMPTS", 5),
+        patch.object(proxy_server_module, "_probe_coordination_redis_from_environment", probe),
+        patch.object(proxy_server_module, "llm_router", router),
+        patch.object(
+            proxy_server_module.proxy_logging_obj.internal_usage_cache, "dual_cache", rate_limiter_cache
+        ),
+        patch.object(proxy_server_module.proxy_config, "start_auth_cache_invalidation_subscriber", subscriber),
+    ):
+        await proxy_server_module._retry_coordination_redis_from_environment(enable_redis_auth_cache=False)
+        attached = proxy_server_module.redis_usage_cache
+
+    assert attached is recovered
+    assert fresh_spend_cache.redis_cache is recovered
+    assert rate_limiter_cache.redis_cache is recovered
+    assert router._update_redis_cache.call_args.kwargs["cache"] is recovered
+    assert subscriber.call_args.kwargs["redis_cache"] is recovered
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_replace_a_backend_attached_while_it_probed():
+    """A probe takes seconds, and the DB-stored coordination settings resolve a
+    backend in that window. The env fallback is last in startup precedence, so a
+    late answer must not take over from the backend the proxy already chose."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+    chosen_elsewhere: Final = _EnvBuiltRedisCache(host="db-configured-host", port="6390")
+    late_answer: Final = _EnvBuiltRedisCache(host="env-fallback-host", port="6390")
+
+    async def probe_that_loses_the_race():
+        proxy_server_module._set_redis_usage_cache(chosen_elsewhere)
+        return late_answer
+
+    with (
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
+        patch.object(proxy_server_module, "COORDINATION_REDIS_ENV_RETRY_SECONDS", 0),
+        patch.object(proxy_server_module, "COORDINATION_REDIS_ENV_RETRY_ATTEMPTS", 5),
+        patch.object(proxy_server_module, "_probe_coordination_redis_from_environment", probe_that_loses_the_race),
+    ):
+        await proxy_server_module._retry_coordination_redis_from_environment(enable_redis_auth_cache=False)
+        attached = proxy_server_module.redis_usage_cache
+
+    assert attached is chosen_elsewhere
+    assert fresh_spend_cache.redis_cache is not late_answer
+
+
+@pytest.mark.asyncio
+async def test_retry_gives_up_after_the_configured_attempts():
+    """A REDIS_HOST left over from an unrelated service never answers, so the probe
+    must stop rather than poke a stranger's address for the life of the pod."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+    never_answers: Final = AsyncMock(return_value=None)
+
+    with (
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
+        patch.object(proxy_server_module, "COORDINATION_REDIS_ENV_RETRY_SECONDS", 0),
+        patch.object(proxy_server_module, "COORDINATION_REDIS_ENV_RETRY_ATTEMPTS", 3),
+        patch.object(proxy_server_module, "_probe_coordination_redis_from_environment", never_answers),
+    ):
+        await proxy_server_module._retry_coordination_redis_from_environment(enable_redis_auth_cache=False)
+
+    assert never_answers.await_count == 3
+    assert fresh_spend_cache.redis_cache is None
+
+
+@pytest.mark.asyncio
 async def test_init_coordination_redis_env_fallback_malformed_cluster_nodes_stays_in_memory():
     """REDIS_CLUSTER_NODES can be set to a malformed value nothing here ever
     asked to be parsed. Unlike the explicit coordination_redis block (a
