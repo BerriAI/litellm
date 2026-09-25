@@ -473,7 +473,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         if not responses_so_far:
             return
 
-        originals: Final[list[object]] = copy.deepcopy(responses_so_far)
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         try:
@@ -486,16 +485,19 @@ class UnifiedLLMGuardrails(CustomLogger):
                 deliver_ended_stream_rewrites=True,
             )
         except UndeliverableStreamRewrite as e:
-            responses_so_far[:] = originals
             verbose_proxy_logger.warning(
                 "UnifiedLLMGuardrails: guardrail '%s' rewrote the streamed response but the rewrite could not be "
-                "written back to the stream: %s. The original stream was released",
+                "written back to the stream: %s. The buffered response will be rejected",
                 e.guardrail_name,
                 e.reason,
             )
-            for item in responses_so_far:
-                yield item
-            return
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "undeliverable_stream_rewrite",
+                    "message": "The guardrail rewrite could not be safely applied to the streamed response",
+                },
+            ) from e
         except HTTPException as e:
             async for error_item in self.emit_streaming_http_error(
                 e,

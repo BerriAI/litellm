@@ -1281,14 +1281,18 @@ class TestStreamingTransform:
         assert json.loads(arguments) == {"value": "restored-secret"}
 
     @pytest.mark.asyncio
-    async def test_custom_code_undeliverable_multi_choice_tool_rewrite_releases_original_stream(self):
+    async def test_custom_code_undeliverable_multi_choice_tool_rewrite_fails_closed(self, monkeypatch):
         from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
 
         guardrail = CustomCodeGuardrail(
             custom_code=(
                 "def apply_guardrail(inputs, request_data, input_type):\n"
                 '    return modify(tool_calls=[{"id": "call_0", "type": "function", '
-                '"function": {"name": "lookup", "arguments": \'{"value": "rewritten"}\'}}])\n'
+                '"function": {"name": "lookup", "arguments": \'{"value": "rewritten-0"}\'}}, '
+                '{"id": "call_1", "type": "function", "function": {"name": "lookup", '
+                '"arguments": \'{"value": "rewritten-1"}\'}}])\n'
             ),
             guardrail_name="custom-code-multi-choice-tool-rewrite",
             streaming_deliver_ended_rewrites=True,
@@ -1322,16 +1326,24 @@ class TestStreamingTransform:
             ),
         ]
 
-        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        async def response_stream():
+            for chunk in chunks:
+                yield chunk
 
-        arguments = tuple(
-            choice.delta.tool_calls[0].function.arguments
-            for item in out[:1]
-            for choice in item.choices
-            if choice.delta.tool_calls
-        )
-        assert arguments == original_arguments
-        assert all("rewritten" not in repr(item) for item in out)
+        with pytest.raises(unified_module.HTTPException) as exc_info:
+            async for _ in UnifiedLLMGuardrails()._run_buffered_rewrite_stream(
+                guardrail_to_apply=guardrail,
+                response=response_stream(),
+                request_data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+                call_type=CallTypes.acompletion.value,
+                mappings={CallTypes.acompletion: OpenAIChatCompletionsHandler},
+            ):
+                pass
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "undeliverable_stream_rewrite"
+        assert "original" not in repr(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_incremental_diff_holdback_boundary(self):
