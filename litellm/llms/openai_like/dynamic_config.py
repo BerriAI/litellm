@@ -49,19 +49,6 @@ def _completion_window_metadata_maps(
     )
 
 
-def _validate_merge_request(
-    request: Mapping[str, object], extra_body: Mapping[str, object] | None, provider: SimpleProviderConfig
-) -> None:
-    raw_model: Final = request.get("model")
-    validate_caller_completion_window(
-        MappingProxyType(
-            {**request, **(MappingProxyType({"extra_body": extra_body}) if extra_body else MappingProxyType({}))}
-        ),
-        provider,
-        raw_model if isinstance(raw_model, str) else "",
-    )
-
-
 def _caller_completion_window(body: Mapping[str, object]) -> object:
     metadata, extra_metadata = _completion_window_metadata_maps(body)
     if "completion_window" in extra_metadata:
@@ -69,11 +56,18 @@ def _caller_completion_window(body: Mapping[str, object]) -> object:
     return metadata.get("completion_window")
 
 
-def validate_caller_completion_window(body: Mapping[str, object], provider: SimpleProviderConfig, model: str) -> None:
-    metadata, extra_metadata = _completion_window_metadata_maps(body)
-    if "completion_window" not in extra_metadata and "completion_window" not in metadata:
+def validate_metadata_completion_window(
+    metadata: Mapping[str, object] | None, provider: SimpleProviderConfig, model: str
+) -> None:
+    """Reject an unknown ``metadata.completion_window`` while request params are
+    mapped, before any provider call, the same place every provider validates
+    its first-class params. Only the Responses API forwards ``metadata`` to the
+    provider; ``extra_body`` stays an unvalidated passthrough on every endpoint."""
+    if metadata is None or not service_tier_as_completion_window_enabled(provider):
         return
-    caller_window: Final = _caller_completion_window(body)
+    if "completion_window" not in metadata:
+        return
+    caller_window: Final = metadata.get("completion_window")
     if isinstance(caller_window, str) and caller_window in COMPLETION_WINDOWS:
         return
     raise litellm.UnsupportedParamsError(
@@ -94,7 +88,6 @@ def apply_service_tier_as_completion_window(
     mapped_window: Final[str | None] = (
         _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier) if isinstance(service_tier, str) else None
     )
-    validate_caller_completion_window(body, provider, model)
     metadata, extra_metadata = _completion_window_metadata_maps(body)
     caller_window_present: Final = "completion_window" in extra_metadata or "completion_window" in metadata
     caller_window: Final = _caller_completion_window(body)
@@ -264,7 +257,6 @@ def create_config_class(provider: SimpleProviderConfig):
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if service_tier_as_completion_window_enabled(provider):
-                _validate_merge_request(request, extra_body, provider)
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 
@@ -406,6 +398,7 @@ def _json_responses_map_params(
 ) -> dict:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
+    validate_metadata_completion_window(params["metadata"] if "metadata" in params else None, provider, model)
     mapped: Final = OpenAILikeResponsesConfig.map_openai_params(
         config, response_api_optional_params=params, model=model, drop_params=drop_params
     )
@@ -479,7 +472,6 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if service_tier_as_completion_window_enabled(provider):
-                _validate_merge_request(request, extra_body, provider)
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 

@@ -1174,57 +1174,64 @@ def _window_kwargs(shape: str, window: object, with_tier: bool) -> dict:
 
 
 class TestSailCallerCompletionWindowRejected:
-    @_INVALID_WINDOW_VALUES
-    @pytest.mark.parametrize("with_tier", (False, True), ids=["no_tier", "with_tier"])
-    @pytest.mark.respx()
-    def test_chat_invalid_caller_window_raises_400(self, respx_mock: respx.Router, window: object, with_tier: bool):
-        with pytest.raises(litellm.UnsupportedParamsError) as exc:
-            litellm.completion(model=MODEL, messages=_MESSAGES, **_window_kwargs("extra_body", window, with_tier))
+    """A window passed as a first-class request param is validated while params are
+    mapped, before any provider call. Only the Responses API carries ``metadata`` to
+    the wire; chat and messages take the window through ``extra_body`` (see below)."""
 
-        assert str(exc.value) == _bad_window_message(window)
-        assert respx_mock.calls.call_count == 0
-
-    @pytest.mark.parametrize(
-        "window,shape",
-        [
-            *[(w, "metadata") for w in ("", "fast")],
-            *[(w, "extra_body") for w in ("", None, 0, "fast")],
-        ],
-        ids=[
-            "metadata_empty",
-            "metadata_fast",
-            "extra_body_empty",
-            "extra_body_none",
-            "extra_body_zero",
-            "extra_body_fast",
-        ],
-    )
+    @pytest.mark.parametrize("window", ("", "fast"), ids=["empty", "fast"])
     @pytest.mark.parametrize("with_tier", (False, True), ids=["no_tier", "with_tier"])
     @pytest.mark.asyncio
     @pytest.mark.respx()
-    async def test_responses_invalid_caller_window_raises_400(
-        self, respx_mock: respx.Router, window: object, shape: str, with_tier: bool
-    ):
-        with pytest.raises(litellm.UnsupportedParamsError) as exc:
-            await litellm.aresponses(model=MODEL, input="hi", **_window_kwargs(shape, window, with_tier))
-
-        assert str(exc.value) == _bad_window_message(window)
-        assert respx_mock.calls.call_count == 0
-
-    @_INVALID_WINDOW_VALUES
-    @pytest.mark.parametrize("with_tier", (False, True), ids=["no_tier", "with_tier"])
-    @pytest.mark.asyncio
-    @pytest.mark.respx()
-    async def test_messages_invalid_caller_window_raises_400(
+    async def test_responses_invalid_metadata_window_raises_400(
         self, respx_mock: respx.Router, window: object, with_tier: bool
     ):
         with pytest.raises(litellm.UnsupportedParamsError) as exc:
-            await litellm.anthropic_messages(
-                model=MODEL, messages=_MESSAGES, max_tokens=50, **_window_kwargs("extra_body", window, with_tier)
-            )
+            await litellm.aresponses(model=MODEL, input="hi", **_window_kwargs("metadata", window, with_tier))
 
         assert str(exc.value) == _bad_window_message(window)
         assert respx_mock.calls.call_count == 0
+
+
+_SAIL_REJECTION: Final = {"error": {"message": "invalid completion_window", "type": "invalid_request_error"}}
+
+
+class TestSailExtraBodyWindowPassesThrough:
+    """``extra_body`` is an unvalidated passthrough for every provider, so a bad
+    window there reaches Sail as sent and Sail's own 400 is what the caller sees."""
+
+    @_INVALID_WINDOW_VALUES
+    @pytest.mark.respx()
+    def test_chat_sends_extra_body_window_as_is(self, respx_mock: respx.Router, window: object):
+        route = respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(status_code=400, json=_SAIL_REJECTION)
+
+        with pytest.raises(litellm.BadRequestError, match="invalid completion_window"):
+            litellm.completion(model=MODEL, messages=_MESSAGES, **_window_kwargs("extra_body", window, True))
+
+        assert json.loads(route.calls.last.request.content)["metadata"] == {"completion_window": window}
+
+    @_INVALID_WINDOW_VALUES
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_responses_sends_extra_body_window_as_is(self, respx_mock: respx.Router, window: object):
+        route = respx_mock.post(SAIL_RESPONSES).respond(status_code=400, json=_SAIL_REJECTION)
+
+        with pytest.raises(litellm.BadRequestError, match="invalid completion_window"):
+            await litellm.aresponses(model=MODEL, input="hi", **_window_kwargs("extra_body", window, True))
+
+        assert json.loads(route.calls.last.request.content)["metadata"] == {"completion_window": window}
+
+    @_INVALID_WINDOW_VALUES
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_messages_sends_extra_body_window_as_is(self, respx_mock: respx.Router, window: object):
+        route = respx_mock.post(SAIL_MESSAGES).respond(status_code=400, json=_SAIL_REJECTION)
+
+        with pytest.raises(litellm.BadRequestError, match="invalid completion_window"):
+            await litellm.anthropic_messages(
+                model=MODEL, messages=_MESSAGES, max_tokens=50, **_window_kwargs("extra_body", window, True)
+            )
+
+        assert json.loads(route.calls.last.request.content)["metadata"] == {"completion_window": window}
 
 
 class TestSailUnknownServiceTierRejected:
@@ -1421,21 +1428,23 @@ class TestSailCallerWindowOnMergeExtraBody:
     @pytest.mark.parametrize(
         "experimental_handler", ["true", "false"], ids=["experimental_handler", "default_handler"]
     )
-    @pytest.mark.respx(assert_all_called=False)
-    def test_chat_extra_body_empty_window_raises_400(
+    @pytest.mark.respx()
+    def test_chat_extra_body_window_wins_over_mapped_tier_on_both_handlers(
         self, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch, experimental_handler: str
     ):
         monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", experimental_handler)
+        route = respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
 
-        with pytest.raises(litellm.UnsupportedParamsError) as exc:
-            litellm.completion(
-                model=MODEL,
-                messages=_MESSAGES,
-                extra_body={"metadata": {"completion_window": ""}},
-            )
+        litellm.completion(
+            model=MODEL,
+            messages=_MESSAGES,
+            service_tier="flex",
+            extra_body={"metadata": {"completion_window": "balanced", "trace": "t-1"}},
+        )
 
-        assert str(exc.value) == _bad_window_message("")
-        assert respx_mock.calls.call_count == 0
+        body = json.loads(route.calls.last.request.content)
+        assert body["metadata"] == {"completion_window": "balanced", "trace": "t-1"}
+        assert "service_tier" not in body
 
 
 class TestSailStreamingRebuildCost:
