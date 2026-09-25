@@ -7981,7 +7981,12 @@ def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_th
 
 @pytest.mark.parametrize(
     "override_key",
-    ("input_cost_per_token_above_200k_tokens_batches",),
+    (
+        "input_cost_per_token_above_200k_tokens_batches",
+        "output_cost_per_token_above_200k_tokens_batches",
+        "cache_read_input_token_cost_above_200k_tokens_batches",
+        "cache_creation_input_token_cost_above_200k_tokens_batches",
+    ),
 )
 def test_deployment_pricing_model_info_honors_a_200k_tier_batch_override(
     _published_batch_model: None, override_key: str
