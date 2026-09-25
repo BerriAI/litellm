@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -42,7 +43,10 @@ def with_flux2_billed_megapixels(image_response: ImageResponse, raw_response: ht
         request_meta: Final = _Flux2ResponseBody.model_validate_json(raw_response.content).request_meta
     except ValidationError:
         return image_response
-    image_response.set_provider_billed_megapixels(request_meta.input_mp + request_meta.output_mp)
+    billed_megapixels: Final = request_meta.input_mp + request_meta.output_mp
+    if not math.isfinite(billed_megapixels):
+        return image_response
+    image_response.set_provider_billed_megapixels(billed_megapixels)
     return image_response
 
 

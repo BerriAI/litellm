@@ -204,6 +204,7 @@ def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensi
         ({"input_mp": 45.78, "output_mp": 1.0}, 46.78),
         ({"output_mp": 0.39}, 2048 * 1024 / (1024 * 1024)),
         ({"input_mp": -1.0, "output_mp": 0.39}, 2048 * 1024 / (1024 * 1024)),
+        ({"input_mp": 1.7e308, "output_mp": 1.7e308}, 2048 * 1024 / (1024 * 1024)),
     ),
 )
 def test_flux2_generation_bills_azure_reported_megapixels_and_falls_back_to_requested_size(
