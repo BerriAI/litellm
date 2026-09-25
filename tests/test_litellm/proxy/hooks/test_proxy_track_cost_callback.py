@@ -93,6 +93,55 @@ async def test_async_post_call_failure_hook():
         assert metadata["original_key"] == "original_value"
 
 
+def test_async_post_call_failure_hook_audio_speech() -> None:
+    """LIT-41521 regression: _ProxyDBLogger writes spend log for failed audio_speech call."""
+    import litellm
+
+    async def _test() -> None:
+        mock_writer: Final = MagicMock()
+        mock_writer.update_database = AsyncMock()
+        logger: Final = _ProxyDBLogger(spend_writer=lambda: mock_writer)
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            api_key="test_api_key",
+            key_alias="test_alias",
+            user_email="test@example.com",
+            user_id="test_user_id",
+            team_id="test_team_id",
+            org_id="test_org_id",
+            team_alias="test_team_alias",
+            end_user_id="test_end_user_id",
+            request_route="/v1/audio/speech",
+        )
+        request_data: Final = {
+            "model": "tts-1",
+            "input": "hello",
+            "voice": "alloy",
+            "call_type": "aspeech",
+            "litellm_call_id": "call-speech-fail-41521",
+        }
+        exc: Final = litellm.BadRequestError(
+            message="Voice not supported",
+            model="tts-1",
+            llm_provider="openai",
+        )
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exc,
+            user_api_key_dict=user_api_key_dict,
+        )
+        mock_writer.update_database.assert_called_once()
+        call_args: Final = mock_writer.update_database.call_args.kwargs
+        assert call_args["token"] == "test_api_key"
+        assert call_args["response_cost"] == 0.0
+        assert call_args["completion_response"] == exc
+        litellm_params: Final = call_args["kwargs"].get("litellm_params", {})
+        metadata: Final = litellm_params.get("metadata", {})
+        assert metadata["status"] == "failure"
+        assert metadata["error_information"]["error_class"] == "BadRequestError"
+
+    asyncio.run(_test())
+
+
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
     """

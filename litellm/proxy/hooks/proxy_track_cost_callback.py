@@ -563,9 +563,7 @@ class _ProxyDBLogger(CustomLogger):
         """
         from litellm.proxy.proxy_server import general_settings
 
-        if general_settings.get("disable_error_logs") is True:
-            return False
-        return
+        return general_settings.get("disable_error_logs") is not True
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
