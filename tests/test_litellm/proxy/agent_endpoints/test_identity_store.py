@@ -223,15 +223,6 @@ async def test_retired_client_cannot_fall_back_to_ordinary_user_authentication()
 
 
 @pytest.mark.asyncio
-async def test_human_lookup_storage_failure_is_explicitly_unavailable() -> None:
-    store, _, _, humans = setup_store()
-    humans.find_unique.side_effect = RuntimeError("writer unavailable")
-    result: Final = await store.verified_human(ISSUER, TENANT, HUMAN)
-    assert isinstance(result, AgentIdentityFailure)
-    assert result.code == "policy_unavailable"
-
-
-@pytest.mark.asyncio
 async def test_missing_revision_cannot_create_entra_authentication_evidence() -> None:
     store, _, identities, _ = setup_store()
     result: Final = await store.record_authentication(ManagedAgentContext(agent_id="agent-one", mode="autonomous"))
@@ -292,3 +283,21 @@ async def test_new_binding_is_enforced_after_another_worker_commits_it() -> None
     assert isinstance(denied, AgentIdentityFailure)
     assert denied.code == "identity_denied"
     assert "Application token contradicts" in denied.message
+
+
+@pytest.mark.asyncio
+async def test_non_string_subject_does_not_query_directory_ownership() -> None:
+    store, _, _, humans = setup_store()
+    assert await store.subject(ISSUER, TENANT, None) is None
+    humans.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [False, True])
+async def test_missing_or_unavailable_retirement_history_fails_closed(configured: bool) -> None:
+    database: Final = MagicMock()
+    database.writer_db.litellm_retiredagent.find_unique = AsyncMock(side_effect=RuntimeError("history unavailable"))
+    store: Final = AgentIdentityStore.from_client(database) if configured else setup_store()[0]
+    result: Final = await store.retired_agent("deleted-agent")
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "policy_unavailable"

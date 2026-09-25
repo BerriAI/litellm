@@ -1513,3 +1513,20 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
     assert internal.status_code == 200, internal.text
     assert internal.json()["kill_switch"] is None
     assert "tok-real" not in internal.text
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
+    monkeypatch: pytest.MonkeyPatch, trusted: bool
+) -> None:
+    from tests.test_litellm.proxy.agent_endpoints.test_managed_identity import BINDING
+
+    configuration: Final = BINDING.model_dump(
+        exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
+    )
+    monkeypatch.setattr(agent_endpoints, "_trusted_agent_issuers", lambda: (BINDING.issuer,) if trusted else ())
+    request: Final = {"identity": {**configuration, "client_id": "invalid"} if trusted else configuration}
+    message: Final = "Invalid Entra identity configuration" if trusted else "Configure trusted JWT issuer"
+    with pytest.raises(HTTPException, match=message) as failure:
+        agent_endpoints._validate_managed_identity_request(request)
+    assert failure.value.status_code == 400

@@ -164,20 +164,6 @@ class AgentIdentityStore:
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent history is unavailable")
 
-    async def verified_human(
-        self, issuer: str, tenant_id: str, oid: str
-    ) -> VerifiedHumanSubject | AgentIdentityFailure | None:
-        try:
-            where: Final[LiteLLM_VerifiedSubjectWhereUniqueInput] = {
-                "issuer_tenant_id_oid": {"issuer": issuer, "tenant_id": tenant_id, "oid": oid}
-            }
-            row: Final = await self.humans.table.find_unique(where=where)
-            if row is None or row.kind != "human" or row.verified_via != "sso_interactive":
-                return None
-            return VerifiedHumanSubject.model_validate(row.model_dump())
-        except Exception:
-            return AgentIdentityFailure(code="policy_unavailable", message="Delegated subject could not be verified")
-
     async def record_authentication(self, context: ManagedAgentContext) -> AgentIdentityFailure | None:
         try:
             if context.binding_revision is None:
