@@ -39,7 +39,7 @@ def heuristic_first_router(proxy: ProxyClient, request: pytest.FixtureRequest) -
                 "heuristic_first_max_tier": "MEDIUM",
                 "heuristic_first_max_context_tokens": 8000,
                 "classifier_fallback": "heuristic",
-                "classifier_llm_config": {"model": "gpt-5.5"},
+                "classifier_llm_config": {"model": "gpt-5.5", "timeout_ms": 30000},
                 "tiers": {
                     "SIMPLE": "gpt-5.5",
                     "MEDIUM": "claude-haiku-4-5",
@@ -133,6 +133,9 @@ def _send(
 
 
 def _assert_classifier_consulted(response: StreamingResponse, context: str) -> None:
+    assert response.headers.get("x-litellm-complexity-router-cause") == "llm_classifier", (
+        f"{context}: expected a successful classifier decision; observed headers={response.headers!r}"
+    )
     classifier_cost: Final = response.headers.get("x-litellm-classifier-cost")
     assert classifier_cost is not None, (
         f"{context}: classifier header missing; observed headers={response.headers!r}; body={response.body[:300]!r}"
@@ -189,6 +192,9 @@ class TestHeuristicFirstLongContext:
         assert "x-litellm-classifier-cost" not in response.headers, (
             f"single-turn heuristic path unexpectedly consulted classifier; "
             f"observed headers={response.headers!r}; body={response.body[:300]!r}"
+        )
+        assert response.headers.get("x-litellm-complexity-router-cause") == "heuristic_first_short_circuit", (
+            f"single-turn request should bypass the classifier; observed headers={response.headers!r}"
         )
         rows: Final = client.proxy.poll_logs_for_key(heuristic_first_key, min_rows=1)
         served: Final = tuple(row.model for row in rows if row.model is not None)
