@@ -30,7 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, redact_bedrock_headers_for_logging
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -256,7 +256,10 @@ class BedrockImageEdit(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": proxy_endpoint_url,
-                "headers": prepped.headers,
+                # Redacted copy: pre_call forwards additional_args unmasked to
+                # logger_fn / log_pre_api_call callbacks; the signed headers
+                # must not leave the request path (prepped keeps them).
+                "headers": redact_bedrock_headers_for_logging(prepped.headers),
             },
         )
         return BedrockImageEditPreparedRequest(

@@ -12,6 +12,7 @@ import asyncio
 import base64
 import io
 import json
+from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
@@ -498,3 +499,83 @@ async def test_aimage_edit_forwards_style_to_nova_canvas_transform(monkeypatch):
     assert isinstance(body, dict)
     assert body["textToImageParams"]["style"] == "DESIGN_SKETCH"
     assert response.data[0].b64_json == "aGk="
+
+
+#################################################
+# logging headers redaction (pre_call additional_args)
+#################################################
+
+
+def test_redact_bedrock_headers_for_logging_masks_signed_headers():
+    """SigV4 signature material must be replaced with [REDACTED]; safe headers survive."""
+    from litellm.llms.bedrock.common_utils import redact_bedrock_headers_for_logging
+
+    signed: Final[dict[str, str]] = {
+        "Content-Type": "application/json",
+        "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+        "Authorization": (
+            "AWS4-HMAC-SHA256 Credential=AKIA-test/20260115/us-east-1/bedrock/aws4_request, "
+            "SignedHeaders=host;x-amz-date, Signature=deadbeefsecret"
+        ),
+        "X-Amz-Date": "20260115T103000Z",
+        "X-Amz-Security-Token": "session-token-secret",
+        "X-Amzn-RequestId": "request-id-not-secret",
+    }
+    redacted = redact_bedrock_headers_for_logging(signed)
+    assert redacted["Content-Type"] == "application/json"
+    assert redacted["Host"] == "bedrock-runtime.us-east-1.amazonaws.com"
+    assert redacted["X-Amzn-RequestId"] == "request-id-not-secret"
+    assert redacted["Authorization"] == "[REDACTED]"
+    assert redacted["X-Amz-Date"] == "[REDACTED]"
+    assert redacted["X-Amz-Security-Token"] == "[REDACTED]"
+    # Every key stays present (log consumers see the full header shape).
+    assert set(redacted.keys()) == set(signed.keys())
+    # The input mapping is untouched: redaction never mutates the sent headers.
+    assert signed["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert signed["X-Amz-Security-Token"] == "session-token-secret"
+
+
+def test_prepare_request_logging_headers_redacted(monkeypatch):
+    """pre_call additional_args must carry the redacted copy; the sent request keeps
+    the real bearer Authorization header."""
+    from litellm.llms.bedrock.image_edit.handler import BedrockImageEdit
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+
+    captured: dict = {}
+
+    def _capture(model_call_details):
+        captured.update(model_call_details)
+
+    logging_obj = Logging(
+        model=f"bedrock/{TEST_MODEL}",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+        kwargs={"logger_fn": _capture},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"logger_fn": _capture},
+        optional_params={},
+    )
+
+    request = BedrockImageEdit()._prepare_request(
+        model=TEST_MODEL,
+        image=[io.BytesIO(b"fake-png")],
+        prompt="make it warmer",
+        optional_params={"aws_region_name": "us-west-2", "aws_profile_name": "litellm-no-such-aws-profile"},
+        api_base=None,
+        extra_headers=None,
+        logging_obj=logging_obj,
+        api_key=None,
+    )
+    logged_headers: Final = captured["additional_args"]["headers"]
+    assert logged_headers["Authorization"] == "[REDACTED]"
+    assert logged_headers["Content-Type"] == "application/json"
+    assert "env-bearer-token-12345" not in str(captured)
+    # The sent request still carries the real bearer Authorization header.
+    assert request.prepped.headers["Authorization"] == "Bearer env-bearer-token-12345"

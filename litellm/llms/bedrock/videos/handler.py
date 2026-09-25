@@ -41,7 +41,7 @@ from ..base_aws_llm import (
     bedrock_bearer_token,
     pop_aws_auth_params,
 )
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, redact_bedrock_headers_for_logging
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -290,7 +290,10 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 additional_args={  # mutable-ok: logging payload dict built for this call
                     "complete_input_dict": data,
                     "api_base": endpoint_url,
-                    "headers": prepped.headers,
+                    # Redacted copy: pre_call forwards additional_args unmasked to
+                    # logger_fn / log_pre_api_call callbacks; the signed headers
+                    # must not leave the request path (prepped keeps them).
+                    "headers": redact_bedrock_headers_for_logging(prepped.headers),
                 },
             )
         return endpoint_url, prepped, body, data

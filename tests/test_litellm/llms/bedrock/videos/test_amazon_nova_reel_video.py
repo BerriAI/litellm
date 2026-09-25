@@ -433,6 +433,90 @@ def test_handler_builds_async_invoke_request(monkeypatch):
     assert parsed["modelInput"]["taskType"] == "TEXT_VIDEO"
 
 
+#################################################
+# logging headers redaction (pre_call additional_args)
+#################################################
+
+
+def test_redact_bedrock_headers_for_logging_masks_signed_headers():
+    """SigV4 signature material must be replaced with [REDACTED]; safe headers survive."""
+    from litellm.llms.bedrock.common_utils import redact_bedrock_headers_for_logging
+
+    signed: Final[dict[str, str]] = {
+        "Content-Type": "application/json",
+        "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+        "Authorization": (
+            "AWS4-HMAC-SHA256 Credential=AKIA-test/20260115/us-east-1/bedrock/aws4_request, "
+            "SignedHeaders=host;x-amz-date, Signature=deadbeefsecret"
+        ),
+        "X-Amz-Date": "20260115T103000Z",
+        "X-Amz-Security-Token": "session-token-secret",
+        "X-Amz-Content-Sha256": "sensitive-payload-hash",
+    }
+    redacted = redact_bedrock_headers_for_logging(signed)
+    assert redacted["Content-Type"] == "application/json"
+    assert redacted["Host"] == "bedrock-runtime.us-east-1.amazonaws.com"
+    assert redacted["Authorization"] == "[REDACTED]"
+    assert redacted["X-Amz-Date"] == "[REDACTED]"
+    assert redacted["X-Amz-Security-Token"] == "[REDACTED]"
+    assert redacted["X-Amz-Content-Sha256"] == "[REDACTED]"
+    # Every key stays present (log consumers see the full header shape).
+    assert set(redacted.keys()) == set(signed.keys())
+    # The input mapping is untouched: redaction never mutates the sent headers.
+    assert signed["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert signed["X-Amz-Security-Token"] == "session-token-secret"
+
+
+def _capturing_logging_obj(captured: dict):
+    """A real Logging object whose logger_fn captures model_call_details."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    def _capture(model_call_details):
+        captured.update(model_call_details)
+
+    logging_obj = Logging(
+        model="bedrock/amazon.nova-reel-v1:0",
+        messages=[],
+        stream=False,
+        call_type="avideo_generation",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+        kwargs={"logger_fn": _capture},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"logger_fn": _capture},
+        optional_params={},
+    )
+    return logging_obj
+
+
+def test_prepare_request_logging_headers_redacted(monkeypatch):
+    """pre_call additional_args must carry the redacted copy; the sent request keeps
+    the real signed Authorization header."""
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+    captured: dict = {}
+    _, prepped, _, _ = handler._prepare_async_invoke_request(
+        model="bedrock/amazon.nova-reel-v1:0",
+        prompt="waves at sunset",
+        optional_params={"output_s3_uri": "s3://bucket/out/"},
+        api_base=None,
+        extra_headers=None,
+        logging_obj=_capturing_logging_obj(captured),
+    )
+    logged_headers: Final = captured["additional_args"]["headers"]
+    assert logged_headers["Authorization"] == "[REDACTED]"
+    assert logged_headers["Content-Type"] == "application/json"
+    assert "deadbeefsecret" not in str(captured)
+    # The sent request still carries the real SigV4 Authorization header.
+    assert prepped.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+
 def test_handler_builds_status_get_url(monkeypatch):
     handler = BedrockVideoGeneration()
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA-test")
