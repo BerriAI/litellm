@@ -1721,6 +1721,39 @@ async def _check_byok_credential(
         )
 
 
+def _challenge_missing_token_exchange_subject(
+    server: MCPServer | None,
+    requested_server: MCPServer | None,
+    allowed_mcp_servers: list[MCPServer],
+    user_api_key_auth: UserAPIKeyAuth | None,
+    oauth2_headers: dict[str, str] | None,
+    raw_headers: dict[str, str] | None,
+) -> None:
+    """Raise the RFC 9728 challenge when a token-exchange server is called without a subject token.
+
+    The listing that fills a cold catalog absorbs the upstream 401 by design, so without this
+    check a missing subject surfaces as an unknown-tool error instead of the challenge the
+    warm path already raises. Gated to servers the key may reach so an unauthorized caller
+    learns nothing about the catalog.
+    """
+    if server is None or server.auth_type != MCPAuth.oauth2_token_exchange:
+        return
+    if requested_server is not None and requested_server.server_id != server.server_id:
+        return
+    if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
+        return
+    if global_mcp_server_manager._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth) is not None:
+        return
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
+        raise_token_exchange_challenge,
+    )
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports proxy utils
+        get_request_root_path,
+    )
+
+    raise_token_exchange_challenge(server, root_path=get_request_root_path())
+
+
 async def _list_tools_before_first_call(
     server: MCPServer | None,
     tool_name: str,
@@ -1863,6 +1896,14 @@ async def _execute_mcp_tool(
         name
         if first_call_target is None or (requested_server is not None and not name_is_prefixed)
         else strip_known_server_prefix(name, first_call_target)
+    )
+    _challenge_missing_token_exchange_subject(
+        server=first_call_target,
+        requested_server=requested_server,
+        allowed_mcp_servers=allowed_mcp_servers,
+        user_api_key_auth=user_api_key_auth,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
     )
     await _list_tools_before_first_call(
         server=first_call_target,
@@ -3062,9 +3103,7 @@ class GatewayOperations:
                 return await _execute_mcp_tool(
                     name=operation.name,
                     arguments=dict(operation.arguments),  # mutable-ok: existing tool hooks own mutable argument data
-                    allowed_mcp_servers=list(
-                        operation.allowed_mcp_servers
-                    ),  # mutable-ok: legacy dispatch list contract
+                    allowed_mcp_servers=list(operation.allowed_mcp_servers),
                     start_time=operation.start_time,
                     user_api_key_auth=auth,
                     mcp_auth_header=token,

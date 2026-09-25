@@ -217,13 +217,25 @@ mod tests {
             "Authorization".to_string(),
             "Bearer abc".to_string()
         )]));
+        assert!(has_bearer_auth(&[(
+            "authorization".to_string(),
+            "bearer abc".to_string()
+        )]));
         assert!(!has_bearer_auth(&[(
             "Authorization".to_string(),
             "Bearer    ".to_string()
         )]));
         assert!(!has_bearer_auth(&[(
+            "authorization".to_string(),
+            String::new()
+        )]));
+        assert!(!has_bearer_auth(&[(
             "Authorization".to_string(),
             "Basic abc".to_string()
+        )]));
+        assert!(!has_bearer_auth(&[(
+            "x-api-key".to_string(),
+            "abc".to_string()
         )]));
     }
 }

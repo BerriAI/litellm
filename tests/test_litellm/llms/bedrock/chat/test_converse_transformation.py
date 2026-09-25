@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from typing import Final
@@ -9,6 +10,7 @@ import pytest
 import litellm
 from litellm import ModelResponse
 from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
@@ -7627,6 +7629,246 @@ def test_eager_input_streaming_non_boolean_is_a_bad_request():
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [_eager_openai_tool(eager_input_streaming="true")],
         )
+
+
+def test_mid_conversation_system_after_multiple_tool_results():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "calling tools",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": "reminder"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "r2"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+    ]
+    assert out_messages[2]["content"] == "r1"
+    assert out_messages[3]["content"] == "r2"
+    # Reminder lands after ALL tool results, not between them.
+    assert out_messages[4]["content"][1]["text"] == "reminder"
+    assert out_messages[5]["content"] == "done"
+
+
+def test_mid_conversation_system_reorders_around_a_pydantic_assistant_tool_call():
+    config = AmazonConverseConfig()
+    assistant = litellm.Message(
+        role="assistant",
+        content="calling tools",
+        tool_calls=[{"id": "call_a", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+    )
+    messages = [
+        {"role": "user", "content": "hi"},
+        assistant,
+        {"role": "system", "content": "reminder"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == ["user", "assistant", "tool", "user", "user"]
+    assert out_messages[1] is assistant
+    assert out_messages[3]["content"][1]["text"] == "reminder"
+
+
+def test_mid_conversation_multi_system_run_after_multiple_tool_results():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "calling tools",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": "reminder 1"},
+        {"role": "system", "content": "reminder 2"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "r2"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, _ = config._transform_system_message(messages)
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+        "user",
+    ]
+    assert out_messages[4]["content"][1]["text"] == "reminder 1"
+    assert out_messages[5]["content"][1]["text"] == "reminder 2"
+
+
+def test_opens_with_tool_result_rejects_non_dict():
+    config = AmazonConverseConfig()
+    assert config._opens_with_tool_result("not-a-dict") is False
+    assert config._opens_with_tool_result(None) is False
+    assert config._opens_with_tool_result([{"role": "tool"}]) is False
+
+
+def test_mid_conversation_system_without_tools_stays_in_place():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "system", "content": "reminder"},
+        {"role": "user", "content": "thanks"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert [b["text"] for b in system_blocks if "text" in b] == ["You are helpful."]
+    assert [m["role"] for m in out_messages] == ["user", "assistant", "user", "user"]
+    assert out_messages[2]["content"][1]["text"] == "reminder"
+    assert out_messages[3]["content"] == "thanks"
+
+
+def test_mid_conversation_system_str_with_cache_control():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "system",
+            "content": "reminder",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert out_messages[1]["role"] == "user"
+    assert out_messages[1]["content"][1] == {
+        "type": "text",
+        "text": "reminder",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_mid_conversation_system_list_content_with_cache_control():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "keep this", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "plain"},
+                {"type": "text", "text": ""},
+                {"type": "image", "source": "x"},
+                "raw-string",
+            ],
+        },
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    blocks = out_messages[1]["content"]
+    assert blocks[0]["text"] == CONVERTED_SYSTEM_NOTE
+    assert blocks[1] == {
+        "type": "text",
+        "text": "keep this",
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert blocks[2] == {"type": "text", "text": "plain"}
+    assert len(blocks) == 3
+
+
+@pytest.mark.parametrize(
+    "empty_content",
+    ["", [], None, [{"type": "image", "source": "x"}, {"type": "text", "text": ""}]],
+    ids=["empty-string", "empty-list", "none", "no-text-parts"],
+)
+def test_mid_conversation_system_entry_without_text_is_dropped(empty_content):
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": empty_content},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert out_messages == [{"role": "user", "content": "hi"}, {"role": "user", "content": "done"}]
+
+
+def _thinking_reply(text: str) -> dict:
+    return {
+        "role": "assistant",
+        "content": text,
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": f"sig-{text}"}],
+    }
+
+
+def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], list[dict], list[dict]]:
+    turn_n = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "First question"}]
+    reminder = {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"}
+    second_question = {"role": "user", "content": "Second question"}
+    second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
+    turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
+    turn_n_plus_two = [*turn_n_plus_one, _thinking_reply("Second answer"), {"role": "user", "content": "Third question"}]
+    return turn_n, turn_n_plus_one, turn_n_plus_two
+
+
+def _replayed_prefix(request: dict, message_count: int) -> str:
+    replayed = {
+        "system": request.get("system"),
+        "toolConfig": request.get("toolConfig"),
+        "messages": request["messages"][:message_count],
+    }
+    return json.dumps(replayed, sort_keys=True)
+
+
+def _assert_prefix_stable(requests: list[dict]) -> None:
+    for earlier, later in zip(requests, requests[1:]):
+        count = len(earlier["messages"])
+        assert _replayed_prefix(later, count) == _replayed_prefix(earlier, count)
+
+
+@pytest.mark.parametrize("reminder_after_user", [True, False])
+def test_flagged_model_replays_a_byte_identical_prefix_around_a_mid_conversation_reminder(
+    local_model_cost_map, reminder_after_user
+):
+    """Converse rejects ``role: system`` inside ``messages``, so the reminder becomes a
+    user turn in place; hoisting it into ``system`` would change the prefix every
+    signed thinking block in the history is bound to."""
+    requests = [
+        AmazonConverseConfig().transform_request(
+            model="bedrock/us.anthropic.claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        for turn in _preserved_thinking_turns(reminder_after_user)
+    ]
+
+    _assert_prefix_stable(requests)
+    assert requests[1]["system"] == [{"text": "You are terse."}]
+    assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user"]
+    assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "assistant", "user"]
 
 
 @pytest.mark.parametrize("model", ("anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-7"))

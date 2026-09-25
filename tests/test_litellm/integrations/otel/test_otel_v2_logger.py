@@ -2001,6 +2001,91 @@ def test_service_span_prefers_ambient_context_over_threaded_parent():
     assert by_name["redis get"].parent.span_id == ambient.get_span_context().span_id
 
 
+_REQUEST_END = 1_000.0
+
+
+def _ended_request_span(logger):
+    """A PROXY_REQUEST span whose response already went out at ``_REQUEST_END``."""
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    server.end(end_time=to_ns(_REQUEST_END))
+    return server
+
+
+@pytest.mark.parametrize("parent_source", ["ambient", "threaded"])
+def test_service_call_that_outlives_the_request_roots_its_own_trace_linked_to_the_request(parent_source):
+    """Post-response work (spend tracking, the cache write, the spend-counter
+    increment) finishes after the server span ended, so it did not add to the
+    request's latency. Nesting it under the request would stretch the request
+    trace past the response, so it starts its own trace and keeps the request
+    reachable through a span link, whether the request span is the ambient
+    context or the threaded ``parent_otel_span``."""
+    logger, exporter = _logger()
+    server = _ended_request_span(logger)
+    hook = logger.async_service_success_hook(
+        payload=_ServicePayload("batch_write_to_db", "_PROXY_track_cost_callback"),
+        parent_otel_span=server if parent_source == "threaded" else None,
+        start_time=_REQUEST_END + 0.1,
+        end_time=_REQUEST_END + 0.5,
+    )
+    if parent_source == "ambient":
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(hook)
+    else:
+        asyncio.run(hook)
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    span = by_name["batch_write_to_db _PROXY_track_cost_callback"]
+    request_ctx = server.get_span_context()
+    assert span.parent is None
+    assert span.context.trace_id != request_ctx.trace_id
+    assert [(link.context.trace_id, link.context.span_id) for link in span.links] == [
+        (request_ctx.trace_id, request_ctx.span_id)
+    ]
+
+
+def test_service_call_that_finished_before_the_response_stays_in_the_request_trace():
+    """The hook is dispatched with ``asyncio.create_task`` and can run after the
+    response went out even though the call itself completed during the request.
+    Its own end time decides: a call that ended before the request span did is
+    request latency and stays a child of the request."""
+    logger, exporter = _logger()
+    server = _ended_request_span(logger)
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload("postgres", "get_data"),
+            parent_otel_span=server,
+            start_time=_REQUEST_END - 0.5,
+            end_time=_REQUEST_END - 0.1,
+        )
+    )
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    assert span.parent.span_id == server.get_span_context().span_id
+    assert span.context.trace_id == server.get_span_context().trace_id
+    assert list(span.links) == []
+
+
+def test_service_call_under_a_remote_parent_is_never_detached():
+    """A propagated parent is a ``NonRecordingSpan`` with no end time of its own.
+    Not recording is not the same as ended, so the call stays its child."""
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+    logger, exporter = _logger()
+    remote = NonRecordingSpan(
+        SpanContext(trace_id=0xABC, span_id=0x123, is_remote=True, trace_flags=TraceFlags(TraceFlags.SAMPLED))
+    )
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload("redis", "get"),
+            parent_otel_span=remote,
+            start_time=_REQUEST_END + 0.1,
+            end_time=_REQUEST_END + 0.5,
+        )
+    )
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis get"]
+    assert span.parent.span_id == 0x123
+    assert span.context.trace_id == 0xABC
+    assert list(span.links) == []
+
+
 # --------------------------------------------------------------------------- #
 #  Proxy SERVER span lifecycle
 # --------------------------------------------------------------------------- #
