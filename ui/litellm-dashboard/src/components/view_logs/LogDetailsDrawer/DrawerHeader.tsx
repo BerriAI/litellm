@@ -50,6 +50,8 @@ export function DrawerHeader({
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
   const showToggleWithProvider = isSidebarCollapsed && Boolean(providerInfo || log.model);
   const showToggleWithRequestId = isSidebarCollapsed && !showToggleWithProvider;
+  const callId: string | null =
+    log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
 
   return (
     <div
@@ -85,7 +87,17 @@ export function DrawerHeader({
         }}
       >
         {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
-        <RequestIdSection requestId={log.request_id} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <CopyableId value={log.request_id} label="Request ID" fontSize={FONT_SIZE_HEADER} />
+          {callId && (
+            <div className="flex items-center gap-1">
+              <span className="text-muted-foreground" style={{ fontSize: 10 }}>
+                call id
+              </span>
+              <CopyableId value={callId} label="Call ID" fontSize={FONT_SIZE_MEDIUM} muted />
+            </div>
+          )}
+        </div>
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>
 
@@ -140,15 +152,22 @@ function ModelProviderSection({
   );
 }
 
-/**
- * Request ID display with copy functionality
- */
-function RequestIdSection({ requestId }: { requestId: string }) {
+function CopyableId({
+  value,
+  label,
+  fontSize,
+  muted,
+}: {
+  value: string;
+  label: string;
+  fontSize: number;
+  muted?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(requestId);
+      await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -157,38 +176,36 @@ function RequestIdSection({ requestId }: { requestId: string }) {
   };
 
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                className="font-semibold"
-                style={{
-                  fontSize: FONT_SIZE_HEADER,
-                  fontFamily: FONT_FAMILY_MONO,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  display: "block",
-                }}
-              />
-            }
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={muted ? "text-muted-foreground" : "font-semibold"}
+              style={{
+                fontSize,
+                fontFamily: FONT_FAMILY_MONO,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                display: "block",
+              }}
+            />
+          }
+        >
+          {value}
+          <button
+            type="button"
+            aria-label={copied ? "Copied!" : `Copy ${label}`}
+            onClick={handleCopy}
+            className="ml-1 align-middle text-muted-foreground hover:text-foreground"
           >
-            {requestId}
-            <button
-              type="button"
-              aria-label={copied ? "Copied!" : "Copy Request ID"}
-              onClick={handleCopy}
-              className="ml-1 align-middle text-muted-foreground hover:text-foreground"
-            >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{requestId}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    </div>
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{value}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

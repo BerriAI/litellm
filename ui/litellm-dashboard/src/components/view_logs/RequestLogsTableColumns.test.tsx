@@ -267,10 +267,35 @@ describe("batch rows", () => {
   });
 
   it("leaves ordinary request ids untouched", () => {
-    renderRows([logEntry({ request_id: "chatcmpl-42" })]);
+    renderRows([logEntry({ request_id: "chatcmpl-42", litellm_call_id: "chatcmpl-42" })]);
 
     expect(screen.getByText("chatcmpl-42")).toBeInTheDocument();
     expect(screen.queryByText("batch cost")).not.toBeInTheDocument();
+    expect(screen.queryByText("call id")).not.toBeInTheDocument();
+  });
+});
+
+describe("Request ID column", () => {
+  it("shows the x-litellm-call-id under the request id when they differ", () => {
+    renderRows([logEntry({ request_id: "chatcmpl-9", litellm_call_id: "call-uuid-9" })]);
+
+    expect(screen.getByText("chatcmpl-9")).toBeInTheDocument();
+    expect(screen.getByText("call-uuid-9")).toBeInTheDocument();
+    expect(screen.getByText("call id")).toBeInTheDocument();
+  });
+
+  it("shows the id once when request id and call id are the same", () => {
+    renderRows([logEntry({ request_id: "same-id-7", litellm_call_id: "same-id-7" })]);
+
+    expect(screen.getAllByText("same-id-7")).toHaveLength(1);
+    expect(screen.queryByText("call id")).not.toBeInTheDocument();
+  });
+
+  it("shows only the request id when the row carries no call id", () => {
+    renderRows([logEntry({ request_id: "chatcmpl-no-call", litellm_call_id: null })]);
+
+    expect(screen.getByText("chatcmpl-no-call")).toBeInTheDocument();
+    expect(screen.queryByText("call id")).not.toBeInTheDocument();
   });
 });
 

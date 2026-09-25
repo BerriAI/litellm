@@ -160,6 +160,20 @@ export const getRequestLogsTableColumns = ({
           </div>
         );
       }
+      if (log.litellm_call_id && log.litellm_call_id !== log.request_id) {
+        return (
+          <div className="flex flex-col">
+            <IdCell value={log.request_id} variant="plain" />
+            <IdCell
+              value={log.litellm_call_id}
+              variant="plain"
+              copyable
+              tooltip={`x-litellm-call-id ${log.litellm_call_id}`}
+            />
+            <span className="text-[10px] text-muted-foreground">call id</span>
+          </div>
+        );
+      }
       return <IdCell value={log.request_id} variant="plain" />;
     },
   },
