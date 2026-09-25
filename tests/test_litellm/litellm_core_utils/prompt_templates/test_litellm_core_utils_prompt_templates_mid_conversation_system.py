@@ -8,6 +8,7 @@ the pure placement rules on the OpenAI-format message list.
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     place_mid_conversation_system,
@@ -259,9 +260,25 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
         {"role": "assistant", "content": None},
         {"role": "assistant", "content": []},
         {"role": "assistant", "content": [{"type": "thinking", "thinking": "unsigned"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": "bridged", "signature": encrypted_reasoning_signature("abc")}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("abc")}],
+        },
         litellm.Message(role="assistant", content=None),
     ],
-    ids=["none", "empty-list", "unsigned-thinking-part", "pydantic-none"],
+    ids=[
+        "none",
+        "empty-list",
+        "unsigned-thinking-part",
+        "encrypted-thinking-part",
+        "encrypted-redacted-thinking-block",
+        "pydantic-none",
+    ],
 )
 
 
@@ -300,13 +317,28 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
             "content": None,
             "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
         },
-        {"role": "assistant", "content": "", "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
-        {"role": "assistant", "content": "", "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}],
+        },
+        {"role": "assistant", "content": None, "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
         {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
         {"role": "assistant", "content": None, "function_call": {"name": "f", "arguments": "{}"}},
-        litellm.Message(role="assistant", content="", tool_calls=[{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]),
+        litellm.Message(
+            role="assistant",
+            content="",
+            tool_calls=[{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+        ),
     ],
-    ids=["tool-calls", "signed-thinking-block", "redacted-thinking-block", "signed-thinking-part", "function-call", "pydantic-tool-calls"],
+    ids=[
+        "tool-calls",
+        "signed-thinking-block",
+        "redacted-thinking-block",
+        "signed-thinking-part",
+        "function-call",
+        "pydantic-tool-calls",
+    ],
 )
 def test_flagged_placement_keeps_a_system_before_an_assistant_turn_that_renders_without_text(assistant_turn):
     placed = place_mid_conversation_system(

@@ -42,6 +42,8 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 
+from .common_utils import is_unsignable_thinking_block
+
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
 )
@@ -50,6 +52,7 @@ _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
 _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
@@ -246,12 +249,8 @@ def _block_containing(message_index: int, blocks: Sequence[tuple[bool, tuple[int
 
 
 def _thinking_block_renders(block: object) -> bool:
-    """A thinking block the converter keeps: redacted, or signed so Anthropic can verify it."""
-    block_type: Final = message_field(block, "type")
-    if block_type == "redacted_thinking":
-        return True
-    signature: Final = message_field(block, "signature")
-    return block_type == "thinking" and isinstance(signature, str) and bool(signature)
+    """A thinking block the converter keeps: one Anthropic can verify, so never bridged encrypted reasoning."""
+    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not is_unsignable_thinking_block(block)
 
 
 def _assistant_part_renders(part: object) -> bool:
