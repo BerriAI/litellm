@@ -90,7 +90,7 @@ const SortableHead = ({
   );
 };
 
-const KeyQueryNotice = ({ query }: { query: ReturnType<typeof useCacheLeakageKeys> }) => {
+const KeyQueryNotice = ({ query, shown }: { query: ReturnType<typeof useCacheLeakageKeys>; shown: number }) => {
   if (query.isPending) {
     return (
       <p role="status" className="py-8 text-center text-sm text-muted-foreground">
@@ -108,10 +108,10 @@ const KeyQueryNotice = ({ query }: { query: ReturnType<typeof useCacheLeakageKey
       </div>
     );
   }
-  if (query.data != null && query.data.results.length < query.data.metadata.total_api_keys) {
+  if (query.data != null && shown < query.data.metadata.total_api_keys) {
     return (
       <p className="mt-2 text-sm text-muted-foreground">
-        {`Showing the top ${query.data.results.length} of ${query.data.metadata.total_api_keys} keys, ranked by uncached prompt tokens.`}
+        {`Showing the top ${shown} of ${query.data.metadata.total_api_keys} keys, ranked by uncached prompt tokens.`}
       </p>
     );
   }
@@ -171,7 +171,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity, accessTok
               Data is still loading; rows and totals will update as the rest of the range arrives.
             </p>
           )}
-          {dimension === "key" && <KeyQueryNotice query={keyQuery} />}
+          {dimension === "key" && <KeyQueryNotice query={keyQuery} shown={rows.length} />}
           {showTableOrEmpty &&
             (rows.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
