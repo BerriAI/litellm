@@ -12,7 +12,7 @@ from litellm.llms.gemini.count_tokens.transformation import (
     GeminiCountTokensPayload,
     InvalidCountTokensRequest,
     build_count_tokens_payload,
-    normalize_count_tokens_tools,
+    native_count_tokens_payload,
 )
 
 _GEMINI_REPLY: Final = {
@@ -488,22 +488,34 @@ def test_build_count_tokens_payload_rejects_a_tool_result_without_its_tool_call(
     assert "Missing corresponding tool call" in payload.message
 
 
-def test_normalize_count_tokens_tools_handles_each_tool_shape():
-    assert normalize_count_tokens_tools(model="gemini-2.5-flash", tools=None) is None
-    assert normalize_count_tokens_tools(
-        model="gemini-2.5-flash", tools=[{"function_declarations": [{"name": "g"}]}]
-    ) == ({"function_declarations": [{"name": "g"}]},)
-    assert normalize_count_tokens_tools(model="gemini-2.5-flash", tools=[{"googleSearch": {}}]) == (
-        {"googleSearch": {}},
+def _native_tools(tools):
+    return native_count_tokens_payload(model="gemini-2.5-flash", contents=[], system=None, tools=tools).tools
+
+
+def test_native_count_tokens_payload_maps_each_tool_shape():
+    assert _native_tools(None) is None
+    assert _native_tools([{"function_declarations": [{"name": "g"}]}]) == ({"function_declarations": [{"name": "g"}]},)
+    assert _native_tools([{"googleSearch": {}}]) == ({"googleSearch": {}},)
+    assert _native_tools([{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]) == (
+        {"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]},
     )
-    assert normalize_count_tokens_tools(
-        model="gemini-2.5-flash",
-        tools=[{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}],
-    ) == ({"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]},)
-    assert normalize_count_tokens_tools(
-        model="gemini-2.5-flash", tools=[{"name": "f", "input_schema": {"type": "object"}}]
-    ) == ({"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]},)
-    assert normalize_count_tokens_tools(
-        model="gemini-2.5-flash",
-        tools=[{"googleSearch": {}}, {"type": "function", "function": {"name": "f"}}],
-    ) == ({"function_declarations": [{"name": "f"}]},)
+    assert _native_tools([{"name": "f", "input_schema": {"type": "object"}}]) == (
+        {"function_declarations": [{"name": "f", "parameters": {"type": "object"}}]},
+    )
+    assert _native_tools([{"googleSearch": {}}, {"type": "function", "function": {"name": "f"}}]) == (
+        {"function_declarations": [{"name": "f"}]},
+    )
+
+
+def test_native_count_tokens_payload_keeps_contents_and_reads_system_text_or_instruction():
+    contents = [{"role": "user", "parts": [{"text": "hi"}]}]
+    instruction = {"parts": [{"text": "be terse"}]}
+
+    from_text = native_count_tokens_payload(model="gemini-2.5-flash", contents=contents, system="be terse", tools=None)
+    from_instruction = native_count_tokens_payload(
+        model="gemini-2.5-flash", contents=contents, system=instruction, tools=None
+    )
+
+    assert from_text.contents == tuple(contents)
+    assert from_text.system_instruction == instruction
+    assert from_instruction.system_instruction == instruction

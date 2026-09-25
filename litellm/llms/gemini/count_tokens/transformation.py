@@ -17,7 +17,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _transform_system_message,  # pyright: ignore[reportPrivateUsage]  # shared chat-path system splitter
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
+from litellm.types.llms.vertex_ai import ContentType, PartType, SystemInstructions, Tools
 from litellm.types.utils import AllMessageValues
 
 
@@ -180,10 +180,7 @@ def _apply_mixed_tool_drop_rule(merged: Sequence[Tools]) -> tuple[Tools, ...] | 
     return tuple(kept) if kept else None
 
 
-def normalize_count_tokens_tools(
-    model: str,
-    tools: Sequence[Mapping[str, object]] | None,
-) -> tuple[Tools, ...] | None:
+def _native_tools(model: str, tools: Sequence[Mapping[str, object]] | None) -> tuple[Tools, ...] | None:
     if not tools:
         return None
     passthrough: Final = tuple(
@@ -260,6 +257,31 @@ def _build_openai_payload(
             (MappingProxyType({"role": "system", "content": system}), *messages) if system is not None else messages
         ),
         tool_params=_openai_tool_params(tools or ()),
+    )
+
+
+def _system_instruction_from_text(text: str) -> SystemInstructions:
+    part: Final[PartType] = {"text": text}
+    instruction: Final[SystemInstructions] = {"parts": [part]}  # mutable-ok: parts is Required[list]
+    return instruction
+
+
+def native_count_tokens_payload(
+    model: str,
+    contents: Sequence[object],
+    system: object | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> GeminiCountTokensPayload:
+    return GeminiCountTokensPayload(
+        contents=cast("tuple[ContentType, ...]", tuple(contents)),  # cast-ok: Gemini-native contents pass through
+        system_instruction=(
+            _system_instruction_from_text(system)
+            if isinstance(system, str)
+            else cast(
+                "SystemInstructions | None", system
+            )  # cast-ok: the native route passes Gemini's systemInstruction
+        ),
+        tools=_native_tools(model=model, tools=tools),
     )
 
 

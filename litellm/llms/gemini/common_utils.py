@@ -3,7 +3,7 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import httpx
 
@@ -13,7 +13,6 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import PartType, SystemInstructions
 from litellm.types.utils import TokenCountResponse
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
@@ -472,12 +471,6 @@ def get_api_key_from_env() -> str | None:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
-def _system_instructions_from_text(text: str) -> SystemInstructions:
-    instruction_part: Final[PartType] = {"text": text}
-    instructions: Final[SystemInstructions] = {"parts": [instruction_part]}  # mutable-ok: parts is Required[list]
-    return instructions
-
-
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
@@ -506,65 +499,41 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         from litellm.llms.gemini.count_tokens.transformation import (
             InvalidCountTokensRequest,
             build_count_tokens_payload,
-            normalize_count_tokens_tools,
+            native_count_tokens_payload,
         )
 
         if contents is None and not messages:
             return None
 
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
-        payload: Final = (
-            build_count_tokens_payload(model=model_to_use, messages=messages, system=system, tools=tools)
-            if contents is None
-            else None
-        )
-        if isinstance(payload, InvalidCountTokensRequest):
+        def failed(message: str, status_code: int) -> TokenCountResponse:
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
                 model_used=model_to_use,
                 tokenizer_type="gemini_api",
                 error=True,
-                error_message=payload.message,
-                status_code=400,
+                error_message=message,
+                status_code=status_code,
             )
-        system_instruction: Final[SystemInstructions | None] = (
-            payload.system_instruction
-            if payload is not None
-            else (
-                _system_instructions_from_text(system)
-                if isinstance(system, str)
-                else cast(  # cast-ok: contents-path callers pass a Gemini-shaped systemInstruction
-                    "SystemInstructions | None",
-                    system,
-                )
-            )
+
+        payload: Final = (
+            build_count_tokens_payload(model=model_to_use, messages=messages or (), system=system, tools=tools)
+            if contents is None
+            else native_count_tokens_payload(model=model_to_use, contents=contents, system=system, tools=tools)
         )
-        gemini_tools: Final = (
-            payload.tools if payload is not None else normalize_count_tokens_tools(model=model_to_use, tools=tools)
-        )
-        count_tokens_params_request.update(
-            model=model_to_use,
-            contents=payload.contents if payload is not None else contents,
-        )
+        if isinstance(payload, InvalidCountTokensRequest):
+            return failed(payload.message, 400)
+        count_tokens_params_request: Final = copy.deepcopy((deployment or {}).get("litellm_params", {}))
+        count_tokens_params_request.update(model=model_to_use, contents=payload.contents)
         try:
             result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-                system_instruction=system_instruction,
-                tools=gemini_tools,
+                system_instruction=payload.system_instruction,
+                tools=payload.tools,
                 client=client,
                 **count_tokens_params_request,
             )
         except (litellm.APIError, litellm.APIConnectionError) as e:
-            return TokenCountResponse(
-                total_tokens=0,
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type="gemini_api",
-                error=True,
-                error_message=e.message,
-                status_code=e.status_code,
-            )
+            return failed(e.message, e.status_code)
         if "totalTokens" not in result:
             return TokenCountResponse(
                 total_tokens=0,

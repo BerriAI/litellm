@@ -13605,34 +13605,22 @@ async def _try_provider_token_count(
             code=status_code,
         )
     except (litellm.APIError, litellm.APIConnectionError) as e:
-        if litellm.disable_token_counter is True:
-            raise ProxyException(
-                message=e.message,
-                type="token_counting_error",
-                param="model",
-                code=e.status_code,
-            )
-        verbose_proxy_logger.warning(
-            "Provider token counting raised (%s): %s. Falling back to local tokenizer.",
-            e.status_code,
-            e.message,
-        )
+        _raise_or_fall_back_to_local_count(message=e.message, status_code=e.status_code)
         return None
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
-            raise ProxyException(
-                message=result.error_message or "Token counting failed",
-                type="token_counting_error",
-                param="model",
-                code=result.status_code or 500,
-            )
-        verbose_proxy_logger.warning(
-            "Provider token counting failed (%s): %s. Falling back to local tokenizer.",
-            result.status_code,
-            result.error_message,
+        _raise_or_fall_back_to_local_count(
+            message=result.error_message or "Token counting failed", status_code=result.status_code or 500
         )
         return None
     return result
+
+
+def _raise_or_fall_back_to_local_count(message: str, status_code: int) -> None:
+    if litellm.disable_token_counter is True:
+        raise ProxyException(message=message, type="token_counting_error", param="model", code=status_code)
+    verbose_proxy_logger.warning(
+        "Provider token counting failed (%s): %s. Falling back to local tokenizer.", status_code, message
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:

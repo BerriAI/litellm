@@ -22,9 +22,15 @@ class GeminiGenerateContentRequest(TypedDict):
     tools: ReadOnly[NotRequired[Sequence[Tools]]]
 
 
-class GeminiCountTokensRequest(TypedDict, total=False):
+class GeminiCountContentsRequest(TypedDict):
     contents: ReadOnly[Sequence[ContentType]]
+
+
+class GeminiCountGenerateContentRequest(TypedDict):
     generateContentRequest: ReadOnly[GeminiGenerateContentRequest]
+
+
+GeminiCountTokensRequest = GeminiCountContentsRequest | GeminiCountGenerateContentRequest
 
 
 class GeminiFilesState(Enum):
