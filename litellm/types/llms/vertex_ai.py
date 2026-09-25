@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -348,6 +349,10 @@ class RequestBody(TypedDict, total=False):
     serviceTier: str
 
 
+class EncryptionSpec(TypedDict):
+    kmsKeyName: ReadOnly[str]
+
+
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
@@ -356,6 +361,12 @@ class CachedContentRequestBody(TypedDict, total=False):
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".
     displayName: str
+
+
+class EncryptedCachedContentRequestBody(CachedContentRequestBody, total=False):
+    """Vertex AI only: Google AI Studio's cachedContents has no encryptionSpec."""
+
+    encryptionSpec: ReadOnly[EncryptionSpec]
 
 
 class CachedContentListAllResponseBody(TypedDict, total=False):

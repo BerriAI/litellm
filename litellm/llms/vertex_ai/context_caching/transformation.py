@@ -4,6 +4,7 @@ Transformation logic for context caching.
 Why separate file? Make it easy to see how transformation works
 """
 
+import hashlib
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -11,7 +12,11 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import CachedContentRequestBody
+from litellm.types.llms.vertex_ai import (
+    CachedContentRequestBody,
+    EncryptedCachedContentRequestBody,
+    EncryptionSpec,
+)
 from litellm.utils import is_cached_message
 
 from ..common_utils import get_supports_system_message
@@ -106,6 +111,19 @@ def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
 
+def scope_cache_key_to_encryption_key(cache_key: str, kms_key_name: str | None) -> str:
+    """
+    Namespace the cache's displayName by the CMEK key, since displayName is the only thing
+    check_cache can match on and `encryptionSpec` is input-only, so Google never tells us
+    which key an existing cache uses. Without this, content already cached under a
+    Google-managed key (or a different CMEK key) would be reused for a request that asked
+    for a specific key, silently escaping the caller's encryption policy.
+    """
+    if kms_key_name is None:
+        return cache_key
+    return f"{cache_key}-cmek-{hashlib.sha256(kms_key_name.encode()).hexdigest()[:16]}"
+
+
 def separate_cached_messages(
     messages: list[AllMessageValues],
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
@@ -165,6 +183,7 @@ def transform_openai_messages_to_gemini_context_caching(
     cache_key: str,
     vertex_project: str | None,
     vertex_location: str | None,
+    kms_key_name: str | None = None,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
     ttl: Final = extract_ttl_from_cached_messages(messages)
@@ -199,4 +218,6 @@ def transform_openai_messages_to_gemini_context_caching(
     if transformed_system_messages is not None:
         data["system_instruction"] = transformed_system_messages
 
-    return data
+    if kms_key_name is None:
+        return data
+    return EncryptedCachedContentRequestBody(**data, encryptionSpec=EncryptionSpec(kmsKeyName=kms_key_name))
