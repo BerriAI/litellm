@@ -76,6 +76,112 @@ def test_basic_anyof_conversion():
     assert schema == expected
 
 
+def test_anyof_conversion_with_null_before_other_branches():
+    schema = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [{"type": "null"}, {"type": "null"}, {"type": "string"}]
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_build_vertex_schema_preserves_oneof_unions():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "$defs": {
+            "Card": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "number": {"type": "string"}},
+                "required": ["kind", "number"],
+            },
+            "Bank": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "iban": {"type": "string"}},
+                "required": ["kind", "iban"],
+            },
+        },
+        "type": "object",
+        "properties": {
+            "payment": {
+                "oneOf": [{"$ref": "#/$defs/Card"}, {"$ref": "#/$defs/Bank"}],
+                "discriminator": {"propertyName": "kind"},
+            }
+        },
+        "required": ["payment"],
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["payment"] == {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "number": {"type": "string"}},
+                "required": ["kind", "number"],
+            },
+            {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "iban": {"type": "string"}},
+                "required": ["kind", "iban"],
+            },
+        ]
+    }
+
+
+def test_oneof_conversion_with_excessive_nesting():
+    from litellm.llms.vertex_ai.common_utils import _convert_oneof_to_anyof
+
+    schema = {"type": "object", "properties": {}}
+    current = schema
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        current["properties"] = {"nested": {"oneOf": [{"type": "string"}], "properties": {}}}
+        current = current["properties"]["nested"]
+
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
+    ):
+        _convert_oneof_to_anyof(schema)
+
+
+def test_oneof_conversion_ignores_non_dict_nodes():
+    from litellm.llms.vertex_ai.common_utils import _convert_oneof_to_anyof
+
+    schema = {"type": "object", "properties": {"tags": {"type": "array", "items": "string"}}}
+
+    _convert_oneof_to_anyof(schema)
+
+    assert schema == {"type": "object", "properties": {"tags": {"type": "array", "items": "string"}}}
+
+
+def test_build_vertex_schema_converts_null_branch_inside_oneof():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "value": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+        },
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["value"] == {
+        "anyOf": [{"type": "string", "nullable": True}]
+    }
+
+
 def test_nested_anyof_conversion():
     """Test nested conversion with 'anyOf' inside properties."""
     schema = {
