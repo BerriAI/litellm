@@ -709,6 +709,7 @@ gigachat_models: Set = set()
 llamagate_models: Set = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
+urun_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -998,6 +999,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
+        elif value.get("litellm_provider") == "urun":
+            urun_models.add(key)
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
@@ -1127,6 +1130,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | urun_models
     | set(clarifai_models)
 )
 
@@ -1246,6 +1250,7 @@ def _build_models_by_provider() -> dict:
         "llamagate": llamagate_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
+        "urun": urun_models,
     }
 
 
