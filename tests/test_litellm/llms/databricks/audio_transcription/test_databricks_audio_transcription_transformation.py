@@ -121,12 +121,17 @@ def test_get_complete_url_from_env(monkeypatch):
     assert url == INVOKE_URL
 
 
-def test_get_complete_url_rejects_path_shaping():
+@pytest.mark.parametrize(
+    "model",
+    ["databricks/../x", "databricks/.."],
+    ids=["dotdot-path", "dotdot-only"],
+)
+def test_get_complete_url_rejects_path_shaping(model):
     with pytest.raises(DatabricksException, match="Invalid Databricks endpoint name") as exc_info:
         CONFIG.get_complete_url(
             api_base=API_BASE,
             api_key=None,
-            model="databricks/../x",
+            model=model,
             optional_params={},
             litellm_params={},
         )
@@ -249,7 +254,11 @@ def test_transform_response_empty_transcript_is_valid():
     assert response.text == ""
 
 
-@pytest.mark.parametrize("payload", [{"predictions": []}, {}], ids=["empty-list", "missing-key"])
+@pytest.mark.parametrize(
+    "payload",
+    [{"predictions": []}, {}, {"predictions": [42]}],
+    ids=["empty-list", "missing-key", "non-text-element"],
+)
 def test_transform_response_empty_predictions_raises(payload):
     raw = httpx.Response(200, json=payload, request=httpx.Request("POST", INVOKE_URL))
     with pytest.raises(DatabricksException, match="no prediction text") as exc_info:
@@ -333,6 +342,35 @@ def test_transcription_dispatches_to_databricks_invoke(monkeypatch):
     assert request.headers["Content-Type"] == "application/json"
     body = json.loads(request.content)
     assert base64.b64decode(body["inputs"][0]) == WAV_BYTES
+    assert response.text == "transcribed text"
+
+
+def test_transcription_uses_per_call_api_base_for_auth(monkeypatch):
+    # no DATABRICKS_API_BASE env var (the autouse fixture clears it): an
+    # explicit api_base= must reach validate_environment, otherwise auth
+    # falls into the SDK fallback even though the caller supplied a base
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(
+            200,
+            json={"predictions": ["transcribed text"]},
+            request=request,
+        )
+
+    http_handler = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    response = litellm.transcription(
+        model="databricks/whisper-t",
+        file=("sample.wav", WAV_BYTES, "audio/wav"),
+        api_key="dapi-test",
+        api_base=API_BASE,
+        client=http_handler,
+    )
+
+    request = captured["request"]
+    assert str(request.url) == INVOKE_URL
+    assert request.headers["Authorization"] == "Bearer dapi-test"
     assert response.text == "transcribed text"
 
 

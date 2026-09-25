@@ -35,9 +35,10 @@ from ..common_utils import DatabricksBase, DatabricksException
 
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 _STRING_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
-# Databricks serving endpoint names use [a-z0-9-]; the guard stays minimal
-# (also permitting dots and underscores) so no valid name can ever be rejected
-_ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9._-]+")
+# Databricks serving endpoint names use [a-z0-9-]; underscores are also
+# permitted so no plausible name is rejected. Dots are excluded: allowing
+# them would admit path-shaping inputs such as "..".
+_ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, DatabricksBase):
@@ -72,15 +73,6 @@ class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, Databrick
         headers: dict[str, object] | Headers,  # mutable-ok: base class signature takes dict
     ) -> BaseLLMException:
         return DatabricksException(message=error_message, status_code=status_code, headers=headers)
-
-    @property
-    def has_native_transcription_endpoint(self) -> bool:
-        # Databricks is not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS today, so
-        # the main.py transport dispatch reads this as a no-op; it is set for
-        # parity with the xai transcription config (the precedent, where it
-        # IS load-bearing) and keeps this provider on the native handler if
-        # databricks ever joins the OpenAI-compatible audio list.
-        return True
 
     def validate_environment(
         self,
@@ -122,7 +114,7 @@ class DatabricksAudioTranscriptionConfig(BaseAudioTranscriptionConfig, Databrick
                 status_code=400,
                 message=(
                     f"Invalid Databricks endpoint name {endpoint!r}: names may only contain "
-                    "letters, digits, dots, underscores, and hyphens."
+                    "letters, digits, underscores, and hyphens."
                 ),
             )
         resolved_base: Final = self._get_api_base(api_base or os.getenv("DATABRICKS_API_BASE")).rstrip("/")
