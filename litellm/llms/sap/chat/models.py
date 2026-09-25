@@ -15,7 +15,7 @@ from pydantic import (
 
 class CacheControl(BaseModel):
     type: Literal["ephemeral"]
-    ttl: str | None = None
+    ttl: Literal["5m", "1h"] | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(

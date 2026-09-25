@@ -73,18 +73,18 @@ def _fold_message_cache_control(
     breakpoint for the whole block.  In all other cases (empty list, None,
     unrecognized type) the marker is silently dropped.
     """
-    cc = message.get("cache_control")
-    if cc is None:
+    cache_control = message.get("cache_control")
+    if cache_control is None:
         return message
     base = {k: v for k, v in message.items() if k != "cache_control"}
     content = message.get("content")
     if isinstance(content, str):
-        base["content"] = [{"type": "text", "text": content, "cache_control": cc}]
+        base["content"] = [{"type": "text", "text": content, "cache_control": cache_control}]
         return base
     if isinstance(content, list) and content and isinstance(content[-1], dict):
         base["content"] = [
             *content[:-1],
-            {**content[-1], "cache_control": cc},
+            {**content[-1], "cache_control": cache_control},
         ]
         return base
     return base
