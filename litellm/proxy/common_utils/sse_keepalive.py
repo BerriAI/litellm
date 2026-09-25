@@ -155,12 +155,19 @@ async def _keepalive_ping_byte_stream(
             await stream.aclose()
 
 
-def advance_sse_tail(recent_tail: bytes, chunk: str | bytes) -> bytes:
-    written: Final = chunk[-_SSE_DELIMITER_LOOKBACK:]
-    encoded: Final = written.encode() if isinstance(written, str) else written
-    if not encoded:
+def advance_sse_tail(recent_tail: bytes, chunk: object) -> bytes:
+    written: Final = _sse_tail_bytes(chunk)
+    if not written:
         return recent_tail
-    return (recent_tail + encoded)[-_SSE_DELIMITER_LOOKBACK:]
+    return (recent_tail + written)[-_SSE_DELIMITER_LOOKBACK:]
+
+
+def _sse_tail_bytes(chunk: object) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk[-_SSE_DELIMITER_LOOKBACK:]
+    if isinstance(chunk, str):
+        return chunk[-_SSE_DELIMITER_LOOKBACK:].encode()
+    return b""
 
 
 def seal_open_sse_frame(recent_tail: bytes) -> str:
