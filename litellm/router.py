@@ -2943,7 +2943,19 @@ class Router:
                         include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
-                    # If fallback returns a streaming response, iterate over it
+                    # Mid-stream fallbacks sometimes return a completed ModelResponse
+                    # (stream=False). Fake-stream it so proxy hooks never see `None`
+                    # (TypeError: async for on NoneType → HTTP 500). See #42724.
+                    if isinstance(fallback_response, ModelResponse):
+                        from litellm.llms.base_llm.base_model_iterator import (
+                            MockResponseIterator,
+                        )
+
+                        fallback_response = MockResponseIterator(
+                            model_response=fallback_response
+                        )
+
+                    # Iterate streaming fallbacks (real streams or fake-streamed ModelResponse)
                     if hasattr(fallback_response, "__aiter__"):
                         prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
@@ -2965,8 +2977,14 @@ class Router:
                                 self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
-                        # If fallback returns a non-streaming response, yield None
-                        yield None
+                        verbose_router_logger.error(
+                            "Mid-stream fallback returned a non-streamable response of type %s",
+                            type(fallback_response).__name__,
+                        )
+                        raise TypeError(
+                            "Mid-stream fallback returned a non-streamable response of type "
+                            f"{type(fallback_response).__name__}"
+                        )
 
                 except Exception as fallback_error:
                     # If fallback also fails, log and re-raise original error
@@ -3504,7 +3522,19 @@ class Router:
                         content_policy_fallbacks=content_policy_fallbacks,
                     )
 
-                    if hasattr(fallback_response, "__iter__"):
+                    # Same as the async path: never yield None, and never treat a
+                    # completed ModelResponse as a generic iterable of field pairs.
+                    if isinstance(fallback_response, ModelResponse):
+                        from litellm.llms.base_llm.base_model_iterator import (
+                            MockResponseIterator,
+                        )
+
+                        fallback_response = MockResponseIterator(
+                            model_response=fallback_response
+                        )
+
+                    # Prefer real iterators (stream wrappers), not merely iterable containers
+                    if hasattr(fallback_response, "__next__"):
                         prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
                         )
@@ -3525,7 +3555,14 @@ class Router:
                                 router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
                             yield fallback_item
                     else:
-                        yield None
+                        verbose_router_logger.error(
+                            "Mid-stream fallback returned a non-streamable response of type %s",
+                            type(fallback_response).__name__,
+                        )
+                        raise TypeError(
+                            "Mid-stream fallback returned a non-streamable response of type "
+                            f"{type(fallback_response).__name__}"
+                        )
 
                 except Exception as fallback_error:
                     verbose_router_logger.error("Fallback also failed: %s", fallback_error)

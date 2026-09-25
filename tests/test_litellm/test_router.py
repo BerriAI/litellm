@@ -2820,6 +2820,74 @@ async def test_acompletion_streaming_iterator_edge_cases():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_fake_streams_non_streaming_fallback():
+    """#42724: a mid-stream fallback that returns a completed ModelResponse must
+    fake-stream it. Yielding None used to crash ResponsesIDSecurity with
+    TypeError: async for on NoneType → proxy HTTP 500 after a 200 upstream."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import ModelResponseStream
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed
+
+    completed = litellm.ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "fallback answer"},
+                "finish_reason": "stop",
+            }
+        ]
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=completed,
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        chunks = [chunk async for chunk in result]
+
+    assert len(chunks) == 1
+    assert chunks[0] is not None
+    assert isinstance(chunks[0], ModelResponseStream)
+    assert chunks[0].choices[0].delta.content == "fallback answer"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_preserves_hidden_params():
     """
     Regression test: FallbackStreamWrapper must copy _hidden_params from the

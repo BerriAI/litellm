@@ -328,12 +328,20 @@ class ResponsesIDSecurity(CustomLogger):
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
+        # Mid-stream chat fallbacks used to yield None into this hook (#42724).
+        # Bail before touching proxy general_settings so a missing/non-iterable
+        # body cannot crash the request with TypeError on async for.
+        if response is None or not hasattr(response, "__aiter__"):
+            return
+
         general_settings: Final = self._general_settings_reader()
 
         # Create a request-scoped cache for consistent encryption across streaming chunks.
         request_encryption_cache: Final[dict[str, str]] = {}
 
         async for chunk in response:
+            if chunk is None:
+                continue
             if (
                 isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
                 and _is_responses_api_create_route(user_api_key_dict.request_route)
