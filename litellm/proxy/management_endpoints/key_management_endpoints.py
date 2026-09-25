@@ -1804,6 +1804,52 @@ async def _check_project_key_limits(
         )
 
 
+async def _validate_project_assignment(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Validate assigning a project to a key that does not have one yet."""
+    if data.project_id is None or data.project_id == existing_key_row.project_id:
+        return
+    if existing_key_row.project_id is not None:
+        raise HTTPException(
+            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
+        )
+    project_obj: Final = await get_project_object(
+        project_id=data.project_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if project_obj is None:
+        raise HTTPException(
+            status_code=404,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form
+                "error": f"Project not found, project_id={data.project_id}"
+            },
+        )
+    team: Final = data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id
+    if team is None or team != project_obj.team_id:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form
+                "error": f"Project {data.project_id} belongs to team {project_obj.team_id}. Keys can only be assigned to a project owned by their own team (key team: {team})"
+            },
+        )
+    await _check_project_key_limits(
+        project_id=data.project_id,
+        data=data.model_copy(
+            update={  # mutable-ok: model_copy takes a dict-shaped update payload
+                "models": data.models if "models" in data.model_fields_set else existing_key_row.models,
+                "max_budget": data.max_budget if data.max_budget is not None else existing_key_row.max_budget,
+            }
+        ),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
 def check_org_key_model_specific_limits(
     keys: Sequence[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
@@ -3107,10 +3153,12 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
-    if data.project_id is not None and data.project_id != existing_key_row.project_id:
-        raise HTTPException(
-            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
-        )
+    await _validate_project_assignment(
+        data=data,
+        existing_key_row=existing_key_row,
+        prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
     is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
 
     acting_as_team_admin: Final = await _acting_as_team_admin_for_key_update(
@@ -3379,7 +3427,7 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
-    - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
+    - project_id: Optional[str] - Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is rejected.
     - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.

@@ -8375,7 +8375,7 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
-         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
+         *     - project_id: Optional[str] - Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
@@ -44628,7 +44628,7 @@ export interface components {
             policies?: string[] | null;
             /**
              * Project Id
-             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             * @description Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.
              */
             project_id?: string | null;
             /** Prompts */
