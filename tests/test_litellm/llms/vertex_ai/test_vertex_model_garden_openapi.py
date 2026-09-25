@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
-from litellm.llms.vertex_ai.vertex_model_garden.main import (
-    _vertex_model_garden_model_id_in_json_body,
-    create_vertex_url,
+from litellm.llms.vertex_ai.common_utils import (
+    vertex_model_garden_model_id_in_json_body,
 )
+from litellm.llms.vertex_ai.vertex_model_garden.main import create_vertex_url
 
 
 @pytest.mark.parametrize(
@@ -43,11 +43,8 @@ def test_create_vertex_url_openapi_vs_deployed_endpoint(
 
 
 def test_model_id_in_json_body_heuristic() -> None:
-    assert (
-        _vertex_model_garden_model_id_in_json_body("xai/grok-4.1-fast-reasoning")
-        is True
-    )
-    assert _vertex_model_garden_model_id_in_json_body("5464397967697903616") is False
+    assert vertex_model_garden_model_id_in_json_body("xai/grok-4.1-fast-reasoning") is True
+    assert vertex_model_garden_model_id_in_json_body("5464397967697903616") is False
 
 
 @pytest.fixture

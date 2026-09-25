@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.vertex_ai.common_utils import VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai_gemma import VertexGemmaContainerError
 from litellm.types.utils import ModelResponse
@@ -48,6 +49,13 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        return [  # mutable-ok: get_optional_params extends the returned list with allowed_openai_params
+            param
+            for param in super().get_supported_openai_params(model=model)
+            if param not in VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
+        ]
 
     def should_fake_stream(
         self,

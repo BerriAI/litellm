@@ -259,6 +259,7 @@ from litellm.router_utils.routing_groups import (
     validate_routing_strategy,
 )
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
@@ -796,15 +797,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
-        routing_strategy: Literal[
-            "simple-shuffle",
-            "least-busy",
-            "usage-based-routing",
-            "latency-based-routing",
-            "cost-based-routing",
-            "usage-based-routing-v2",
-            "lar1",
-        ] = "simple-shuffle",
+        routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
         routing_groups: list[RoutingGroup | dict] | None = None,
@@ -2940,7 +2933,7 @@ class Router:
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=e,
-                        disable_fallbacks=False,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
@@ -3384,7 +3377,7 @@ class Router:
                     )
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=fallback_trigger,
-                        disable_fallbacks=False,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
@@ -3475,8 +3468,9 @@ class Router:
                 for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                if fallbacks_disabled_for_request(initial_kwargs) or (
+                    not e.is_pre_first_chunk
+                    and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
                 ):
                     if e.original_exception is not None:
                         raise e.original_exception from e
@@ -5611,7 +5605,7 @@ class Router:
             )
             fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
                 e=fallback_trigger,
-                disable_fallbacks=False,
+                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                 fallbacks=fallbacks,
                 context_window_fallbacks=context_window_fallbacks,
                 content_policy_fallbacks=content_policy_fallbacks,

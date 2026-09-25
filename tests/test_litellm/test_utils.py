@@ -642,6 +642,10 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_image_512",
         "output_cost_per_image_1024",
         "output_cost_per_image_1536",
+        "output_cost_per_image_0.5K",
+        "output_cost_per_image_1K",
+        "output_cost_per_image_2K",
+        "output_cost_per_image_4K",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
         "input_cost_per_second",
@@ -875,6 +879,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_image_512": {"type": "number"},
                 "output_cost_per_image_1024": {"type": "number"},
                 "output_cost_per_image_1536": {"type": "number"},
+                "output_cost_per_image_0.5K": {"type": "number"},
+                "output_cost_per_image_1K": {"type": "number"},
+                "output_cost_per_image_2K": {"type": "number"},
+                "output_cost_per_image_4K": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
@@ -3720,6 +3728,23 @@ def test_scoped_weights_are_excluded_from_provider_params(filter_name: str) -> N
         {"provider_option": "kept", "_router_weights": {"group": {"deployment": 100}}}
     )
     assert filtered == {"provider_option": "kept"}
+
+
+@pytest.mark.parametrize(
+    "provider_filter",
+    [
+        litellm.utils.get_non_default_completion_params,
+        litellm.utils.get_non_default_transcription_params,
+        litellm.utils.filter_out_litellm_params,
+    ],
+)
+@pytest.mark.parametrize("setting", [("tag_regex", ["^team-a$"]), ("max_file_size_mb", 5)])
+def test_deployment_only_settings_copied_by_the_router_stay_out_of_provider_params(
+    provider_filter: Callable[[dict[str, object]], Mapping[str, object]], setting: tuple[str, object]
+) -> None:
+    name, value = setting
+    filtered: Final = provider_filter({"provider_option": "kept", name: value})
+    assert filtered == {"provider_option": "kept"}, filtered
 
 
 class TestGetOptionalParamsTencent:
