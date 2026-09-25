@@ -374,7 +374,7 @@ export const parseAgentForForm = (agent: any) => {
 
   return {
     agent_name: agent.agent_name,
-    name: agent.agent_card_params?.name,
+    name: agent.agent_card_params?.name || agent.agent_name,
     description: agent.agent_card_params?.description,
     url: agent.agent_card_params?.url,
     version: agent.agent_card_params?.version,
