@@ -13,12 +13,13 @@ on:
           have its path existence-checked like any other token.
         required: true
         type: string
-      fork-flag:
+      unit-flag:
         description: >-
           Codecov flag of the `.circleci/tests.yml` job that now owns part of
-          this shard. The CircleCI `litellm-tests` pipeline is manually
-          triggered while tests migrate, so on every event this shard also runs
-          the files `.circleci/scripts/unit_selection.sh` lists for the flag.
+          this shard. The shard also runs the files
+          `.circleci/scripts/unit_selection.sh` lists for the flag, on every
+          event, because the CircleCI pipeline is manual-only while the tests
+          migrate.
         required: false
         type: string
         default: ""
@@ -175,7 +176,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
-          FORK_FLAG: ${{ inputs.fork-flag }}
+          UNIT_FLAG: ${{ inputs.unit-flag }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
@@ -185,11 +186,11 @@ jobs:
         run: |
           echo "has-coverage=false" >> "$GITHUB_OUTPUT"
           selection="${TEST_PATH}"
-          if [ -n "${FORK_FLAG}" ]; then
-            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${FORK_FLAG}" | tr '\n' ' ')"
+          if [ -n "${UNIT_FLAG}" ]; then
+            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${UNIT_FLAG}" | tr '\n' ' ')"
           fi
           if [ -z "${selection// /}" ]; then
-            echo "shard selection is empty on this event (CircleCI flag ${FORK_FLAG:-none} owns it); nothing to run"
+            echo "shard selection is empty; nothing to run"
             exit 0
           fi
           pytest_args=()
