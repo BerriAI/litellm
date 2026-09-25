@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias, cast
 
 from pydantic import JsonValue
-from sentry_sdk.scrubber import EventScrubber
+from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScrubber
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
@@ -18,7 +18,10 @@ EventScrubFn: TypeAlias = "Callable[[Event, Hint], Event]"
 
 FILTERED: Final = "[Filtered]"
 SEND_DEFAULT_PII_ENV: Final = "SENTRY_SEND_DEFAULT_PII"
+SECRET_FIELD_NAMES: Final = tuple(DEFAULT_DENYLIST) + tuple(SENTRY_DENYLIST)
+PII_FIELD_NAMES: Final = tuple(DEFAULT_PII_DENYLIST) + tuple(SENTRY_PII_DENYLIST)
 
+LITELLM_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
 EMAIL_PATTERN: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 SHA256_HEX_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{64}(?![0-9A-Za-z])")
 QUOTED_VALUE: Final = r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\""
@@ -45,11 +48,11 @@ def build_repr_field_pattern(field_names: Sequence[str]) -> re.Pattern[str]:
 
 
 def build_string_scrubber(send_default_pii: bool) -> Callable[[str], str]:
-    field_names: Final = (
-        tuple(SENTRY_DENYLIST) if send_default_pii else tuple(SENTRY_DENYLIST) + tuple(SENTRY_PII_DENYLIST)
-    )
+    field_names: Final = SECRET_FIELD_NAMES if send_default_pii else SECRET_FIELD_NAMES + PII_FIELD_NAMES
     field_pattern: Final = build_repr_field_pattern(field_names)
-    value_patterns: Final = () if send_default_pii else (EMAIL_PATTERN, SHA256_HEX_PATTERN)
+    value_patterns: Final = (
+        (LITELLM_KEY_PATTERN,) if send_default_pii else (LITELLM_KEY_PATTERN, EMAIL_PATTERN, SHA256_HEX_PATTERN)
+    )
 
     def scrub(text: str) -> str:
         fields_scrubbed: Final = field_pattern.sub(_filtered_field, text)
@@ -102,8 +105,8 @@ def build_sentry_init_options(env: Mapping[str, str]) -> SentryInitOptions:
         sample_rate=float(env.get("SENTRY_API_SAMPLE_RATE") or "1.0"),
         send_default_pii=send_default_pii,
         event_scrubber=EventScrubber(
-            denylist=list(SENTRY_DENYLIST),  # mutable-ok: EventScrubber appends pii_denylist onto denylist in place
-            pii_denylist=list(SENTRY_PII_DENYLIST),  # mutable-ok: EventScrubber takes List[str]
+            denylist=list(SECRET_FIELD_NAMES),  # mutable-ok: EventScrubber appends pii_denylist onto denylist in place
+            pii_denylist=list(PII_FIELD_NAMES),  # mutable-ok: EventScrubber takes List[str]
             recursive=True,
             send_default_pii=send_default_pii,
         ),

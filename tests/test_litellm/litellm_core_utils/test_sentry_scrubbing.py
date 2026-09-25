@@ -18,7 +18,8 @@ from litellm.litellm_core_utils.sentry_scrubbing import (
 from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 
 EMAIL: Final = "qa.user@example.com"
-KEY_HASH: Final = hashlib.sha256(b"sk-virtual-key-under-test").hexdigest()
+VIRTUAL_KEY: Final = "sk-virtual-key-under-test"
+KEY_HASH: Final = hashlib.sha256(VIRTUAL_KEY.encode()).hexdigest()
 MASTER_KEY: Final = "sk-master-key-under-test"
 DATABASE_URL: Final = "postgresql://litellm:db-password-under-test@db.internal:5432/litellm"
 PII_ON: Final = {"SENTRY_DSN": "https://key@sentry.example/1", "SENTRY_SEND_DEFAULT_PII": "true"}
@@ -39,6 +40,7 @@ def reject_request(
     user_obj: LiteLLM_UserTable,
     general_settings: Mapping[str, str],
     data: Mapping[str, Mapping[str, str]],
+    raw_headers: Mapping[str, str],
 ) -> None:
     raise RuntimeError(f"key {valid_token.token} owned by {user_obj.user_email} was rejected")
 
@@ -49,6 +51,7 @@ def raise_with_identity_locals() -> None:
         user_obj=LiteLLM_UserTable(user_id=EMAIL, user_email=EMAIL, user_role="internal_user"),
         general_settings={"master_key": MASTER_KEY, "database_url": DATABASE_URL},
         data={"metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_user_email": EMAIL}},
+        raw_headers={"authorization": f"Bearer {VIRTUAL_KEY}", "x-api-key": VIRTUAL_KEY, "content-type": "application/json"},
     )
 
 
@@ -75,8 +78,10 @@ def test_default_event_carries_no_email_hash_or_secret_anywhere() -> None:
     assert EMAIL not in serialized
     assert KEY_HASH not in serialized
     assert MASTER_KEY not in serialized
+    assert VIRTUAL_KEY not in serialized
     assert "db-password-under-test" not in serialized
     frame_vars: Final = innermost_frame_vars(serialized)
+    assert frame_vars["raw_headers"] == {"authorization": FILTERED, "x-api-key": FILTERED, "content-type": "'application/json'"}
     assert f"token='{FILTERED}'" in frame_vars["valid_token"]
     assert f"user_id='{FILTERED}'" in frame_vars["valid_token"]
     assert f"user_email='{FILTERED}'" in frame_vars["user_obj"]
@@ -102,7 +107,9 @@ def test_pii_opt_in_keeps_identifiers_and_still_scrubs_secrets() -> None:
     }
     assert f"token='{FILTERED}'" in frame_vars["valid_token"]
     assert frame_vars["general_settings"] == {"master_key": FILTERED, "database_url": FILTERED}
+    assert frame_vars["raw_headers"] == {"authorization": FILTERED, "x-api-key": FILTERED, "content-type": "'application/json'"}
     assert MASTER_KEY not in serialized
+    assert VIRTUAL_KEY not in serialized
     assert "db-password-under-test" not in serialized
 
 
@@ -138,6 +145,14 @@ def test_transaction_events_are_scrubbed_too() -> None:
         (f"hashed key {KEY_HASH} not found", f"hashed key {FILTERED} not found"),
         ("request id 0123456789abcdef0123456789abcdef stays", "request id 0123456789abcdef0123456789abcdef stays"),
         ("monkey=banana", "monkey=banana"),
+        (
+            "{'x-api-key': 'k-1', 'cookie': 'session=abc', 'content-type': 'application/json'}",
+            f"{{'x-api-key': '{FILTERED}', 'cookie': '{FILTERED}', 'content-type': 'application/json'}}",
+        ),
+        (
+            "headers={'x-tenant-key': 'sk-custom-header-key-0123456789'} key_name='sk-...6789'",
+            f"headers={{'x-tenant-key': '{FILTERED}'}} key_name='sk-...6789'",
+        ),
     ],
 )
 def test_string_scrubber_rewrites_field_and_value_forms(text: str, expected: str) -> None:
@@ -148,6 +163,9 @@ def test_string_scrubber_with_pii_on_only_scrubs_secrets() -> None:
     scrub: Final = build_string_scrubber(send_default_pii=True)
     assert scrub(f"user_id='{EMAIL}', token='{KEY_HASH}', email {EMAIL} hash {KEY_HASH}") == (
         f"user_id='{EMAIL}', token='{FILTERED}', email {EMAIL} hash {KEY_HASH}"
+    )
+    assert scrub(f"headers={{'authorization': 'Bearer {VIRTUAL_KEY}'}} sent {VIRTUAL_KEY}") == (
+        f"headers={{'authorization': '{FILTERED}'}} sent {FILTERED}"
     )
 
 
