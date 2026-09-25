@@ -3135,9 +3135,9 @@ class TeamNotFoundError(HTTPException):
 
 @log_db_metrics
 async def _get_team_db_check(
-    team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None
+    team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> "_PrismaTeamRow | None":
-    response = await _team_table(TeamRepository(prisma_client)).find_unique(
+    response = await _team_table(TeamRepository(prisma_client, use_writer=use_writer)).find_unique(
         where={"team_id": team_id}, include=_TEAM_GRANT_RELATIONS
     )
 
@@ -3171,6 +3171,7 @@ async def _get_team_object_from_user_api_key_cache(
     proxy_logging_obj: ProxyLogging | None,
     key: str,
     team_id_upsert: bool | None = None,
+    use_writer: bool = False,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key: Final = key
     should_check_db: Final = _should_check_db(
@@ -3179,7 +3180,9 @@ async def _get_team_object_from_user_api_key_cache(
         db_cache_expiry=db_cache_expiry,
     )
     if should_check_db:
-        response = await _get_team_db_check(team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert)
+        response = await _get_team_db_check(
+            team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert, use_writer=use_writer
+        )
         # The database answered and the row is not there. Distinct from every
         # other failure here, which leaves the team's grant unknown.
         if response is None:
@@ -3201,8 +3204,11 @@ async def _get_team_object_from_user_api_key_cache(
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=None,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=use_writer,
             )
         except Exception as e:
+            if use_writer:
+                raise
             verbose_proxy_logger.debug(
                 "Failed to load object_permission for team %s with object_permission_id=%s: %s",
                 team_id,
@@ -3283,25 +3289,6 @@ async def get_team_object(
 
     # else, check db
     try:
-        if check_db_only:
-            row: Final = await _team_table(TeamRepository(prisma_client, use_writer=True)).find_unique(
-                where={"team_id": team_id}, include=_TEAM_GRANT_RELATIONS
-            )
-            if row is None:
-                raise TeamNotFoundError(team_id=team_id)
-            team: Final = LiteLLM_TeamTableCachedObj.model_validate(row.dict())
-            if team.object_permission_id is None:
-                return team
-            permission: Final = await get_object_permission(
-                object_permission_id=team.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                check_db_only=True,
-            )
-            return team.model_copy(update=MappingProxyType({"object_permission": permission}))
-
         return await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
             prisma_client=prisma_client,
@@ -3311,6 +3298,7 @@ async def get_team_object(
             db_cache_expiry=db_cache_expiry,
             key=key,
             team_id_upsert=team_id_upsert,
+            use_writer=bool(check_db_only),
         )
     except TeamNotFoundError:
         raise

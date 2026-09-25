@@ -3074,6 +3074,34 @@ async def test_get_team_object_raises_404_when_not_found():
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_get_team_object_check_db_only_reads_writer_through_the_shared_loader():
+    """Management endpoints mock ``_get_team_object_from_user_api_key_cache`` and expect
+    ``check_db_only`` to still flow through it; only the table it reads moves to the writer."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    row = {"team_id": "team-writer", "models": ["gpt-4o"], "object_permission_id": None}
+    prisma = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(dict=lambda: row))
+    prisma.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(dict=lambda: row))
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    shared_loader = AsyncMock(wraps=auth_checks._get_team_object_from_user_api_key_cache)
+
+    with patch.object(auth_checks, "_get_team_object_from_user_api_key_cache", shared_loader):
+        team = await get_team_object("team-writer", prisma, cache, check_db_only=True)
+
+    assert team.team_id == "team-writer"
+    assert shared_loader.await_args.kwargs["use_writer"] is True
+    prisma.writer_db.litellm_teamtable.find_unique.assert_awaited_once()
+    prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
+    cache.async_set_cache.assert_awaited_once()
+
+
 def _mock_prisma_for_team_lookup(find_unique):
     from unittest.mock import MagicMock
 
