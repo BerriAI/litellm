@@ -6,12 +6,10 @@ use tokio::fs;
 use tokio::process::Command;
 
 use crate::archive::{extract_binary, verify_sha256};
-use crate::release::resolve;
-use crate::{Client, Error, Fetch, Platform};
+use crate::{Agent, Error, Fetch, Target};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Installed {
-    pub client: Client,
     pub version: String,
     pub binary: PathBuf,
 }
@@ -19,24 +17,23 @@ pub struct Installed {
 pub struct Installer<F> {
     fetch: F,
     cache_root: PathBuf,
-    platform: Platform,
+    target: Target,
 }
 
 impl<F: Fetch> Installer<F> {
-    pub fn new(fetch: F, cache_root: impl Into<PathBuf>, platform: Platform) -> Self {
+    pub fn new(fetch: F, cache_root: impl Into<PathBuf>, target: Target) -> Self {
         Self {
             fetch,
             cache_root: cache_root.into(),
-            platform,
+            target,
         }
     }
 
-    pub async fn install(&self, client: Client, version: &str) -> Result<Installed, Error> {
+    pub async fn install(&self, agent: &impl Agent, version: &str) -> Result<Installed, Error> {
         validate_version(version)?;
-        let dir = self.cache_root.join(client.binary()).join(version);
-        let binary = dir.join(client.binary());
+        let dir = self.cache_root.join(agent.binary()).join(version);
+        let binary = dir.join(agent.binary());
         let installed = Installed {
-            client,
             version: version.to_owned(),
             binary: binary.clone(),
         };
@@ -44,13 +41,13 @@ impl<F: Fetch> Installer<F> {
             return Ok(installed);
         }
 
-        let release = resolve(&self.fetch, client, version, self.platform).await?;
+        let release = agent.release(&self.fetch, version, self.target).await?;
         let archive = self.fetch.get(&release.url).await?;
         verify_sha256(&release.asset, &release.sha256, &archive)?;
         let contents = extract_binary(&release.packaging, &archive)?;
 
         fs::create_dir_all(&dir).await?;
-        let staging = dir.join(format!(".{}.partial", client.binary()));
+        let staging = dir.join(format!(".{}.partial", agent.binary()));
         fs::write(&staging, contents).await?;
         fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).await?;
         fs::rename(&staging, &binary).await?;

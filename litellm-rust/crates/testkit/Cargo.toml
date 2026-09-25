@@ -13,16 +13,18 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
+target-lexicon.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "process"] }
 zip.workspace = true
 
 [dev-dependencies]
+flate2.workspace = true
 rstest.workspace = true
+sha2.workspace = true
+tar.workspace = true
+target-lexicon.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 toml = "0.9"
-flate2.workspace = true
-sha2.workspace = true
-tar.workspace = true
 zip.workspace = true

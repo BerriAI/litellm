@@ -5,11 +5,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("unsupported platform {os}/{arch}")]
-    UnsupportedPlatform {
-        os: &'static str,
-        arch: &'static str,
-    },
+    #[error("unsupported target {0}")]
+    UnsupportedTarget(String),
     #[error("'{0}' is not a plain x.y.z release version")]
     InvalidVersion(String),
     #[error("request to {url} failed")]

@@ -83,6 +83,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
+target-lexicon = "0.13.5"
 tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }

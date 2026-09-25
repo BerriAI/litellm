@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use litellm_testkit::{Client, Gateway, launch_spec};
+use litellm_testkit::{Agent, ClaudeCode, Codex, Gateway, Opencode};
 use rstest::rstest;
 
 fn gateway() -> Gateway {
@@ -12,13 +12,13 @@ fn gateway() -> Gateway {
 }
 
 #[rstest]
-#[case(Client::ClaudeCode)]
-#[case(Client::Codex)]
-#[case(Client::Opencode)]
-fn every_client_runs_inside_the_given_home(#[case] client: Client) {
+#[case(&ClaudeCode)]
+#[case(&Codex)]
+#[case(&Opencode)]
+fn every_client_runs_inside_the_given_home(#[case] agent: &impl Agent) {
     let home = Path::new("/scratch/home");
 
-    let spec = launch_spec(client, &gateway(), home);
+    let spec = agent.launch_spec(&gateway(), home);
 
     assert_eq!(spec.env["HOME"], "/scratch/home");
     assert!(
@@ -32,7 +32,7 @@ fn every_client_runs_inside_the_given_home(#[case] client: Client) {
 
 #[test]
 fn claude_code_points_at_the_gateway_root_with_the_key_and_model() {
-    let spec = launch_spec(Client::ClaudeCode, &gateway(), Path::new("/h"));
+    let spec = ClaudeCode.launch_spec(&gateway(), Path::new("/h"));
 
     assert_eq!(spec.env["ANTHROPIC_BASE_URL"], "http://localhost:4000/");
     assert_eq!(spec.env["ANTHROPIC_AUTH_TOKEN"], "sk-test \"quoted\"");
@@ -42,7 +42,7 @@ fn claude_code_points_at_the_gateway_root_with_the_key_and_model() {
 #[test]
 fn codex_config_is_valid_toml_routing_the_responses_api_to_the_gateway() {
     let dir = tempfile::tempdir().unwrap();
-    let spec = launch_spec(Client::Codex, &gateway(), dir.path());
+    let spec = Codex.launch_spec(&gateway(), dir.path());
     spec.write_files(dir.path()).unwrap();
 
     let config: toml::Table =
@@ -64,7 +64,7 @@ fn codex_config_is_valid_toml_routing_the_responses_api_to_the_gateway() {
 #[test]
 fn opencode_config_is_valid_json_registering_the_gateway_model() {
     let dir = tempfile::tempdir().unwrap();
-    let spec = launch_spec(Client::Opencode, &gateway(), dir.path());
+    let spec = Opencode.launch_spec(&gateway(), dir.path());
     spec.write_files(dir.path()).unwrap();
 
     let config: serde_json::Value = serde_json::from_str(
