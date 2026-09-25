@@ -3722,6 +3722,23 @@ def test_scoped_weights_are_excluded_from_provider_params(filter_name: str) -> N
     assert filtered == {"provider_option": "kept"}
 
 
+@pytest.mark.parametrize(
+    "provider_filter",
+    [
+        litellm.utils.get_non_default_completion_params,
+        litellm.utils.get_non_default_transcription_params,
+        litellm.utils.filter_out_litellm_params,
+    ],
+)
+@pytest.mark.parametrize("setting", [("tag_regex", ["^team-a$"]), ("max_file_size_mb", 5)])
+def test_deployment_only_settings_copied_by_the_router_stay_out_of_provider_params(
+    provider_filter: Callable[[dict[str, object]], Mapping[str, object]], setting: tuple[str, object]
+) -> None:
+    name, value = setting
+    filtered: Final = provider_filter({"provider_option": "kept", name: value})
+    assert filtered == {"provider_option": "kept"}, filtered
+
+
 class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 

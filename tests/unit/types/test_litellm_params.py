@@ -127,6 +127,8 @@ OPTION_NAMES: Final = (
     "max_parallel_requests",
     "weight",
     "order",
+    "tag_regex",
+    "max_file_size_mb",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",

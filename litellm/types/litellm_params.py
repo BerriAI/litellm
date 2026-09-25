@@ -142,6 +142,8 @@ class DeploymentOptions:
     max_parallel_requests: int | None = None
     weight: int | None = None
     order: int | None = None
+    tag_regex: Sequence[str] | None = None
+    max_file_size_mb: float | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
