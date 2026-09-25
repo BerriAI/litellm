@@ -137,7 +137,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const paginatedActivityArgs = {
     fetchFn,
-    args: [accessToken, startTime, endTime, entityFilterArg],
+    args: [accessToken, startTime, endTime, entityIds],
     enabled,
     aggregatedFetchFn,
   };

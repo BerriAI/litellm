@@ -1,4 +1,5 @@
 import type { EntityType } from "@/components/EntityUsageExport/types";
+import type { DailyData } from "@/components/UsagePage/types";
 import {
   agentDailyActivityAggregatedCall,
   agentDailyActivityCall,
@@ -34,22 +35,43 @@ import {
   type ModelTopApiKeysResponse,
 } from "@/components/networking";
 
-export const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
+export interface EntityDailyActivityResponse {
+  results: DailyData[];
+  metadata: Record<string, unknown>;
+}
+
+export type EntityPaginatedFetchCall = (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [page: number, entityIds?: string[] | null]
+) => Promise<EntityDailyActivityResponse>;
+
+export type EntityAggregatedFetchCall = (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  entityIds: string[] | null,
+) => Promise<EntityDailyActivityResponse>;
+
+export const ENTITY_FETCH_FNS: Record<EntityType, EntityPaginatedFetchCall> = {
   tag: tagDailyActivityCall,
   team: teamDailyActivityCall,
   organization: organizationDailyActivityCall,
   customer: customerDailyActivityCall,
   agent: agentDailyActivityCall,
-  user: userDailyActivityCall,
+  user: (accessToken, startTime, endTime, ...options) =>
+    userDailyActivityCall(accessToken, startTime, endTime, options[0], options[1]?.[0] ?? null),
 };
 
-export const ENTITY_AGGREGATED_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
+export const ENTITY_AGGREGATED_FETCH_FNS: Record<EntityType, EntityAggregatedFetchCall> = {
   tag: tagDailyActivityAggregatedCall,
   team: teamDailyActivityAggregatedCall,
   organization: organizationDailyActivityAggregatedCall,
   customer: customerDailyActivityAggregatedCall,
   agent: agentDailyActivityAggregatedCall,
-  user: userDailyActivityAggregatedCall,
+  user: (accessToken, startTime, endTime, entityIds) =>
+    userDailyActivityAggregatedCall(accessToken, startTime, endTime, entityIds?.[0] ?? null),
 };
 
 type EntityKeySearchCall = (
@@ -57,7 +79,7 @@ type EntityKeySearchCall = (
   startTime: Date,
   endTime: Date,
   ...options: [search: string, entityIds?: string[] | null]
-) => Promise<any>;
+) => Promise<EntityDailyActivityResponse>;
 
 export const ENTITY_KEY_SEARCH_FNS: Partial<Record<EntityType, EntityKeySearchCall>> = {
   tag: tagDailyActivityKeySearchCall,
