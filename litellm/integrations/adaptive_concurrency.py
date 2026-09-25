@@ -9,6 +9,7 @@ fixed-width semaphore.
 
 import asyncio
 from collections import deque
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Final
 
@@ -48,10 +49,8 @@ class AdaptiveConcurrencyLimiter:
                 self._in_flight -= 1
                 self._grant()
             else:
-                try:
+                with suppress(ValueError):
                     self._waiters.remove(waiter)
-                except ValueError:
-                    pass
             raise
         return self
 
