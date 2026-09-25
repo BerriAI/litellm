@@ -28748,6 +28748,7 @@
         "mode": "audio_speech",
         "output_cost_per_audio_token": 1e-05,
         "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
@@ -29823,6 +29824,7 @@
         "mode": "chat",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2e-05,
+        "output_cost_per_token_batches": 1e-05,
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
@@ -56451,6 +56453,7 @@
         "mode": "audio_speech",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2e-05,
+        "output_cost_per_token_batches": 1e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
@@ -56519,6 +56522,7 @@
         "mode": "audio_speech",
         "output_cost_per_audio_token": 1e-05,
         "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
