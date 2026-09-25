@@ -170,3 +170,41 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
     expect(optionByLabel("Server One")).toHaveAttribute("aria-disabled", "true");
   });
 });
+
+describe("MCPServerSelector unified group flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupMcpMocks();
+    mockUseMCPAccessGroups.mockReturnValue({ data: ["legacy-group"], isLoading: false } as ReturnType<
+      typeof useMCPAccessGroups
+    >);
+  });
+
+  it("offers servers without legacy groups when disabled", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<MCPServerSelector accessToken="tok" onChange={onChange} allowAccessGroups={false} />);
+    await openSelector(user);
+    expect(optionByLabel("legacy-group")).toBeUndefined();
+    await user.click(optionByLabel("Server One")!);
+    expect(onChange).toHaveBeenCalledWith({ servers: ["srv-1"], accessGroups: [], toolsets: [] });
+  });
+
+  it("preserves a saved legacy group even if discovery no longer returns it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        onChange={onChange}
+        allowAccessGroups={false}
+        value={{ servers: [], accessGroups: ["retired-group"] }}
+      />,
+    );
+    await openSelector(user);
+    expect(optionByLabel("retired-group")).toHaveTextContent("Existing legacy MCP group");
+    expect(optionByLabel("legacy-group")).toBeUndefined();
+    await user.click(optionByLabel("Server One")!);
+    expect(onChange).toHaveBeenCalledWith({ servers: ["srv-1"], accessGroups: ["retired-group"], toolsets: [] });
+  });
+});

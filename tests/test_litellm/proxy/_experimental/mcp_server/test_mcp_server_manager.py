@@ -5404,9 +5404,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -5473,9 +5471,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -5542,9 +5538,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -5579,9 +5573,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -6657,9 +6649,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -6743,9 +6733,7 @@ class TestMCPServerManager:
         manager._create_mcp_client = AsyncMock(return_value=mock_client)
 
         # Mock user auth with no restrictions
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
 
         # Mock proxy logging
         proxy_logging_obj = MagicMock()
@@ -11226,12 +11214,8 @@ class TestDiscoveryFailureLogging:
         assert "unresolved" in caplog.text
 
 
-def _unrestricted_auth() -> MagicMock:
-    """A caller with no object_permission, so only server-level checks apply."""
-    user_api_key_auth = MagicMock()
-    user_api_key_auth.object_permission = None
-    user_api_key_auth.object_permission_id = None
-    return user_api_key_auth
+def _unrestricted_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth()
 
 
 def _permissive_proxy_logging() -> MagicMock:

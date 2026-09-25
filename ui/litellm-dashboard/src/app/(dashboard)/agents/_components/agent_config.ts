@@ -58,7 +58,7 @@ export const AGENT_FORM_CONFIG: {
         name: "description",
         label: "Description",
         type: "textarea",
-        required: true,
+        required: false,
         placeholder: "Describe what this agent does...",
         rows: 3,
       },

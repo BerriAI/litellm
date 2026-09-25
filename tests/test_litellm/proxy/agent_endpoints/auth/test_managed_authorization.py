@@ -76,6 +76,7 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
         {
             "managed_agent_context": context,
             "requires_fresh_policy": True,
+            "mcp_explicit_grants_only": True,
             "managed_agent_policy": agent(),
             "billing_agent_policy": agent(),
             "invoked_agent_id": "forged-target",
@@ -83,6 +84,8 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
         }
     )
     assert auth.requires_fresh_policy is False
+    assert auth.mcp_explicit_grants_only is False
+    assert "mcp_explicit_grants_only" not in auth.model_dump()
     assert auth.managed_agent_context is None
     assert auth.managed_agent_policy is None
     assert auth.billing_agent_policy is None
@@ -301,7 +304,9 @@ async def test_invocation_cannot_bypass_missing_policy_permission_or_invalid_pri
         side_effect=RuntimeError("unavailable") if state == "outage" else None,
     )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
-    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=[] if state == "denied" else ["agent"])
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="grant", agents=[] if state == "denied" else ["agent"]
+    )
     auth: Final = UserAPIKeyAuth(user_id="human", object_permission=permission)
     with pytest.raises(HTTPException) as failure:
         await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database))

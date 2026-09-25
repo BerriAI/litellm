@@ -3293,6 +3293,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
     mcp_admitted_user_subject: bool = Field(default=False, exclude=True)
     requires_fresh_policy: bool = Field(default=False, exclude=True)
+    mcp_explicit_grants_only: bool = Field(default=False, exclude=True)
     # team_id -> that team's mcp_rpm_limit map, for a keyless admitted subject that reaches MCP
     # servers through several teams at once and therefore has no single team_id for the limiter to
     # key off. Server-only and stripped from validated input for the same reason as the marker
@@ -3360,6 +3361,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("requires_fresh_policy", None)
+        values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_id", None)
         values.pop("mcp_toolset_id", None)

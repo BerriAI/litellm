@@ -1837,6 +1837,7 @@ class MCPRequestHandler:
             scoped.object_permission_id = auth.object_permission_id
             scoped.access_group_ids = auth.access_group_ids
         scoped.requires_fresh_policy = auth.requires_fresh_policy
+        scoped.mcp_explicit_grants_only = auth.mcp_explicit_grants_only
         return scoped
 
     @staticmethod
@@ -3152,7 +3153,11 @@ class MCPRequestHandler:
         server-axis registry resolution in ``get_allowed_mcp_servers`` and the tools-axis open
         channel in ``resolve_admitted_subject_tools`` both consult it, so the two axes cannot
         disagree."""
-        if user_api_key_auth is None or not user_api_key_has_admin_view(user_api_key_auth):
+        if (
+            user_api_key_auth is None
+            or user_api_key_auth.mcp_explicit_grants_only
+            or not user_api_key_has_admin_view(user_api_key_auth)
+        ):
             return False
         object_permission: Final = user_api_key_auth.object_permission
         credential_scoped: Final = (

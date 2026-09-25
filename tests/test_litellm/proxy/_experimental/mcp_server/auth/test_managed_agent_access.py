@@ -160,3 +160,75 @@ async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
         )
     client.db.litellm_usertable.find_unique.assert_not_called()
     client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["proxy_admin", "proxy_admin_viewer", "internal_user"])
+@pytest.mark.parametrize("open_channel", ["none", "operator", "submitted"])
+@pytest.mark.parametrize("has_grant", [True, False])
+async def test_delegated_mcp_uses_explicit_team_grants_even_for_dashboard_admins(
+    monkeypatch: pytest.MonkeyPatch, role: str, open_channel: str, has_grant: bool
+) -> None:
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    manager.registry = {
+        name: MCPServer(
+            server_id=name,
+            name=name,
+            transport="http",
+            url="https://example.com/mcp",
+            allow_all_keys=open_channel == "operator",
+        )
+        for name in ("slack", "linear")
+    }
+    from litellm.proxy._experimental.mcp_server import db
+
+    monkeypatch.setattr(
+        db,
+        "get_active_submitted_mcp_server_ids_for_user",
+        AsyncMock(return_value=["slack", "linear"] if open_channel == "submitted" else []),
+    )
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team-grant", mcp_servers=["slack"], mcp_tool_permissions={"slack": ["read"]}
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="human", user_role=role, teams=["team"] if has_grant else [], organization_memberships=[]
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team",
+        models=[],
+        members_with_roles=[{"user_id": "human", "role": "user"}],
+        object_permission_id="team-grant",
+    )
+    client: Final = MagicMock()
+    client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    auth: Final = actor(("read", "write"), delegated=True)
+    assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == (["slack"] if has_grant else [])
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (["read"] if has_grant else [])
+    assert await MCPRequestHandler.get_allowed_tools_for_server("linear", auth) == []
+    admitted: Final = await MCPRequestHandler.reload_admitted_user("human", requires_fresh_policy=True)
+    assert admitted.user_role == role
+
+
+@pytest.mark.asyncio
+async def test_explicit_grants_never_fall_back_to_open_servers_on_resolution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    manager.registry = {"slack": MCPServer(server_id="slack", name="slack", transport="http", allow_all_keys=True)}
+    monkeypatch.setattr(db, "get_active_submitted_mcp_server_ids_for_user", AsyncMock(return_value=["slack"]))
+    auth: Final = UserAPIKeyAuth(user_id="human")
+    auth.mcp_explicit_grants_only = True
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(MCPRequestHandler, "get_mcp_server_access", AsyncMock(side_effect=RuntimeError("unavailable")))
+        assert await manager.get_allowed_mcp_servers(auth) == []
+        auth.mcp_explicit_grants_only = False
+        assert await manager.get_allowed_mcp_servers(auth) == ["slack"]

@@ -65,6 +65,14 @@ export const SCIMAgentProvisioning = ({ accessToken }: { accessToken: string | n
         Sync Entra agent-user accounts into Agents. New agents start disabled until you configure their permissions and
         enable them. Application service principals can be registered directly in Agents.
       </p>
+      <p className="text-sm text-muted-foreground">
+        To inspect a synced agent, open{" "}
+        <a className="underline" href="/ui/agents/">
+          Agents
+        </a>
+        , select its Agent ID, and look for “Provisioned through Entra SCIM” on Overview. Agents registered directly do
+        not have this label.
+      </p>
       {sources.isError && <p role="alert">Could not load provisioning sources</p>}
       <div className="flex flex-wrap gap-2">
         {sources.data?.map((source) => (

@@ -1,9 +1,17 @@
+from types import MappingProxyType
 from typing import Final
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
+
+
+async def _delegated_resource_subject(user_id: str) -> UserAPIKeyAuth:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
+    return human.model_copy(update=MappingProxyType({"mcp_explicit_grants_only": True}))
 
 
 async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
@@ -27,7 +35,7 @@ async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
             return tuple(sorted(own))
         if context.user_id is None:
             return ()
-        human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id, requires_fresh_policy=True)
+        human: Final = await _delegated_resource_subject(context.user_id)
         allowed: Final = await MCPRequestHandler.resolve_admitted_subject_servers(human)
         return tuple(sorted(own.intersection(allowed)))
     except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
@@ -48,7 +56,7 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
             return own
         if context.user_id is None:
             return []
-        human: Final = await MCPRequestHandler.reload_admitted_user(context.user_id, requires_fresh_policy=True)
+        human: Final = await _delegated_resource_subject(context.user_id)
         human_tools: Final = await MCPRequestHandler.resolve_admitted_subject_tools(server_id, human)
         if own is None:
             return human_tools

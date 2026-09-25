@@ -19,6 +19,7 @@ interface AgentSelectorProps {
   accessToken: string;
   placeholder?: string;
   disabled?: boolean;
+  allowAccessGroups?: boolean;
 }
 
 const AgentSelector: React.FC<AgentSelectorProps> = ({
@@ -28,6 +29,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
   accessToken,
   placeholder = "Select agents",
   disabled = false,
+  allowAccessGroups = true,
 }) => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [accessGroups, setAccessGroups] = useState<string[]>([]);
@@ -60,12 +62,15 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
     fetchData();
   }, [accessToken]);
 
-  // Combine options, access groups first
+  const selectableGroups = allowAccessGroups
+    ? Array.from(new Set([...accessGroups, ...(value?.accessGroups ?? [])]))
+    : value?.accessGroups ?? [];
+
   const options: MultiSelectOption[] = [
-    ...accessGroups.map((group) => ({
+    ...selectableGroups.map((group) => ({
       label: group,
       value: `group:${group}`,
-      description: "Access Group",
+      description: allowAccessGroups ? "Access Group" : "Existing legacy agent group",
     })),
     ...agents.map((agent) => ({
       label: `${agent.agent_name || agent.agent_id}`,
