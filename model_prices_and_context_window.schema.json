@@ -632,11 +632,27 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_image_0.5K": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_image_1024": {
           "type": "number",
           "minimum": 0
         },
         "output_cost_per_image_1536": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_1K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_2K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_4K": {
           "type": "number",
           "minimum": 0
         },

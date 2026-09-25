@@ -462,6 +462,14 @@ pub struct ModelInfo {
     pub output_cost_per_image_1536: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image_512: Option<f64>,
+    #[serde(default, rename = "output_cost_per_image_0.5K", skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_image_0_5k: Option<f64>,
+    #[serde(default, rename = "output_cost_per_image_1K", skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_image_1k: Option<f64>,
+    #[serde(default, rename = "output_cost_per_image_2K", skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_image_2k: Option<f64>,
+    #[serde(default, rename = "output_cost_per_image_4K", skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_image_4k: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image_token: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
