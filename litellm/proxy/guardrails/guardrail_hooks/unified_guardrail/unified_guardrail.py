@@ -493,10 +493,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "undeliverable_stream_rewrite",
-                    "message": "The guardrail rewrite could not be safely applied to the streamed response",
-                },
+                detail="undeliverable_stream_rewrite: The guardrail rewrite could not be safely applied to the "
+                "streamed response",
             ) from e
         except HTTPException as e:
             async for error_item in self.emit_streaming_http_error(

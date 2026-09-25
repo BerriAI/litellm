@@ -1342,7 +1342,7 @@ class TestStreamingTransform:
                 pass
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["error"] == "undeliverable_stream_rewrite"
+        assert str(exc_info.value.detail).startswith("undeliverable_stream_rewrite:")
         assert "original" not in repr(exc_info.value)
 
     @pytest.mark.asyncio
