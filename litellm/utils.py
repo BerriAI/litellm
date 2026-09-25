@@ -3157,13 +3157,23 @@ _BEDROCK_REGION_PREFIXES: Final = (
     "ap-northeast-1.",
 )
 
-_CACHE_PRICING_FIELDS: Final = (
-    "cache_creation_input_token_cost",
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost",
-    "cache_read_input_token_cost_above_200k_tokens",
-)
+_TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
+
+
+def _without_synthesized_costs(
+    model_info: Mapping[str, object], key: str, value: Mapping[str, object]
+) -> Mapping[str, object]:
+    """``_get_model_info_helper`` synthesizes ``input_cost_per_token`` / ``output_cost_per_token`` = 0 when the raw
+    entry has neither (#30198). Persisting those zeros would turn a name-priced entry into a free one and make
+    ``_is_cost_explicitly_configured`` disable budget enforcement on the next re-registration."""
+    raw_fields: Final = frozenset(litellm.model_cost.get(model_info["key"], litellm.model_cost.get(key, ())))
+    return MappingProxyType(
+        {
+            name: field_value
+            for name, field_value in model_info.items()
+            if name not in _TOKEN_COST_FIELDS or name in raw_fields or name in value
+        }
+    )
 
 
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
@@ -3172,30 +3182,40 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
     aliases).
 
-    Returns a copy of the matching entry so the caller can inherit its defaults
-    (most importantly cache pricing) without mutating the shared built-in.
-    Returns ``None`` when no safe match exists.
+    The key itself is tried first, so a catalog row whose lookup tripped
+    inherits from itself rather than from a region-stripped sibling priced at
+    the base rate. Returns a copy of the matching entry so the caller can
+    inherit its defaults without mutating the shared built-in. Returns ``None``
+    when no candidate exists under a provider ``get_model_info`` would accept
+    for ``provider``, or, when the value names none, for the provider prefix
+    the key itself carries, which is what ``get_model_info`` derives when it
+    reads the key back.
     """
-    candidates: Final[list[str]] = []
+    candidates: Final[list[str]] = [key]
     segments: Final = key.split("/")
+    match_provider: Final = provider or (segments[0] if len(segments) > 1 and segments[0] in LlmProvidersSet else "")
     idx = 0
     while idx < len(segments) - 1 and segments[idx] in LlmProvidersSet:
         idx += 1
         candidates.append("/".join(segments[idx:]))
 
-    base: Final = candidates[-1] if candidates else key
+    base: Final = candidates[-1]
     for region_prefix in _BEDROCK_REGION_PREFIXES:
         if base.startswith(region_prefix):
             candidates.append(base[len(region_prefix) :])
 
-    if provider:
-        stripped: Final = _strip_model_name(model=base, custom_llm_provider=provider)
+    if match_provider:
+        stripped: Final = _strip_model_name(model=base, custom_llm_provider=match_provider)
         if stripped != base:
             candidates.append(stripped)
 
     for candidate in candidates:
         entry = litellm.model_cost.get(candidate)
-        if entry is not None and entry.get("litellm_provider") is not None:
+        if (
+            entry is not None
+            and entry.get("litellm_provider") is not None
+            and _check_provider_match(entry, match_provider)
+        ):
             return dict(entry)
     return None
 
@@ -3350,20 +3370,22 @@ def register_model(
         else:
             builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
             if builtin_model_info is not None:
-                existing_model = cast(dict, builtin_model_info)
-                model_cost_key = existing_model["key"]
+                existing_model = dict(  # mutable-ok: merge target
+                    _without_synthesized_costs(builtin_model_info, key=_key_str, value=value)
+                )
+                model_cost_key = builtin_model_info["key"]
             else:
                 # An exact entry ends the lookup ladder before the capability rules are
                 # consulted, so seed from them: otherwise registering an unmapped model
                 # shadows the very defaults it would have resolved to unregistered.
-                existing_model = dict(match_capability_generalizations(_key_str) or {})  # mutable-ok: merge target
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
-                if builtin_entry is not None:
-                    for field in _CACHE_PRICING_FIELDS:
-                        if value.get(field) is None and builtin_entry.get(field) is not None:
-                            existing_model[field] = builtin_entry[field]
-                elif (
+                existing_model = (
+                    builtin_entry
+                    if builtin_entry is not None
+                    else dict(match_capability_generalizations(_key_str) or {})  # mutable-ok: merge target
+                )
+                if builtin_entry is None and (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
                     and value.get("tiered_pricing") is None
@@ -3382,21 +3404,6 @@ def register_model(
         # custom pricing on subsequent cost lookups.
         if existing_model.get("litellm_provider") is None:
             existing_model.pop("litellm_provider", None)
-        # Same pattern for cost fields (#30198): ``_get_model_info_helper``
-        # synthesizes ``input_cost_per_token`` / ``output_cost_per_token``
-        # = 0 when they are absent from the raw entry. Writing those zeros
-        # back flips a sparse entry from "no cost keys" (priced via name)
-        # to "cost keys = 0" (free), which makes
-        # ``_is_cost_explicitly_configured`` return True and silently
-        # disables budget enforcement on the next re-registration.
-        _raw_entry = litellm.model_cost.get(model_cost_key)
-        if _raw_entry is None:
-            _raw_entry = litellm.model_cost.get(key)
-        if _raw_entry is None:
-            _raw_entry = {}
-        for _cost_field in ("input_cost_per_token", "output_cost_per_token"):
-            if _cost_field not in _raw_entry and _cost_field not in value:
-                existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -5573,7 +5580,7 @@ def _rebuild_model_cost_lowercase_map() -> dict[str, str]:
         The rebuilt map (guaranteed to be not None).
     """
     global _model_cost_lowercase_map
-    _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
+    _model_cost_lowercase_map = {k.lower(): k for k in tuple(litellm.model_cost)}
     return _model_cost_lowercase_map
 
 
@@ -5588,9 +5595,7 @@ def _handle_stale_map_entry_rebuild(
     Returns:
         The matched key if found after rebuild, None otherwise.
     """
-    global _model_cost_lowercase_map
-    _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
-    matched_key: Final = _model_cost_lowercase_map.get(potential_key_lower)
+    matched_key: Final = _rebuild_model_cost_lowercase_map().get(potential_key_lower)
     if matched_key is not None and matched_key in litellm.model_cost:
         return matched_key
     return None
@@ -5630,18 +5635,19 @@ def _get_model_cost_key(potential_key: str) -> str | None:
     called and confirmed not to cause performance issues, add it to the allowed_helpers
     list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
     """
-    global _model_cost_lowercase_map
-
     # Exact match (O(1))
     if potential_key in litellm.model_cost:
         return potential_key
 
-    # Case-insensitive lookup via map (O(1))
-    if _model_cost_lowercase_map is None:
-        _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+    # Case-insensitive lookup via map (O(1)); bound locally because another thread's
+    # registration can invalidate the module-level map at any point
+    cached_lowercase_map: Final = _model_cost_lowercase_map
+    lowercase_map: Final = (
+        cached_lowercase_map if cached_lowercase_map is not None else _rebuild_model_cost_lowercase_map()
+    )
 
     potential_key_lower: Final = potential_key.lower()
-    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    matched_key = lowercase_map.get(potential_key_lower)
 
     # Verify key exists (O(1) - handles model_cost.pop() case)
     if matched_key is not None and matched_key in litellm.model_cost:
