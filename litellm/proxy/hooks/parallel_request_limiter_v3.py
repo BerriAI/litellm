@@ -472,11 +472,12 @@ class RateLimitStatus(TypedDict):
     limit_remaining: int
     rate_limit_type: Literal["requests", "tokens", "max_parallel_requests"]
     descriptor_key: str
-    # Only populated by the atomic_check_and_increment_by_n path. A caller
-    # matching a status back to its descriptor must key on (descriptor_key,
-    # descriptor_value) when this is present, not descriptor_key alone --
-    # e.g. a batch charging several models' project ITPM/OTPM in one call
-    # produces multiple statuses sharing the same descriptor_key.
+    # Populated by the atomic_check_and_increment_by_n and windowed
+    # sliding-window paths. A caller matching a status back to its
+    # descriptor must key on (descriptor_key, descriptor_value) when this
+    # is present, not descriptor_key alone -- e.g. a batch charging several
+    # models' project ITPM/OTPM in one call, or a request carrying multiple
+    # rate-limited tags, produces statuses sharing the same descriptor_key.
     descriptor_value: NotRequired[ReadOnly[str]]
 
 
@@ -506,6 +507,7 @@ class WindowKeyMetadata(TypedDict):
     tokens_limit: int | None
     window_size: int
     descriptor_key: str
+    descriptor_value: ReadOnly[str]
 
 
 class AtomicCounterMeta(TypedDict):
@@ -1228,6 +1230,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "limit_remaining": limit_remaining,
                     "rate_limit_type": rate_limit_type,
                     "descriptor_key": key_metadata[window_key]["descriptor_key"],
+                    "descriptor_value": key_metadata[window_key]["descriptor_value"],
                 }
             )
 
@@ -1532,6 +1535,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
                 "window_size": int(window_size),
                 "descriptor_key": descriptor_key,
+                "descriptor_value": descriptor_value,
             }
         return keys_to_fetch, key_metadata, gauges
 
@@ -3163,8 +3167,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
+                status_value: Final = status.get("descriptor_value")
                 matching_descriptor = next(
-                    (desc for desc in descriptors if desc["key"] == descriptor_key),
+                    (
+                        desc
+                        for desc in descriptors
+                        if desc["key"] == descriptor_key
+                        and (status_value is None or desc["value"] == status_value)
+                    ),
                     None,
                 )
                 descriptor_value = matching_descriptor["value"] if matching_descriptor is not None else "unknown"

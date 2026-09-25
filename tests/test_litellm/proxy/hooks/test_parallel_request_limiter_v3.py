@@ -5050,6 +5050,38 @@ async def test_tag_object_rpm_limit_enforced_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tag_429_names_the_tag_that_is_over_its_limit(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _request_stash.set(None)
+    resolver, _ = _static_tag_limits(
+        {
+            "cell-ok": TagRateLimit(rpm_limit=100, tpm_limit=None),
+            "cell-blocked": TagRateLimit(rpm_limit=1, tpm_limit=None),
+        }
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tag-order"))
+
+    async def call(tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call(["cell-blocked"])
+    with pytest.raises(HTTPException) as exc_info:
+        await call(["cell-ok", "cell-blocked"])
+    assert exc_info.value.status_code == 429
+    assert "cell-blocked" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_tag_object_tpm_limit_enforced_v3(monkeypatch):
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
     monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
@@ -5096,9 +5128,16 @@ async def test_resolve_tag_rate_limits_from_db_reads_budget_row(monkeypatch):
     from litellm.models.tag import LiteLLM_TagTable
     from litellm.proxy import proxy_server
     from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.hooks.parallel_request_limiter_v3 import resolve_tag_rate_limits_from_db
+    from litellm.proxy.utils import PrismaClient
 
-    async def fake_batch(tag_names, prisma_client, user_api_key_cache, **kwargs):
+    async def fake_batch(
+        tag_names: Sequence[str],
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        **kwargs: object,
+    ) -> dict[str, LiteLLM_TagTable]:
         return {
             "limited": LiteLLM_TagTable(
                 tag_name="limited",
