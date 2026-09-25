@@ -406,22 +406,24 @@ async def test_verified_subject_cannot_switch_to_an_unrelated_registered_parent(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["human", "agent_user", "untrusted", "missing"])
 async def test_human_lookup_requires_trusted_interactive_enrollment(kind: str) -> None:
-    store, _, _, humans, native, _ = native_store()
+    store, _, _, humans = setup_store()
+    native: Final = native_store()[4]
     humans.find_unique.return_value = (
         None
         if kind == "missing"
         else native.model_copy(update={"kind": "human", "verified_via": "sso_interactive", "user_id": "local-human"})
         if kind == "human"
-        else native.model_copy(update={"verified_via": "untrusted"})
+        else native.model_copy(update={"kind": "human", "verified_via": "untrusted"})
         if kind == "untrusted"
         else native
     )
-    result: Final = await store.verified_human(ISSUER, TENANT, HUMAN)
+    result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
     if kind == "human":
-        assert result is not None and not isinstance(result, AgentIdentityFailure)
+        assert isinstance(result, ManagedAgentContext)
+        assert result.mode == "delegated"
         assert result.user_id == "local-human"
     else:
-        assert result is None
+        assert isinstance(result, AgentIdentityFailure)
 
 
 @pytest.mark.asyncio
