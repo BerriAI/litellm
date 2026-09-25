@@ -10,20 +10,21 @@ import dataclasses
 import io
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, Literal
+from typing import Final
 
 from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _PRISMA_TO_PG_TABLE,
+    _adjust_dates_for_timezone,
+    _build_aggregated_where_clause,
     get_daily_activity_export_rows,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.verification_token_repository import (
-    VerificationTokenRepository,
-)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityExportFormat,
     DailyActivityExportMetadata,
@@ -31,7 +32,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityExportRow,
     DailyActivityExportType,
 )
-from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
 
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
@@ -186,44 +186,89 @@ def _team_export_row(row: DailyActivityExportRow) -> TeamDailyActivityExportRow:
     )
 
 
-class DailyActivityKeySearchWhere(TypedDict):
-    """Prisma filter behind the `/<entity>/daily/activity/aggregated/search` routes: exact token
-    hash, or key alias or user id containing the term, case-insensitive, narrowed to the keys
-    the caller may see."""
-
-    token: NotRequired[ReadOnly[Mapping[Literal["in"], Sequence[str]]]]
-    OR: ReadOnly[
-        tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]
-    ]
+class _KeySearchTokenRow(TypedDict):
+    token: str
 
 
-def _daily_activity_key_search_where(search: str, own_keys: Sequence[str] | None) -> DailyActivityKeySearchWhere:
-    search_or: Final = (
-        {"token": search},  # mutable-ok: prisma where clause leaf
-        {"key_alias": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
-        {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
+_KEY_SEARCH_TOKEN_ADAPTER: Final = TypeAdapter(list[_KeySearchTokenRow])
+
+
+def build_daily_activity_key_search_sql(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    timezone_offset_minutes: int | None,
+    search: str,
+) -> tuple[str, list[str]]:
+    """Build the key-search query: top-spend matching tokens that have spend rows inside the
+    caller's entity scope, so the LIMIT cannot evict an in-scope match for a foreign one."""
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=None,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
     )
-    if own_keys is None:
-        return {"OR": search_or}  # mutable-ok: prisma where clause root
-    return {"token": {"in": tuple(own_keys)}, "OR": search_or}  # mutable-ok: prisma where clause root
+    token_param: Final = len(where_params) + 1
+    like_param: Final = token_param + 1
+    escaped_search: Final = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    sql_query: Final = f"""
+        SELECT vt.token
+        FROM "LiteLLM_VerificationToken" vt
+        WHERE EXISTS (
+            SELECT 1 FROM "{pg_table}" s
+            WHERE {where_clause} AND s.api_key = vt.token
+        )
+        AND (vt.token = ${token_param} OR vt.key_alias ILIKE ${like_param} OR vt.user_id ILIKE ${like_param})
+        ORDER BY vt.spend DESC NULLS LAST, vt.token
+        LIMIT {USAGE_TOP_API_KEYS_LIMIT}
+    """
+    return sql_query, [*where_params, search, f"%{escaped_search}%"]
 
 
 async def search_daily_activity_key_tokens(
     *,
     prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    timezone_offset_minutes: int | None,
     search: str,
-    own_keys: Sequence[str] | None,
 ) -> tuple[str, ...]:
-    """Token hashes matching `search`, caller scoping inside the same Prisma where so `take`
-    never trims visible matches in favour of keys the caller is not allowed to see."""
-    if own_keys is not None and not own_keys:
+    """Token hashes matching `search` restricted to keys with spend rows inside the caller's
+    entity and api_key scope, so the spend-ordered LIMIT never trims visible matches."""
+    if entity_id == [] or api_key == []:
         return ()
-    matched_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
-        where=_daily_activity_key_search_where(search, own_keys),
-        take=USAGE_TOP_API_KEYS_LIMIT,
-        order={"spend": "desc"},  # mutable-ok: prisma serializes order, keep it a plain dict
+    sql_query, sql_params = build_daily_activity_key_search_sql(
+        table_name=table_name,
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        exclude_entity_ids=exclude_entity_ids,
+        api_key=api_key,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone_offset_minutes,
+        search=search,
     )
-    return tuple(key.token for key in matched_keys if key.token)
+    raw_rows: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+    return tuple(row["token"] for row in _KEY_SEARCH_TOKEN_ADAPTER.validate_python(raw_rows))
 
 
 async def build_daily_activity_export_response(

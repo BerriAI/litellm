@@ -916,11 +916,17 @@ async def search_tag_daily_activity_keys(
         user_api_key_dict=user_api_key_dict,
     )
 
-    own_keys: Final = scope.api_key_filter if isinstance(scope.api_key_filter, list) else None
     key_filter: Final = await search_daily_activity_key_tokens(
         prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=scope.tag_ids,
+        exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
+        api_key=scope.api_key_filter,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone,
         search=search,
-        own_keys=own_keys,
     )
     if not key_filter:
         return SpendAnalyticsPaginatedResponse(

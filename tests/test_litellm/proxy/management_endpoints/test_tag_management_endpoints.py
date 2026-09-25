@@ -1592,9 +1592,8 @@ async def test_get_tag_daily_activity_aggregated_scoped_empty_keys_returns_empty
 
 @pytest.mark.asyncio
 async def test_search_tag_daily_activity_keys_scopes_where_before_take():
-    """A scoped caller's own keys must sit inside the same Prisma where as the
-    search OR, because `take` trims rows before Python sees them."""
-    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    """The caller's key and tag scope must sit inside the same SQL WHERE as the
+    LIMIT, so high-spend foreign keys cannot evict an in-scope match."""
     from litellm.proxy.management_endpoints import tag_management_endpoints
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
         search_tag_daily_activity_keys,
@@ -1602,8 +1601,6 @@ async def test_search_tag_daily_activity_keys_scopes_where_before_take():
 
     own_key = Mock()
     own_key.token = "user_key_1"
-    matched = Mock()
-    matched.token = "user_key_1"
     user_api_key_dict = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
 
     with (
@@ -1612,7 +1609,8 @@ async def test_search_tag_daily_activity_keys_scopes_where_before_take():
             tag_management_endpoints, "get_daily_activity_aggregated", new_callable=AsyncMock
         ) as mock_aggregated,
     ):
-        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(side_effect=[[own_key], [matched]])
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[own_key])
+        mock_prisma.db.query_raw = AsyncMock(return_value=[{"token": "user_key_1"}])
         mock_aggregated.return_value = Mock()
 
         await search_tag_daily_activity_keys(
@@ -1625,19 +1623,17 @@ async def test_search_tag_daily_activity_keys_scopes_where_before_take():
             timezone=480,
         )
 
-        token_calls = mock_prisma.db.litellm_verificationtoken.find_many.call_args_list
-        assert len(token_calls) == 2
-        search_kwargs = token_calls[1][1]
-        assert search_kwargs["where"] == {
-            "token": {"in": ("user_key_1",)},
-            "OR": (
-                {"token": "Needle"},
-                {"key_alias": {"contains": "Needle", "mode": "insensitive"}},
-                {"user_id": {"contains": "Needle", "mode": "insensitive"}},
-            ),
-        }
-        assert search_kwargs["take"] == USAGE_TOP_API_KEYS_LIMIT
-        assert search_kwargs["order"] == {"spend": "desc"}
+        query_raw_args = mock_prisma.db.query_raw.call_args[0]
+        sql, params = query_raw_args[0], query_raw_args[1:]
+        assert 'FROM "LiteLLM_DailyTagSpend" s' in sql
+        assert "EXISTS" in sql
+        assert '"tag" IN (' in sql
+        assert "api_key IN (" in sql
+        assert "LIMIT" in sql
+        assert "tag-a" in params
+        assert "user_key_1" in params
+        assert "Needle" in params
+        assert "%Needle%" in params
 
         call_kwargs = mock_aggregated.call_args[1]
         assert call_kwargs["api_key"] == ["user_key_1"]
@@ -1662,6 +1658,7 @@ async def test_search_tag_daily_activity_keys_no_match_returns_empty_without_agg
         ) as mock_aggregated,
     ):
         mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
         result = await search_tag_daily_activity_keys(
             user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),

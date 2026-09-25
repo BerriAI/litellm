@@ -1096,8 +1096,15 @@ async def search_customer_daily_activity_keys(
 
     key_filter: Final = await search_daily_activity_key_tokens(
         prisma_client=prisma_client,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=scope.end_user_ids,
+        exclude_entity_ids=scope.exclude_end_user_ids,
+        api_key=None,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone,
         search=search,
-        own_keys=None,
     )
     if not key_filter:
         return SpendAnalyticsPaginatedResponse(

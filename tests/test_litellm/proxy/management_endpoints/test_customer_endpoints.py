@@ -1151,3 +1151,54 @@ async def test_get_customer_daily_activity_aggregated_alias_metadata_and_breakdo
     assert kwargs["entity_metadata_field"] == {"end-user-1": {"alias": "Customer One"}}
     assert kwargs["include_entity_breakdown"] is True
     assert kwargs["timezone_offset_minutes"] == 480
+
+
+@pytest.mark.asyncio
+async def test_search_customer_daily_activity_keys_scopes_search_to_caller_end_users():
+    """The key search must pass the resolved end-user ids into the scoped query
+    so its LIMIT ranks only keys with spend rows for the caller's customers."""
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        search_customer_daily_activity_keys,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch.object(
+            customer_endpoints,
+            "_resolve_customer_daily_activity_scope",
+            new=AsyncMock(
+                return_value=customer_endpoints._CustomerDailyActivityScope(
+                    end_user_ids=["cust-1"],
+                    exclude_end_user_ids=["cust-skip"],
+                    end_user_alias_metadata={},
+                )
+            ),
+        ),
+        patch.object(
+            customer_endpoints,
+            "search_daily_activity_key_tokens",
+            new=AsyncMock(return_value=("sk-1",)),
+        ) as mock_search,
+        patch.object(
+            customer_endpoints,
+            "get_daily_activity_aggregated",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+    ):
+        await search_customer_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="shared-key",
+            end_user_ids="cust-1",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_end_user_ids="cust-skip",
+            timezone=None,
+        )
+
+        kwargs = mock_search.call_args[1]
+        assert kwargs["table_name"] == "litellm_dailyenduserspend"
+        assert kwargs["entity_id_field"] == "end_user_id"
+        assert kwargs["entity_id"] == ["cust-1"]
+        assert kwargs["exclude_entity_ids"] == ["cust-skip"]
+        assert kwargs["search"] == "shared-key"

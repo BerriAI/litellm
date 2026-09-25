@@ -1475,3 +1475,56 @@ async def test_get_agent_daily_activity_export_csv_headers(monkeypatch):
     body = _json.loads(json_response.body)
     assert body["data"][0]["entity_id"] == "agent-1"
     assert body["data"][0]["entity_alias"] == "First Agent"
+
+
+@pytest.mark.asyncio
+async def test_search_agent_daily_activity_keys_scopes_search_to_caller_agents():
+    """The key search must pass the resolved agent ids into the scoped query so
+    its LIMIT ranks only keys with spend rows on the caller's agents."""
+    from litellm.proxy.agent_endpoints import endpoints
+    from litellm.proxy.agent_endpoints.endpoints import search_agent_daily_activity_keys
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.agent_endpoints.endpoints.check_feature_access_for_user",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            endpoints,
+            "_resolve_agent_daily_activity_scope",
+            new=AsyncMock(
+                return_value=endpoints._AgentDailyActivityScope(
+                    agent_ids=["agent-1"],
+                    exclude_agent_ids=["agent-skip"],
+                    agent_metadata={},
+                )
+            ),
+        ),
+        patch.object(
+            endpoints,
+            "search_daily_activity_key_tokens",
+            new=AsyncMock(return_value=("sk-1",)),
+        ) as mock_search,
+        patch.object(
+            endpoints,
+            "get_daily_activity_aggregated",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+    ):
+        await search_agent_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="shared-key",
+            agent_ids="agent-1",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_agent_ids="agent-skip",
+            timezone=None,
+        )
+
+        kwargs = mock_search.call_args[1]
+        assert kwargs["table_name"] == "litellm_dailyagentspend"
+        assert kwargs["entity_id_field"] == "agent_id"
+        assert kwargs["entity_id"] == ["agent-1"]
+        assert kwargs["exclude_entity_ids"] == ["agent-skip"]
+        assert kwargs["search"] == "shared-key"

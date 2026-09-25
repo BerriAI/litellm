@@ -3222,3 +3222,76 @@ async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
     header: Final = _team_export_csv("daily", rows).splitlines()[0]
     assert "Flat Cost" not in header
     assert "Total Cost" not in header
+
+
+def test_build_daily_activity_key_search_sql_scopes_limit_inside_where():
+    """The entity scope sits inside the same WHERE as the LIMIT, so matching
+    keys outside the caller's orgs cannot take the top-N slots."""
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+        build_daily_activity_key_search_sql,
+    )
+
+    sql, params = build_daily_activity_key_search_sql(
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=["org-1", "org-2"],
+        exclude_entity_ids=["org-skip"],
+        api_key=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        timezone_offset_minutes=None,
+        search="shared-key",
+    )
+
+    assert 'FROM "LiteLLM_DailyOrganizationSpend" s' in sql
+    assert "EXISTS" in sql
+    assert '"organization_id" IN ($3, $4)' in sql
+    assert '"organization_id" NOT IN ($5)' in sql
+    assert f"LIMIT {USAGE_TOP_API_KEYS_LIMIT}" in sql
+    assert params == ["2024-01-01", "2024-01-31", "org-1", "org-2", "org-skip", "shared-key", "%shared-key%"]
+
+
+def test_build_daily_activity_key_search_sql_escapes_like_wildcards():
+    """`%`, `_` and `\\` in the search term must be backslash-escaped in the
+    ILIKE param so the term matches literally; the exact-token param stays raw."""
+    from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+        build_daily_activity_key_search_sql,
+    )
+
+    _, params = build_daily_activity_key_search_sql(
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=None,
+        exclude_entity_ids=None,
+        api_key=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        timezone_offset_minutes=None,
+        search="a%b_c\\d",
+    )
+
+    assert params[2] == "a%b_c\\d"
+    assert params[3] == "%a\\%b\\_c\\\\d%"
+
+
+def test_build_daily_activity_key_search_sql_empty_entity_list_is_false():
+    """An empty explicit entity list must match nothing, not everything."""
+    from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+        build_daily_activity_key_search_sql,
+    )
+
+    sql, params = build_daily_activity_key_search_sql(
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=[],
+        exclude_entity_ids=None,
+        api_key=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        timezone_offset_minutes=None,
+        search="k",
+    )
+
+    assert "FALSE" in sql
+    assert params[-2:] == ["k", "%k%"]

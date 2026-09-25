@@ -1710,3 +1710,57 @@ async def test_get_organization_daily_activity_export_csv_headers(monkeypatch):
     assert body["data"][0]["entity_id"] == "orgA"
     assert body["data"][0]["entity_alias"] == "Org A"
     assert body["metadata"]["entity_ids"] == ["orgA"]
+
+
+@pytest.mark.asyncio
+async def test_search_organization_daily_activity_keys_scopes_search_to_caller_orgs():
+    """The key search must pass the resolved org ids into the scoped query so
+    its LIMIT ranks only keys with spend rows in the caller's organizations."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        search_organization_daily_activity_keys,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch.object(
+            organization_endpoints,
+            "_resolve_organization_daily_activity_scope",
+            new=AsyncMock(
+                return_value=organization_endpoints._OrganizationDailyActivityScope(
+                    organization_ids=["org-1"],
+                    exclude_organization_ids=["org-skip"],
+                    organization_alias_metadata={},
+                )
+            ),
+        ),
+        patch.object(
+            organization_endpoints,
+            "search_daily_activity_key_tokens",
+            new=AsyncMock(return_value=("sk-1",)),
+        ) as mock_search,
+        patch.object(
+            organization_endpoints,
+            "get_daily_activity_aggregated",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+    ):
+        await search_organization_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="shared-key",
+            organization_ids="org-1",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_organization_ids="org-skip",
+            timezone=None,
+        )
+
+        kwargs = mock_search.call_args[1]
+        assert kwargs["table_name"] == "litellm_dailyorganizationspend"
+        assert kwargs["entity_id_field"] == "organization_id"
+        assert kwargs["entity_id"] == ["org-1"]
+        assert kwargs["exclude_entity_ids"] == ["org-skip"]
+        assert kwargs["search"] == "shared-key"
+        assert kwargs["start_date"] == "2024-01-01"
+        assert kwargs["end_date"] == "2024-01-31"
