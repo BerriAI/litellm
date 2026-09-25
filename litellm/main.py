@@ -64,6 +64,7 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
@@ -3495,25 +3496,9 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
 
 
 def _complete_nadir(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
-    """
-    Nadir has its own dispatch branch rather than riding the generic
-    OpenAI-compatible path, for the same reason OpenRouter does: the shared
-    OpenAI SDK handler never calls ``provider_config.transform_response``, and
-    Nadir needs it to report the cost of the model it actually routed to. The
-    routed model is a vendor name with no ``nadir/*`` pricing entry, so without
-    that hook every call records 0.0 spend.
+    api_base: Final = ctx.api_base or litellm.api_base or get_secret_str("NADIR_API_BASE") or NADIR_DEFAULT_API_BASE
+    api_key: Final = ctx.api_key
 
-    ``api_key`` deliberately does NOT fall back to the environment here.
-    ``get_llm_provider`` already binds ``NADIR_API_KEY`` to the trusted Nadir
-    endpoint and withholds it when the caller points at their own ``api_base``;
-    re-reading the env var at this layer would undo that.
-    """
-    api_base: Final = (
-        ctx.api_base or litellm.api_base or get_secret_str("NADIR_API_BASE") or "https://api.getnadir.com/v1"
-    )
-    api_key: Final = ctx.api_key or litellm.api_key
-
-    ## COMPLETION CALL
     response: Final = base_llm_http_handler.completion(
         model=ctx.model,
         stream=ctx.stream,
@@ -3532,7 +3517,6 @@ def _complete_nadir(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
         logging_obj=ctx.logging,
         client=ctx.client,
     )
-    ## LOGGING
     ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
 
     return response

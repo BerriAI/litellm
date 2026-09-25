@@ -4833,7 +4833,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "xai":
         optional_params = litellm.XAIChatConfig().map_openai_params(
@@ -5696,6 +5696,8 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
             return True
         elif custom_llm_provider == "github":
             # Allow github/<model> aliases to reuse existing provider metadata.
+            return True
+        elif custom_llm_provider == "nadir":
             return True
         else:
             return False

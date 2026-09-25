@@ -2,7 +2,11 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO, REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import (
+    NADIR_DEFAULT_API_BASE,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -277,9 +281,11 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
-                    elif endpoint == "https://api.getnadir.com/v1":
+                    elif endpoint == NADIR_DEFAULT_API_BASE:
                         custom_llm_provider = "nadir"  # rebind-ok: mirrors sibling endpoint branches
-                        dynamic_api_key = get_secret_str("NADIR_API_KEY")
+                        dynamic_api_key = (
+                            get_secret_str("NADIR_API_KEY") if api_base.lower().startswith("https://") else None
+                        )
                     elif endpoint == "https://inference.baseten.co/v1":
                         custom_llm_provider = "baseten"
                         dynamic_api_key = get_secret_str("BASETEN_API_KEY")
@@ -653,12 +659,7 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
     elif custom_llm_provider == "nadir":
-        # Bind the server-side NADIR_API_KEY to the trusted Nadir endpoint. If a
-        # caller directs the request at a custom api_base, do NOT fall back to
-        # the env key: forwarding the server's key as a Bearer token to a
-        # caller-controlled host is a credential-exfiltration risk. Such
-        # overrides must supply their own key.
-        default_nadir_base: Final = get_secret_str("NADIR_API_BASE") or "https://api.getnadir.com/v1"
+        default_nadir_base: Final = get_secret_str("NADIR_API_BASE") or NADIR_DEFAULT_API_BASE
         caller_base: Final = api_base
         api_base = api_base or default_nadir_base  # rebind-ok: mirrors sibling provider branches
         trusted_base: Final = caller_base is None or caller_base.rstrip("/") == default_nadir_base.rstrip("/")
