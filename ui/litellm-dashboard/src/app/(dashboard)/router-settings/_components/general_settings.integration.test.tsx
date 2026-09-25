@@ -184,63 +184,6 @@ it("persists a List setting typed as comma-separated text as a trimmed string ar
   ]);
 });
 
-it("persists a String setting typed into its text input", async () => {
-  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
-    {
-      field_name: "maximum_daily_tag_spend_retention_period",
-      field_type: "String",
-      field_value: null,
-      field_description: "retention",
-      stored_in_db: null,
-    },
-  ]);
-  vi.mocked(updateConfigFieldSetting).mockClear();
-  const user = userEvent.setup();
-  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
-  await user.click(screen.getByRole("tab", { name: "General" }));
-  const input = await screen.findByRole("textbox", { name: "maximum_daily_tag_spend_retention_period" });
-  expect(input).toHaveValue("");
-  fireEvent.change(input, { target: { value: "30d" } });
-  await user.click(
-    within(screen.getByRole("row", { name: /maximum_daily_tag_spend_retention_period/ })).getByRole("button", {
-      name: "Update",
-    }),
-  );
-  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
-    ["token", "maximum_daily_tag_spend_retention_period", "30d"],
-  ]);
-  expect(screen.getByText("In DB")).toBeInTheDocument();
-});
-
-it("clears a stored String setting when Update is clicked on an emptied input", async () => {
-  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
-    {
-      field_name: "maximum_daily_tag_spend_retention_period",
-      field_type: "String",
-      field_value: "30d",
-      field_description: "retention",
-      stored_in_db: true,
-    },
-  ]);
-  vi.mocked(updateConfigFieldSetting).mockClear();
-  vi.mocked(deleteConfigFieldSetting).mockClear();
-  const user = userEvent.setup();
-  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
-  await user.click(screen.getByRole("tab", { name: "General" }));
-  const input = await screen.findByRole("textbox", { name: "maximum_daily_tag_spend_retention_period" });
-  expect(input).toHaveValue("30d");
-  fireEvent.change(input, { target: { value: "" } });
-  await user.click(
-    within(screen.getByRole("row", { name: /maximum_daily_tag_spend_retention_period/ })).getByRole("button", {
-      name: "Update",
-    }),
-  );
-  expect(vi.mocked(deleteConfigFieldSetting).mock.calls).toEqual([
-    ["token", "maximum_daily_tag_spend_retention_period"],
-  ]);
-  expect(updateConfigFieldSetting).not.toHaveBeenCalled();
-});
-
 it("clears a stored List setting when Update is clicked on an emptied input", async () => {
   vi.mocked(getGeneralSettingsCall).mockResolvedValue([
     {

@@ -114,15 +114,6 @@ const SettingValueEditor: React.FC<{
       />
     );
   }
-  if (setting.field_type === "String") {
-    return (
-      <Input
-        aria-label={setting.field_name}
-        value={setting.field_value ?? ""}
-        onChange={(event) => onChange(setting.field_name, event.target.value === "" ? null : event.target.value)}
-      />
-    );
-  }
   if (setting.field_type === "Select") {
     return (
       <Select value={setting.field_value ?? null} onValueChange={(newValue) => onChange(setting.field_name, newValue)}>
@@ -258,7 +249,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (["Select", "List", "String"].includes(setting?.field_type ?? "")) handleResetField(fieldName);
+      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
       return;
     }
     try {
