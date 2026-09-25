@@ -96,10 +96,6 @@ class TestGetLitellmParamsKwargsExtraction:
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
 
-    def test_stream_chunk_size_is_carried_as_a_litellm_param(self) -> None:
-        assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
-        assert get_litellm_params()["stream_chunk_size"] is None
-
     def test_a_caller_supplied_control_params_key_is_not_carried(self) -> None:
         assert CONTROL_PARAMS_KEY not in get_litellm_params(**{CONTROL_PARAMS_KEY: {"stream_chunk_size": 64}})
 

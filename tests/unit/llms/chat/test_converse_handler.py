@@ -15,6 +15,7 @@ from tests._support.stream_chunk_size import (
     LitellmParamsRecorder,
     keys_at_every_depth,
     record_litellm_params,
+    recorded_stream_chunk_size,
 )
 
 
@@ -353,7 +354,7 @@ def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body(
     data: Final = post_spy.call_args.kwargs["data"]
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] == 64
+    assert recorded_stream_chunk_size(recorder.seen[0]) == 64
 
 
 def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -361,7 +362,7 @@ def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch:
 
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] is None
+    assert recorded_stream_chunk_size(recorder.seen[0]) is None
 
 
 async def _astream_converse_completion_with_spied_client(
@@ -404,7 +405,7 @@ async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_convers
     data: Final = post_spy.call_args.kwargs["data"]
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] == 64
+    assert recorded_stream_chunk_size(recorder.seen[0]) == 64
 
 
 @pytest.mark.asyncio
@@ -415,7 +416,7 @@ async def test_acompletion_without_stream_chunk_size_uses_default_chunking(
 
     aiter_bytes_spy.assert_called_once_with(chunk_size=None)
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] is None
+    assert recorded_stream_chunk_size(recorder.seen[0]) is None
 
 
 @pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), ("64", 64), (None, None)])
@@ -455,7 +456,7 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     data: Final = client.post.call_args.kwargs["data"]
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] == expected_chunk_size
+    assert recorded_stream_chunk_size(recorder.seen[0]) == expected_chunk_size
 
 
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "non_stream"])
