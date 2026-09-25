@@ -730,6 +730,7 @@ from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    drain_passthrough_upstream_error_reports,
     initialize_pass_through_endpoints,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -1583,6 +1584,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
     await flush_spend_counters_on_shutdown()
+
+    try:
+        await drain_passthrough_upstream_error_reports()
+    except Exception as e:  # noqa: BLE001  # shutdown must continue when a report drain fails
+        verbose_proxy_logger.error("Error draining passthrough upstream error reports: %s", e)
 
     await _flush_spend_logs_queue_on_shutdown()
 

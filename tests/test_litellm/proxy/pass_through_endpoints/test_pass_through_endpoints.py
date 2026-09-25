@@ -27,15 +27,20 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    _REPORT_TASKS,
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    _bounded_report,
+    _PreviewReportingStream,
     _registered_pass_through_routes,
+    _spawn_report_task,
     _truncate_upstream_error_body,
     _with_trace_context,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
+    drain_passthrough_upstream_error_reports,
     initialize_pass_through_endpoints,
     pass_through_request,
     resolve_llm_passthrough_timeout,
@@ -4933,6 +4938,211 @@ async def test_pass_through_request_streaming_upstream_error_body_read_failure_k
         and args[2] == "ReadError"
         for args, fmt in zip(recorded_warnings, formats)
     ), rendered
+
+
+class _UpstreamErrorBodyStreamHeld(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...], hold: asyncio.Event) -> None:
+        self._chunks: Final = chunks
+        self._hold: Final = hold
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+        await self._hold.wait()
+
+
+class _UpstreamErrorBodyStreamAbortingAfter(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_abort_after_preview_budget_reraises_to_client():
+    chunks: Final = tuple(b"d" * 1000 for _ in range(5))
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStreamAbortingAfter(chunks),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    enqueued: list[asyncio.Future[None]] = []
+
+    def _recording_spawn(coro):
+        enqueued.append(asyncio.ensure_future(coro))
+        return enqueued[-1]
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
+        side_effect=_recording_spawn,
+    ):
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_success_handler.return_value = None
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+    assert isinstance(response, StreamingResponse)
+    received: list[bytes] = []
+
+    async def consume_response() -> None:
+        async for chunk in response.body_iterator:
+            received.append(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
+
+    with pytest.raises(httpx.RemoteProtocolError):
+        await consume_response()
+    assert b"".join(received) == b"d" * 5000
+
+    assert len(enqueued) == 1, enqueued
+    await enqueued[0]
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    expected_body: Final = f"{'d' * 4096}... (truncated at 4096 chars)"
+    assert (
+        mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+        == f"Upstream passthrough request failed with status 500: {expected_body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_finishes_report_after_consumer_cancelled():
+    upstream_hold: Final = asyncio.Event()
+    chunks: Final = (b"first",)
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStreamHeld(chunks, upstream_hold),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    release: Final = asyncio.Event()
+    hook_done: Final = asyncio.Event()
+    log_warning: Final = MagicMock()
+
+    async def report(preview: bytes) -> None:
+        await release.wait()
+        hook_done.set()
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=log_warning,
+        spawn=_spawn_report_task,
+    )
+
+    async def consume() -> None:
+        async for _ in relay.__aiter__():
+            pass
+
+    consumer: Final = asyncio.ensure_future(consume())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    consumer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    pending: Final = tuple(_REPORT_TASKS)
+    assert len(pending) == 1, pending
+    assert not pending[0].done()
+    assert not hook_done.is_set()
+    log_warning.assert_called_once_with(
+        "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body", 5
+    )
+
+    release.set()
+    await drain_passthrough_upstream_error_reports(timeout=5)
+    assert hook_done.is_set()
+    assert pending[0].done()
+    assert not _REPORT_TASKS
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_returns_with_report_still_pending_on_timeout():
+    upstream_hold: Final = asyncio.Event()
+    chunks: Final = (b"first",)
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStreamHeld(chunks, upstream_hold),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    release: Final = asyncio.Event()
+
+    async def report(preview: bytes) -> None:
+        await release.wait()
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=MagicMock(),
+        spawn=_spawn_report_task,
+    )
+
+    async def consume() -> None:
+        async for _ in relay.__aiter__():
+            pass
+
+    consumer: Final = asyncio.ensure_future(consume())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    consumer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    pending: Final = tuple(_REPORT_TASKS)
+    assert len(pending) == 1, pending
+    await drain_passthrough_upstream_error_reports(timeout=0.05)
+    assert not pending[0].done()
+    pending[0].cancel()
+    await asyncio.gather(pending[0], return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_report_concurrency_is_bounded_by_the_semaphore():
+    limiter: Final = asyncio.Semaphore(2)
+    release: Final = asyncio.Event()
+    entered: list[int] = []
+    finished: list[int] = []
+
+    def make_report(index: int):
+        async def report() -> None:
+            entered.append(index)
+            await release.wait()
+            finished.append(index)
+
+        return report
+
+    tasks: Final = tuple(asyncio.ensure_future(_bounded_report(make_report(index)(), limiter)) for index in range(4))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert len(entered) == 2, entered
+
+    release.set()
+    await asyncio.gather(*tasks)
+    assert len(entered) == 4, entered
+    assert len(finished) == 4, finished
 
 
 class _UpstreamErrorGzipStreamDropping(httpx.AsyncByteStream):

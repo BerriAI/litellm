@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
@@ -42,6 +42,8 @@ from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    PASSTHROUGH_UPSTREAM_ERROR_REPORT_CONCURRENCY,
+    PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
@@ -875,7 +877,7 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         upstream: httpx.Response,
         report: _ReportPreview,
         log_warning: Callable[..., None],
-        spawn: Callable[[Coroutine[None, None, None]], asyncio.Future[None]],
+        spawn: Callable[[Awaitable[None]], asyncio.Future[None]],
     ) -> None:
         self._upstream: Final = upstream
         self._report: Final = report
@@ -884,6 +886,7 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
         self._dispatched = False
         self._pending: asyncio.Future[None] | None = None
+        self._completed = False
 
     def _dispatch_report(self) -> None:
         if self._dispatched:
@@ -896,6 +899,14 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         if pending is not None:
             await asyncio.shield(pending)
 
+    def _dispatch_disconnect_report(self) -> None:
+        if not self._completed and not self._dispatched:
+            self._log_warning(
+                "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body",
+                sum(len(part) for part in self._collected),
+            )
+        self._dispatch_report()
+
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
         try:
@@ -906,9 +917,11 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
                     if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
                         self._dispatch_report()
                 yield chunk
+            self._completed = True
             self._dispatch_report()
             await self._drain_pending_report()
         except httpx.HTTPError as err:
+            dispatched_before: Final = self._dispatched
             self._log_warning(
                 "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
                 sum(len(part) for part in self._collected),
@@ -916,16 +929,38 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
             )
             self._dispatch_report()
             await self._drain_pending_report()
+            if dispatched_before:
+                raise
         finally:
-            self._dispatch_report()
+            self._dispatch_disconnect_report()
 
     async def aclose(self) -> None:
-        self._dispatch_report()
+        self._dispatch_disconnect_report()
         await self._upstream.aclose()
 
 
-def _spawn_report_task(report: Coroutine[None, None, None]) -> asyncio.Future[None]:
-    return asyncio.ensure_future(report)
+_REPORT_CONCURRENCY: Final = asyncio.Semaphore(PASSTHROUGH_UPSTREAM_ERROR_REPORT_CONCURRENCY)
+_REPORT_TASKS: Final[set[asyncio.Future[None]]] = set()  # mutable-ok: in-flight report registry drained at shutdown
+
+
+async def _bounded_report(report: Awaitable[None], limiter: asyncio.Semaphore) -> None:
+    async with limiter:
+        await report
+
+
+def _spawn_report_task(report: Awaitable[None]) -> asyncio.Future[None]:
+    task: Final = asyncio.ensure_future(_bounded_report(report, _REPORT_CONCURRENCY))
+    _REPORT_TASKS.add(task)
+    task.add_done_callback(_REPORT_TASKS.discard)
+    return task
+
+
+async def drain_passthrough_upstream_error_reports(
+    timeout: float = PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
+) -> None:
+    pending: Final = tuple(_REPORT_TASKS)
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
 
 
 def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:

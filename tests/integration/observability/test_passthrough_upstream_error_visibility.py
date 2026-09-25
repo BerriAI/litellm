@@ -1000,6 +1000,50 @@ def test_gemini_passthrough_streaming_429_upstream_abort_after_first_frame_still
             assert follow_up.status_code == 200, follow_up.text
 
 
+def test_upstream_abort_after_preview_budget_reaches_client_as_truncated(gateway: Gateway, tmp_path: Path) -> None:
+    frames: Final = tuple(b"d" * 1000 for _ in range(5)) + (b"data: tail\n\n",)
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(status=500, content_type="text/event-stream", chunks=frames, abort_after=5)
+        return Reply(status=200, body=json.dumps({"ok": True}).encode())
+
+    path: Final = tmp_path / "gemini-stream-500-abort-past-preview.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            received: Final = bytearray()
+
+            def consume_error_stream() -> None:
+                with candidate.client.stream(
+                    "POST",
+                    _GEMINI_STREAM_PATH,
+                    params={"alt": "sse"},
+                    json=_GENERATE_CONTENT,
+                    headers=_gemini_headers(candidate),
+                    timeout=httpx.Timeout(15, connect=5),
+                ) as response:
+                    assert response.status_code == 500, response.text
+                    for chunk in response.iter_bytes():
+                        received.extend(chunk)
+
+            with pytest.raises(httpx.HTTPError):
+                consume_error_stream()
+            assert bytes(received) == b"d" * 5000, bytes(received)[-64:]
+            eventually(
+                lambda: _upstream_warnings(owned.log),
+                lambda lines: (
+                    any("returned 500" in line for line in lines) and any("read failed" in line for line in lines)
+                ),
+                seconds=30,
+            )
+            returned: Final = tuple(line for line in _upstream_warnings(owned.log) if "returned 500" in line)
+            read_failures: Final = tuple(line for line in _upstream_warnings(owned.log) if "read failed" in line)
+            assert len(returned) == 1, returned
+            assert len(read_failures) == 1, read_failures
+
+
 def test_gemini_passthrough_empty_streaming_429_still_logged(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
         return Reply(status=429, content_type="text/event-stream", chunks=())
