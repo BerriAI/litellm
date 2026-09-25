@@ -4445,6 +4445,14 @@ def _can_object_call_model(
     )
 
 
+def _resolve_team_alias(model: str | list[str], team_model_aliases: dict[str, str] | None) -> str | list[str]:
+    if not team_model_aliases:
+        return model
+    if isinstance(model, str):
+        return team_model_aliases.get(model, model)
+    return [team_model_aliases.get(name, name) for name in model]  # mutable-ok: _can_object_call_model takes list[str]
+
+
 async def _check_agent_access_group_model_access(
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
@@ -4465,14 +4473,14 @@ async def _check_agent_access_group_model_access(
             param="model",
             code=status.HTTP_403_FORBIDDEN,
         )
+    dispatched: Final = _resolve_team_alias(model, valid_token.team_model_aliases)
     return _can_object_call_model(
-        model=model,
+        model=dispatched,
         llm_router=llm_router,
         models=sorted(ceiling.models),
         team_id=valid_token.team_id,
         object_type="agent",
         key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-        team_model_aliases=valid_token.team_model_aliases,
     )
 
 
