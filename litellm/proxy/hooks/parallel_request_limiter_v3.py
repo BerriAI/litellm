@@ -30,7 +30,16 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_cache import log_redis_failure
+from litellm.caching._redis_scripts import (
+    batch_rate_limit,
+    check_and_increment_by_n,
+    increment_tokens,
+    parallel_acquire,
+    parallel_count,
+    parallel_release,
+    window_guarded_token_increment,
+)
+from litellm.caching.redis_cache import RedisScriptClient, log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -116,173 +125,6 @@ def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
     prefix: Final = window_key.removesuffix(":window")
     return f"{prefix}:requests", f"{prefix}:tokens"
 
-
-BATCH_RATE_LIMITER_SCRIPT: Final = """
-local results = {}
-local now = tonumber(ARGV[1])
-local window_size = tonumber(ARGV[2])
-
--- Process each window/counter pair
-for i = 1, #KEYS, 2 do
-    local window_key = KEYS[i]
-    local counter_key = KEYS[i + 1]
-    local increment_value = 1
-
-    -- Check if window exists and is valid
-    local window_start = redis.call('GET', window_key)
-    if not window_start or (now - tonumber(window_start)) >= window_size then
-        -- Reset window and counter
-        local prefix = string.sub(window_key, 1, -(#':window') - 1)
-        redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
-        redis.call('SET', window_key, tostring(now))
-        redis.call('SET', counter_key, increment_value)
-        redis.call('EXPIRE', window_key, window_size)
-        redis.call('EXPIRE', counter_key, window_size)
-        table.insert(results, tostring(now)) -- window_start
-        table.insert(results, increment_value) -- counter
-    else
-        local counter = redis.call('INCR', counter_key)
-        -- This happens when window_key exists but counter_key doesn't (e.g., tokens key
-        -- created after requests key when both share the same window_key)
-        local current_ttl = redis.call('TTL', counter_key)
-        if current_ttl == -1 then
-            redis.call('EXPIRE', counter_key, window_size)
-        end
-        table.insert(results, window_start) -- window_start
-        table.insert(results, counter) -- counter
-    end
-end
-
-return results
-"""
-
-CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
--- Atomic check-and-increment-by-N across one or more descriptors.
--- All-or-nothing: if any descriptor would exceed its limit, no counter is
--- modified.
---
--- Uses Redis server time (`redis.call('TIME')`) instead of a client-supplied
--- timestamp so that window resets are deterministic across replicas with
--- skewed wall-clocks. This prevents a clock-skew-induced reopening of the
--- TOCTOU window across multi-replica deployments.
---
--- KEYS layout: pairs of (window_key, counter_key), one pair per descriptor.
--- ARGV layout: per-descriptor 4-tuple, starting at ARGV[1]:
---     ARGV[(i-1)*4 + 1] = limit
---     ARGV[(i-1)*4 + 2] = increment
---     ARGV[(i-1)*4 + 3] = ttl_seconds (counter TTL when window resets)
---     ARGV[(i-1)*4 + 4] = window_size_seconds (sliding-window length)
---
--- Return on success:
---     { 0, new_counter_1, window_start_1, new_counter_2, window_start_2, ... }
--- Return on over-limit: { 1, descriptor_index, current_counter, limit }
-local time_reply = redis.call('TIME')
-local now = tonumber(time_reply[1])
-local descriptor_count = #KEYS / 2
-local reset_windows = {}
-
--- Pass 1: read state, validate. Abort without writing if any over limit.
-local descriptor_state = {}
-for i = 1, descriptor_count do
-    local window_key = KEYS[(i - 1) * 2 + 1]
-    local counter_key = KEYS[(i - 1) * 2 + 2]
-    local arg_base = (i - 1) * 4 + 1
-    local limit = tonumber(ARGV[arg_base])
-    local increment = tonumber(ARGV[arg_base + 1])
-    local window_size = tonumber(ARGV[arg_base + 3])
-
-    local window_start = redis.call('GET', window_key)
-    local window_expired = (not window_start) or
-        ((now - tonumber(window_start)) >= window_size)
-
-    local current_counter
-    if window_expired then
-        current_counter = 0
-    else
-        current_counter = tonumber(redis.call('GET', counter_key) or 0)
-    end
-
-    local blocked
-    if increment > 0 then
-        blocked = current_counter + increment > limit
-    else
-        blocked = current_counter >= limit
-    end
-    if blocked then
-        return { 1, i, current_counter, limit }
-    end
-
-    descriptor_state[i] = { window_expired, current_counter, window_start }
-end
-
--- Pass 2: all checks passed. Apply increments.
-local results = { 0 }
-for i = 1, descriptor_count do
-    local window_key = KEYS[(i - 1) * 2 + 1]
-    local counter_key = KEYS[(i - 1) * 2 + 2]
-    local arg_base = (i - 1) * 4 + 1
-    local increment = tonumber(ARGV[arg_base + 1])
-    local ttl = tonumber(ARGV[arg_base + 2])
-    local window_size = tonumber(ARGV[arg_base + 3])
-
-    local window_expired = descriptor_state[i][1]
-    local active_window_start
-
-    if window_expired then
-        active_window_start = now
-        if not reset_windows[window_key] then
-            local prefix = string.sub(window_key, 1, -(#':window') - 1)
-            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
-            reset_windows[window_key] = true
-        end
-        redis.call('SET', window_key, tostring(now))
-        redis.call('SET', counter_key, increment)
-        redis.call('EXPIRE', window_key, window_size)
-        if ttl > 0 then
-            redis.call('EXPIRE', counter_key, ttl)
-        end
-        table.insert(results, increment)
-    else
-        active_window_start = tonumber(descriptor_state[i][3])
-        local new_counter = redis.call('INCRBY', counter_key, increment)
-        local current_ttl = redis.call('TTL', counter_key)
-        if current_ttl == -1 and ttl > 0 then
-            redis.call('EXPIRE', counter_key, ttl)
-        end
-        table.insert(results, new_counter)
-    end
-    table.insert(results, active_window_start)
-end
-
-return results
-"""
-
-WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT: Final = """
-local results = {}
-for i = 1, #KEYS, 2 do
-    local window_key = KEYS[i]
-    local counter_key = KEYS[i + 1]
-    local arg_base = ((i - 1) / 2) * 3 + 1
-    local expected_window_start = ARGV[arg_base]
-    local increment = tonumber(ARGV[arg_base + 1])
-    local ttl = tonumber(ARGV[arg_base + 2])
-    local active_window_start = redis.call('GET', window_key)
-
-    if active_window_start and active_window_start == expected_window_start then
-        local new_counter = redis.call('INCRBY', counter_key, increment)
-        local current_ttl = redis.call('TTL', counter_key)
-        if current_ttl == -1 and ttl > 0 then
-            redis.call('EXPIRE', counter_key, ttl)
-        end
-        table.insert(results, 1)
-        table.insert(results, new_counter)
-    else
-        table.insert(results, 0)
-        table.insert(results, tonumber(redis.call('GET', counter_key) or 0))
-    end
-end
-return results
-"""
 
 PARALLEL_ACQUIRE_SCRIPT: Final = """
 -- Atomic check-and-acquire for the max_parallel_requests concurrency gauge.
@@ -434,12 +276,6 @@ CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 ReservationWindowIdentity: TypeAlias = tuple[str, str, Literal["redis", "local"]]
 
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
-
-
-class _AsyncLuaScript(Protocol):
-    """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
-
-    def __call__(self, *, keys: Sequence[str], args: Sequence[object]) -> Awaitable[list[CacheCounterValue]]: ...
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -678,14 +514,6 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
-    batch_rate_limiter_script: _AsyncLuaScript | None
-    token_increment_script: _AsyncLuaScript | None
-    check_and_increment_by_n_script: _AsyncLuaScript | None
-    window_guarded_token_increment_script: _AsyncLuaScript | None
-    parallel_acquire_script: _AsyncLuaScript | None
-    parallel_release_script: _AsyncLuaScript | None
-    parallel_count_script: _AsyncLuaScript | None
-
     def __init__(
         self,
         internal_usage_cache: InternalUsageCache,
@@ -697,38 +525,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                BATCH_RATE_LIMITER_SCRIPT
-            )
-            self.token_increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                TOKEN_INCREMENT_SCRIPT
-            )
-            self.check_and_increment_by_n_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(CHECK_AND_INCREMENT_BY_N_SCRIPT)
-            )
-            self.window_guarded_token_increment_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT
-                )
-            )
-            self.parallel_acquire_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                PARALLEL_ACQUIRE_SCRIPT
-            )
-            self.parallel_release_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                PARALLEL_RELEASE_SCRIPT
-            )
-            self.parallel_count_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                PARALLEL_COUNT_SCRIPT
-            )
-        else:
-            self.batch_rate_limiter_script = None
-            self.token_increment_script = None
-            self.check_and_increment_by_n_script = None
-            self.window_guarded_token_increment_script = None
-            self.parallel_acquire_script = None
-            self.parallel_release_script = None
-            self.parallel_count_script = None
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        # The Lua scripts, run through the cache's namespace and circuit breaker; None without Redis.
+        self._scripts: RedisScriptClient | None = RedisScriptClient(redis_cache) if redis_cache is not None else None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
@@ -1327,7 +1126,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns:
             List of cache values
         """
-        if self.batch_rate_limiter_script is None:
+        scripts: Final = self._scripts
+        if scripts is None:
             return []
 
         key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
@@ -1335,9 +1135,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         for hash_tag, group_keys in key_groups.items():
             try:
-                group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
-                    keys=group_keys,
-                    args=[now_int, self.window_size],  # Use integer timestamp
+                group_cache_values: CacheCounterValues = await batch_rate_limit(
+                    scripts, keys=group_keys, now=now_int, window_size=self.window_size
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
@@ -1426,7 +1225,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     cache_values = [  # rebind-ok: missing keys default to a zeroed window snapshot
                         str(now_int) if key.endswith(":window") else 0 for key in keys_to_fetch
                     ]
-            elif self.batch_rate_limiter_script is not None:
+            elif self._scripts is not None:
                 # NORMAL MODE: Increment counters in Redis
                 # Group keys by hash tag for Redis cluster compatibility
                 cache_values = await self._execute_redis_batch_rate_limiter_script(
@@ -1583,11 +1382,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         gauge_keys: Final = [gauge["counter_key"] for gauge in gauges]
 
         if read_only:
-            if self.parallel_count_script is not None:
+            if self._scripts is not None:
                 try:
-                    raw_counts: Final[list[CacheCounterValue]] = await self.parallel_count_script(
+                    raw_counts: Final = await parallel_count(
+                        self._scripts,
                         keys=gauge_keys,
-                        args=[PARALLEL_REQUEST_SLOT_TTL_SECONDS for _ in gauges],
+                        slot_ttls=[PARALLEL_REQUEST_SLOT_TTL_SECONDS for _ in gauges],
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
@@ -1614,9 +1414,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     statuses=[self._gauge_status(gauge, in_flight, "OVER_LIMIT")],
                 )
 
-        if self.parallel_acquire_script is not None:
+        if self._scripts is not None:
             try:
-                raw: Final[list[CacheCounterValue]] = await self.parallel_acquire_script(
+                raw: Final = await parallel_acquire(
+                    self._scripts,
                     keys=gauge_keys,
                     args=[
                         arg for gauge in gauges for arg in (gauge["limit"], PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id)
@@ -1752,11 +1553,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         slot_id: Final = acquisition["slot_id"]
         if not counter_keys or not slot_id:
             return
-        if self.parallel_release_script is not None:
+        if self._scripts is not None:
             try:
-                raw: Final[list[CacheCounterValue]] = await self.parallel_release_script(
-                    keys=counter_keys,
-                    args=[slot_id for _ in counter_keys],
+                raw: Final = await parallel_release(
+                    self._scripts, keys=counter_keys, slot_ids=[slot_id for _ in counter_keys]
                 )
                 for counter_key, remaining in zip(counter_keys, raw):
                     await self.internal_usage_cache.async_set_cache(
@@ -1853,8 +1653,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # asyncio.Lock + in-memory sliding window below — there are no
         # cluster slot concerns locally, so we keep the batched 2-phase
         # critical section for true cross-descriptor atomicity.
-        if self.check_and_increment_by_n_script is not None:
+        if self._scripts is not None:
             return await self._atomic_lua_per_descriptor(
+                self._scripts,
                 descriptor_groups=descriptor_groups,
                 parent_otel_span=parent_otel_span,
             )
@@ -1927,6 +1728,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _atomic_lua_per_descriptor(
         self,
+        scripts: RedisScriptClient,
         descriptor_groups: list[DescriptorAtomicGroup],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
@@ -1944,14 +1746,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         applied: Final[list[list[AtomicCounterMeta]]] = []
         statuses: Final[list[RateLimitStatus]] = []
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
-        raw: list[CacheCounterValue]
+        raw: Sequence[CacheCounterValue]
 
         for _idx, (keys, args, meta) in enumerate(descriptor_groups):
             try:
-                raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
-                    keys=keys,
-                    args=args,
-                )
+                raw = await check_and_increment_by_n(scripts, keys=keys, args=args)
             except Exception as e:
                 # Lua failure (timeout, OOM, network partition) leaves Redis
                 # state ambiguous. Refund any prior groups so Redis returns
@@ -2020,7 +1819,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _build_atomic_response(
         self,
-        raw: list[CacheCounterValue],
+        raw: Sequence[CacheCounterValue],
         per_counter_meta: list[AtomicCounterMeta],
     ) -> RateLimitResponse:
         """Convert Lua script return value to RateLimitResponse.
@@ -3995,7 +3794,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Execute token increment script grouped by hash tag for cluster compatibility.
         """
-        if self.token_increment_script is None:
+        scripts: Final = self._scripts
+        if scripts is None:
             return
 
         # Group operations by hash tag for Redis cluster compatibility
@@ -4022,10 +3822,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 keys.append(op["key"])
                 args.extend([op["increment_value"], ttl_value])
 
-            await self.token_increment_script(
-                keys=keys,
-                args=args,
-            )
+            await increment_tokens(scripts, keys=keys, args=args)
 
     async def async_increment_tokens_with_ttl_preservation(
         self,
@@ -4040,7 +3837,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
 
         # Check if script is available
-        if self.token_increment_script is None:
+        if self._scripts is None:
             verbose_proxy_logger.debug("TTL preservation script not available, using regular pipeline")
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
@@ -4109,9 +3906,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             expected_window_start = operation.get("expected_window_start")
             if window_key is None or expected_window_start is None:
                 continue
-            if self.window_guarded_token_increment_script is not None:
+            if self._scripts is not None:
                 try:
-                    await self.window_guarded_token_increment_script(
+                    await window_guarded_token_increment(
+                        self._scripts,
                         keys=[  # mutable-ok: Redis script interface requires a key list
                             window_key,
                             operation["key"],

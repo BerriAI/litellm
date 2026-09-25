@@ -21,15 +21,9 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
+from litellm.caching._redis_scripts import delete_if_owner, pexpire_if_owner
 from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_coordinator import (
     LockAcquisition,
-)
-
-# Delete the key only if it still holds this caller's token, so a holder whose lock already expired
-# (PX) and was re-acquired by another worker cannot delete the new holder's lock.
-_RELEASE_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-_EXTEND_IF_OWNER: Final = (
-    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
 )
 
 
@@ -38,7 +32,9 @@ class RedisCommands(Protocol):
 
     async def set(self, name: str, value: str, *, nx: bool = False, px: int | None = None) -> object | None: ...
 
-    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> object: ...
+    def register_script(self, script: str) -> object: ...
+
+    async def __aenter__(self) -> object: ...
 
     async def exists(self, *names: str) -> int: ...
 
@@ -61,12 +57,8 @@ class RedisDistributedLock:
 
     async def extend(self, key: str, token: str, ttl_seconds: float) -> bool:
         try:
-            result: Final = await self.client.eval(
-                _EXTEND_IF_OWNER,
-                1,
-                self.namespace_key(key),
-                token,
-                str(int(ttl_seconds * 1000)),
+            result: Final = await pexpire_if_owner(
+                self.client, key=self.namespace_key(key), token=token, milliseconds=int(ttl_seconds * 1000)
             )
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
@@ -77,7 +69,9 @@ class RedisDistributedLock:
 
     async def release(self, key: str, token: str) -> None:
         try:
-            await self.client.eval(_RELEASE_IF_OWNER, 1, self.namespace_key(key), token)
+            # Deletes only while the key still holds this caller's token, so a holder whose lock already
+            # expired (PX) and was re-acquired by another worker cannot delete the new holder's lock.
+            await delete_if_owner(self.client, key=self.namespace_key(key), token=token)
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001

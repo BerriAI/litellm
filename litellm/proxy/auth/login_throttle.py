@@ -24,8 +24,9 @@ from pydantic import TypeAdapter, ValidationError
 from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching._redis_scripts import login_block_ttls, record_login_failure
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError, RedisScriptClient
 from litellm.constants import (
     EMPTY_MAPPING,
     LOGIN_THROTTLE_CACHE_KEY_PREFIX,
@@ -74,25 +75,6 @@ class LocalStore(Protocol):
 
     def delete_cache(self, key: str) -> None: ...
 
-
-# KEYS: pair counter, pair block, source counter, source block (one cluster slot via the source hash tag)
-# ARGV: pair limit, source limit (0 = source scope off), window seconds, block seconds
-# Both scripts return {pair block TTL, source block TTL}; 0 or below means not blocked
-_BLOCK_TTLS_LUA: Final = "return {redis.call('TTL', KEYS[2]), redis.call('TTL', KEYS[4])}"
-_RECORD_FAILURE_LUA: Final = (
-    "local function bump(count_key, block_key, limit) "
-    "local blocked = redis.call('TTL', block_key) "
-    "if blocked > 0 then return blocked end "
-    "local count = redis.call('INCR', count_key) "
-    "if redis.call('TTL', count_key) < 0 then redis.call('EXPIRE', count_key, ARGV[3]) end "
-    "if count > limit then redis.call('SET', block_key, '1', 'EX', ARGV[4]) return tonumber(ARGV[4]) end "
-    "return 0 end "
-    "local user_block = bump(KEYS[1], KEYS[2], tonumber(ARGV[1])) "
-    "local source_block = 0 "
-    "if tonumber(ARGV[2]) > 0 and user_block == 0 then "
-    "source_block = bump(KEYS[3], KEYS[4], tonumber(ARGV[2])) end "
-    "return {user_block, source_block}"
-)
 
 _COUNTERS: Final = InMemoryCache(
     max_size_in_memory=LOGIN_THROTTLE_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
@@ -350,9 +332,7 @@ class LoginThrottle:
         if self.redis_cache is None:
             return LOGIN_THROTTLE_NOT_BLOCKED
         try:
-            return _LUA_BLOCK_TTLS.validate_python(
-                await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(keys, ())
-            )
+            return _LUA_BLOCK_TTLS.validate_python(await login_block_ttls(RedisScriptClient(self.redis_cache), *keys))
         except _REDIS_FAILURES as err:
             self._warn_redis(err)
             return LOGIN_THROTTLE_NOT_BLOCKED
@@ -372,8 +352,13 @@ class LoginThrottle:
         if self.redis_cache is not None:
             try:
                 return _LUA_BLOCK_TTLS.validate_python(
-                    await self.redis_cache.async_register_script(_RECORD_FAILURE_LUA)(
-                        keys, (self.user_limit, source_limit, self.window_seconds, self.block_seconds)
+                    await record_login_failure(
+                        RedisScriptClient(self.redis_cache),
+                        *keys,
+                        pair_limit=self.user_limit,
+                        source_limit=source_limit,
+                        window_seconds=self.window_seconds,
+                        block_seconds=self.block_seconds,
                     )
                 )
             except _REDIS_FAILURES as err:

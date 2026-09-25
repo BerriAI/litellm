@@ -516,8 +516,8 @@ async def test_claim_pin_uses_redis_attached_after_construction():
 
     assert claimed == "other-pod-winner"
     assert cache.in_memory_cache.ttl_dict[pin_key] == pytest.approx(time_module.time() + 777, abs=5)
-    assert captured["keys"] == (pin_key,)
-    assert captured["args"] == ('{"model_id": "our-deployment"}', 777)
+    assert captured["keys"] == [pin_key]
+    assert captured["args"] == ['{"model_id": "our-deployment"}', "777", ""]
     assert cache.in_memory_cache.get_cache(_session_pin_key("late-redis-session", "key-1")) == {
         "model_id": "other-pod-winner"
     }

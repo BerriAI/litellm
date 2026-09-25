@@ -20,6 +20,7 @@ from typing import Any, Dict
 
 import pytest
 
+from tests.test_litellm.caching._redis_script_fakes import fake_scripts
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -1686,7 +1687,7 @@ async def test_redis_window_guard_uses_reservation_identity_and_never_falls_back
     async def capture_unguarded(pipeline_operations, **_kwargs):
         unguarded_calls.extend(pipeline_operations)
 
-    handler.window_guarded_token_increment_script = failing_guard
+    handler._scripts = fake_scripts(window_guarded_token_increment=failing_guard)
     handler.async_increment_tokens_with_ttl_preservation = capture_unguarded
     await handler.async_increment_reservation_aware_tokens(
         pipeline_operations=[
@@ -1707,7 +1708,7 @@ async def test_redis_window_guard_uses_reservation_identity_and_never_falls_back
                 "{model_per_project_itpm:project:model}:window",
                 "{model_per_project_itpm:project:model}:tokens",
             ],
-            ["1234", -90, 60],
+            ["1234", "-90", "60"],
         )
     ]
     assert unguarded_calls == []
@@ -1730,13 +1731,14 @@ async def test_atomic_lua_response_carries_redis_window_identity(rate_limiter):
     async def successful_reservation(*, keys, args):
         return [0, 25, 1234]
 
-    handler.check_and_increment_by_n_script = successful_reservation
-    assert await handler._atomic_lua_per_descriptor([]) == {
+    scripts = fake_scripts(check_and_increment_by_n=successful_reservation)
+    assert await handler._atomic_lua_per_descriptor(scripts, []) == {
         "overall_code": "OK",
         "statuses": [],
     }
 
     response = await handler._atomic_lua_per_descriptor(
+        scripts,
         descriptor_groups=[
             (
                 [

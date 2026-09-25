@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching.redis_cache import RedisCache, log_redis_failure
+from litellm.caching._redis_scripts import delete_if_owner
+from litellm.caching.redis_cache import RedisCache, RedisScriptClient, log_redis_failure
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.types.services import ServiceTypes
@@ -23,18 +24,9 @@ class PodLockManager:
     Ensures that only one pod can run a cron job at a time.
     """
 
-    _COMPARE_AND_DELETE_LOCK_SCRIPT = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-"""
-
     def __init__(self, redis_cache: RedisCache | None = None):
         self.pod_id = str(uuid.uuid4())
         self.redis_cache = redis_cache
-        self._release_lock_script: Any | None = None
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
@@ -161,21 +153,17 @@ end
         Falls back to get/delete for non-RedisCache implementations that do not
         expose Lua script registration.
         """
-        script_register: Final = getattr(self.redis_cache, "async_register_script", None)
-        if callable(script_register):
+        if callable(getattr(self.redis_cache, "async_register_script", None)):
             try:
-                if self._release_lock_script is None:
-                    self._release_lock_script = script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
                 # acquire_lock stores the pod_id via async_set_cache, which
                 # JSON-encodes the value; compare against the same encoding so
                 # the Lua equality check matches and the lock is released
-                result = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
-                return int(result or 0)
+                return await delete_if_owner(
+                    RedisScriptClient(self.redis_cache), key=lock_key, token=json.dumps(self.pod_id)
+                )
             except Exception:
-                # Lua execution failed (e.g. Redis restart cleared loaded scripts,
-                # or scripting is disabled). Reset cached script handle and fall
-                # through to the GET + DEL fallback so the lock is still released.
-                self._release_lock_script = None
+                # Lua execution failed (e.g. scripting is disabled). Fall through
+                # to the GET + DEL fallback so the lock is still released.
                 verbose_proxy_logger.warning(
                     "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
                     lock_key,

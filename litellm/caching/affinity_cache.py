@@ -2,49 +2,16 @@
 
 import json
 from collections.abc import Mapping
-from typing import (
-    Final,
-    cast,  # noqa: TID251  # Redis script results are narrowed only to object, then validated
-)
+from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
+from litellm.caching._redis_scripts import claim_affinity_pin as claim_affinity_pin_script
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisScriptClient
 
 _PIN_JSON_ADAPTER: Final = TypeAdapter[JsonValue](JsonValue)
-
-_CLAIM_PIN_SCRIPT: Final = """
-local current = redis.call('GET', KEYS[1])
-if current == false then
-  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-  return ARGV[1]
-end
-if ARGV[3] then
-  local decoded, stored = pcall(cjson.decode, current)
-  if decoded and type(stored) == 'table' then
-    for _, eligible in ipairs(cjson.decode(ARGV[3])) do
-      local matches = true
-      for key, value in pairs(eligible) do
-        if stored[key] ~= value then matches = false; break end
-      end
-      for key, _ in pairs(stored) do
-        if eligible[key] == nil then matches = false; break end
-      end
-      if matches then
-        redis.call('EXPIRE', KEYS[1], ARGV[2])
-        return current
-      end
-    end
-  end
-  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-  return ARGV[1]
-end
-if current == ARGV[1] then
-  redis.call('EXPIRE', KEYS[1], ARGV[2])
-end
-return current
-"""
 
 
 def set_local_affinity_pin(cache: DualCache, cache_key: str, value: object, ttl_seconds: int) -> None:
@@ -101,23 +68,21 @@ async def claim_affinity_pin(
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         try:
-            claim_script: Final = redis_cache.async_register_script(_CLAIM_PIN_SCRIPT)
-            args: Final = (
-                json.dumps(dict(pin_value)),  # mutable-ok: JSON serialization requires dict, not a generic Mapping
-                int(ttl_seconds),
-                *(
-                    (json.dumps(tuple(dict(value) for value in eligible_values)),)  # mutable-ok: JSON requires dict
+            # Typed object, not the script's bytes: a client built with decode_responses returns str.
+            raw: Final[object] = await claim_affinity_pin_script(
+                RedisScriptClient(redis_cache),
+                key=cache_key,
+                pin=json.dumps(dict(pin_value)),  # mutable-ok: JSON serialization requires dict, not a generic Mapping
+                ttl=int(ttl_seconds),
+                eligible_json=(
+                    json.dumps(tuple(dict(value) for value in eligible_values))  # mutable-ok: JSON requires dict
                     if eligible_values is not None
-                    else ()
+                    else ""
                 ),
             )
-            raw: Final = cast(  # cast-ok: Redis scripts return heterogeneous values; only object is asserted here
-                object, await claim_script(keys=(cache_key,), args=args)
-            )
-            decoded: Final = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            if not isinstance(decoded, str):
+            if not isinstance(raw, bytes | str):
                 return pin_value
-            winner: Final = _decode_pin(decoded)
+            winner: Final = _decode_pin(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
             set_local_affinity_pin(cache, cache_key, winner, ttl_seconds)
             return winner
         except Exception as error:  # noqa: BLE001  # Redis/Lua faults retain same-pod affinity through local claims

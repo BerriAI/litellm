@@ -1367,13 +1367,13 @@ class _FakeRedis:
         self.scripts: list[str] = []
 
     def async_register_script(self, script: str):
-        from litellm.proxy.auth import login_throttle as lt
+        from litellm.caching import _redis_scripts
 
         async def _run(keys, args):
             self.scripts.append(script)
-            if script == lt._BLOCK_TTLS_LUA:
+            if script == _redis_scripts.LOGIN_BLOCK_TTLS:
                 return [self._ttl(keys[1]), self._ttl(keys[3])]
-            assert script == lt._RECORD_FAILURE_LUA
+            assert script == _redis_scripts.RECORD_LOGIN_FAILURE
             user_limit, source_limit, window, block = (int(a) for a in args)
             user_block = self._bump(keys[0], keys[1], user_limit, window, block)
             if source_limit > 0 and user_block == 0:

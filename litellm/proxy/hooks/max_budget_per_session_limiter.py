@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_cache import log_redis_failure
+from litellm.caching._redis_scripts import increment_session_spend
+from litellm.caching.redis_cache import RedisScriptClient, log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -34,23 +35,6 @@ if TYPE_CHECKING:
 else:
     InternalUsageCache = Any
 
-
-# Redis Lua script for atomic float increment with TTL.
-# INCRBYFLOAT returns the new value as a string.
-# Only sets EXPIRE on first call (when prior value was nil).
-MAX_BUDGET_SESSION_INCREMENT_SCRIPT: Final = """
-local key = KEYS[1]
-local amount = ARGV[1]
-local ttl = tonumber(ARGV[2])
-
-local existed = redis.call('EXISTS', key)
-local new_val = redis.call('INCRBYFLOAT', key, amount)
-if existed == 0 then
-    redis.call('EXPIRE', key, ttl)
-end
-
-return new_val
-"""
 
 # Default TTL for session budget counters (1 hour)
 DEFAULT_MAX_BUDGET_PER_SESSION_TTL: Final = 3600
@@ -76,12 +60,8 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             )
         )
 
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                MAX_BUDGET_SESSION_INCREMENT_SCRIPT
-            )
-        else:
-            self.increment_script = None
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        self._scripts: Final = RedisScriptClient(redis_cache) if redis_cache is not None else None
 
     async def async_pre_call_hook(
         self,
@@ -235,13 +215,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     async def _increment_spend(self, cache_key: str, amount: float) -> float:
         """Atomically increment the session spend and return the new value."""
-        if self.increment_script is not None:
+        if self._scripts is not None:
             try:
-                result: Final = await self.increment_script(
-                    keys=[cache_key],
-                    args=[str(amount), self.ttl],
+                return float(
+                    await increment_session_spend(self._scripts, key=cache_key, amount=str(amount), ttl=self.ttl)
                 )
-                return float(result)
             except Exception as e:
                 log_redis_failure(
                     verbose_proxy_logger,

@@ -11,14 +11,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_c
 
 
 class _FakeRedis:
-    """Models just enough Redis to exercise SET NX (token store) and the compare-and-delete EVAL."""
+    """Models just enough Redis to exercise SET NX (token store) and the compare-and-delete script."""
 
     def __init__(self, set_returns=True, exists_returns=1, raise_on=()):
         self._set_returns = set_returns
         self._exists_returns = exists_returns
         self._raise_on = set(raise_on)
         self.set_calls = []
-        self.eval_calls = []
+        self.script_calls = []
         self.expire_calls = []
         self.deleted = []
         self.store: dict = {}
@@ -31,22 +31,25 @@ class _FakeRedis:
             self.store[name] = value
         return self._set_returns
 
-    async def eval(self, script, numkeys, *keys_and_args):
-        if "eval" in self._raise_on:
-            raise RuntimeError("redis down")
-        self.eval_calls.append((numkeys, keys_and_args))
-        key, token = keys_and_args[0], keys_and_args[1]
-        if len(keys_and_args) == 3:
-            ttl_ms = keys_and_args[2]
-            if self.store.get(key) == token:
-                self.expire_calls.append((key, ttl_ms))
+    def register_script(self, script):
+        async def run(keys, args, client=None):
+            if "script" in self._raise_on:
+                raise RuntimeError("redis down")
+            self.script_calls.append((keys, args))
+            key, token = keys[0], args[0]
+            if len(args) == 2:
+                ttl_ms = args[1]
+                if self.store.get(key) == token:
+                    self.expire_calls.append((key, ttl_ms))
+                    return 1
+                return 0
+            if self.store.get(key) == token:  # compare-and-delete: only the owner deletes
+                del self.store[key]
+                self.deleted.append(key)
                 return 1
             return 0
-        if self.store.get(key) == token:  # compare-and-delete: only the owner deletes
-            del self.store[key]
-            self.deleted.append(key)
-            return 1
-        return 0
+
+        return run
 
     async def exists(self, *names):
         if "exists" in self._raise_on:
@@ -95,8 +98,8 @@ async def test_keys_are_namespaced_before_reaching_redis():
     await lock.release("k", "tok")
     await lock.is_held("k")
     assert redis.set_calls[0][0] == "ns:k"  # acquire namespaced
-    assert redis.eval_calls[0][1][0] == "ns:k"  # extend (EVAL KEYS[1]) namespaced
-    assert redis.eval_calls[1][1][0] == "ns:k"  # release (EVAL KEYS[1]) namespaced
+    assert redis.script_calls[0][0] == ["ns:k"]  # extend (script KEYS[1]) namespaced
+    assert redis.script_calls[1][0] == ["ns:k"]  # release (script KEYS[1]) namespaced
     assert redis.deleted == ["ns:k"]
 
 
@@ -112,7 +115,7 @@ async def test_extend_refreshes_ttl_only_when_the_token_matches():
 
 @pytest.mark.asyncio
 async def test_extend_degrades_to_false_on_redis_error():
-    assert await RedisDistributedLock(_FakeRedis(raise_on=["eval"])).extend("k", "tok", 10.0) is False
+    assert await RedisDistributedLock(_FakeRedis(raise_on=["script"])).extend("k", "tok", 10.0) is False
 
 
 @pytest.mark.asyncio

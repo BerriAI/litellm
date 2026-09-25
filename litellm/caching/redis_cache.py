@@ -45,6 +45,7 @@ from litellm.types.caching import (
 )
 from litellm.types.services import ServiceTypes
 
+from . import _redis_scripts
 from .base_cache import BaseCache
 
 if TYPE_CHECKING:
@@ -89,21 +90,15 @@ class _AsyncRedisCommands(Protocol):
 
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
-    def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+    def register_script(self, script: str) -> object: ...
+
+    async def __aenter__(self) -> object: ...
 
 
 _BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
     {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
 )
 
-_INCREMENT_WITH_FLOOR_LUA: Final = (
-    "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
-    "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count) end "
-    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
-    "return count"
-)
-
-_LUA_COUNT: Final = TypeAdapter(int)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
 
@@ -601,6 +596,40 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
     )
 
 
+class _ScriptRegistry(Protocol):
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[Any]]: ...
+
+
+class RedisScriptClient:
+    """Lets the generated scripts in ``litellm.caching._redis_scripts`` run through a RedisCache.
+
+    A generated script takes a redis-py client and calls ``client.register_script(lua)``.
+    Handing it this instead routes the call through ``async_register_script``, so the
+    script keeps the cache's key namespace, circuit breaker and per-event-loop binding.
+    """
+
+    __slots__ = ("__weakref__", "_cache")  # the generated scripts cache their handle per client, weakly
+
+    def __init__(self, cache: _ScriptRegistry) -> None:
+        self._cache: Final = cache
+
+    def register_script(self, script: str) -> Callable[..., Awaitable[object]]:
+        run: Final = self._cache.async_register_script(script)
+
+        async def call(keys: Sequence[str], args: Sequence[str | bytes], client: object = None) -> object:
+            # ``client`` is this adapter, handed back by the generated wrapper; the cache picks its own.
+            return await run(keys=keys, args=args)
+
+        return call
+
+    async def __aenter__(self) -> "RedisScriptClient":
+        """Unused. Having it types the generated scripts' calls as awaitable, as for an async client."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
@@ -915,11 +944,9 @@ class RedisCache(BaseCache):
         would keep a count a dead worker never decremented alive for as long as the group
         takes traffic. Returns the resulting count.
         """
-        namespaced_key: Final = self.check_and_fix_namespace(key=key)
-        count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
-            _INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl
+        return _redis_scripts.increment_with_floor(
+            self.redis_client, key=self.check_and_fix_namespace(key=key), amount=value, ttl=ttl
         )
-        return _LUA_COUNT.validate_python(count)
 
     @_redis_circuit_breaker_guard_sync
     def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
@@ -1473,34 +1500,18 @@ class RedisCache(BaseCache):
         GET/compare/SET runs in a single Lua call, so it is also atomic across
         racing callers and pods. Returns the resulting value.
         """
-        _redis_client: Final = self.init_async_client()
+        _redis_client: Final = self._async_commands()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
-        lua: Final = (
-            "local cur = redis.call('GET', KEYS[1]) "
-            "if cur == false or tonumber(cur) < tonumber(ARGV[1]) then "
-            "redis.call('SET', KEYS[1], ARGV[1]) "
-            "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
-            "return ARGV[1] end "
-            "return cur"
-        )
-        result = cast(
-            "str | bytes | int | float | None",
-            await _redis_client.eval(lua, 1, key, str(value), str(int(_used_ttl or 0))),
-        )
-        if result is None:
-            return None
-        if isinstance(result, bytes):
-            result = result.decode()
+        result: Final = await _redis_scripts.set_max(_redis_client, key=key, value=str(value), ttl=int(_used_ttl or 0))
         return float(result)
 
     @_redis_circuit_breaker_guard
     async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         """Async twin of ``increment_with_floor``, sharing its Lua script and its guarantees."""
-        _redis_client: Final = self._async_commands()
-        namespaced_key: Final = self.check_and_fix_namespace(key=key)
-        count: Final = await _redis_client.eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
-        return _LUA_COUNT.validate_python(count)
+        return await _redis_scripts.increment_with_floor(
+            self._async_commands(), key=self.check_and_fix_namespace(key=key), amount=value, ttl=ttl
+        )
 
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")

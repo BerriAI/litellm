@@ -196,6 +196,7 @@ dev = [
     "numpy>=1.26.0,<3.0",
     "diff-cover==9.7.2",
     "hypothesis==6.165.10",
+    "redis-lua-py==0.10.0",
     "reportlab==5.0.1",
     "basedpyright==1.39.7",
     "mypy==1.20.1",
