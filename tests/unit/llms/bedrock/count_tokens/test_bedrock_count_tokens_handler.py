@@ -7,7 +7,7 @@ from botocore.credentials import RefreshableCredentials
 
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 class _ProbedCountTokensHandler(BedrockCountTokensHandler):
