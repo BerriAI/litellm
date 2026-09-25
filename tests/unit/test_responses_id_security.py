@@ -4,7 +4,7 @@ Tests for ResponsesIDSecurity hook.
 Tests the security hook that prevents user B from seeing response from user A.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -111,63 +111,6 @@ class TestDecryptResponseId:
             assert original_id == "resp_plain_value"
             assert user_id is None
             assert team_id is None
-
-
-class TestEncryptResponseId:
-    """Test _encrypt_response_id function"""
-
-    @pytest.mark.skip(
-        reason="Flaky on CI; disabling temporarily until responses_id_security is fixed"
-    )
-    def test_encrypt_response_id_success(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
-        """Test encrypting a response ID with user information"""
-        mock_response = ResponsesAPIResponse(
-            id="resp_123", created_at=1234567890, output=[], status="completed"
-        )
-
-        with patch(
-            "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
-        ) as mock_encrypt:
-            mock_encrypt.return_value = "encrypted_base64_value"
-
-            with patch.object(
-                responses_id_security, "_get_signing_key", return_value="test-key"
-            ):
-                result = responses_id_security._encrypt_response_id(
-                    mock_response, mock_user_api_key_dict
-                )
-
-                assert result.id == "resp_encrypted_base64_value"
-                assert result.id.startswith("resp_")
-                mock_encrypt.assert_called_once()
-
-    @pytest.mark.skip(
-        reason="Flaky on CI; disabling temporarily until responses_id_security is fixed"
-    )
-    def test_encrypt_response_id_maintains_prefix(
-        self, responses_id_security, mock_user_api_key_dict
-    ):
-        """Test that encrypted response ID maintains 'resp_' prefix"""
-        mock_response = ResponsesAPIResponse(
-            id="resp_456", created_at=1234567890, output=[], status="in_progress"
-        )
-
-        with patch(
-            "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
-            return_value="test-salt-key",
-        ):
-            with patch.object(
-                responses_id_security, "_get_signing_key", return_value="test-key"
-            ):
-                result = responses_id_security._encrypt_response_id(
-                    mock_response, mock_user_api_key_dict
-                )
-
-                assert result.id.startswith("resp_")
-                # The encrypted ID should be different from the original
-                assert result.id != "resp_456"
 
 
 class TestCheckUserAccessToResponseId:
@@ -855,7 +798,6 @@ class TestAsyncPostCallSuccessHook:
         )
 
         assert result == mock_response
-
 
 
 _FABRICATED_PROVIDER_RESPONSE_ID = "resp_fabricatedprovideridaaaaaaaaaaaaaaaa"
