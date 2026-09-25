@@ -194,7 +194,7 @@ async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
         return
     budget: Final = agent.litellm_budget_table.max_budget
     spend: Final = await get_current_spend(
-        counter_key=f"spend:agent:{agent.agent_id}",
+        counter_key=agent.budget_counter_key,
         fallback_spend=agent.spend or 0.0,
         max_budget=budget,
         fallback_authoritative=True,

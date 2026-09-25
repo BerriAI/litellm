@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
@@ -315,6 +315,14 @@ class AgentKeySummary(BaseModel):
     key_name: str | None = None
 
 
+def agent_budget_counter_key(agent_id: str, reset_at: datetime | None) -> str:
+    if reset_at is None:
+        return f"spend:agent:{agent_id}"
+    aware: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
+    window: Final = aware.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return f"spend:agent_window:{window}:{agent_id}"
+
+
 class AgentResponse(BaseModel):
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
@@ -343,6 +351,12 @@ class AgentResponse(BaseModel):
     updated_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
+
+    @property
+    def budget_counter_key(self) -> str:
+        return agent_budget_counter_key(
+            self.agent_id, self.litellm_budget_table.budget_reset_at if self.litellm_budget_table else None
+        )
 
 
 class ListAgentsResponse(BaseModel):

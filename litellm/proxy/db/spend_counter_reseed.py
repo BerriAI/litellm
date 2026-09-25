@@ -39,6 +39,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.agents import agent_budget_counter_key
 
 if TYPE_CHECKING:
     from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
@@ -171,6 +172,18 @@ class SpendCounterReseed:
                 return await OrganizationRepository(prisma_client).table.find_unique(
                     where={"organization_id": counter_key[len("spend:org:") :]}
                 )
+            if counter_key.startswith("spend:agent_window:"):
+                parts: Final = counter_key.split(":", 3)
+                if len(parts) != 4:
+                    return None
+                row: Final = await AgentsRepository(prisma_client, use_writer=True).table.find_unique(
+                    where={"agent_id": parts[3]}, include={"litellm_budget_table": True}
+                )
+                if row is None:
+                    return None
+                budget: Final = row.litellm_budget_table
+                current_key: Final = agent_budget_counter_key(row.agent_id, budget.budget_reset_at if budget else None)
+                return row if current_key == counter_key else row.model_copy(update={"spend": 0.0})
             if counter_key.startswith("spend:agent:"):
                 return await AgentsRepository(prisma_client).table.find_unique(
                     where={"agent_id": counter_key[len("spend:agent:") :]}

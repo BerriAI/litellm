@@ -2754,7 +2754,7 @@ async def test_callback_does_not_charge_a_header_selected_agent(
     from litellm.proxy import proxy_server
 
     cache: Final = DualCache()
-    for key in ("spend:user:human", "spend:agent:header-selected-agent", "spend:agent:verified-agent"):
+    for key in ("spend:user:human", "spend:agent:header-selected-agent", "spend:agent:verified-agent", "spend:agent_window:20260102T000000.000000Z:verified-agent"):
         cache.in_memory_cache.set_cache(key=key, value=0.0)
     logging: Final = MagicMock()
     logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
@@ -2766,6 +2766,7 @@ async def test_callback_does_not_charge_a_header_selected_agent(
         "call_type": "acompletion", "model": "test-model", "response_cost": 0.01,
         "litellm_params": {"metadata": {
             "user_api_key_user_id": "human", "agent_id": "header-selected-agent", "billing_agent_id": billing_agent,
+            "billing_agent_counter_key": "spend:agent_window:20260102T000000.000000Z:verified-agent" if billing_agent else None,
         }},
     }
     await _ProxyDBLogger()._PROXY_track_cost_callback(
@@ -2773,4 +2774,5 @@ async def test_callback_does_not_charge_a_header_selected_agent(
     )
     assert cache.in_memory_cache.get_cache(key="spend:user:human") == 0.01
     assert cache.in_memory_cache.get_cache(key="spend:agent:header-selected-agent") == 0.0
-    assert cache.in_memory_cache.get_cache(key="spend:agent:verified-agent") == (0.01 if billing_agent else 0.0)
+    assert cache.in_memory_cache.get_cache(key="spend:agent:verified-agent") == 0.0
+    assert cache.in_memory_cache.get_cache(key="spend:agent_window:20260102T000000.000000Z:verified-agent") == (0.01 if billing_agent else 0.0)

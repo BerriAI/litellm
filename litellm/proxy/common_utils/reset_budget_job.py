@@ -52,7 +52,6 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
-    AgentsRepository,
     EndUserRepository,
     ModelAccessGroupBudgetRepository,
     TagRepository,
@@ -121,11 +120,6 @@ class _ModelAccessGroupRow(_BudgetLinkedRow, Protocol):
 class _ProjectRow(_BudgetLinkedRow, Protocol):
     @property
     def project_id(self) -> str: ...
-
-
-class _AgentRow(_BudgetLinkedRow, Protocol):
-    @property
-    def agent_id(self) -> str: ...
 
 
 class _EndUserRow(_BudgetLinkedRow, Protocol):
@@ -776,11 +770,6 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="projects",
         )
-        agents: Final[tuple[_AgentRow, ...]] = await self._fetch_linked_rows(
-            table=AgentsRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids),
-            log_subject="agents",
-        )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
                 b.budget_id: cap
@@ -814,7 +803,6 @@ class ResetBudgetJob:
                     for row in model_access_groups
                 ),
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
-                *((f"spend:agent:{row.agent_id}", _row_carried_spend(row, rollover_caps)) for row in agents),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -857,17 +845,8 @@ class ResetBudgetJob:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _set_spend_counter_with_floor_and_broadcast,
-        )
-
-        for counter_key, carried_spend in cascade.counter_resets:
-            if counter_key.startswith("spend:agent:"):
-                await _set_spend_counter_with_floor_and_broadcast(counter_key, carried_spend)
         await self._invalidate_caches(
-            counter_keys=tuple(
-                counter_key for counter_key, _ in cascade.counter_resets if not counter_key.startswith("spend:agent:")
-            ),
+            counter_keys=tuple(counter_key for counter_key, _ in cascade.counter_resets),
             cache_keys=cascade.cache_keys,
         )
 

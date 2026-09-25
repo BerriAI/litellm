@@ -476,3 +476,37 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
     assert managed_inference_request(
         route, {"model": "requested"}, {"completion_model": "allowed-default"}, "cli"
     )["model"] == "requested"
+
+
+@pytest.mark.asyncio
+async def test_new_budget_window_isolated_from_inflight_previous_window_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
+
+    cache: Final = DualCache()
+    old_key: Final = "spend:agent_window:20260101T000000.000000Z:agent"
+    new_key: Final = "spend:agent_window:20260102T000000.000000Z:agent"
+    cache.set_cache("spend:agent:agent", 10.0)
+    cache.set_cache(old_key, 10.0)
+    cache.set_cache(new_key, 0.0)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    auth.billing_agent_policy = agent(spend=0, litellm_budget_table={
+        "budget_id": "budget", "max_budget": 1.0, "budget_reset_at": "2026-01-02T00:00:00Z",
+    })
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.5,
+        billing_agent_id="agent", billing_agent_counter_key=old_key,
+    )
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=1.1,
+        billing_agent_id="agent", billing_agent_counter_key=new_key,
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_agent_budget(auth)
+    assert await cache.async_get_cache(old_key) == 10.5
+    assert await cache.async_get_cache(new_key) == 1.1

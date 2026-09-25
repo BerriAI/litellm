@@ -490,3 +490,34 @@ async def test_agent_counter_reseed_uses_persisted_agent_spend(spend: float | No
     client: Final = SimpleNamespace(db=SimpleNamespace(litellm_agentstable=table))
     assert await SpendCounterReseed.from_db(prisma_client=client, counter_key="spend:agent:agent-1") == spend
     assert table.where_clauses == [{"agent_id": "agent-1"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window,expected", [("20260102T000000.000000Z", 0.3), ("20260101T000000.000000Z", 0.0)])
+async def test_agent_window_reseed_cannot_load_another_windows_spend(window: str, expected: float) -> None:
+    from litellm.types.agents import AgentResponse
+
+    row: Final = AgentResponse(
+        agent_id="agent:with:colons", agent_name="Agent", agent_card_params={}, spend=0.3,
+        litellm_budget_table={"budget_id": "budget", "budget_reset_at": "2026-01-02T00:00:00Z"},
+    )
+    writer: Final = AsyncMock(return_value=row)
+    replica: Final = AsyncMock(return_value=row.model_copy(update={"spend": 99.0}))
+    client: Final = SimpleNamespace(
+        writer_db=SimpleNamespace(litellm_agentstable=SimpleNamespace(find_unique=writer)),
+        db=SimpleNamespace(litellm_agentstable=SimpleNamespace(find_unique=replica)),
+    )
+    result: Final = await SpendCounterReseed.from_db(client, f"spend:agent_window:{window}:agent:with:colons")
+    assert result == expected
+    replica.assert_not_awaited()
+    writer.assert_awaited_once_with(where={"agent_id": "agent:with:colons"}, include={"litellm_budget_table": True})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [True, False])
+async def test_agent_window_reseed_handles_missing_rows_and_malformed_keys(missing: bool) -> None:
+    lookup: Final = AsyncMock(return_value=None)
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_agentstable=SimpleNamespace(find_unique=lookup)))
+    key: Final = "spend:agent_window:20260102T000000.000000Z:missing" if missing else "spend:agent_window:malformed"
+    assert await SpendCounterReseed.from_db(client, key) is None
+    assert lookup.await_count == int(missing)
