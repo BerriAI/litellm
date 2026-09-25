@@ -1752,7 +1752,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _get_tool_call_arguments(tool_call: Any) -> Optional[str]:
+    def _get_tool_call_arguments(tool_call: Any) -> str | None:
         """Return the JSON arguments string of a dict-shaped tool call, if present."""
         if not isinstance(tool_call, dict):
             return None
