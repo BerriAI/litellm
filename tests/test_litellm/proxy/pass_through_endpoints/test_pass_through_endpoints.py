@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import time
 import zlib
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
@@ -33,7 +34,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
-    _bounded_report,
     _PreviewReportingStream,
     _registered_pass_through_routes,
     _spawn_report_task,
@@ -5066,7 +5066,7 @@ async def test_shutdown_drain_finishes_report_after_consumer_cancelled():
     with pytest.raises(asyncio.CancelledError):
         await consumer
 
-    pending: Final = tuple(_REPORT_TASKS)
+    pending: Final = tuple(_REPORT_TASKS.get(asyncio.get_running_loop(), ()))
     assert len(pending) == 1, pending
     assert not pending[0].done()
     assert not hook_done.is_set()
@@ -5078,7 +5078,7 @@ async def test_shutdown_drain_finishes_report_after_consumer_cancelled():
     await drain_passthrough_upstream_error_reports(timeout=5)
     assert hook_done.is_set()
     assert pending[0].done()
-    assert not _REPORT_TASKS
+    assert not _REPORT_TASKS.get(asyncio.get_running_loop())
 
 
 @pytest.mark.asyncio
@@ -5114,38 +5114,115 @@ async def test_shutdown_drain_returns_with_report_still_pending_on_timeout():
     with pytest.raises(asyncio.CancelledError):
         await consumer
 
-    pending: Final = tuple(_REPORT_TASKS)
+    pending: Final = tuple(_REPORT_TASKS.get(asyncio.get_running_loop(), ()))
     assert len(pending) == 1, pending
-    await drain_passthrough_upstream_error_reports(timeout=0.05)
+    warnings: Final = MagicMock()
+    await drain_passthrough_upstream_error_reports(timeout=0.05, log_warning=warnings)
+    warnings.assert_called_once_with(
+        "pass_through_endpoint: shutdown drain timed out with %d upstream error reports still pending", 1
+    )
     assert not pending[0].done()
     pending[0].cancel()
     await asyncio.gather(pending[0], return_exceptions=True)
 
 
 @pytest.mark.asyncio
-async def test_report_concurrency_is_bounded_by_the_semaphore():
-    limiter: Final = asyncio.Semaphore(2)
-    release: Final = asyncio.Event()
-    entered: list[int] = []
-    finished: list[int] = []
+async def test_parked_reports_do_not_block_the_error_stream():
+    """A pile of still-running reports must not sit on the response path: a stream whose
+    own report finishes immediately delivers its body without waiting on the others."""
+    hold: Final = asyncio.Event()
 
-    def make_report(index: int):
-        async def report() -> None:
-            entered.append(index)
+    async def parked() -> None:
+        await hold.wait()
+
+    spawned: Final = tuple(_spawn_report_task(parked()) for _ in range(70))
+    assert len(_REPORT_TASKS.get(asyncio.get_running_loop(), ())) == 70
+
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStream(b"d" * 5000),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    hook_done: Final = asyncio.Event()
+
+    async def report(preview: bytes) -> None:
+        hook_done.set()
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=MagicMock(),
+        spawn=_spawn_report_task,
+    )
+
+    started: Final = time.monotonic()
+    received: Final = b"".join([chunk async for chunk in relay.__aiter__()])
+    elapsed: Final = time.monotonic() - started
+    assert received == b"d" * 5000
+    assert hook_done.is_set()
+    assert elapsed < 0.5, elapsed
+
+    for task in spawned:
+        task.cancel()
+    await asyncio.gather(*spawned, return_exceptions=True)
+
+
+def test_report_registry_is_scoped_to_each_event_loop():
+    """Two consecutive asyncio.run calls: each loop's reports register and drain on their
+    own loop, so a shared module-level primitive bound to the first loop never breaks the second."""
+
+    async def run_once() -> None:
+        loop: Final = asyncio.get_running_loop()
+        release: Final = asyncio.Event()
+
+        async def parked() -> None:
             await release.wait()
-            finished.append(index)
 
-        return report
+        spawned: Final = tuple(_spawn_report_task(parked()) for _ in range(70))
+        assert len(_REPORT_TASKS.get(loop, ())) == 70
 
-    tasks: Final = tuple(asyncio.ensure_future(_bounded_report(make_report(index)(), limiter)) for index in range(4))
-    for _ in range(20):
-        await asyncio.sleep(0)
-    assert len(entered) == 2, entered
+        release.set()
+        await drain_passthrough_upstream_error_reports()
+        assert all(task.done() for task in spawned)
+        assert not _REPORT_TASKS.get(loop)
 
-    release.set()
-    await asyncio.gather(*tasks)
-    assert len(entered) == 4, entered
-    assert len(finished) == 4, finished
+    asyncio.run(run_once())
+    asyncio.run(run_once())
+    assert all(len(pending) == 0 for pending in _REPORT_TASKS.values())
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_without_a_timeout():
+    finished: Final = asyncio.Event()
+
+    async def report() -> None:
+        await asyncio.sleep(0.3)
+        finished.set()
+
+    task: Final = _spawn_report_task(report())
+    warnings: Final = MagicMock()
+    await drain_passthrough_upstream_error_reports(timeout=None, log_warning=warnings)
+    assert task.done()
+    assert finished.is_set()
+    warnings.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_timeout_warns_with_the_pending_count():
+    hold: Final = asyncio.Event()
+
+    async def parked() -> None:
+        await hold.wait()
+
+    task: Final = _spawn_report_task(parked())
+    warnings: Final = MagicMock()
+    await drain_passthrough_upstream_error_reports(timeout=0.05, log_warning=warnings)
+    warnings.assert_called_once_with(
+        "pass_through_endpoint: shutdown drain timed out with %d upstream error reports still pending", 1
+    )
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 class _UpstreamErrorGzipStreamDropping(httpx.AsyncByteStream):

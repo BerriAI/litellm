@@ -193,6 +193,56 @@ async def test_passthrough_disconnect_burst_logs_every_failure_once(gateway: Gat
             assert follow_up.status_code == 200, follow_up.text
 
 
+_SLOW_FAILURE_HOOK: Final = """
+import asyncio
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class SlowFailureHook(CustomLogger):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        await asyncio.sleep(15)
+
+
+instance = SlowFailureHook()
+"""
+
+
+async def test_passthrough_sigterm_drains_reports_parked_on_a_slow_failure_hook(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    gate: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(
+                status=429, content_type="text/event-stream", chunks=_RATE_LIMITED_FRAMES, gate_after_first=gate
+            )
+        return Reply(status=200, body=json.dumps({"ok": True}).encode())
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"callbacks": ["slow_hook.instance"]})
+    (tmp_path / "slow_hook.py").write_text(_SLOW_FAILURE_HOOK)
+    path: Final = tmp_path / "chaos-sigterm-drain.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=1) as owned:
+            candidate: Final = owned.gateway
+            call_ids: Final = await asyncio.gather(
+                *(_first_frame_then_close(str(candidate.client.base_url), candidate.key) for _ in range(20))
+            )
+            assert len(set(call_ids)) == 20, call_ids
+            gate.set()
+            owned.process.send_signal(signal.SIGTERM)
+            owned.process.wait(timeout=90)
+            for call_id in call_ids:
+                _single_spend_row(call_id)
+
+
 async def _first_frame_then_close(base_url: str, key: str) -> str:
     async with httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(5, connect=5), trust_env=False) as client:
         async with client.stream(

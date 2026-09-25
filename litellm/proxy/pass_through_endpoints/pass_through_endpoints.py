@@ -4,6 +4,7 @@ import copy
 import json
 import posixpath
 import traceback
+import weakref
 from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -42,7 +43,6 @@ from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
-    PASSTHROUGH_UPSTREAM_ERROR_REPORT_CONCURRENCY,
     PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
@@ -944,28 +944,35 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         await self._upstream.aclose()
 
 
-_REPORT_CONCURRENCY: Final = asyncio.Semaphore(PASSTHROUGH_UPSTREAM_ERROR_REPORT_CONCURRENCY)
-_REPORT_TASKS: Final[set[asyncio.Future[None]]] = set()  # mutable-ok: in-flight report registry drained at shutdown
-
-
-async def _bounded_report(report: Awaitable[None], limiter: asyncio.Semaphore) -> None:
-    async with limiter:
-        await report
+_REPORT_TASKS: Final[  # mutable-ok: in-flight report registry per loop, drained at shutdown
+    weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, set[asyncio.Future[None]]]
+] = weakref.WeakKeyDictionary()
 
 
 def _spawn_report_task(report: Awaitable[None]) -> asyncio.Future[None]:
-    task: Final = asyncio.ensure_future(_bounded_report(report, _REPORT_CONCURRENCY))
-    _REPORT_TASKS.add(task)
-    task.add_done_callback(_REPORT_TASKS.discard)
+    task: Final = asyncio.ensure_future(report)
+    registry: Final = _REPORT_TASKS.setdefault(
+        asyncio.get_running_loop(),
+        set(),  # mutable-ok: per-loop task set, tasks discard themselves on completion
+    )
+    registry.add(task)
+    task.add_done_callback(registry.discard)
     return task
 
 
 async def drain_passthrough_upstream_error_reports(
-    timeout: float = PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
+    timeout: float | None = PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
+    log_warning: Callable[..., None] = verbose_proxy_logger.warning,
 ) -> None:
-    pending: Final = tuple(_REPORT_TASKS)
-    if pending:
-        await asyncio.wait(pending, timeout=timeout)
+    pending: Final = tuple(_REPORT_TASKS.get(asyncio.get_running_loop(), ()))
+    if not pending:
+        return
+    _, still_pending = await asyncio.wait(pending, timeout=timeout)
+    if still_pending:
+        log_warning(
+            "pass_through_endpoint: shutdown drain timed out with %d upstream error reports still pending",
+            len(still_pending),
+        )
 
 
 def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
