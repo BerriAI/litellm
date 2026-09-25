@@ -16,7 +16,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.common_utils import BaseOpenAILLM, _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
+from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -725,9 +725,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "api_version": api_version,
                 "base_url": f"{api_base}",
                 "http_client": (
-                    litellm.aclient_session or _OpenAIAsyncHTTPClient()
+                    litellm.aclient_session or OpenAIAsyncHTTPClient()
                     if acompletion
-                    else litellm.client_session or _OpenAIHTTPClient()
+                    else litellm.client_session or OpenAIHTTPClient()
                 ),
                 "max_retries": max_retries,
                 "timeout": timeout,

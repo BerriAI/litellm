@@ -59,7 +59,7 @@ _OPENAI_HTTPX_CONNECTION_LIMITS: Final = httpx.Limits(
 )
 
 
-class _OpenAIHTTPClient(httpx.Client):
+class OpenAIHTTPClient(httpx.Client):
     def __init__(self) -> None:
         super().__init__(
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
@@ -73,7 +73,7 @@ class _OpenAIHTTPClient(httpx.Client):
                 self.close()
 
 
-class _OpenAIAsyncHTTPClient(httpx.AsyncClient):
+class OpenAIAsyncHTTPClient(httpx.AsyncClient):
     def __init__(self) -> None:
         super().__init__(
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,

@@ -14,7 +14,7 @@ from litellm.utils import ProviderConfigManager
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ...custom_httpx.llm_http_handler import LiteLLMLoggingObj
-from ..common_utils import OpenAIError, _OpenAIAsyncHTTPClient, _OpenAIHTTPClient
+from ..common_utils import OpenAIAsyncHTTPClient, OpenAIError, OpenAIHTTPClient
 
 
 class OpenAIImageVariationsHandler:
@@ -28,7 +28,7 @@ class OpenAIImageVariationsHandler:
         return OpenAI(
             **{
                 **init_client_params,
-                "http_client": init_client_params.get("http_client") or _OpenAIHTTPClient(),
+                "http_client": init_client_params.get("http_client") or OpenAIHTTPClient(),
             },
         )
 
@@ -38,7 +38,7 @@ class OpenAIImageVariationsHandler:
         return AsyncOpenAI(
             **{
                 **init_client_params,
-                "http_client": init_client_params.get("http_client") or _OpenAIAsyncHTTPClient(),
+                "http_client": init_client_params.get("http_client") or OpenAIAsyncHTTPClient(),
             },
         )
 

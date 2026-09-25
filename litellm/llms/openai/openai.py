@@ -53,9 +53,9 @@ from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
+    OpenAIAsyncHTTPClient,
     OpenAIError,
-    _OpenAIAsyncHTTPClient,
-    _OpenAIHTTPClient,
+    OpenAIHTTPClient,
     build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
@@ -1706,9 +1706,9 @@ class OpenAIFilesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data, http_client=_OpenAIAsyncHTTPClient())
+                openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
             else:
-                openai_client = OpenAI(**data, http_client=_OpenAIHTTPClient())
+                openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
         else:
             openai_client = client
 
@@ -2064,9 +2064,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data, http_client=_OpenAIAsyncHTTPClient())
+                openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
             else:
-                openai_client = OpenAI(**data, http_client=_OpenAIHTTPClient())
+                openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
         else:
             openai_client = client
 
@@ -2274,7 +2274,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = OpenAI(**data, http_client=_OpenAIHTTPClient())
+            openai_client = OpenAI(**data, http_client=OpenAIHTTPClient())
         else:
             openai_client = client
 
@@ -2299,7 +2299,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = AsyncOpenAI(**data, http_client=_OpenAIAsyncHTTPClient())
+            openai_client = AsyncOpenAI(**data, http_client=OpenAIAsyncHTTPClient())
         else:
             openai_client = client
 

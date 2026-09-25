@@ -7725,7 +7725,7 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
-    from litellm.llms.openai.common_utils import _OpenAIHTTPClient
+    from litellm.llms.openai.common_utils import OpenAIHTTPClient
 
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
@@ -7735,7 +7735,7 @@ def moderation(input: str, model: str | None = None, api_key: str | None = None,
 
     openai_client = kwargs.get("client", None)
     if openai_client is None:
-        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=_OpenAIHTTPClient())
+        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=OpenAIHTTPClient())
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
