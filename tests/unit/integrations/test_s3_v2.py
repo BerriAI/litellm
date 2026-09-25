@@ -2844,8 +2844,8 @@ async def test_events_appended_during_failed_flush_survive() -> None:
     with patch("asyncio.sleep", new_callable=AsyncMock):
         await logger.flush_queue()
 
-    assert [element.s3_object_key for element in logger.log_queue] == [late.s3_object_key, first.s3_object_key]
-    assert logger.log_queue[-1].retrying_since is None
+    assert [element.s3_object_key for element in logger.log_queue] == [first.s3_object_key, late.s3_object_key]
+    assert logger.log_queue[0].retrying_since is None
 
     logger.async_httpx_client.put.failed_key = None
     await logger.flush_queue()
@@ -3251,7 +3251,7 @@ async def test_overflow_after_a_failed_flush_trims_failed_first_and_counts_uploa
     ):
         await logger.async_send_batch()
 
-    assert [element.payload["id"] for element in logger.log_queue] == ["late-0", "late-1", "late-2", "second"]
+    assert [element.payload["id"] for element in logger.log_queue] == ["second", "late-0", "late-1", "late-2"]
     failed_uploads: Final = 2
     assert mock_failure.call_count == failed_uploads
     mock_failure.assert_called_with(callback_name="S3Logger")
@@ -3495,7 +3495,7 @@ class _AppendingSuffixFailingPut:
 
 
 @pytest.mark.asyncio
-async def test_failed_elements_are_requeued_behind_mid_flush_arrivals() -> None:
+async def test_failed_elements_stay_oldest_first_when_requeued() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3512,8 +3512,8 @@ async def test_failed_elements_are_requeued_behind_mid_flush_arrivals() -> None:
     with patch("asyncio.sleep", new_callable=AsyncMock):
         await logger.flush_queue()
 
-    assert [element.s3_object_key for element in logger.log_queue] == [late.s3_object_key, failed.s3_object_key]
-    assert logger.log_queue[-1].retrying_since is not None
+    assert [element.s3_object_key for element in logger.log_queue] == [failed.s3_object_key, late.s3_object_key]
+    assert logger.log_queue[0].retrying_since is not None
 
 
 @pytest.mark.asyncio
@@ -3541,6 +3541,60 @@ async def test_overflow_prefers_arrivals_over_failed_elements_without_counting_t
     failed_uploads: Final = 1
     assert mock_failure.call_count == failed_uploads
     assert "dropped 1 oldest events" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fresh_elements_upload_before_stale_retries_after_a_failed_flush() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_concurrent_uploads=1,
+    )
+
+    late = _element({"id": "late"}, "late")
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _AppendingSuffixFailingPut(logger, late, ("test-f2.json",))
+    logger.log_queue = [_element({"id": "f1"}, "f1"), _element({"id": "f2"}, "f2")]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    recovered = _FailOnSuffixPut(("never-matches",))
+    logger.async_httpx_client.put = recovered
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert [call_url.rsplit("/", 1)[-1] for call_url in recovered.calls] == ["test-late.json", "test-f2.json"]
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_overflow_trims_oldest_across_failed_flushes(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_queue_size=3,
+    )
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _AppendingFailingPut(logger, (_element({"id": "d"}, "d"),))
+    logger.log_queue = [_element({"id": name}, name) for name in ("a", "b", "c")]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert [element.payload["id"] for element in logger.log_queue] == ["b", "c", "d"]
+
+    logger.async_httpx_client.put = _AppendingFailingPut(logger, (_element({"id": "e"}, "e"),))
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert [element.payload["id"] for element in logger.log_queue] == ["c", "d", "e"]
+    assert caplog.text.count("dropped 1 oldest events") == 2
 
 
 @pytest.mark.asyncio

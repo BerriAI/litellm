@@ -222,6 +222,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 max_queue_size=self.s3_max_queue_size,
             )
             self.log_queue: list[s3BatchLoggingElement] = []
+            self._requeued_count: int = 0
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
@@ -596,7 +597,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
-        results: Final = await asyncio.gather(*(self._upload_bounded(element) for element in uploads))
+        stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
+        order: Final = (*range(stale, len(uploads)), *range(stale))
+        ordered: Final = await asyncio.gather(*(self._upload_bounded(uploads[i]) for i in order))
+        outcomes: Final = dict(zip(order, ordered, strict=True))
+        results: Final = tuple(outcomes[i] for i in range(len(uploads)))
         delivered: Final = sum(1 for outcome in results if outcome == "delivered")
         bucket_wide: Final = delivered == 0
         failed: Final = tuple(
@@ -625,22 +630,20 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.s3_max_retry_age_seconds,
             )
         if not requeued:
+            self._requeued_count = 0
             return
         arrivals: Final = self.log_queue[len(batch) :]
         overflow: Final = max(0, len(requeued) + len(arrivals) - self.max_queue_size)
-        survivors: Final = (*requeued, *arrivals)[overflow:]
-        kept_failed: Final = survivors[: max(0, len(requeued) - overflow)]
-        kept_new: Final = survivors[len(kept_failed) :]
         if overflow:
             verbose_logger.warning(
                 "s3 logging: queue exceeded max_queue_size=%s after a failed flush, dropped %s oldest events",
                 self.max_queue_size,
                 overflow,
             )
-        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
-            *kept_new,
-            *kept_failed,
-        ]
+        self.log_queue = [*requeued, *arrivals][
+            overflow:
+        ]  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        self._requeued_count = max(0, len(requeued) - overflow)
         raise S3BatchUploadError(failed=len(failed), total=len(uploads))
 
     def _batch_file_mode_active(self) -> bool:
