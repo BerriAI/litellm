@@ -1,9 +1,11 @@
+import os
 import uuid
 from pathlib import Path
 from typing import Final
 
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
+from redis import Redis
 
 
 def test_spend_over_a_tag_max_budget_rejects_the_next_request(gateway: Gateway) -> None:
@@ -58,6 +60,110 @@ def test_spend_over_a_tag_max_budget_rejects_the_next_request(gateway: Gateway) 
                 "messages": [{"role": "user", "content": f"untagged probe {tag}"}],
                 "metadata": {"tags": [f"other-{tag}"]},
             },
+        )
+        assert control.status_code == 200, control.text
+
+
+def test_tag_object_rpm_limit_rejects_the_second_request_across_keys(gateway: Gateway) -> None:
+    tag: Final = f"tag-rpm-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        key_a: Final = scenario.key()
+        key_b: Final = scenario.key()
+        gateway.post("/tag/new", {"name": tag, "rpm_limit": 1})
+        scenario.cleanups.callback(delete_tag)
+        first: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"tag rpm {tag}"}],
+                "metadata": {"tags": [tag]},
+            },
+            key=key_a,
+        )
+        assert first.status_code == 200, first.text
+        second: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"tag rpm {tag}"}],
+                "metadata": {"tags": [tag]},
+            },
+            key=key_b,
+        )
+        assert second.status_code == 429, second.text
+        assert "tag" in second.text.lower(), second.text
+        control: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"other tag rpm {tag}"}],
+                "metadata": {"tags": [f"other-{tag}"]},
+            },
+            key=key_b,
+        )
+        assert control.status_code == 200, control.text
+
+
+def test_tag_object_tpm_limit_rejects_the_next_request_once_tokens_are_charged(gateway: Gateway) -> None:
+    tag: Final = f"tag-tpm-{uuid.uuid4().hex}"
+
+    def delete_tag() -> None:
+        gateway.post("/tag/delete", {"name": tag})
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.01, output_cost_per_token=0.01)
+        key: Final = scenario.key()
+        gateway.post("/tag/new", {"name": tag, "tpm_limit": 39})
+        scenario.cleanups.callback(delete_tag)
+        first: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"tag tpm {tag}"}],
+                "metadata": {"tags": [tag]},
+            },
+            key=key,
+        )
+        assert first.status_code == 200, first.text
+
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            charged: Final = eventually(
+                lambda: int(cache.get(f"{{tag:{tag}}}:tokens") or 0),
+                lambda tokens: tokens >= 40,
+                seconds=70,
+            )
+        assert charged >= 40, charged
+        second: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"tag tpm {tag}"}],
+                "metadata": {"tags": [tag]},
+            },
+            key=key,
+        )
+        assert second.status_code == 429, second.text
+        assert "tag" in second.text.lower(), second.text
+        assert "token" in second.text.lower(), second.text
+        control: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"other tag tpm {tag}"}],
+                "metadata": {"tags": [f"other-{tag}"]},
+            },
+            key=key,
         )
         assert control.status_code == 200, control.text
 
