@@ -6731,7 +6731,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False):
+        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False, on_dispatch=None):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
@@ -6771,6 +6771,39 @@ class TestMCPServerManager:
 
         # Verify the MCP client call was awaited exactly once
         assert mock_client.call_tool.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_on_dispatch_to_the_mcp_client(self):
+        """The MCP client fires on_dispatch when it sends the call, so call_tool must hand it down."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from mcp.types import CallToolResult
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "test-server": MCPServer(
+                server_id="test-server", name="test-server", transport=MCPTransport.http, url="http://test-server.com"
+            )
+        }
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+        manager._create_mcp_client = AsyncMock(return_value=_RetryFakeClient(result=CallToolResult(content=[])))
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        dispatched = MagicMock()
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={},
+            user_api_key_auth=MagicMock(object_permission=None, object_permission_id=None),
+            proxy_logging_obj=proxy_logging_obj,
+            on_dispatch=dispatched,
+        )
+
+        dispatched.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
@@ -10062,8 +10095,10 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False, on_dispatch=None):
         self.attempts += 1
+        if on_dispatch is not None:
+            on_dispatch()
         if self._raises is not None:
             if raise_on_error:
                 raise self._raises
@@ -10199,6 +10234,56 @@ class TestOBOCallToolRetry:
         assert first.attempts == 1 and retry.attempts == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["plain", "relay", "obo_retry"])
+    async def test_call_regular_reports_every_sent_attempt_through_on_dispatch(self, path):
+        """on_dispatch tells the caller a tool may have run, so every attempt that is sent must reach
+        it: once on the plain and relay paths, twice when the OBO path retries after an upstream 401."""
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        clients = [_RetryFakeClient(raises=_UpstreamAuthError(401)), _RetryFakeClient(result=success)]
+        manager._create_mcp_client = AsyncMock(side_effect=clients if path == "obo_retry" else clients[1:])
+        servers = {
+            "plain": MCPServer(
+                server_id="plain-srv", name="plain", url="https://upstream.example/mcp", transport=MCPTransport.sse
+            ),
+            "relay": MCPServer(
+                server_id="relay-srv",
+                name="relay",
+                url="https://upstream.example/mcp",
+                transport=MCPTransport.sse,
+                auth_type=MCPAuth.true_passthrough,
+            ),
+            "obo_retry": MCPServer(
+                server_id="id-jag-srv",
+                name="id-jag",
+                url="https://upstream.example/mcp",
+                transport=MCPTransport.sse,
+                auth_type=MCPAuth.oauth2_id_jag,
+                client_id="gateway-client",
+                client_secret="gateway-secret",
+                token_exchange_endpoint="https://org-idp.example/oauth2/token",
+                id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+            ),
+        }
+        dispatched = MagicMock()
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=servers[path],
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer caller-id-token"} if path == "obo_retry" else None,
+            raw_headers={"authorization": "Bearer caller-token"} if path == "relay" else None,
+            proxy_logging_obj=None,
+            on_dispatch=dispatched,
+        )
+
+        assert result is success
+        assert dispatched.call_count == (2 if path == "obo_retry" else 1)
+
+    @pytest.mark.asyncio
     async def test_non_auth_error_does_not_retry(self):
         manager = self._manager()
         first = _RetryFakeClient(raises=ValueError("tool blew up"))
@@ -10274,7 +10359,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False, on_dispatch=None):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:

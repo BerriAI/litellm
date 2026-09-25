@@ -696,8 +696,14 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
         guardrail_context: Mapping[str, object] | None = None,
+        on_tool_dispatched: Callable[[], None] | None = None,
     ) -> list[MCPToolResult]:
-        """Execute tool calls and return results."""
+        """Execute tool calls and return results.
+
+        ``on_tool_dispatched`` runs for every call that is sent to its MCP server, even one that then
+        times out. Calls rejected or failing before that, for example on a pre-call guardrail or a
+        credential the caller has not set, do not trigger it.
+        """
         from fastapi import HTTPException
 
         from litellm._uuid import uuid
@@ -860,6 +866,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     proxy_logging_obj=proxy_logging_obj,
                     litellm_logging_obj=litellm_logging_obj,
                     guardrail_context=guardrail_context,
+                    on_dispatch=on_tool_dispatched,
                 )
 
                 if proxy_logging_obj:

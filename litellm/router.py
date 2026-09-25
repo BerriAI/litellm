@@ -223,6 +223,7 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.mcp_tool_execution import mcp_tools_executed
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -7196,7 +7197,7 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None:
+        if disable_fallbacks is True or original_model_group is None or mcp_tools_executed(e):
             raise e
 
         input_kwargs: Final = {
@@ -7610,6 +7611,8 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
+            if mcp_tools_executed(e):
+                raise
             current_attempt = None
             original_exception = e
             deployment_num_retries: Final = getattr(e, "num_retries", None)
@@ -7709,6 +7712,8 @@ class Router:
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
+                    if mcp_tools_executed(e):
+                        raise
 
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)

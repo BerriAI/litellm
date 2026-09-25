@@ -10,6 +10,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.router_utils.mcp_tool_execution import MCPToolReplayGuard
 from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -244,6 +245,7 @@ async def acompletion_with_mcp(
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
+                self.replay_guard = MCPToolReplayGuard()
 
             def __aiter__(self):
                 return self
@@ -382,7 +384,8 @@ async def acompletion_with_mcp(
                         verbose_logger.debug("Follow-up stream iterator created")
 
                     try:
-                        chunk = await self.follow_up_iterator.__anext__()
+                        with self.replay_guard:
+                            chunk = await self.follow_up_iterator.__anext__()
                         from litellm._logging import verbose_logger
 
                         verbose_logger.debug("Follow-up chunk yielded: %s", chunk)
@@ -445,6 +448,7 @@ async def acompletion_with_mcp(
                             litellm_trace_id=self.litellm_trace_id,
                             request_tags=self.request_tags,
                             guardrail_context=context.guardrail_context,
+                            on_tool_dispatched=self.replay_guard.record_tool_dispatch,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -606,6 +610,7 @@ async def acompletion_with_mcp(
         return initial_response
 
     # Execute tool calls
+    replay_guard: Final = MCPToolReplayGuard()
     tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
@@ -618,6 +623,7 @@ async def acompletion_with_mcp(
         litellm_trace_id=context.litellm_trace_id,
         request_tags=request_tags,
         guardrail_context=context.guardrail_context,
+        on_tool_dispatched=replay_guard.record_tool_dispatch,
     )
 
     if not tool_results:
@@ -640,7 +646,8 @@ async def acompletion_with_mcp(
     follow_up_call_args["messages"] = follow_up_messages
     follow_up_call_args["stream"] = stream
 
-    response = await litellm_acompletion(**follow_up_call_args)
+    with replay_guard:
+        response = await litellm_acompletion(**follow_up_call_args)
     if isinstance(response, (ModelResponse, CustomStreamWrapper)):
         _add_mcp_metadata_to_response(
             response=response,

@@ -35,6 +35,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.mcp_tool_execution import MCPToolReplayGuard
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -337,6 +338,7 @@ async def aresponses_api_with_mcp(
                 tools=tools,
             )
 
+            replay_guard: Final = MCPToolReplayGuard()
             tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
                 tool_calls=tool_calls,
@@ -351,6 +353,7 @@ async def aresponses_api_with_mcp(
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(
                     MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                 ),
+                on_tool_dispatched=replay_guard.record_tool_dispatch,
             )
 
             if tool_results:
@@ -375,13 +378,14 @@ async def aresponses_api_with_mcp(
                         tool_calls=tool_calls, tool_results=tool_results
                     )
 
-                final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
-                    follow_up_input=follow_up_input,
-                    model=model,
-                    all_tools=all_tools,
-                    response_id=previous_response_id if persistence_disabled else response.id,
-                    **follow_up_call_params,
-                )
+                with replay_guard:
+                    final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
+                        follow_up_input=follow_up_input,
+                        model=model,
+                        all_tools=all_tools,
+                        response_id=previous_response_id if persistence_disabled else response.id,
+                        **follow_up_call_params,
+                    )
 
                 # If streaming and we have tool execution events, wrap the response
                 if (
@@ -403,17 +407,18 @@ async def aresponses_api_with_mcp(
                 # Add custom output elements to the final response (for non-streaming)
                 elif isinstance(final_response, ResponsesAPIResponse):
                     # Fetch MCP tools again for output elements (without OpenAI transformation)
-                    (
-                        mcp_tools_for_output,
-                        _,
-                    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-                        user_api_key_auth=user_api_key_auth,
-                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-                        mcp_auth_header=mcp_auth_header,
-                        mcp_server_auth_headers=mcp_server_auth_headers,
-                        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
-                        raw_headers=discovery_raw_headers,
-                    )
+                    with replay_guard:
+                        (
+                            mcp_tools_for_output,
+                            _,
+                        ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+                            user_api_key_auth=user_api_key_auth,
+                            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+                            mcp_auth_header=mcp_auth_header,
+                            mcp_server_auth_headers=mcp_server_auth_headers,
+                            request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+                            raw_headers=discovery_raw_headers,
+                        )
                     final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
                         response=final_response,
                         mcp_tools_fetched=mcp_tools_for_output,
