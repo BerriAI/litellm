@@ -187,7 +187,7 @@ def test_delegated_identity_requires_a_scope() -> None:
     assert "delegated scope" in result.message
 
 
-@pytest.mark.parametrize("budget", [{"max_budget": -1}, {"max_budget": float("inf")}])
+@pytest.mark.parametrize("budget", [{"max_budget": -1}, {"max_budget": float("inf")}, {"max_budget": 1, "budget_duration": "0d"}, {"max_budget": 1, "budget_duration": "0s"}, {"max_budget": 1, "budget_duration": "-1d"}, {"max_budget": 1, "budget_duration": ""}])
 def test_invalid_budget_changes_are_rejected(budget: dict[str, object]) -> None:
     result: Final = managed_write_fields({"budget": budget}, managed_agent(), "admin")
     assert isinstance(result, AgentIdentityFailure)

@@ -1508,6 +1508,9 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
         prisma_client=mock_prisma,
     )
 
+    if billing_agent is None:
+        writer.daily_agent_spend_update_queue.add_update.assert_not_awaited()
+        return
     writer.daily_agent_spend_update_queue.add_update.assert_called_once()
 
     call_args = writer.daily_agent_spend_update_queue.add_update.call_args[1]

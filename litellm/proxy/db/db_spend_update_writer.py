@@ -1068,7 +1068,7 @@ class DBSpendUpdateWriter:
             router=get_llm_router(),
         )
 
-        _agent_id_for_spend: Final = payload_copy.get("billing_agent_id") or payload_copy.get("agent_id")
+        _agent_id_for_spend: Final = payload_copy.get("billing_agent_id", payload_copy.get("agent_id"))
         try:
             await self._update_agent_db(
                 response_cost=response_cost,
@@ -2904,7 +2904,7 @@ class DBSpendUpdateWriter:
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
             return
-        charged_agent_id: Final = payload.get("billing_agent_id") or payload["agent_id"]
+        charged_agent_id: Final = payload.get("billing_agent_id", payload["agent_id"])
         if charged_agent_id is None:
             return
         payload_with_agent_id: Final = cast(

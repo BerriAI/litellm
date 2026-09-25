@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import budget_duration_error, get_budget_reset_time
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import (
     AgentBudgetConfig,
@@ -218,6 +218,9 @@ def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) 
         empty: Final[ManagedWriteFields] = {}
         return empty
     budget: Final = AgentBudgetConfig.model_validate(raw)
+    duration_error: Final = budget_duration_error(budget.budget_duration)
+    if duration_error is not None:
+        raise ValueError(duration_error)
     fields: Final[BudgetFields] = {
         "max_budget": budget.max_budget,
         "budget_duration": budget.budget_duration,

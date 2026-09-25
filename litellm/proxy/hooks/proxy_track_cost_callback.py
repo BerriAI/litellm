@@ -379,7 +379,7 @@ class _ProxyDBLogger(CustomLogger):
                         request_tags=tags,
                         model_access_groups=model_access_groups,
                         project_id=project_id,
-                        billing_agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
+                        billing_agent_id=metadata.get("billing_agent_id"),
                     )
                     if not charged:
                         return

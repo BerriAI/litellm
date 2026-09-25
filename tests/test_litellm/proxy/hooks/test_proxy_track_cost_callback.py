@@ -2743,3 +2743,23 @@ def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: 
     assert _should_track_cost_callback(
         user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
     ) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billing_agent", [None, "verified-agent"])
+async def test_callback_does_not_charge_a_header_selected_agent(billing_agent: str | None) -> None:
+    kwargs: Final = {
+        "call_type": "acompletion", "model": "test-model", "response_cost": 0.01,
+        "litellm_params": {"metadata": {
+            "user_api_key_user_id": "human", "agent_id": "header-selected-agent", "billing_agent_id": billing_agent,
+        }},
+    }
+    with patch(
+        "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+        new_callable=AsyncMock, return_value=False,
+    ) as persist:
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
+        )
+    persist.assert_awaited_once()
+    assert persist.call_args.kwargs["billing_agent_id"] == billing_agent
