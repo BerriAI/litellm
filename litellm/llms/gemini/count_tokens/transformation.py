@@ -5,19 +5,18 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypedDict, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
-import litellm
-from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
-    LiteLLMAnthropicMessagesAdapter,
-)
+from litellm.llms.anthropic.common_utils import sanitize_replayed_anthropic_messages
+from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import AnthropicAdapter
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+from litellm.llms.vertex_ai.common_utils import get_supports_system_message
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared chat-path converter
     _transform_system_message,  # pyright: ignore[reportPrivateUsage]  # shared chat-path system splitter
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
 from litellm.types.utils import AllMessageValues
 
@@ -33,6 +32,8 @@ class GeminiCountTokensPayload:
 class InvalidCountTokensRequest:
     message: str
 
+
+_ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 
 _ANTHROPIC_PART_TYPES: Final = frozenset(
     {
@@ -57,25 +58,6 @@ _ANTHROPIC_TOOL_TYPE_NAMES: Final = frozenset(
 )
 _ANTHROPIC_DATED_TOOL_TYPE_RE: Final = re.compile(
     r"^(web_search|web_fetch|code_execution|computer|text_editor|bash|mcp_toolset)_\d{8}$"
-)
-
-_SERVER_SIDE_PART_TYPES: Final = frozenset(
-    {
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
-        "code_execution_tool_result",
-        "code_execution_result",
-        "mcp_tool_use",
-        "mcp_tool_result",
-        "container_upload",
-        "redacted_thinking",
-    }
-)
-
-_ANTHROPIC_HOSTED_TOOL_TYPES: Final = (
-    ("code_execution", "codeExecution"),
-    ("web_fetch", "urlContext"),
 )
 
 _GEMINI_TOOL_KEYS: Final = frozenset(
@@ -133,192 +115,126 @@ def _is_gemini_tool_shape(tool: Mapping[str, object]) -> bool:
     return any(key in tool for key in _GEMINI_TOOL_KEYS)
 
 
-def _hosted_tool_type(tool: Mapping[str, object]) -> str | None:
-    tool_type: Final = tool.get("type")
-    if not isinstance(tool_type, str):
-        return None
-    for prefix, gemini_name in _ANTHROPIC_HOSTED_TOOL_TYPES:
-        if tool_type.startswith(prefix):
-            return gemini_name
-    return None
-
-
 def _normalize_openai_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
     if "function" in tool:
         return tool
     if "input_schema" in tool:
-        function: Final = {  # mutable-ok: _map_function mutates nested tool dicts
-            "name": tool.get("name"),
-            "description": tool.get("description"),
-            "parameters": tool.get("input_schema"),
-        }
-        return {  # mutable-ok: _map_function mutates nested tool dicts
-            "type": "function",
-            "function": function,
-        }
+        return MappingProxyType(
+            {
+                "type": "function",
+                "function": MappingProxyType(
+                    {
+                        "name": tool.get("name"),
+                        "description": tool.get("description"),
+                        "parameters": tool.get("input_schema"),
+                    }
+                ),
+            }
+        )
     if tool.get("type") == "function" and "name" in tool:
-        flat_function: Final = {  # mutable-ok: _map_function mutates nested tool dicts
-            key: tool[key] for key in ("name", "description", "parameters", "strict") if key in tool
-        }
-        return {  # mutable-ok: _map_function mutates nested tool dicts
-            "type": "function",
-            "function": flat_function,
-        }
+        return MappingProxyType(
+            {
+                "type": "function",
+                "function": MappingProxyType(
+                    {key: tool[key] for key in ("name", "description", "parameters", "strict") if key in tool}
+                ),
+            }
+        )
     return tool
+
+
+def _tool_params(
+    tools: Sequence[Mapping[str, object]],
+    web_search_options: object | None,
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (("tools", tuple(tools) or None), ("web_search_options", web_search_options))
+            if value is not None
+        }
+    )
+
+
+def _openai_tool_params(tools: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    return _tool_params(
+        tools=tuple(_normalize_openai_tool(tool) for tool in tools if not _is_web_search_tool(tool)),
+        web_search_options=MappingProxyType({}) if any(_is_web_search_tool(tool) for tool in tools) else None,
+    )
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _json_object_copy(value: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: adapter pops keys
+    return _JSON_OBJECT.validate_json(json.dumps(value, default=dict))
+
+
+def _json_array_copy(value: Sequence[object]) -> list[object]:  # mutable-ok: the chat converters take plain lists
+    return _JSON_ARRAY.validate_json(json.dumps(value, default=dict))
+
+
+def _gemini_tools_like_chat(model: str, tool_params: Mapping[str, object]) -> tuple[Tools, ...] | None:
+    if not tool_params:
+        return None
+    optional_params: Final = GoogleAIStudioGeminiConfig().map_openai_params(
+        non_default_params=_json_object_copy(tool_params),
+        optional_params={},  # mutable-ok: the chat mapper writes the Gemini tools into it
+        model=model,
+        drop_params=False,
+    )
+    tools: Final = cast(  # cast-ok: the chat mapper stores Gemini Tools under "tools"
+        "list[Tools] | None", optional_params.get("tools")
+    )
+    return tuple(tools) if tools else None
 
 
 def _apply_mixed_tool_drop_rule(merged: Sequence[Tools]) -> tuple[Tools, ...] | None:
     if not merged:
         return None
-    tools_list: Final = list(merged)  # mutable-ok: shared drop rule rewrites the list
-    optional_params: Final = {"tools": tools_list}  # mutable-ok: shared drop rule takes a dict
+    optional_params: Final = {"tools": list(merged)}  # mutable-ok: the shared drop rule rewrites this dict in place
     VertexGeminiConfig._drop_search_tools_mixed_with_functions(optional_params)  # pyright: ignore[reportPrivateUsage]  # shared chat-path drop rule
     kept: Final = optional_params["tools"]
     return tuple(kept) if kept else None
 
 
-def _map_to_gemini_tools(
-    openai_tools: Sequence[Mapping[str, object]],
-    web_search_options: object | None,
-) -> tuple[Tools, ...] | None:
-    mapped_functions: Final = tuple(
-        VertexGeminiConfig()._map_function(  # pyright: ignore[reportPrivateUsage]  # shared chat-path tool mapper
-            value=[dict(tool) for tool in openai_tools],  # mutable-ok: _map_function mutates plain tool dicts
-            optional_params={},  # mutable-ok: _map_function writes toolConfig into it
-        )
-        if openai_tools
-        else ()
-    )
-    mapped_search: Final = (
-        (VertexGeminiConfig()._map_web_search_options({}),)  # pyright: ignore[reportPrivateUsage]  # shared chat-path web-search mapper  # mutable-ok: signature takes a dict
-        if web_search_options is not None
-        else ()
-    )
-    return _apply_mixed_tool_drop_rule(mapped_functions + mapped_search)
-
-
 def normalize_count_tokens_tools(
+    model: str,
     tools: Sequence[Mapping[str, object]] | None,
 ) -> tuple[Tools, ...] | None:
     if not tools:
         return None
-    gemini_shaped: Final = tuple(tool for tool in tools if _is_gemini_tool_shape(tool))
-    rest: Final = tuple(tool for tool in tools if not _is_gemini_tool_shape(tool))
-    mapped: Final = _map_to_gemini_tools(
-        openai_tools=tuple(_normalize_openai_tool(tool) for tool in rest if not _is_web_search_tool(tool)),
-        web_search_options=MappingProxyType({}) if any(_is_web_search_tool(tool) for tool in rest) else None,
-    )
     passthrough: Final = tuple(
         cast(Tools, tool)  # cast-ok: Gemini wire-shape tools pass through
-        for tool in gemini_shaped
+        for tool in tools
+        if _is_gemini_tool_shape(tool)
     )
-    return _apply_mixed_tool_drop_rule(passthrough + tuple(mapped or ()))
-
-
-def _merge_signature_into_parts(parts: Sequence[object]) -> Sequence[object]:
-    signature_by_text: Final = MappingProxyType(
-        {
-            part.get("text"): part.get("thoughtSignature")
-            for part in parts
-            if isinstance(part, Mapping)
-            and part.get("thoughtSignature") is not None
-            and part.get("thought") is not True
-        }
+    mapped: Final = _gemini_tools_like_chat(
+        model=model,
+        tool_params=_openai_tool_params(tuple(tool for tool in tools if not _is_gemini_tool_shape(tool))),
     )
-    if not signature_by_text:
-        return parts
-    thought_texts: Final = frozenset(
-        part.get("text") for part in parts if isinstance(part, Mapping) and part.get("thought") is True
-    )
-    return tuple(
-        (
-            {**part, "thoughtSignature": signature_by_text[part.get("text")]}  # mutable-ok: parts serialize to JSON
-            if isinstance(part, Mapping)
-            and part.get("thought") is True
-            and signature_by_text.get(part.get("text")) is not None
-            else part
-        )
-        for part in parts
-        if not (
-            isinstance(part, Mapping)
-            and part.get("thoughtSignature") is not None
-            and part.get("thought") is not True
-            and part.get("text") in thought_texts
-        )
-    )
+    return _apply_mixed_tool_drop_rule(passthrough + (mapped or ()))
 
 
-def _merge_duplicate_thought_signature_parts(contents: Sequence[ContentType]) -> tuple[ContentType, ...]:
-    return tuple(
-        cast(  # cast-ok: same ContentType shape with deduped parts
-            ContentType,
-            {  # mutable-ok: rebuilt content for the request body
-                **content,
-                "parts": _merge_signature_into_parts(content["parts"]),
-            },
-        )
-        if isinstance(content.get("parts"), list)
-        else content
-        for content in contents
-    )
-
-
-def _textify_server_side_blocks(
-    messages: Sequence[Mapping[str, object]],
-) -> tuple[Mapping[str, object], ...]:
-    def _textify(content: object) -> object:
-        if not isinstance(content, list):
-            return content
-        return [  # mutable-ok: rebuilt message content for the adapter
-            (
-                {  # mutable-ok: textified block must serialize to JSON
-                    "type": "text",
-                    "text": json.dumps(dict(block), ensure_ascii=False),  # mutable-ok: plain dict for the dump
-                }
-                if isinstance(block, Mapping) and block.get("type") in _SERVER_SIDE_PART_TYPES
-                else block
-            )
-            for block in content
-        ]
-
-    return tuple(
-        (
-            {**message, "content": _textify(message.get("content"))}  # mutable-ok: rebuilt message for the adapter
-            if isinstance(message.get("content"), list)
-            else message
-        )
-        for message in messages
-    )
-
-
-def _payload_from_openai_parts(
+def _payload_like_chat(
     model: str,
     messages: Sequence[object],
-    tools: Sequence[Mapping[str, object]],
-    web_search_options: object | None,
+    tool_params: Mapping[str, object],
 ) -> GeminiCountTokensPayload:
-    system_instruction, remaining_messages = _transform_system_message(
-        supports_system_message=litellm.supports_system_messages(model=model, custom_llm_provider="gemini"),
-        messages=cast(  # cast-ok: chat-shaped message dicts accepted by the helper
-            "list[AllMessageValues]",
-            list(messages),  # mutable-ok: helper contract takes a list
+    system_instruction, chat_messages = _transform_system_message(
+        supports_system_message=get_supports_system_message(model=model, custom_llm_provider="gemini"),
+        messages=cast(  # cast-ok: chat-shaped message dicts, copied so the converters cannot touch the caller's request
+            "list[AllMessageValues]", _json_array_copy(messages)
         ),
     )
-    contents: Final = _merge_duplicate_thought_signature_parts(
-        _gemini_convert_messages_with_history(
-            messages=remaining_messages,
-            model=model,
-            custom_llm_provider="gemini",
-        )
-    )
     return GeminiCountTokensPayload(
-        contents=contents,
+        contents=tuple(
+            _gemini_convert_messages_with_history(messages=chat_messages, model=model, custom_llm_provider="gemini")
+        ),
         system_instruction=system_instruction,
-        tools=_map_to_gemini_tools(openai_tools=tools, web_search_options=web_search_options),
+        tools=_gemini_tools_like_chat(model=model, tool_params=tool_params),
     )
-
-
-_ANTHROPIC_REQUEST: Final = TypeAdapter(AnthropicMessagesRequest)
 
 
 def _build_anthropic_payload(
@@ -327,46 +243,27 @@ def _build_anthropic_payload(
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
 ) -> GeminiCountTokensPayload | InvalidCountTokensRequest:
-    hosted_tools: Final = tuple(tool for tool in tools or () if _hosted_tool_type(tool) is not None)
-    adapter_tools: Final = tuple(tool for tool in tools or () if _hosted_tool_type(tool) is None)
-    raw_request: Final = {  # mutable-ok: request dict for the anthropic adapter
-        "model": model,
-        "messages": list(_textify_server_side_blocks(messages)),  # mutable-ok: adapter contract takes a list
-        **({"system": system} if system else {}),  # mutable-ok: optional adapter field
-        **({"tools": list(adapter_tools)} if adapter_tools else {}),  # mutable-ok: optional adapter field
-    }
-    try:
-        _ANTHROPIC_REQUEST.validate_python(raw_request)
-    except ValidationError as e:
-        return InvalidCountTokensRequest(message=str(e))
-    anthropic_request: Final = cast(  # cast-ok: validated above; pydantic returns lazy Iterable validators
-        AnthropicMessagesRequest,
-        raw_request,
+    request: Final = _json_object_copy(
+        MappingProxyType(
+            {key: value for key, value in (("model", model), ("system", system), ("tools", tools)) if value}
+        )
     )
-    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        anthropic_request, custom_llm_provider="gemini"
+    openai_request, _ = _ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
+        {  # mutable-ok: the adapter pops model and messages out of the dict it is given
+            **request,
+            "messages": sanitize_replayed_anthropic_messages(_json_array_copy(messages)),
+        },
+        custom_llm_provider="gemini",
     )
-    openai_tools: Final = openai_request.get("tools")
-    payload: Final = _payload_from_openai_parts(
+    if openai_request is None:
+        return InvalidCountTokensRequest(message="Anthropic request could not be translated for Gemini")
+    return _payload_like_chat(
         model=model,
         messages=openai_request["messages"],
-        tools=tuple(dict(tool) for tool in openai_tools)  # mutable-ok: plain dicts for the normalizer
-        if openai_tools
-        else (),
-        web_search_options=openai_request.get("web_search_options"),
-    )
-    if not hosted_tools:
-        return payload
-    hosted_tool_names: Final = frozenset(_hosted_tool_type(tool) for tool in hosted_tools)
-    hosted_tool_dicts: Final = tuple(
-        cast(Tools, {gemini_name: {}})  # cast-ok: hosted tool wire shape  # mutable-ok: hosted tool wire shape
-        for gemini_name in hosted_tool_names
-    )
-    merged_tools: Final = _apply_mixed_tool_drop_rule(tuple(payload.tools or ()) + hosted_tool_dicts)
-    return GeminiCountTokensPayload(
-        contents=payload.contents,
-        system_instruction=payload.system_instruction,
-        tools=merged_tools,
+        tool_params=_tool_params(
+            tools=openai_request.get("tools") or (),
+            web_search_options=openai_request.get("web_search_options"),
+        ),
     )
 
 
@@ -376,16 +273,12 @@ def _build_openai_payload(
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
 ) -> GeminiCountTokensPayload:
-    openai_messages: Final = (
-        [{"role": "system", "content": system}, *messages]  # mutable-ok: converter contract takes a list
-        if system is not None
-        else list(messages)  # mutable-ok: converter contract takes a list
-    )
-    return _payload_from_openai_parts(
+    return _payload_like_chat(
         model=model,
-        messages=openai_messages,
-        tools=tuple(_normalize_openai_tool(tool) for tool in tools or () if not _is_web_search_tool(tool)),
-        web_search_options=MappingProxyType({}) if any(_is_web_search_tool(tool) for tool in tools or ()) else None,
+        messages=(
+            (MappingProxyType({"role": "system", "content": system}), *messages) if system is not None else messages
+        ),
+        tool_params=_openai_tool_params(tools or ()),
     )
 
 

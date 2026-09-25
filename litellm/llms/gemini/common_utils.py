@@ -541,7 +541,9 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 )
             )
         )
-        gemini_tools: Final = payload.tools if payload is not None else normalize_count_tokens_tools(tools)
+        gemini_tools: Final = (
+            payload.tools if payload is not None else normalize_count_tokens_tools(model=model_to_use, tools=tools)
+        )
         count_tokens_params_request.update(
             model=model_to_use,
             contents=payload.contents if payload is not None else contents,

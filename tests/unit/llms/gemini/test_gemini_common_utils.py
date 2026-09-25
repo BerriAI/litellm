@@ -291,11 +291,11 @@ class TestGoogleAIStudioTokenCounter:
 
         result = await token_counter.count_tokens(
             model_to_use="gemini-2.5-flash",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[{"role": "user", "content": [{"type": "tool_result", "content": "18C"}]}],
             contents=None,
             deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://gemini.example.test"}},
             request_model="gemini/gemini-2.5-flash",
-            system={"not": "a valid system prompt"},
+            system=None,
             tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
             client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
         )
