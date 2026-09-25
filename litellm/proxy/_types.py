@@ -37,6 +37,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAdvertisedVersions,
     MCPAllowedClient,
     MCPAuth,
     MCPAuthType,
@@ -51,6 +52,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -779,6 +781,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
         "/global/spend/tags",
         "/global/spend/all_tag_names",
+        "/spend/capture_rate",
     ]
 
     public_routes = frozenset(
@@ -2948,6 +2951,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "every replica. On by default; set to tune the window, pin a job, or turn it off."
         ),
     )
+    spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(
+        None,
+        description=(
+            "Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). "
+            "Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window "
+            "falls under the threshold (default 0.9). Off unless set."
+        ),
+    )
     maximum_spend_logs_retention_period: str | None = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2987,6 +2998,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
+    )
+    mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
+        None,
+        description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
+        "Modern protocol serving and Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,

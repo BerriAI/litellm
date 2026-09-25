@@ -729,6 +729,15 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_zero_cost_requests_total"),
             )
 
+            self.litellm_spend_capture_rate = self._gauge_factory(
+                "litellm_spend_capture_rate",
+                (
+                    "Share of the provider's bill LiteLLM captured as spend over the scheduled check's window "
+                    "(captured spend / provider bill), by api_provider; NaN when the last check produced no rate"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            )
+
             # Cache metrics
             self.litellm_cache_hits_metric = self._counter_factory(
                 name="litellm_cache_hits_metric",
@@ -2028,6 +2037,15 @@ class PrometheusLogger(CustomLogger):
         )
         self.litellm_zero_cost_requests_total.labels(**labels).inc()
 
+    def set_spend_capture_rate(self, api_provider: str, capture_rate: float | None) -> None:
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            enum_values=UserAPIKeyLabelValues(api_provider=api_provider),
+        )
+        gauge: Final = self.litellm_spend_capture_rate
+        series: Final = gauge.labels(**labels) if labels else gauge
+        series.set(math.nan if capture_rate is None else capture_rate)
+
     @staticmethod
     def _get_remaining_from_v3_rate_limit_headers(
         standard_logging_payload: StandardLoggingPayload | None,
@@ -2605,6 +2623,7 @@ class PrometheusLogger(CustomLogger):
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         status_code: Final = self._extract_status_code(exception=original_exception)
 
@@ -2623,7 +2642,9 @@ class PrometheusLogger(CustomLogger):
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
-                hashed_api_key=None if status_code == 401 else user_api_key_dict.api_key,
+                hashed_api_key=None
+                if status_code == 401
+                else LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,

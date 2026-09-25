@@ -15,8 +15,8 @@ import json
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.proxy import proxy_server
-from litellm.router_utils import pattern_match_deployments
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -200,7 +200,7 @@ def test_supported_openai_params_never_runs_oauth_for_authenticating_providers(c
         raise AssertionError("get_llm_provider would run the OAuth device flow")
 
     monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
-    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _oauth_tripwire)
     expected = litellm.get_supported_openai_params(model="gpt-4o", custom_llm_provider="github_copilot")
 
     with auth_as():
