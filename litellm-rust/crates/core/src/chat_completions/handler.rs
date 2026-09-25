@@ -85,3 +85,29 @@ pub(super) async fn outbound_request(
         other => other,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, as_response_error};
+
+    #[test]
+    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
+        for original in [
+            Error::MissingField("usage"),
+            Error::Unsupported("non-text response content block"),
+            Error::InvalidRequest("whatever".to_string()),
+            Error::Auth(litellm_auth::Error::InvalidHeader),
+        ] {
+            let label = format!("{original:?}");
+            assert!(
+                matches!(as_response_error(original), Error::InvalidResponse(_)),
+                "{label} must not stay retryable once the provider has answered"
+            );
+        }
+        let upstream = Error::Transport(litellm_http::transport::Error::Http {
+            status: 500,
+            body: "boom".to_string(),
+        });
+        assert_eq!(as_response_error(upstream.clone()), upstream);
+    }
+}
