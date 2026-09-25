@@ -501,6 +501,63 @@ async def test_aimage_edit_forwards_style_to_nova_canvas_transform(monkeypatch):
     assert response.data[0].b64_json == "aGk="
 
 
+async def test_aimage_edit_image_less_condition_image_reaches_transform(monkeypatch):
+    """POST /v1/images/edits with taskType TEXT_IMAGE and conditionImage only (no
+    multipart image) must reach the conditioned edit path instead of failing before
+    dispatch (aimage_edit used to require image as a positional argument)."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    posted: dict[str, object] = {}
+
+    class _FakeAsyncClient:
+        async def post(self, url, headers, data):
+            posted["url"] = url
+            posted["body"] = json.loads(data)
+            return httpx.Response(200, json={"images": ["aGk="]}, request=httpx.Request("POST", url))
+
+    import litellm.llms.bedrock.image_edit.handler as bedrock_image_edit_handler
+
+    with patch.object(
+        bedrock_image_edit_handler,
+        "get_async_httpx_client",
+        lambda **kwargs: _FakeAsyncClient(),
+    ):
+        response = await litellm.aimage_edit(
+            model=f"bedrock/{TEST_MODEL}",
+            prompt="same layout",
+            taskType="TEXT_IMAGE",
+            conditionImage="aGVsbG8=",
+        )
+    body = posted["body"]
+    assert isinstance(body, dict)
+    assert body["taskType"] == "TEXT_IMAGE"
+    assert body["textToImageParams"]["conditionImage"] == "aGVsbG8="
+    assert response.data is not None
+    assert response.data[0].b64_json == "aGk="
+
+
+def test_aimage_edit_none_image_builds_empty_list(monkeypatch):
+    """An omitted image must arrive at the handler as [] (empty list), not [None]."""
+    import litellm.images.main as images_main
+    from unittest.mock import Mock
+
+    seen: dict[str, object] = {}
+
+    def fake_image_edit(**kwargs):
+        seen.update(kwargs)
+        return Mock()
+
+    monkeypatch.setattr(images_main, "image_edit", fake_image_edit)
+    asyncio.run(
+        images_main.aimage_edit(
+            model=f"bedrock/{TEST_MODEL}",
+            prompt="same layout",
+            taskType="TEXT_IMAGE",
+            conditionImage="aGVsbG8=",
+        )
+    )
+    assert seen["image"] == []
+
+
 #################################################
 # logging headers redaction (pre_call additional_args)
 #################################################
