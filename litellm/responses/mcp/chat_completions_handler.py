@@ -10,6 +10,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.router_utils.mcp_tool_execution import mark_mcp_tools_executed
 from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -640,7 +641,11 @@ async def acompletion_with_mcp(
     follow_up_call_args["messages"] = follow_up_messages
     follow_up_call_args["stream"] = stream
 
-    response = await litellm_acompletion(**follow_up_call_args)
+    try:
+        response = await litellm_acompletion(**follow_up_call_args)
+    except Exception as follow_up_exception:
+        mark_mcp_tools_executed(follow_up_exception)
+        raise
     if isinstance(response, (ModelResponse, CustomStreamWrapper)):
         _add_mcp_metadata_to_response(
             response=response,
