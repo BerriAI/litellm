@@ -15,12 +15,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.models.organization import LiteLLM_OrganizationTable
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 
-
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
     MCPTransport,
@@ -29,6 +33,7 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -7903,10 +7908,13 @@ class TestGetMcpToolsWireShape:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role,expected_status", [
-    (LitellmUserRoles.PROXY_ADMIN, 404),
-    (LitellmUserRoles.INTERNAL_USER, 403),
-])
+@pytest.mark.parametrize(
+    "role,expected_status",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, 404),
+        (LitellmUserRoles.INTERNAL_USER, 403),
+    ],
+)
 async def test_config_server_edit_preserves_api_contract_without_creating_rows(role, expected_status):
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
@@ -7929,9 +7937,7 @@ async def test_config_server_edit_preserves_api_contract_without_creating_rows(r
 
     assert exc.value.status_code == expected_status
     if role == LitellmUserRoles.PROXY_ADMIN:
-        assert exc.value.detail == {
-            "error": f"MCP Server not found, passed server_id={server.server_id}"
-        }
+        assert exc.value.detail == {"error": f"MCP Server not found, passed server_id={server.server_id}"}
         prisma.db.litellm_mcpservertable.update.assert_awaited_once()
     else:
         prisma.db.litellm_mcpservertable.update.assert_not_awaited()
@@ -8166,3 +8172,482 @@ class TestDuplicateIdentifierRejection:
         assert [entry.name for entry in result.skipped] == ["fresh"]
         assert "fresh" in result.skipped[0].reason
         assert result.imported == ()
+
+
+def _lit3974_prisma_client(
+    server: LiteLLM_MCPServerTable,
+    key_permission: LiteLLM_ObjectPermissionTable,
+    team: LiteLLM_TeamTable,
+    user: LiteLLM_UserTable | None = None,
+    organization: LiteLLM_OrganizationTable | None = None,
+) -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=SimpleNamespace(object_permission=key_permission)
+    )
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+    prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=server)
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=organization)
+    return prisma
+
+
+def _lit3974_cache() -> MagicMock:
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return cache
+
+
+class TestLIT3974ResolutionRegressions:
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason="LIT-3974 change A: detail authorization includes a server granted to the caller's team",
+    )
+    async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
+        server_id: Final = "lit3974-team-db"
+        team_id: Final = "lit3974-team"
+        server: Final = generate_mock_mcp_server_db_record(
+            server_id=server_id,
+            alias="Team server",
+            url="http://127.0.0.1:1/mcp",
+        )
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="lit3974-key-permission",
+            mcp_servers=[],
+        )
+        team: Final = LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974-team-permission",
+                mcp_servers=[server_id],
+            ),
+        )
+        prisma: Final = _lit3974_prisma_client(server, key_permission, team)
+        manager: Final = MCPServerManager()
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974-key",
+            user_id="lit3974-user",
+            team_id=team_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=key_permission,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == server_id, "team-granted DB server detail must resolve for the team's key"
+        assert result.alias == "Team server", "detail must identify the granted DB server"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "case_name,key_server_ids,team_server_ids,org_server_ids",
+        [
+            ("key-team-intersection", ["lit3974-target"], ["lit3974-other"], None),
+            ("key-opt-out", ["no-mcp-servers", "lit3974-target"], ["lit3974-target"], None),
+            ("org-ceiling", ["lit3974-target"], ["lit3974-target"], ["lit3974-other"]),
+        ],
+    )
+    @pytest.mark.xfail(
+        strict=True,
+        reason="LIT-3974 change A: detail authorization enforces key, team, and organization ceilings",
+    )
+    async def test_database_server_detail_obeys_authz_intersection(
+        self,
+        case_name: str,
+        key_server_ids: list[str],
+        team_server_ids: list[str],
+        org_server_ids: list[str] | None,
+    ) -> None:
+        server_id: Final = "lit3974-target"
+        team_id: Final = "lit3974-team"
+        organization_id: Final = "lit3974-organization" if org_server_ids is not None else None
+        server: Final = generate_mock_mcp_server_db_record(
+            server_id=server_id,
+            alias="Target server",
+            url="http://127.0.0.1:1/mcp",
+        )
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"lit3974-key-permission-{case_name}",
+            mcp_servers=key_server_ids,
+        )
+        team: Final = LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"lit3974-team-permission-{case_name}",
+                mcp_servers=team_server_ids,
+            ),
+            organization_id=organization_id,
+        )
+        organization: Final = (
+            LiteLLM_OrganizationTable(
+                organization_id=organization_id,
+                organization_alias="LIT-3974",
+                budget_id="lit3974-budget",
+                created_by="lit3974-test",
+                updated_by="lit3974-test",
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id=f"lit3974-org-permission-{case_name}",
+                    mcp_servers=org_server_ids,
+                ),
+            )
+            if org_server_ids is not None
+            else None
+        )
+        prisma: Final = _lit3974_prisma_client(server, key_permission, team, organization=organization)
+        manager: Final = MCPServerManager()
+        health_check: Final = AsyncMock()
+        add_server: Final = AsyncMock()
+        auth: Final = UserAPIKeyAuth(
+            api_key=f"lit3974-key-{case_name}",
+            user_id="lit3974-user",
+            team_id=team_id,
+            org_id=organization_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=key_permission,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+            patch.object(manager, "health_check_server", health_check),
+            patch.object(manager, "add_server", add_server),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.fetch_mcp_server(
+                    request=_make_mock_request(),
+                    server_id=server_id,
+                    user_api_key_dict=auth,
+                )
+
+        assert exc_info.value.status_code == 403, f"{case_name}: narrowed detail access must return 403"
+        assert exc_info.value.detail == {
+            "error": (
+                f"User does not have permission to view mcp server with id {server_id}. "
+                "You can only view mcp servers that you have access to."
+            )
+        }, f"{case_name}: authorization denial body"
+        add_server.assert_not_awaited()
+        health_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason="LIT-3974 change A: dashboard detail authorization resolves team grants for config servers",
+    )
+    async def test_ui_session_team_grant_resolves_config_server_detail(self) -> None:
+        server_id: Final = "lit3974-config-server"
+        team_id: Final = "lit3974-ui-team"
+        user_id: Final = "lit3974-ui-user"
+        server: Final = generate_mock_mcp_server_db_record(server_id=server_id)
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="lit3974-ui-key-permission",
+            mcp_servers=[],
+        )
+        team: Final = LiteLLM_TeamTable(
+            team_id=team_id,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974-ui-team-permission",
+                mcp_servers=[server_id],
+            ),
+        )
+        user: Final = LiteLLM_UserTable(
+            user_id=user_id,
+            teams=[team_id],
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        prisma: Final = _lit3974_prisma_client(server, key_permission, team, user=user)
+        manager: Final = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "config-server": {
+                    "server_id": server_id,
+                    "alias": "Config server",
+                    "url": "https://config.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                    "authorization_url": "https://oauth.example.com/authorize",
+                    "token_url": "https://oauth.example.com/token",
+                }
+            }
+        )
+        auth: Final = UserAPIKeyAuth(
+            user_id=user_id,
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=server_id,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == server_id, "UI session team grant must resolve the config server"
+        assert result.alias == "Config server", "config detail must retain its display alias"
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason="LIT-3974 change B: creation rejects an identifier already owned by a config server",
+    )
+    async def test_create_rejects_config_server_identifier_collision(self) -> None:
+        server_id: Final = "lit3974-config-collision"
+        prisma: Final = _lit3974_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=server_id),
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974-key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974-team"),
+        )
+        manager: Final = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "config-server": {
+                    "server_id": server_id,
+                    "url": "http://127.0.0.1:1/mcp",
+                    "transport": "http",
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                    "authorization_url": "https://oauth.example.com/authorize",
+                    "token_url": "https://oauth.example.com/token",
+                }
+            }
+        )
+        payload: Final = NewMCPServerRequest(
+            server_id=server_id,
+            alias="duplicate",
+            url="https://new.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        created: Final = generate_mock_mcp_server_db_record(server_id=server_id, alias="duplicate")
+        create_server: Final = AsyncMock(return_value=created)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free",
+                create_server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.add_mcp_server(
+                    payload=payload,
+                    user_api_key_dict=generate_mock_user_api_key_auth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        user_id="lit3974-admin",
+                    ),
+                )
+
+        assert exc_info.value.status_code == 400, "config-server identifier collision must be a client error"
+        assert exc_info.value.detail == {
+            "error": f"MCP Server with id {server_id} already exists. Cannot create another."
+        }, "config-server collision response body"
+        create_server.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason="LIT-3974 change C: credential listing resolves config-server display name and alias",
+    )
+    async def test_user_credential_list_includes_config_server_display_fields(self) -> None:
+        server_id: Final = "lit3974-config-credential"
+        prisma: Final = _lit3974_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=server_id),
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974-key", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974-team"),
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        manager: Final = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "config-server": {
+                    "server_id": server_id,
+                    "alias": "Credential display name",
+                    "url": "https://config.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                    "authorization_url": "https://oauth.example.com/authorize",
+                    "token_url": "https://oauth.example.com/token",
+                }
+            }
+        )
+        credential: Final = {
+            "server_id": server_id,
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "connected_at": "2026-01-01T00:00:00+00:00",
+        }
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.list_user_oauth_credentials",
+                AsyncMock(return_value=[credential]),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            result: Final = await mgmt_endpoints.list_mcp_user_credentials(
+                user_api_key_dict=_make_user_auth("lit3974-credential-user"),
+            )
+
+        assert [item.model_dump() for item in result] == [
+            {
+                "server_id": server_id,
+                "server_name": "config-server",
+                "alias": "Credential display name",
+                "credential_type": "oauth2",
+                "has_credential": True,
+                "expires_at": "2099-01-01T00:00:00+00:00",
+                "connected_at": "2026-01-01T00:00:00+00:00",
+            }
+        ], "config credential list entry must include complete display metadata"
+
+    @pytest.mark.asyncio
+    async def test_alias_lookup_authorizes_the_resolved_canonical_server_id(self) -> None:
+        allowed_id: Final = "lit3974-allowed-config"
+        denied_id: Final = "lit3974-denied-config"
+        prisma: Final = _lit3974_prisma_client(
+            generate_mock_mcp_server_db_record(server_id=denied_id),
+            LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974-alias-permission",
+                mcp_servers=[allowed_id],
+            ),
+            LiteLLM_TeamTable(team_id="lit3974-alias-team"),
+        )
+        manager: Final = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "allowed_server": {
+                    "server_id": allowed_id,
+                    "alias": "allowed_alias",
+                    "url": "https://allowed.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                    "authorization_url": "https://oauth.example.com/authorize",
+                    "token_url": "https://oauth.example.com/token",
+                },
+                "denied_server": {
+                    "server_id": denied_id,
+                    "alias": "denied_alias",
+                    "url": "https://denied.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                    "authorization_url": "https://oauth.example.com/authorize",
+                    "token_url": "https://oauth.example.com/token",
+                },
+            }
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974-alias-key",
+            user_id="lit3974-alias-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974-alias-permission",
+                mcp_servers=[allowed_id],
+            ),
+        )
+        add_server: Final = AsyncMock()
+        health_check: Final = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+            patch.object(manager, "add_server", add_server),
+            patch.object(manager, "health_check_server", health_check),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mgmt_endpoints.fetch_mcp_server(
+                    request=_make_mock_request(),
+                    server_id="denied_alias",
+                    user_api_key_dict=auth,
+                )
+
+        assert exc_info.value.status_code == 403, "alias resolution must not widen canonical-id authorization"
+        assert exc_info.value.detail == {
+            "error": (
+                "User does not have permission to view mcp server with id denied_alias. "
+                "You can only view mcp servers that you have access to."
+            )
+        }, "alias denial response body"
+        add_server.assert_not_awaited()
+        health_check.assert_not_awaited()
