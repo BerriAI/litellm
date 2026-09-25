@@ -4942,3 +4942,40 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+def test_custom_stream_wrapper_carries_service_tier(logging_obj: Logging) -> None:
+    content_chunk: Final = ModelResponseStream(
+        id="chatcmpl-tier",
+        model="databricks/test-endpoint",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    setattr(content_chunk, "service_tier", "priority")
+    usage_chunk: Final = ModelResponseStream(
+        id="chatcmpl-tier",
+        model="databricks/test-endpoint",
+        object="chat.completion.chunk",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    setattr(usage_chunk, "service_tier", "priority")
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[content_chunk, usage_chunk]),
+        model="databricks/test-endpoint",
+        custom_llm_provider="databricks",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    emitted: Final = list(wrapper)
+    emitted_tiers: Final = [getattr(chunk, "service_tier", None) for chunk in emitted]
+
+    assert emitted_tiers == ["priority"] * len(emitted_tiers)
+    assert any(getattr(chunk, "usage", None) is not None for chunk in emitted)

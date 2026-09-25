@@ -1795,3 +1795,29 @@ def test_calculate_usage_keeps_a_reported_count_over_a_later_chunks_zero() -> No
     )
 
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (5, 17, 22)
+
+
+def test_stream_chunk_builder_carries_terminal_chunk_service_tier() -> None:
+    chunks: Final = [
+        ModelResponseStream(
+            model="databricks/offline-tier-test",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "OK"},
+                    "finish_reason": "stop",
+                },
+            ],
+        ),
+        ModelResponseStream(
+            model="databricks/offline-tier-test",
+            choices=[],
+            service_tier="default",
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks)
+
+    assert response is not None
+    assert getattr(response, "service_tier", None) == "default"

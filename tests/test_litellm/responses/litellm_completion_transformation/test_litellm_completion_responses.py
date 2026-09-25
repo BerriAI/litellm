@@ -5172,3 +5172,33 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+def test_transform_request_reads_service_tier_from_responses_api_request() -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="databricks/offline-tier-test",
+        input="hello",
+        responses_api_request={"service_tier": "priority"},
+        custom_llm_provider="databricks",
+    )
+
+    assert result["service_tier"] == "priority"
+
+
+def test_transform_response_carries_returned_service_tier() -> None:
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    chat_completion_response: Final = ModelResponse(
+        id="chatcmpl-tier",
+        model="databricks/offline-tier-test",
+        choices=[Choices(message=Message(content="hello", role="assistant"), finish_reason="stop", index=0)],
+    )
+    setattr(chat_completion_response, "service_tier", "default")
+
+    result: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hello",
+        responses_api_request={"service_tier": "priority"},
+        chat_completion_response=chat_completion_response,
+    )
+
+    assert getattr(result, "service_tier", None) == "default"

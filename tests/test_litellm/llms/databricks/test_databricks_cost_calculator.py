@@ -229,3 +229,26 @@ def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: No
 
     for field in PRICE_FIELDS:
         assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
+
+
+def test_service_tier_selects_tiered_pricing(local_model_cost_map: None) -> None:
+    model: Final = "databricks/offline-service-tier-test"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "databricks",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "input_cost_per_token_priority": 2e-6,
+                "output_cost_per_token_priority": 4e-6,
+            },
+        },
+    )
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    standard: Final = cost_per_token(model=model, usage=usage)
+    priority: Final = cost_per_token(model=model, usage=usage, service_tier="priority")
+
+    assert priority[0] == pytest.approx(standard[0] * 2)
+    assert priority[1] == pytest.approx(standard[1] * 2)
