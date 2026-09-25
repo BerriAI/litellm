@@ -1,6 +1,6 @@
 //! The CPython runtime adapter: value marshalling, interpreter detachment, the tokio and
 //! asyncio glue, and the driver that runs a native [`Machine`](litellm_host::machine::Machine)
-//! against a Python route host and a Python lifecycle. Everything here is Python-specific by
+//! against a Python protocol host and a Python lifecycle. Everything here is Python-specific by
 //! construction; another host language gets its own crate of the same shape.
 
 mod adapter;
@@ -8,13 +8,14 @@ mod argument;
 mod callable;
 mod driver;
 mod execution;
+mod file_reader;
 mod fork_gate;
 mod gil;
 mod handle;
 mod marshal;
 
 pub use adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, ProtocolHost, PythonLifecycle, missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;
@@ -24,6 +25,7 @@ pub use execution::{
     reserve_process_for_forking, run_async, run_async_value, run_sync, run_sync_value,
     runtime_started,
 };
+pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};

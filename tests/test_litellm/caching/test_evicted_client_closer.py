@@ -10,9 +10,11 @@ never closed, because litellm does not own its lifecycle.
 import asyncio
 import gc
 import weakref
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from redis.asyncio import ConnectionPool, Redis
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -70,6 +72,33 @@ class CountingDeadline(float):
 
 def make_closer(clock: FakeClock, grace_seconds: float = 60.0) -> EvictedClientCloser:
     return EvictedClientCloser(grace_seconds=grace_seconds, clock=clock)
+
+
+@pytest.mark.asyncio
+async def test_redis_client_is_closed_only_after_its_subscription_releases_the_connection():
+    closer = EvictedClientCloser(grace_seconds=0)
+    pool = ConnectionPool()
+    client = Redis.from_pool(pool)
+    closed = asyncio.Event()
+    connection = AsyncMock()
+    connection.disconnect.side_effect = closed.set
+    pool._available_connections.append(connection)
+    borrowed = pool.get_available_connection()
+    closer.mark_owned(client)
+    closer.schedule(client)
+
+    closer.reap()
+    await asyncio.sleep(0.05)
+
+    connection.disconnect.assert_not_awaited()
+    assert closer.pending_count == 1
+
+    await pool.release(borrowed)
+    closer.reap()
+    await asyncio.wait_for(closed.wait(), timeout=1)
+
+    connection.disconnect.assert_awaited_once()
+    assert closer.pending_count == 0
 
 
 async def _trickling_upstream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

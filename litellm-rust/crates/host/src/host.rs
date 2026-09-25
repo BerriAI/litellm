@@ -1,28 +1,27 @@
 use std::future::Future;
 
-use crate::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
-use crate::route::Route;
+pub use litellm_coroutine::{Abandoned, Answer, Reply, reply};
 
-/// One suspension point of a native call, performed by the host.
-pub enum HostOp<R: Route> {
-    Route(R::Op),
+use crate::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
+use crate::protocol::Protocol;
+
+/// One suspension point of a native call, performed by the host and answered through the
+/// [`Reply`] it carries.
+pub enum HostOp<R: Protocol> {
+    /// The first op of every call: the caller's request as the host projects it.
+    Project(Reply<R::Projection>),
+    Custom(R::Op),
     BeforeSend {
         wire: Box<WireRequest>,
         context: Box<RequestContext>,
+        reply: Reply<WireRequest>,
     },
-    Emit(MachineEvent),
+    Emit(MachineEvent, Reply<()>),
     /// The response streams: the host hands the caller a stream and answers once the
     /// caller asks for the first chunk or goes away.
-    Open(R::StreamHead),
+    Open(R::StreamHead, Reply<Demand>),
     /// The next chunk of an open stream, answered once the caller asks for the one after.
-    Deliver(R::Chunk),
-}
-
-pub enum HostResult<R: Route> {
-    Route(R::OpResult),
-    BeforeSend(Box<WireRequest>),
-    Emitted,
-    Demand(Demand),
+    Deliver(R::Chunk, Reply<Demand>),
 }
 
 /// Whether the caller of a streamed call still reads it.
@@ -39,10 +38,13 @@ pub enum HostStep<V, S> {
     Suspend(S),
 }
 
-/// An in-process host: answers route operations and observes the call without leaving
+/// An in-process host: answers custom operations and observes the call without leaving
 /// the Rust runtime. Language hosts implement their own driver instead.
-pub trait Host<R: Route>: Send + Sync {
-    fn route(&self, op: R::Op) -> impl Future<Output = Result<R::OpResult, R::Error>> + Send;
+pub trait Host<R: Protocol>: Send + Sync {
+    fn project(&self) -> impl Future<Output = Result<R::Projection, R::Error>> + Send;
+
+    /// Answers `op` through its reply, or fails the call.
+    fn custom_op(&self, op: R::Op) -> impl Future<Output = Result<(), R::Error>> + Send;
 
     fn before_send(
         &self,
