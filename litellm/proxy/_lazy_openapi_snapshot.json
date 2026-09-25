@@ -2091,79 +2091,6 @@
           "title": "APIKeySecurityScheme",
           "type": "object"
         },
-        "AgentBudgetConfig": {
-          "additionalProperties": false,
-          "properties": {
-            "budget_duration": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Budget Duration"
-            },
-            "max_budget": {
-              "minimum": 0.0,
-              "title": "Max Budget",
-              "type": "number"
-            }
-          },
-          "required": [
-            "max_budget"
-          ],
-          "title": "AgentBudgetConfig",
-          "type": "object"
-        },
-        "AgentBudgetState": {
-          "properties": {
-            "budget_duration": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Budget Duration"
-            },
-            "budget_id": {
-              "title": "Budget Id",
-              "type": "string"
-            },
-            "budget_reset_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Budget Reset At"
-            },
-            "max_budget": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Max Budget"
-            }
-          },
-          "required": [
-            "budget_id"
-          ],
-          "title": "AgentBudgetState",
-          "type": "object"
-        },
         "AgentCapabilities": {
           "description": "Defines optional capabilities supported by an agent.",
           "properties": {
@@ -2450,16 +2377,6 @@
             "agent_name": {
               "title": "Agent Name",
               "type": "string"
-            },
-            "budget": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/AgentBudgetConfig"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "enabled": {
               "title": "Enabled",
@@ -3139,17 +3056,6 @@
               "title": "Agent Name",
               "type": "string"
             },
-            "budget_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Budget Id"
-            },
             "created_at": {
               "anyOf": [
                 {
@@ -3240,16 +3146,6 @@
               "anyOf": [
                 {
                   "$ref": "#/components/schemas/AgentKillSwitchConfig"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "litellm_budget_table": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/AgentBudgetState"
                 },
                 {
                   "type": "null"
@@ -4137,16 +4033,6 @@
             "agent_name": {
               "title": "Agent Name",
               "type": "string"
-            },
-            "budget": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/AgentBudgetConfig"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "enabled": {
               "title": "Enabled",

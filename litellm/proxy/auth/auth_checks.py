@@ -1084,10 +1084,6 @@ async def common_checks(
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
         )
 
-    if valid_token is not None:
-        from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
-
-        await check_agent_budget(valid_token)
     await _check_agent_access_group_model_access(model=_model, valid_token=valid_token, llm_router=llm_router)
     await _check_agent_caller_model_access(
         model=_model,

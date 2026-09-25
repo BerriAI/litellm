@@ -36,7 +36,6 @@ model LiteLLM_BudgetTable {
   model_access_groups LiteLLM_ModelAccessGroupBudgetTable[] // multiple model access groups can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
-  agents LiteLLM_AgentsTable[]
 }
 
 // Models on proxy
@@ -84,8 +83,6 @@ model LiteLLM_AgentsTable {
   execution_mode String @default("autonomous")
   identity LiteLLM_AgentIdentity?
   retired_identities LiteLLM_RetiredAgentIdentity[]
-  budget_id String? @unique
-  litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
   tpm_limit  Int?
   rpm_limit  Int?
   session_tpm_limit Int?

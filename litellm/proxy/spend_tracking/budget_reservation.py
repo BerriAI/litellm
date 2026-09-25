@@ -67,7 +67,6 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
     "Project": Litellm_EntityType.PROJECT.value,
-    "Agent": Litellm_EntityType.AGENT.value,
 }
 
 
@@ -266,8 +265,7 @@ async def reserve_budget_for_request(
         return None
     if _is_unbilled_route(route):
         return None
-    invocation_cost: Final = valid_token.agent_invocation_cost
-    if invocation_cost is None and get_model_from_request(request_body, route, llm_router=llm_router) is None:
+    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
 
     counters: Final = await _get_budget_counters(
@@ -285,27 +283,19 @@ async def reserve_budget_for_request(
     if not counters:
         return None
 
-    input_token_counts: Final = (
-        await count_request_input_tokens(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            raw_body=raw_body,
-        )
-        if invocation_cost is None
-        else MappingProxyType({})
+    input_token_counts: Final = await count_request_input_tokens(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        raw_body=raw_body,
     )
 
     current_spend_by_counter_key: Final[dict[str, float]] = {}
-    reservation_cost = (
-        invocation_cost
-        if invocation_cost is not None
-        else estimate_request_max_cost(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-        )
+    reservation_cost = estimate_request_max_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        input_token_counts=input_token_counts,
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -356,7 +346,7 @@ async def reserve_budget_for_request(
                         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
                     )
                     continue
-    except (asyncio.CancelledError, Exception):
+    except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,
             default_reserved_cost=reservation_cost,
@@ -366,15 +356,11 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
-    input_cost: Final = (
-        invocation_cost
-        if invocation_cost is not None
-        else estimate_request_input_cost(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-        )
+    input_cost: Final = estimate_request_input_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        input_token_counts=input_token_counts,
     )
     budget_reservation: Final = {
         "reserved_cost": reservation_cost,
@@ -514,23 +500,7 @@ async def _get_budget_counters(
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
-    agent: Final = valid_token.billing_agent_policy
-    counters: Final[list[_BudgetCounter]] = (
-        [
-            _BudgetCounter(
-                counter_key=f"spend:agent:{agent.agent_id}",
-                source_cache_key=None,
-                max_budget=agent.litellm_budget_table.max_budget,
-                fallback_spend=agent.spend or 0.0,
-                entity_type="Agent",
-                entity_id=agent.agent_id,
-            )
-        ]
-        if agent is not None
-        and agent.litellm_budget_table is not None
-        and agent.litellm_budget_table.max_budget is not None
-        else []
-    )
+    counters: Final[list[_BudgetCounter]] = []
 
     if valid_token.token is not None:
         if valid_token.max_budget is not None and valid_token.max_budget > 0:

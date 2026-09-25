@@ -76,7 +76,6 @@ class AgentIdentityStore:
             include: Final[LiteLLM_AgentsTableInclude] = {
                 "identity": True,
                 "object_permission": True,
-                "litellm_budget_table": True,
             }
             row: Final = await self.agents.table.find_unique(where=where, include=include)
             if row is None:

@@ -765,7 +765,7 @@ async def update_agent(
     try:
         # Check if agent exists
         existing_agent = await agents_table(prisma_client).find_unique(
-            where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
+            where={"agent_id": agent_id}, include={"identity": True}
         )
         if existing_agent is not None:
             existing_agent = existing_agent.model_dump()
@@ -872,7 +872,7 @@ async def patch_agent(
     try:
         # Check if agent exists
         existing_agent = await agents_table(prisma_client).find_unique(
-            where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
+            where={"agent_id": agent_id}, include={"identity": True}
         )
         if existing_agent is not None:
             existing_agent = existing_agent.model_dump()
@@ -964,7 +964,7 @@ async def delete_agent(
     try:
         # Check if agent exists
         existing_agent = await agents_table(prisma_client).find_unique(
-            where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
+            where={"agent_id": agent_id}, include={"identity": True}
         )
         if existing_agent is not None:
             existing_agent = dict[str, object](existing_agent)
