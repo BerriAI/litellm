@@ -297,3 +297,187 @@ def test_search_request_logs_effective_query_when_extra_body_overrides_query():
 
     assert body["query"] == "from-extra-body"
     assert log.model_call_details["query"] == "from-extra-body"
+
+
+_CHUNK_NAME = (
+    "projects/p/locations/global/collections/default_collection/dataStores/ds-1/"
+    "branches/0/documents/policy/chunks/c3"
+)
+
+
+def _search_response(payload):
+    return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_response(
+        response=SimpleNamespace(json=lambda: payload, status_code=200, headers={}),
+        litellm_logging_obj=SimpleNamespace(model_call_details={"query": "hello"}),
+    )
+
+
+def test_chunk_hit_uses_chunk_content_and_document_metadata():
+    payload = {
+        "results": [
+            {
+                "chunk": {
+                    "id": "c3",
+                    "name": _CHUNK_NAME,
+                    "content": "Refunds are available within 14 days.",
+                    "documentMetadata": {
+                        "uri": "gs://bucket/policy.pdf",
+                        "title": "Refund policy",
+                        "structData": {"department": "billing"},
+                    },
+                    "pageSpan": {"pageStart": 2, "pageEnd": 2},
+                    "relevanceScore": 0.91,
+                }
+            }
+        ]
+    }
+
+    result = _search_response(payload)["data"][0]
+
+    assert result["content"] == [
+        {"text": "Refunds are available within 14 days.", "type": "text"}
+    ]
+    assert result["score"] == 1.0
+    assert result["file_id"] == "gs://bucket/policy.pdf"
+    assert result["filename"] == "Refund policy"
+    assert result["attributes"] == {
+        "document_id": "policy",
+        "chunk_id": "c3",
+        "link": "gs://bucket/policy.pdf",
+        "title": "Refund policy",
+        "structData": {"department": "billing"},
+        "pageSpan": {"pageStart": 2, "pageEnd": 2},
+    }
+
+
+def test_chunk_hit_without_uri_or_title_falls_back_to_document_id():
+    payload = {
+        "results": [
+            {
+                "chunk": {
+                    "id": "c1",
+                    "name": _CHUNK_NAME.replace("policy/chunks/c3", "handbook/chunks/c1"),
+                    "content": "Guest Services Handbook",
+                    "documentMetadata": {"structData": {"title": "Handbook"}},
+                }
+            }
+        ]
+    }
+
+    result = _search_response(payload)["data"][0]
+
+    assert result["content"] == [{"text": "Guest Services Handbook", "type": "text"}]
+    assert result["file_id"] == "handbook"
+    assert result["filename"] == "Unknown Document"
+    assert result["attributes"] == {
+        "document_id": "handbook",
+        "chunk_id": "c1",
+        "structData": {"title": "Handbook"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("derived", "expected_text"),
+    [
+        (
+            {
+                "extractive_segments": [{"content": "seg one"}, {"content": "seg two"}],
+                "extractive_answers": [{"content": "ans"}],
+                "snippets": [{"snippet": "snip"}],
+                "title": "policy.pdf",
+            },
+            "seg one\n\nseg two",
+        ),
+        (
+            {
+                "extractive_answers": [{"content": "ans one"}, {"content": "ans two"}],
+                "snippets": [{"snippet": "snip"}],
+                "title": "policy.pdf",
+            },
+            "ans one\n\nans two",
+        ),
+        (
+            {
+                "snippets": [{"snippet": "snip a"}, {"htmlSnippet": "snip b"}],
+                "title": "policy.pdf",
+            },
+            "snip a snip b",
+        ),
+        (
+            {"extractive_segments": [{"pageNumber": "1"}, {"content": "seg", "pageNumber": "2"}]},
+            "seg",
+        ),
+        ({"title": "policy.pdf"}, "policy.pdf"),
+    ],
+    ids=["segments", "answers", "snippets", "content_less_segment", "title"],
+)
+def test_document_hit_text_prefers_extractive_content(derived, expected_text):
+    payload = {"results": [{"id": "doc-1", "document": {"derivedStructData": derived}}]}
+
+    result = _search_response(payload)["data"][0]
+
+    assert result["content"] == [{"text": expected_text, "type": "text"}]
+
+
+def test_document_hit_surfaces_struct_data_in_attributes():
+    payload = {
+        "results": [
+            {
+                "id": "attr-1",
+                "document": {
+                    "structData": {"title": "Thunder Loop", "waitMinutes": 45},
+                    "derivedStructData": {"clearbox_escorer_score": 0.5},
+                },
+            },
+            {"id": "attr-2", "document": {"structData": {}, "derivedStructData": {}}},
+        ]
+    }
+
+    first, second = _search_response(payload)["data"]
+
+    assert first["content"] == [{"text": "", "type": "text"}]
+    assert first["file_id"] == "attr-1"
+    assert first["filename"] == "Unknown Document"
+    assert first["attributes"] == {
+        "document_id": "attr-1",
+        "structData": {"title": "Thunder Loop", "waitMinutes": 45},
+    }
+    assert second["attributes"] == {"document_id": "attr-2"}
+
+
+def test_search_response_keeps_link_metadata_and_positional_scores():
+    payload = {
+        "results": [
+            {
+                "id": "doc-1",
+                "document": {
+                    "derivedStructData": {
+                        "title": "Terms",
+                        "link": "gs://bucket/terms.pdf",
+                        "displayLink": "bucket",
+                        "formattedUrl": "https://bucket/terms.pdf",
+                        "snippets": [{"snippet": "snip"}],
+                    }
+                },
+            },
+            {"chunk": {"name": _CHUNK_NAME, "content": "chunk text"}},
+        ]
+    }
+
+    response = _search_response(payload)
+
+    assert response["object"] == "vector_store.search_results.page"
+    assert response["search_query"] == "hello"
+    assert [result["score"] for result in response["data"]] == [1.0, 0.5]
+    assert response["data"][0]["file_id"] == "gs://bucket/terms.pdf"
+    assert response["data"][0]["attributes"] == {
+        "document_id": "doc-1",
+        "link": "gs://bucket/terms.pdf",
+        "title": "Terms",
+        "displayLink": "bucket",
+        "formattedUrl": "https://bucket/terms.pdf",
+    }
+
+
+def test_search_response_without_results_key_is_empty():
+    assert _search_response({"totalSize": 0})["data"] == []

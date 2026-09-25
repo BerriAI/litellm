@@ -1,4 +1,5 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
@@ -57,23 +58,57 @@ class VertexSearchSnippet(TypedDict, total=False):
     htmlSnippet: ReadOnly[str]
 
 
+class VertexSearchExtractiveContent(TypedDict, total=False):
+    """One ``extractive_answers`` or ``extractive_segments`` entry (opt-in via ``extractiveContentSpec``)."""
+
+    content: ReadOnly[str]
+    pageNumber: ReadOnly[str]
+
+
 class VertexSearchDerivedStructData(TypedDict, total=False):
-    """The ``derivedStructData`` blob Discovery Engine attaches to each search hit."""
+    """The ``derivedStructData`` blob Discovery Engine attaches to each document hit."""
 
     title: ReadOnly[str]
     link: ReadOnly[str]
     displayLink: ReadOnly[str]
     formattedUrl: ReadOnly[str]
     snippets: ReadOnly[list[VertexSearchSnippet]]
+    extractive_answers: ReadOnly[list[VertexSearchExtractiveContent]]
+    extractive_segments: ReadOnly[list[VertexSearchExtractiveContent]]
 
 
 class VertexSearchDocument(TypedDict, total=False):
+    id: ReadOnly[str]
+    structData: ReadOnly[Mapping[str, object]]
     derivedStructData: ReadOnly[VertexSearchDerivedStructData]
+
+
+class VertexSearchChunkDocumentMetadata(TypedDict, total=False):
+    uri: ReadOnly[str]
+    title: ReadOnly[str]
+    structData: ReadOnly[Mapping[str, object]]
+
+
+class VertexSearchChunkPageSpan(TypedDict, total=False):
+    pageStart: ReadOnly[int]
+    pageEnd: ReadOnly[int]
+
+
+class VertexSearchChunk(TypedDict, total=False):
+    """A hit when ``searchResultMode`` is ``CHUNKS``; such hits carry no ``document`` and no top-level ``id``."""
+
+    id: ReadOnly[str]
+    name: ReadOnly[str]
+    content: ReadOnly[str]
+    documentMetadata: ReadOnly[VertexSearchChunkDocumentMetadata]
+    pageSpan: ReadOnly[VertexSearchChunkPageSpan]
+    relevanceScore: ReadOnly[float]
 
 
 class VertexSearchHit(TypedDict, total=False):
     id: ReadOnly[str]
     document: ReadOnly[VertexSearchDocument]
+    chunk: ReadOnly[VertexSearchChunk]
 
 
 class VertexSearchApiResponse(TypedDict, total=False):
@@ -96,6 +131,97 @@ class _VertexSearchApiSource(Protocol):
 
 def _vertex_search_payload(response: _VertexSearchApiSource) -> VertexSearchApiResponse:
     return response.json()
+
+
+_UNKNOWN_DOCUMENT: Final = "Unknown Document"
+_EMPTY_DOCUMENT: Final[VertexSearchDocument] = {}
+_EMPTY_DERIVED_STRUCT_DATA: Final[VertexSearchDerivedStructData] = {}
+_EMPTY_CHUNK_DOCUMENT_METADATA: Final[VertexSearchChunkDocumentMetadata] = {}
+
+
+def _joined_content(entries: Sequence[VertexSearchExtractiveContent]) -> str:
+    return "\n\n".join(content for entry in entries if (content := entry.get("content")))
+
+
+def _snippet_text(snippets: Sequence[VertexSearchSnippet]) -> str:
+    return " ".join(snippet.get("snippet", snippet.get("htmlSnippet", "")) for snippet in snippets)
+
+
+def _document_text(derived: VertexSearchDerivedStructData) -> str:
+    candidates: Final = (
+        _joined_content(derived.get("extractive_segments", ())),
+        _joined_content(derived.get("extractive_answers", ())),
+        _snippet_text(derived.get("snippets", ())),
+        derived.get("title", ""),
+    )
+    return next((text for text in candidates if text), "")
+
+
+def _document_id_from_chunk_name(name: str) -> str:
+    return name.partition("/documents/")[2].partition("/")[0]
+
+
+def _non_empty_attributes(pairs: Iterable[tuple[str, object]]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in pairs if value})
+
+
+def _chunk_result(chunk: VertexSearchChunk, score: float) -> VectorStoreSearchResult:
+    metadata: Final = chunk.get("documentMetadata", _EMPTY_CHUNK_DOCUMENT_METADATA)
+    uri: Final = metadata.get("uri", "")
+    title: Final = metadata.get("title", "")
+    document_id: Final = _document_id_from_chunk_name(chunk.get("name", ""))
+    return VectorStoreSearchResult(
+        score=score,
+        content=[VectorStoreResultContent(text=chunk.get("content", ""), type="text")],
+        file_id=uri or document_id,
+        filename=title or _UNKNOWN_DOCUMENT,
+        attributes={
+            "document_id": document_id,
+            **_non_empty_attributes(
+                (
+                    ("chunk_id", chunk.get("id", "")),
+                    ("link", uri),
+                    ("title", title),
+                    ("structData", metadata.get("structData")),
+                    ("pageSpan", chunk.get("pageSpan")),
+                )
+            ),
+        },
+    )
+
+
+def _document_result(hit: VertexSearchHit, score: float) -> VectorStoreSearchResult:
+    document: Final = hit.get("document", _EMPTY_DOCUMENT)
+    derived: Final = document.get("derivedStructData", _EMPTY_DERIVED_STRUCT_DATA)
+    link: Final = derived.get("link", "")
+    title: Final = derived.get("title", "")
+    document_id: Final = hit.get("id", "")
+    return VectorStoreSearchResult(
+        score=score,
+        content=[VectorStoreResultContent(text=_document_text(derived), type="text")],
+        file_id=link or document_id,
+        filename=title or _UNKNOWN_DOCUMENT,
+        attributes={
+            "document_id": document_id,
+            **_non_empty_attributes(
+                (
+                    ("link", link),
+                    ("title", title),
+                    ("displayLink", derived.get("displayLink", "")),
+                    ("formattedUrl", derived.get("formattedUrl", "")),
+                    ("structData", document.get("structData")),
+                )
+            ),
+        },
+    )
+
+
+def _search_result(hit: VertexSearchHit, position: int) -> VectorStoreSearchResult:
+    score: Final = 1.0 / (position + 1)
+    chunk: Final = hit.get("chunk")
+    if chunk is not None:
+        return _chunk_result(chunk, score)
+    return _document_result(hit, score)
 
 
 class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
@@ -285,98 +411,19 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         """
-        Transform Vertex AI Search API response to standard vector store search response
+        Transform a Discovery Engine ``:search`` response into the standard vector store search response.
 
-        Handles the format from Discovery Engine Search API which returns:
-        {
-            "results": [
-                {
-                    "id": "...",
-                    "document": {
-                        "derivedStructData": {
-                            "title": "...",
-                            "link": "...",
-                            "snippets": [...]
-                        }
-                    }
-                }
-            ]
-        }
+        Document hits (``results[].document``) take their text from ``derivedStructData`` in a fixed order:
+        ``extractive_segments``, then ``extractive_answers``, then ``snippets``, then ``title``; ``structData``
+        and the link metadata land in ``attributes``. Chunk hits (``results[].chunk``, returned when the
+        caller sets ``contentSearchSpec.searchResultMode`` to ``CHUNKS`` via ``extra_body``) take their text
+        from ``chunk.content`` and their file id and name from ``chunk.documentMetadata``.
         """
         try:
             response_json: Final = _vertex_search_payload(response)
-
-            # Extract results from Vertex AI Search API response
-            results: Final = response_json.get("results", [])
-
-            # Transform results to standard format
-            search_results: Final[list[VectorStoreSearchResult]] = []
-            for result in results:
-                document: VertexSearchDocument = result.get("document", {})
-                derived_data: VertexSearchDerivedStructData = document.get("derivedStructData", {})
-
-                # Extract text content from snippets
-                snippets = derived_data.get("snippets", [])
-                text_content = ""
-
-                if snippets:
-                    # Combine all snippets into one text
-                    text_parts = [snippet.get("snippet", snippet.get("htmlSnippet", "")) for snippet in snippets]
-                    text_content = " ".join(text_parts)
-
-                # If no snippets, use title as fallback
-                if not text_content:
-                    text_content = derived_data.get("title", "")
-
-                content = [
-                    VectorStoreResultContent(
-                        text=text_content,
-                        type="text",
-                    )
-                ]
-
-                # Extract file/document information
-                document_link = derived_data.get("link", "")
-                document_title = derived_data.get("title", "")
-                document_id = result.get("id", "")
-
-                # Use link as file_id if available, otherwise use document ID
-                file_id = document_link if document_link else document_id
-                filename = document_title if document_title else "Unknown Document"
-
-                # Build attributes with available metadata
-                attributes = {
-                    "document_id": document_id,
-                }
-
-                if document_link:
-                    attributes["link"] = document_link
-                if document_title:
-                    attributes["title"] = document_title
-
-                # Add display link if available
-                display_link = derived_data.get("displayLink", "")
-                if display_link:
-                    attributes["displayLink"] = display_link
-
-                # Add formatted URL if available
-                formatted_url = derived_data.get("formattedUrl", "")
-                if formatted_url:
-                    attributes["formattedUrl"] = formatted_url
-
-                # Note: Search API doesn't provide explicit scores in the response
-                # You can use the position/rank as an implicit score
-                score = 1.0 / (float(search_results.__len__() + 1))  # Decreasing score based on position
-
-                result_obj = VectorStoreSearchResult(
-                    score=score,
-                    content=content,
-                    file_id=file_id,
-                    filename=filename,
-                    attributes=attributes,
-                )
-                search_results.append(result_obj)
-
+            search_results: Final = [
+                _search_result(hit, position) for position, hit in enumerate(response_json.get("results", ()))
+            ]
             query_view: Final[_SearchQueryView] = {"query": litellm_logging_obj.model_call_details.get("query", "")}
             return VectorStoreSearchResponse(
                 object="vector_store.search_results.page",
