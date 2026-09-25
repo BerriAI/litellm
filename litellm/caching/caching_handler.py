@@ -429,6 +429,7 @@ class LLMCachingHandler:
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=False,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                     if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):

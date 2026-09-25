@@ -230,6 +230,11 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
     return next((status for status in map(_status_code_for_error_field, fields) if status is not None), 500)
 
 
+def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
+    message, error_type, error_code = _error_event_fields(error_obj)
+    return _status_code_for_error_fields(error_type, error_code), message
+
+
 def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_provider: str) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -1360,7 +1365,7 @@ def _billed_terminal_response(
         return None
     usage: Final[object] = response_obj.get("usage")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a model_constructed terminal event leaves response as an untyped dict
     return ResponsesAPIResponse.model_construct(
-        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # same untyped dict spread
+        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportArgumentType]  # same untyped dict spread
     )
 
 

@@ -62,10 +62,10 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span | Any
-    Tracer = _Tracer | Any
-    Context = _Context | Any
-    SpanExporter = _SpanExporter | Any
-    UserAPIKeyAuth = _UserAPIKeyAuth | Any
+    Tracer = _Tracer
+    Context = _Context
+    SpanExporter = _SpanExporter
+    UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload | Any
 else:
     Span = Any
@@ -2730,7 +2730,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")
             verbose_logger.exception("OpenTelemetry logging error in set_attributes %s", str(e))
 
-    def _cast_as_primitive_value_type(self, value) -> str | bool | int | float:
+    def _cast_as_primitive_value_type(self, value: object) -> str | bool | int | float:
         """
         Casts the value to a primitive OTEL type if it is not already a primitive type.
 

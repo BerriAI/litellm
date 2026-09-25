@@ -693,7 +693,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: dict) -> AllMessageValues | None:
+    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:

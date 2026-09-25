@@ -1096,7 +1096,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _spread_text_rewrite_over_stream_events(
         self,
-        stream_events: Sequence[Any],
+        stream_events: Sequence[object],
         rewritten_text: str,
         guardrail_name: str,
     ) -> None:
