@@ -255,7 +255,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
-                timeout=self.timeout if isinstance(self.timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS,
+                timeout=auth_timeout,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -465,7 +465,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
-                timeout=self.timeout if isinstance(self.timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS,
+                timeout=auth_timeout,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)

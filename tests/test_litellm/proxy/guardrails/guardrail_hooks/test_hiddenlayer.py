@@ -1138,3 +1138,18 @@ def test_get_jwt_gives_up_at_the_timeout_instead_of_blocking_the_event_loop(hang
         _get_jwt(auth_url=hanging_auth_server, api_id="id", api_key="secret", timeout=1)
 
     assert time.monotonic() - started < 10
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer._get_jwt",
+        return_value="tok",
+    ) as get_jwt:
+        guardrail = HiddenlayerGuardrail(
+            guardrail_name="hiddenlayer",
+            api_id="id",
+            api_key="secret",
+            api_base="https://api.hiddenlayer.ai",
+            timeout=2,
+        )
+        guardrail.refresh_jwt_func()
+
+    assert [call.kwargs["timeout"] for call in get_jwt.call_args_list] == [2, 2]
