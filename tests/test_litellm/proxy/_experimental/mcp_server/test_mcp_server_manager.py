@@ -216,6 +216,9 @@ def _reload_mcp_manager_module():
     operations_module = sys.modules.get("litellm.proxy._experimental.mcp_server.operations")
     if operations_module is not None:
         operations_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
+    rest_module: Final = sys.modules.get("litellm.proxy._experimental.mcp_server.rest_endpoints")
+    if rest_module is not None:
+        rest_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
 
 
