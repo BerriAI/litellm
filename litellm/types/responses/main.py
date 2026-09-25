@@ -29,6 +29,13 @@ class OutputText(BaseLiteLLMOpenAIResponseObject):
     annotations: list[GenericResponseOutputItemContentAnnotation] | None
 
 
+class OutputReasoningText(BaseLiteLLMOpenAIResponseObject):
+    """Reasoning text content of a reasoning output item"""
+
+    type: Literal["reasoning_text"]
+    text: str
+
+
 class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     """A tool call to run a function"""
 
@@ -142,7 +149,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
-    content: list[OutputText]
+    content: list[OutputText | OutputReasoningText]
     phase: Phase = None
 
 

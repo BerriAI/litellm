@@ -84,6 +84,7 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
+    OutputReasoningText,
     OutputText,
 )
 from litellm.types.utils import (
@@ -2597,11 +2598,7 @@ class LiteLLMCompletionResponsesConfig:
                             ),
                             role="assistant",
                             content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=text,
-                                    annotations=[],
-                                )
+                                OutputReasoningText(type="reasoning_text", text=text)
                                 for text in (reasoning_content,)
                                 if text
                             ],

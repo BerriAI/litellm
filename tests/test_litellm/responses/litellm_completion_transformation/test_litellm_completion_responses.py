@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Final, Literal
 
 import pytest
+from openai.types.responses.response_reasoning_item import Content as ReasoningContent
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -343,7 +344,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert reasoning_item.status == "completed"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
+        assert reasoning_item.content[0].type == "reasoning_text"
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 
@@ -544,6 +545,42 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(reasoning_items) == 1
         assert reasoning_items[0].content[0].text == "counting the primes"
         assert "sig" in reasoning_items[0].encrypted_content
+
+    @pytest.mark.parametrize("thinking_text", ["counting the primes", ""])
+    def test_reasoning_item_content_is_reasoning_text(self, thinking_text):
+        response: Final = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content=thinking_text,
+                        thinking_blocks=[{"type": "thinking", "thinking": thinking_text, "signature": "sig"}],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test input",
+                responses_api_request={},
+                chat_completion_response=response,
+            )
+        )
+
+        reasoning_item: Final = next(item for item in responses_api_response.output if item.type == "reasoning")
+        parts: Final = [
+            ReasoningContent.model_validate(part) for part in json.loads(reasoning_item.model_dump_json())["content"]
+        ]
+        expected: Final = [("reasoning_text", thinking_text)] if thinking_text else []
+        assert [(part.type, part.text) for part in parts] == expected
 
     def test_transform_chat_completion_response_status_with_stop(self):
         """
