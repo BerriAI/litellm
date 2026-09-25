@@ -594,6 +594,81 @@ async def test_resolved_identity_exported_on_auth_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_identity, expected_fragment, absent_fragment",
+    [
+        pytest.param(
+            UserAPIKeyAuth(
+                token="hashed-token",
+                key_alias="skip-laptop-key",
+                user_id="skip-user",
+                user_email="skip@example.com",
+                team_id="team-123",
+                team_alias="research-team",
+            ),
+            "Key Identity: key_alias=skip-laptop-key user_id=skip-user user_email=skip@example.com "
+            "team_id=team-123 team_alias=research-team",
+            None,
+            id="expired_key_owner_named_in_log",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(token="hashed-token", user_id="skip-user"),
+            "Key Identity: user_id=skip-user",
+            "key_alias=",
+            id="unset_fields_omitted",
+        ),
+        pytest.param(None, None, "Key Identity", id="unknown_key_has_no_identity_line"),
+    ],
+)
+async def test_expired_key_error_log_names_the_key_owner(resolved_identity, expected_fragment, absent_fragment, caplog):
+    """An expired key rejection is logged with the key alias, user and team auth already
+    resolved, so an operator can trace the caller from the log line alone."""
+    handler = UserAPIKeyAuthExceptionHandler()
+    expired_key_error = ProxyException(
+        message="Authentication Error - Expired Key.",
+        type=ProxyErrorTypes.expired_key,
+        param="sk-...",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+                await handler._handle_authentication_error(
+                    expired_key_error,
+                    MagicMock(),
+                    {"model": "gpt-4o"},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-raw-key",
+                    resolved_identity=resolved_identity,
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    logged = records[0].getMessage()
+    assert "Expired Key" in logged and "Requester IP Address:" in logged, logged
+    if expected_fragment is not None:
+        assert expected_fragment in logged, logged
+    if absent_fragment is not None:
+        assert absent_fragment not in logged, logged
+
+
+@pytest.mark.asyncio
 async def test_auth_failure_without_resolved_identity_still_logs():
     """When auth fails before any identity is resolved (e.g. an unknown key),
     the handler must still log a usable object carrying the raw api key and
