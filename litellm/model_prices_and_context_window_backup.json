@@ -32264,7 +32264,8 @@
             "/v1/images/edits"
         ],
         "supports_vision": true,
-        "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare"
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-image-2.5-flare-2026-09-08": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -32279,7 +32280,8 @@
             "/v1/images/edits"
         ],
         "supports_vision": true,
-        "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare"
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-image-2.5-sunburst": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -32294,7 +32296,8 @@
             "/v1/images/edits"
         ],
         "supports_vision": true,
-        "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst"
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-image-2.5-sunburst-2026-09-08": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -32309,7 +32312,8 @@
             "/v1/images/edits"
         ],
         "supports_vision": true,
-        "source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst"
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
     },
     "low/1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
