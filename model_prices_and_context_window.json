@@ -18840,7 +18840,7 @@
         "output_vector_size": 1024,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-claude-fable-5": {
+    "databricks/system.ai.claude-fable-5": {
         "cache_creation_input_token_cost": 1.250004e-05,
         "cache_read_input_token_cost": 1.00002e-06,
         "input_cost_per_token": 1.000006e-05,
@@ -18869,7 +18869,7 @@
         "supports_vision": false,
         "thinking_always_on": true
     },
-    "databricks/databricks-claude-fable-5-1": {
+    "databricks/system.ai.claude-fable-5-1": {
         "cache_creation_input_token_cost": 1.250004e-05,
         "cache_read_input_token_cost": 2.5004e-07,
         "input_cost_per_token": 1.000006e-05,
@@ -18899,7 +18899,7 @@
         "supports_vision": true,
         "thinking_always_on": true
     },
-    "databricks/databricks-claude-haiku-4-5": {
+    "databricks/system.ai.claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.0003e-07,
         "input_cost_per_token": 1.00002e-06,
@@ -18996,7 +18996,7 @@
         "supports_output_config": true,
         "prompt_cache_min_tokens": 4096
     },
-    "databricks/databricks-claude-opus-4-6": {
+    "databricks/system.ai.claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25002e-06,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
@@ -19021,7 +19021,7 @@
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 4096
     },
-    "databricks/databricks-claude-opus-4-7": {
+    "databricks/system.ai.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25002e-06,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
@@ -19048,7 +19048,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-claude-opus-4-8": {
+    "databricks/system.ai.claude-opus-4-8": {
         "cache_creation_input_token_cost": 6.25002e-06,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
@@ -19076,7 +19076,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-claude-opus-5": {
+    "databricks/system.ai.claude-opus-5": {
         "cache_creation_input_token_cost": 6.25002e-06,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
@@ -19104,7 +19104,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-claude-sonnet-4": {
+    "databricks/system.ai.claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "deprecation_date": "2026-10-09",
@@ -19152,7 +19152,7 @@
         "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
-    "databricks/databricks-claude-sonnet-4-5": {
+    "databricks/system.ai.claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
@@ -19176,7 +19176,7 @@
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
-    "databricks/databricks-claude-sonnet-4-6": {
+    "databricks/system.ai.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
@@ -19201,7 +19201,7 @@
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
-    "databricks/databricks-claude-sonnet-5": {
+    "databricks/system.ai.claude-sonnet-5": {
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.99999e-06,
@@ -19229,7 +19229,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-deepseek-v4-flash-0731": {
+    "databricks/system.ai.deepseek-v4-flash-0731": {
         "cache_creation_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.4e-07,
@@ -19257,7 +19257,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "databricks/databricks-deepseek-v4-pro-0813": {
+    "databricks/system.ai.deepseek-v4-pro-0813": {
         "cache_creation_input_token_cost": 1.31999e-06,
         "cache_read_input_token_cost": 1.3202e-07,
         "input_cost_per_token": 1.31999e-06,
@@ -19285,7 +19285,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "databricks/databricks-gemini-2-5-flash": {
+    "databricks/system.ai.gemini-2-5-flash": {
         "cache_creation_input_token_cost": 3.0002e-07,
         "cache_read_input_token_cost": 3.0002e-08,
         "deprecation_date": "2026-10-02",
@@ -19320,7 +19320,7 @@
         "supports_audio_input": true,
         "supports_video_input": true
     },
-    "databricks/databricks-gemini-2-5-pro": {
+    "databricks/system.ai.gemini-2-5-pro": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.24999e-07,
         "input_cost_per_token": 1.24999e-06,
@@ -19355,7 +19355,7 @@
         "supports_audio_input": true,
         "supports_video_input": true
     },
-    "databricks/databricks-gemini-3-1-flash-lite": {
+    "databricks/system.ai.gemini-3-1-flash-lite": {
         "cache_creation_input_token_cost": 3.1248e-07,
         "cache_read_input_token_cost": 3.122e-08,
         "input_cost_per_token": 3.1248e-07,
@@ -19429,7 +19429,7 @@
         "supports_function_calling": false,
         "supports_vision": true
     },
-    "databricks/databricks-gemini-3-1-pro": {
+    "databricks/system.ai.gemini-3-1-pro": {
         "cache_creation_input_token_cost": 2.49998e-06,
         "cache_read_input_token_cost": 2.4997e-07,
         "input_cost_per_token": 2.49998e-06,
@@ -19462,7 +19462,7 @@
         "supports_audio_input": true,
         "supports_video_input": true
     },
-    "databricks/databricks-gemini-3-flash": {
+    "databricks/system.ai.gemini-3-flash": {
         "cache_creation_input_token_cost": 6.2503e-07,
         "cache_read_input_token_cost": 6.251e-08,
         "input_cost_per_token": 6.2503e-07,
@@ -19562,7 +19562,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gemini-3-6-flash": {
+    "databricks/system.ai.gemini-3-6-flash": {
         "cache_creation_input_token_cost": 1.87502e-06,
         "cache_read_input_token_cost": 1.8753e-07,
         "input_cost_per_token": 1.87502e-06,
@@ -19593,7 +19593,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gemini-3-5-flash": {
+    "databricks/system.ai.gemini-3-5-flash": {
         "cache_creation_input_token_cost": 1.87502e-06,
         "cache_read_input_token_cost": 1.8753e-07,
         "input_cost_per_token": 1.87502e-06,
@@ -19656,7 +19656,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gemma-3-12b": {
+    "databricks/system.ai.gemma-3-12b": {
         "cache_creation_input_token_cost": 1.5001e-07,
         "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5000999999999998e-07,
@@ -19673,7 +19673,7 @@
         "output_dbu_cost_per_token": 7.143e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-glm-5-2": {
+    "databricks/system.ai.glm-5-2": {
         "cache_creation_input_token_cost": 1.4e-06,
         "cache_read_input_token_cost": 2.5998e-07,
         "input_cost_per_token": 1.4e-06,
@@ -19701,7 +19701,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "databricks/databricks-glm-5-3": {
+    "databricks/system.ai.glm-5-3": {
         "cache_creation_input_token_cost": 1.4e-06,
         "cache_read_input_token_cost": 2.5998e-07,
         "input_cost_per_token": 1.4e-06,
@@ -19732,7 +19732,7 @@
         "supports_vision": false,
         "thinking_always_on": true
     },
-    "databricks/databricks-glm-5-3-flash": {
+    "databricks/system.ai.glm-5-3-flash": {
         "cache_creation_input_token_cost": 1.5001e-07,
         "cache_read_input_token_cost": 3.003e-08,
         "input_cost_per_token": 1.5001e-07,
@@ -19762,7 +19762,7 @@
         "supports_vision": true,
         "thinking_always_on": true
     },
-    "databricks/databricks-gpt-5": {
+    "databricks/system.ai.gpt-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.2502e-07,
         "input_cost_per_token": 1.24999e-06,
@@ -19782,7 +19782,7 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "databricks/databricks-gpt-5-1": {
+    "databricks/system.ai.gpt-5-1": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.2502e-07,
         "input_cost_per_token": 1.24999e-06,
@@ -19802,7 +19802,7 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "databricks/databricks-gpt-5-2": {
+    "databricks/system.ai.gpt-5-2": {
         "cache_creation_input_token_cost": 1.75e-06,
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
@@ -19842,7 +19842,7 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "databricks/databricks-gpt-5-4": {
+    "databricks/system.ai.gpt-5-4": {
         "cache_creation_input_token_cost": 2.49998e-06,
         "cache_read_input_token_cost": 2.4997e-07,
         "input_cost_per_token": 2.49998e-06,
@@ -19871,7 +19871,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gpt-5-4-mini": {
+    "databricks/system.ai.gpt-5-4-mini": {
         "cache_creation_input_token_cost": 7.4998e-07,
         "cache_read_input_token_cost": 7.497e-08,
         "input_cost_per_token": 7.4998e-07,
@@ -19900,7 +19900,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gpt-5-4-nano": {
+    "databricks/system.ai.gpt-5-4-nano": {
         "cache_creation_input_token_cost": 1.9999e-07,
         "cache_read_input_token_cost": 2.002e-08,
         "input_cost_per_token": 1.9999e-07,
@@ -19929,7 +19929,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gpt-5-6-sol": {
+    "databricks/system.ai.gpt-5-6-sol": {
         "cache_creation_input_token_cost": 5.00003e-06,
         "cache_read_input_token_cost": 3.9998e-07,
         "input_cost_per_token": 4.00001e-06,
@@ -19987,7 +19987,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gpt-5-6-luna": {
+    "databricks/system.ai.gpt-5-6-luna": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.0003e-07,
         "input_cost_per_token": 1.00002e-06,
@@ -20016,7 +20016,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gpt-5-5": {
+    "databricks/system.ai.gpt-5-5": {
         "cache_creation_input_token_cost": 5.00003e-06,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
@@ -20074,7 +20074,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-gpt-5-mini": {
+    "databricks/system.ai.gpt-5-mini": {
         "cache_creation_input_token_cost": 2.4997e-07,
         "cache_read_input_token_cost": 2.499e-08,
         "input_cost_per_token": 2.4997000000000006e-07,
@@ -20094,7 +20094,7 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "databricks/databricks-gpt-5-nano": {
+    "databricks/system.ai.gpt-5-nano": {
         "cache_creation_input_token_cost": 4.998e-08,
         "cache_read_input_token_cost": 4.97e-09,
         "input_cost_per_token": 4.998e-08,
@@ -20114,7 +20114,7 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
-    "databricks/databricks-gpt-oss-120b": {
+    "databricks/system.ai.gpt-oss-120b": {
         "cache_creation_input_token_cost": 1.5001e-07,
         "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5000999999999998e-07,
@@ -20131,7 +20131,7 @@
         "output_dbu_cost_per_token": 8.571e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-gpt-oss-20b": {
+    "databricks/system.ai.gpt-oss-20b": {
         "cache_creation_input_token_cost": 7e-08,
         "cache_read_input_token_cost": 7e-08,
         "input_cost_per_token": 7e-08,
@@ -20148,7 +20148,7 @@
         "output_dbu_cost_per_token": 4.285999999999999e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-grok-4-6": {
+    "databricks/system.ai.grok-4-6": {
         "cache_creation_input_token_cost": 2.49998e-06,
         "cache_read_input_token_cost": 6.2503e-07,
         "input_cost_per_token": 2.49998e-06,
@@ -20174,7 +20174,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "databricks/databricks-gte-large-en": {
+    "databricks/system.ai.gte-large-en": {
         "cache_creation_input_token_cost": 1.2999e-07,
         "cache_read_input_token_cost": 1.2999e-07,
         "input_cost_per_token": 1.2999000000000001e-07,
@@ -20191,7 +20191,7 @@
         "output_vector_size": 1024,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-inkling": {
+    "databricks/system.ai.inkling": {
         "cache_creation_input_token_cost": 1.00002e-06,
         "cache_read_input_token_cost": 1.7003e-07,
         "input_cost_per_token": 1.00002e-06,
@@ -20219,7 +20219,7 @@
         "supports_vision": true,
         "thinking_always_on": true
     },
-    "databricks/databricks-kimi-k3": {
+    "databricks/system.ai.kimi-k3": {
         "cache_creation_input_token_cost": 2.99999e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.99999e-06,
@@ -20248,7 +20248,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "databricks/databricks-llama-4-maverick": {
+    "databricks/system.ai.llama-4-maverick": {
         "cache_creation_input_token_cost": 5.0001e-07,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
@@ -20266,7 +20266,7 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
-    "databricks/databricks-meta-llama-3-1-8b-instruct": {
+    "databricks/system.ai.meta-llama-3-1-8b-instruct": {
         "cache_creation_input_token_cost": 1.5001e-07,
         "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5000999999999998e-07,
@@ -20283,7 +20283,7 @@
         "output_dbu_cost_per_token": 6.429000000000001e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
-    "databricks/databricks-meta-llama-3-3-70b-instruct": {
+    "databricks/system.ai.meta-llama-3-3-70b-instruct": {
         "cache_creation_input_token_cost": 5.0001e-07,
         "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
@@ -20301,7 +20301,7 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
-    "databricks/databricks-qwen35-122b-a10b": {
+    "databricks/system.ai.qwen35-122b-a10b": {
         "cache_creation_input_token_cost": 2.2001e-07,
         "cache_read_input_token_cost": 2.2001e-07,
         "input_cost_per_token": 2.2001e-07,
@@ -20329,7 +20329,7 @@
         "supports_vision": false,
         "thinking_always_on": true
     },
-    "databricks/databricks-qwen3-next-80b-a3b-instruct": {
+    "databricks/system.ai.qwen3-next-80b-a3b-instruct": {
         "cache_creation_input_token_cost": 1.5001e-07,
         "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5001e-07,
@@ -20352,7 +20352,7 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
-    "databricks/databricks-qwen3-embedding-0-6b": {
+    "databricks/system.ai.qwen3-embedding-0-6b": {
         "cache_creation_input_token_cost": 2.002e-08,
         "cache_read_input_token_cost": 2.002e-08,
         "input_cost_per_token": 2.002e-08,
@@ -37252,7 +37252,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "meta/muse-voice-transcribe-1.0": {
-        "input_cost_per_second": 0.00005,
+        "input_cost_per_second": 5e-05,
         "litellm_provider": "meta",
         "mode": "audio_transcription",
         "source": "https://dev.meta.ai/docs/speech-to-text",
@@ -41505,7 +41505,50 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":1.5e-7,"output_cost_per_token":6e-7,"cache_read_input_token_cost":3e-9},
+        "off_peak_pricing": {
+            "windows": [
+                {
+                    "weekdays": [
+                        "saturday",
+                        "sunday"
+                    ],
+                    "hours_utc": "00:00-00:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "00:00-01:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "04:00-06:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "10:00-00:00"
+                }
+            ],
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "cache_read_input_token_cost": 3e-09
+        },
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -41533,7 +41576,50 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "cache_read_input_token_cost": 1.54e-08,
-        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":0.00000132,"output_cost_per_token":0.00000396,"cache_read_input_token_cost":4.4e-8},
+        "off_peak_pricing": {
+            "windows": [
+                {
+                    "weekdays": [
+                        "saturday",
+                        "sunday"
+                    ],
+                    "hours_utc": "00:00-00:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "00:00-01:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "04:00-06:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "10:00-00:00"
+                }
+            ],
+            "input_cost_per_token": 1.32e-06,
+            "output_cost_per_token": 3.96e-06,
+            "cache_read_input_token_cost": 4.4e-08
+        },
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -59903,7 +59989,13 @@
             {
                 "name": "claude-adaptive-thinking",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.6 or higher, in any id shape that contains claude-<family>-: minors 4.6 through 4.99, any later major-minor, and bare 5+ majors so a new family shaped like claude-fable-5 matches. Requiring the claude- prefix keeps non-Claude names such as team-sonnet-5-1 out. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Turns on adaptive thinking for new versions and new families with no code change.",
                 "model_info": {
                     "supports_adaptive_thinking": true
@@ -59912,7 +60004,13 @@
             {
                 "name": "claude-legacy-thinking",
                 "pattern": "claude-[a-z]+-4[-._]6(?!\\d)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.6 exactly, in any id shape that contains claude-<family>-4-6 (dotted and underscored minors included, dated releases such as claude-sonnet-4-6-20260219 too). The 4.6 family is adaptive-thinking yet still accepts legacy thinking.type=enabled with budget_tokens, so the caller's hard budget cap is forwarded verbatim instead of being rewritten to an uncapped output_config.effort. The lookahead keeps two-digit minors such as 4-60 from matching. 4.7+ and 5+ majors reject the legacy shape and stay on the adaptive translation.",
                 "model_info": {
                     "supports_legacy_thinking": true
@@ -59929,7 +60027,13 @@
             {
                 "name": "claude-mid-conversation-system",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.8 or higher, in any id shape that contains claude-<family>-: minors 4.8 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic introduced mid-conversation system messages with Opus 4.8 and every newer Claude keeps them; 4.7 and below reject the system role inside messages.",
                 "model_info": {
                     "supports_mid_conversation_system": true
@@ -59938,7 +60042,12 @@
             {
                 "name": "claude-tool-search",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.5 or higher, in any id shape that contains claude-<family>-: minors 4.5 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic's tool search docs list every Claude 4.5 and newer model as supported and Opus 4.1 and earlier as unsupported, so the flag follows the version instead of a per-model list. azure_ai is left out on purpose: Anthropic documents tool search as unavailable on Azure-hosted Foundry deployments, and the azure_ai/ key cannot tell those from Anthropic-hosted ones.",
                 "model_info": {
                     "supports_tool_search": true
@@ -59955,7 +60064,11 @@
             {
                 "name": "openai-reasoning-family-baseline",
                 "pattern": "^(?!.*search-api)(?:[a-z0-9_.-]+/)*(?:ft:)?(?:o[1-9]\\d*(?![a-z0-9])|gpt-[5-9](?:\\.\\d+)?(?![0-9.])|(?:gpt-\\d+(?:\\.\\d+)?(?:-[a-z0-9]+)*-)?(?:codex|deep-research|chat-latest)(?![a-z0-9]))",
-                "fill_missing_for_providers": ["azure", "azure_ai", "openai"],
+                "fill_missing_for_providers": [
+                    "azure",
+                    "azure_ai",
+                    "openai"
+                ],
                 "description": "OpenAI reasoning families by id shape, under any provider namespace and with an optional ft: prefix: the o-series (o1, o3-pro, o4-mini), gpt-5 through gpt-9 majors including dotted minors and suffixed variants (gpt-5.5-cyber, gpt-6-astra), and the codex, deep-research and chat-latest lines when standalone or on a gpt base. gpt-5-search-api is excluded because it is a search-only surface. Every model here is a reasoning model, and the Responses API drops the caller's reasoning param for any mapped OpenAI model whose info lacks supports_reasoning, so an id the registry has not named yet keeps its reasoning settings instead of silently losing them. Rules lose to exact entries. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
                 "model_info": {
                     "supports_reasoning": true
@@ -71436,7 +71549,50 @@
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":6.6e-7,"output_cost_per_token":0.00000198,"cache_read_input_token_cost":2.2e-8},
+        "off_peak_pricing": {
+            "windows": [
+                {
+                    "weekdays": [
+                        "saturday",
+                        "sunday"
+                    ],
+                    "hours_utc": "00:00-00:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "00:00-01:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "04:00-06:00"
+                },
+                {
+                    "weekdays": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday"
+                    ],
+                    "hours_utc": "10:00-00:00"
+                }
+            ],
+            "input_cost_per_token": 6.6e-07,
+            "output_cost_per_token": 1.98e-06,
+            "cache_read_input_token_cost": 2.2e-08
+        },
         "output_cost_per_token": 3.96e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
@@ -74856,7 +75012,12 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "off_peak_pricing": {"hours_utc":"16:00-00:00","input_cost_per_token":8.25e-8,"output_cost_per_token":3.3e-7,"cache_read_input_token_cost":2.0625e-8},
+        "off_peak_pricing": {
+            "hours_utc": "16:00-00:00",
+            "input_cost_per_token": 8.25e-08,
+            "output_cost_per_token": 3.3e-07,
+            "cache_read_input_token_cost": 2.0625e-08
+        },
         "output_cost_per_token": 5.28e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
@@ -76489,7 +76650,9 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,

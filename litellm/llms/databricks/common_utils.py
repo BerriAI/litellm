@@ -10,12 +10,19 @@ Authentication priority:
 3. Databricks SDK automatic auth - Fallback (uses unified auth)
 """
 
+from __future__ import annotations
+
+import copy
 import os
 import re
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class DatabricksException(BaseLLMException):
@@ -398,3 +405,39 @@ class DatabricksBase:
             api_base = f"{api_base}/embeddings"
 
         return api_base, headers
+
+
+class DatabricksModelInfo(BaseLLMModelInfo):
+    def get_model_cost_key(self, model: str) -> str | None:
+        from litellm.llms.databricks.cost_calculator import get_databricks_cost_key
+
+        return get_databricks_cost_key(model)
+
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+        import litellm
+
+        return copy.deepcopy(litellm.models_by_provider.get("databricks", []))
+
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return api_key or os.getenv("DATABRICKS_API_KEY")
+
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str | None:
+        return api_base or os.getenv("DATABRICKS_API_BASE")
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        return headers
+
+    @staticmethod
+    def get_base_model(model: str) -> str | None:
+        return model
