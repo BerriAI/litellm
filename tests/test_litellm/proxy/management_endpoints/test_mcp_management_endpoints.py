@@ -4,6 +4,7 @@ import sys
 import types
 import json
 import logging
+from collections.abc import Mapping
 from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -1363,14 +1364,11 @@ class TestListMCPServers:
                 mock_manager,
             ),
             patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
-                AsyncMock(return_value=[generate_mock_mcp_server_db_record(server_id="env-server")]),
-            ),
-            patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
                 return_value=False,
             ),
         ):
+            mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["env-server"])
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_mcp_server,
             )
@@ -2330,6 +2328,7 @@ class TestTemporaryMCPSessionEndpoints:
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = registry_server
         mock_manager.get_mcp_server_by_name.return_value = None
+        mock_manager._build_mcp_server_table.return_value = generate_mock_mcp_server_db_record(server_id="server-x")
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server-x"])
 
         with (
@@ -2342,7 +2341,7 @@ class TestTemporaryMCPSessionEndpoints:
                 mock_manager,
             ),
             patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                "litellm.proxy._experimental.mcp_server.ui_session_utils.build_effective_auth_contexts",
                 AsyncMock(return_value=[non_admin]),
             ),
         ):
@@ -2375,6 +2374,7 @@ class TestTemporaryMCPSessionEndpoints:
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = registry_server
         mock_manager.get_mcp_server_by_name.return_value = None
+        mock_manager._build_mcp_server_table.return_value = generate_mock_mcp_server_db_record(server_id="server-x")
 
         def allowed_for(auth):
             return ["server-x"] if auth.team_id == "team-with-mcp-grant" else []
@@ -2391,7 +2391,7 @@ class TestTemporaryMCPSessionEndpoints:
                 mock_manager,
             ),
             patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                "litellm.proxy._experimental.mcp_server.ui_session_utils.build_effective_auth_contexts",
                 AsyncMock(return_value=[ui_session_auth, team_context]),
             ),
         ):
@@ -8186,10 +8186,15 @@ def _lit3974_prisma_client(
     object_permission: LiteLLM_ObjectPermissionTable | None = None,
 ) -> MagicMock:
     prisma: Final = MagicMock()
+
+    def find_many_side_effect(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
+        where: Final[object | None] = kwargs.get("where")
+        return [] if isinstance(where, Mapping) and "submitted_by" in where else [server]
+
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=SimpleNamespace(object_permission=key_permission)
     )
-    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=find_many_side_effect)
     prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=server)
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
@@ -8208,11 +8213,6 @@ def _lit3974_cache() -> MagicMock:
 
 class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=HTTPException,
-        reason="LIT-3974 change A: detail authorization includes a server granted to the caller's team",
-    )
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
         server_id: Final = "lit3974-team-db"
         team_id: Final = "lit3974-team"
@@ -8279,11 +8279,6 @@ class TestLIT3974ResolutionRegressions:
             ("key-opt-out", ["no-mcp-servers", "lit3974-target"], ["lit3974-target"], None),
             ("org-ceiling", ["lit3974-target"], ["lit3974-target"], ["lit3974-other"]),
         ],
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="LIT-3974 change A: detail authorization enforces key, team, and organization ceilings",
     )
     async def test_database_server_detail_obeys_authz_intersection(
         self,
@@ -8486,11 +8481,6 @@ class TestLIT3974ResolutionRegressions:
         assert result.alias == "Target server"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=HTTPException,
-        reason="LIT-3974 change A: dashboard detail authorization resolves team grants for config servers",
-    )
     async def test_ui_session_team_grant_resolves_config_server_detail(self) -> None:
         server_id: Final = "lit3974-config-server"
         team_id: Final = "lit3974-ui-team"
@@ -8566,11 +8556,6 @@ class TestLIT3974ResolutionRegressions:
         assert result.alias == "Config_server", "config detail must retain its display alias"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="LIT-3974 change B: creation rejects an identifier already owned by a config server",
-    )
     async def test_create_rejects_config_server_identifier_collision(self) -> None:
         server_id: Final = "lit3974-config-collision"
         prisma: Final = _lit3974_prisma_client(
@@ -8638,11 +8623,6 @@ class TestLIT3974ResolutionRegressions:
         create_server.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="LIT-3974 change C: credential listing resolves config-server display name and alias",
-    )
     async def test_user_credential_list_includes_config_server_display_fields(self) -> None:
         server_id: Final = "lit3974-config-credential"
         prisma: Final = _lit3974_prisma_client(
@@ -10350,53 +10330,28 @@ class TestLIT3974ResolutionCharacterization:
                 "db_runtime",
                 "org object_permission",
                 id="db-runtime-org-object-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=HTTPException,
-                    reason="LIT-3974 change A: detail authorization includes org object_permission grants",
-                ),
             ),
             pytest.param("config", "org object_permission", id="config-org-object-permission"),
             pytest.param(
                 "db_runtime",
                 "direct user object_permission",
                 id="db-runtime-direct-user-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=HTTPException,
-                    reason="LIT-3974 change A: detail authorization includes direct user object_permission grants",
-                ),
             ),
             pytest.param(
                 "config",
                 "direct user object_permission",
                 id="config-direct-user-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=HTTPException,
-                    reason="LIT-3974 change A: detail authorization includes direct user object_permission grants",
-                ),
             ),
             pytest.param(
                 "db_runtime",
                 "allow_all_keys",
                 id="db-runtime-allow-all-keys",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=HTTPException,
-                    reason="LIT-3974 change A: detail authorization includes allow_all_keys grants",
-                ),
             ),
             pytest.param("config", "allow_all_keys", id="config-allow-all-keys"),
             pytest.param(
                 "db_runtime",
                 "access-group",
                 id="db-runtime-access-group",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=HTTPException,
-                    reason="LIT-3974 change A: detail authorization includes access-group grants",
-                ),
             ),
             pytest.param("config", "access-group", id="config-access-group"),
         ],

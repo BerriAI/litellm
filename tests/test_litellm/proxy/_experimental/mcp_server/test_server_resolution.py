@@ -26,15 +26,21 @@ class FakeMCPServerManager:
     allowed_server_ids: tuple[str, ...]
     id_lookup_spy: Mock
     name_lookup_spy: Mock
+    ip_filter_spy: Mock
     allowed_servers_spy: Mock
+    ip_accessible: bool
 
-    def get_mcp_server_by_id(self, server_id: str, client_ip: str | None = None) -> MCPServer | None:
-        self.id_lookup_spy(server_id, client_ip)
+    def get_mcp_server_by_id(self, server_id: str) -> MCPServer | None:
+        self.id_lookup_spy(server_id)
         return self.servers_by_id.get(server_id)
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         self.name_lookup_spy(server_name, client_ip)
         return self.servers_by_name.get(server_name)
+
+    def _is_server_accessible_from_ip(self, server: MCPServer, client_ip: str) -> bool:
+        self.ip_filter_spy(server, client_ip)
+        return self.ip_accessible
 
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
@@ -76,6 +82,7 @@ def _manager(
     servers_by_id: Mapping[str, MCPServer] | None = None,
     servers_by_name: Mapping[str, MCPServer] | None = None,
     allowed_server_ids: tuple[str, ...] = (),
+    ip_accessible: bool = True,
 ) -> FakeMCPServerManager:
     return FakeMCPServerManager(
         servers_by_id={} if servers_by_id is None else servers_by_id,
@@ -83,7 +90,9 @@ def _manager(
         allowed_server_ids=allowed_server_ids,
         id_lookup_spy=Mock(),
         name_lookup_spy=Mock(),
+        ip_filter_spy=Mock(),
         allowed_servers_spy=Mock(),
+        ip_accessible=ip_accessible,
     )
 
 
@@ -169,7 +178,7 @@ async def test_registry_id_resolution_precedes_name() -> None:
         runtime=server,
         source="registry",
     )
-    manager.id_lookup_spy.assert_called_once_with(server.server_id, None)
+    manager.id_lookup_spy.assert_called_once_with(server.server_id)
     manager.name_lookup_spy.assert_not_called()
 
 
@@ -189,7 +198,8 @@ async def test_lookup_ip_arguments_are_scoped_and_name_matching_can_be_disabled(
     assert resolved is not None
     assert resolved.source == "registry"
     assert resolved.runtime == server
-    manager.id_lookup_spy.assert_called_once_with("server-alias", "id-client")
+    manager.id_lookup_spy.assert_called_once_with("server-alias")
+    manager.ip_filter_spy.assert_not_called()
     manager.name_lookup_spy.assert_called_once_with("server-alias", "name-client")
 
     disabled_manager: Final = _manager(servers_by_name={"server-alias": server})
@@ -200,8 +210,25 @@ async def test_lookup_ip_arguments_are_scoped_and_name_matching_can_be_disabled(
     )
 
     assert not_resolved is None
-    disabled_manager.id_lookup_spy.assert_called_once_with("server-alias", None)
+    disabled_manager.id_lookup_spy.assert_called_once_with("server-alias")
     disabled_manager.name_lookup_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_id_lookup_applies_ip_filter_after_unfiltered_registry_lookup() -> None:
+    server: Final = _runtime_server()
+    manager: Final = _manager(servers_by_id={server.server_id: server}, ip_accessible=False)
+
+    resolved: Final = await resolve_mcp_server(
+        server.server_id,
+        manager=manager,
+        id_client_ip="external-client",
+    )
+
+    assert resolved is None
+    manager.id_lookup_spy.assert_called_once_with(server.server_id)
+    manager.ip_filter_spy.assert_called_once_with(server, "external-client")
+    manager.name_lookup_spy.assert_not_called()
 
 
 @pytest.mark.asyncio

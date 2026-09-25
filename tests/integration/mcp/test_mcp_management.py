@@ -322,7 +322,7 @@ def test_ui_session_lists_and_fetches_team_granted_config_server(
         team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
         user_id: Final = scenario.user(user_role="internal_user", teams=[team_id])
         config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
-        config["mcp_servers"] = {alias: {**peer.registration(), "server_id": server_id}}
+        config["mcp_servers"] = {alias: {**peer.registration(), "alias": alias, "server_id": server_id}}
         config_path: Final = tmp_path / "lit3974-mcp.yaml"
         config_path.write_text(yaml.safe_dump(config))
 

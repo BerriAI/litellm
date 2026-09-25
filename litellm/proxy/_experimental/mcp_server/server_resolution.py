@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException, status
 
@@ -47,7 +47,13 @@ async def resolve_mcp_server(
         if database_server is not None:
             return ResolvedMCPServer(table=database_server, runtime=None, source="db")
 
-    registry_server: MCPServer | None = manager.get_mcp_server_by_id(server_id, client_ip=id_client_ip)
+    registry_candidate: Final[MCPServer | None] = manager.get_mcp_server_by_id(server_id)
+    registry_server: Final[MCPServer | None] = (
+        registry_candidate
+        if registry_candidate is not None
+        and (id_client_ip is None or manager._is_server_accessible_from_ip(registry_candidate, id_client_ip))
+        else None
+    )
     if registry_server is not None:
         return ResolvedMCPServer(
             table=manager._build_mcp_server_table(registry_server),
