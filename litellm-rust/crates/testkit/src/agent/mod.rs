@@ -1,7 +1,11 @@
+mod claude_code;
+mod codex;
+mod opencode;
+
 use std::future::Future;
 use std::path::Path;
 
-use crate::release::Release;
+use crate::install::release::Release;
 use crate::{Error, Fetch, Gateway, LaunchSpec, Target};
 
 pub trait Agent: Sync {
@@ -16,3 +20,7 @@ pub trait Agent: Sync {
 
     fn launch_spec(&self, gateway: &Gateway, home: &Path) -> LaunchSpec;
 }
+
+pub use claude_code::ClaudeCode;
+pub use codex::Codex;
+pub use opencode::Opencode;

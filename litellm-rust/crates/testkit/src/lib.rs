@@ -1,22 +1,11 @@
 mod agent;
-mod archive;
-mod claude_code;
-mod codex;
 mod error;
-mod fetch;
 mod gateway;
 mod install;
-mod opencode;
-mod release;
 mod target;
 
-pub use agent::Agent;
-pub use claude_code::ClaudeCode;
-pub use codex::Codex;
+pub use agent::{Agent, ClaudeCode, Codex, Opencode};
 pub use error::Error;
-pub use fetch::{Fetch, HttpFetch};
 pub use gateway::{Gateway, LaunchSpec};
-pub use install::{Installed, Installer};
-pub use opencode::Opencode;
-pub use release::{Packaging, Release};
+pub use install::{Fetch, HttpFetch, Installed, Installer, Packaging, Release};
 pub use target::{Arch, Os, Target};

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::gateway::{env, path_string, v1};
-use crate::release::{Packaging, Release, github_release};
+use crate::install::release::{Packaging, Release, github_release};
 use crate::target::Os;
 use crate::{Agent, Error, Fetch, Gateway, LaunchSpec, Target};
 

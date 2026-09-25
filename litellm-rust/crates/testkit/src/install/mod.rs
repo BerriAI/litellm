@@ -1,3 +1,7 @@
+mod archive;
+mod fetch;
+pub(crate) mod release;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -5,8 +9,8 @@ use std::process::Stdio;
 use tokio::fs;
 use tokio::process::Command;
 
-use crate::archive::{extract_binary, verify_sha256};
-use crate::{Agent, Error, Fetch, Target};
+use crate::{Agent, Error, Target};
+use archive::{extract_binary, verify_sha256};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Installed {
@@ -94,3 +98,6 @@ async fn probe_version(binary: &Path, expected: &str) -> Result<(), Error> {
         reported: stdout.trim().to_owned(),
     })
 }
+
+pub use fetch::{Fetch, HttpFetch};
+pub use release::{Packaging, Release};

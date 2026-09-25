@@ -3,8 +3,8 @@ use std::io::{Cursor, Read};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
+use super::release::Packaging;
 use crate::Error;
-use crate::release::Packaging;
 
 pub(crate) fn verify_sha256(asset: &str, expected: &str, bytes: &[u8]) -> Result<(), Error> {
     let actual = format!("{:x}", Sha256::digest(bytes));

@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::gateway::{env, path_string};
-use crate::release::{Packaging, Release, parse};
+use crate::install::release::{Packaging, Release, parse};
 use crate::{Agent, Error, Fetch, Gateway, LaunchSpec, Target};
 
 const RELEASES: &str = "https://downloads.claude.ai/claude-code-releases";
