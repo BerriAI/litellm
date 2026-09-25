@@ -1,23 +1,30 @@
-use litellm_llms::{
-    anthropic::experimental_pass_through::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
-    azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
-};
 use rstest::rstest;
 
 use super::*;
 
 #[rstest]
-#[case::anthropic("anthropic", &ANTHROPIC_MESSAGES_CONFIG, "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "/v1/messages")]
-#[case::azure_ai("azure_ai", &AZURE_ANTHROPIC_MESSAGES_CONFIG, "AZURE_API_KEY", "AZURE_API_BASE", "/anthropic/v1/messages")]
+#[case::anthropic(
+    "anthropic",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "/v1/messages",
+    &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"]
+)]
+#[case::azure_ai(
+    "azure_ai",
+    "AZURE_API_KEY",
+    "AZURE_API_BASE",
+    "/anthropic/v1/messages",
+    &["AZURE_API_KEY", "AZURE_API_BASE"]
+)]
 #[tokio::test]
 async fn the_credential_and_base_come_from_the_secret_source(
     call: MessagesCall,
     #[case] provider: &str,
-    #[case] config: &dyn BaseAnthropicMessagesConfig,
     #[case] key_name: &str,
     #[case] base_name: &str,
     #[case] path: &str,
+    #[case] looked_up: &[&str],
 ) {
     let upstream = upstream([message_response()]).await;
     let base = upstream.uri();
@@ -40,7 +47,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
     let request = only_request(&upstream).await;
     assert_eq!(request.url.path(), path);
     assert_eq!(request.header("x-api-key"), Some("sk-from-manager"));
-    assert_eq!(secrets.requested(), config.secret_names());
+    assert_eq!(secrets.requested(), looked_up);
 }
 
 #[rstest]
@@ -91,4 +98,103 @@ async fn a_secret_manager_failure_fails_the_call_before_sending(call: MessagesCa
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());
+}
+
+#[derive(Clone, Copy)]
+enum Base {
+    Upstream,
+    Unreachable,
+    Blank,
+    Absent,
+}
+
+fn base_value(base: Base, upstream: &str) -> Option<String> {
+    match base {
+        Base::Upstream => Some(upstream.to_string()),
+        Base::Unreachable => Some(UNREACHABLE_BASE.to_string()),
+        Base::Blank => Some("  ".to_string()),
+        Base::Absent => None,
+    }
+}
+
+#[rstest]
+#[case::api_base_beats_base_url(Base::Upstream, Base::Unreachable)]
+#[case::blank_api_base_falls_through_to_base_url(Base::Blank, Base::Upstream)]
+#[case::base_url_alone(Base::Absent, Base::Upstream)]
+#[tokio::test]
+async fn the_anthropic_base_env_precedence_picks_the_upstream(
+    call: MessagesCall,
+    #[case] api_base: Base,
+    #[case] base_url: Base,
+) {
+    let upstream = upstream([message_response()]).await;
+    let uri = upstream.uri();
+    let values: Vec<(&str, &str)> = [
+        ("ANTHROPIC_API_KEY", Some("sk-env".to_string())),
+        ("ANTHROPIC_API_BASE", base_value(api_base, &uri)),
+        ("ANTHROPIC_BASE_URL", base_value(base_url, &uri)),
+    ]
+    .iter()
+    .filter_map(|(name, value)| Some((*name, value.as_deref()?)))
+    .map(|(name, value)| (name, Box::leak(value.to_string().into_boxed_str()) as &str))
+    .collect();
+
+    run_with(Arc::new(RecordingSecrets::new(values)), call)
+        .await
+        .expect("messages call reaches the upstream the precedence picks");
+
+    assert_eq!(only_request(&upstream).await.url.path(), "/v1/messages");
+}
+
+#[rstest]
+#[case::auth_token_alone(
+    &[("ANTHROPIC_AUTH_TOKEN", "tok")],
+    ("authorization", "Bearer tok"),
+    "x-api-key"
+)]
+#[case::api_key_beats_the_auth_token(
+    &[("ANTHROPIC_API_KEY", "sk-env"), ("ANTHROPIC_AUTH_TOKEN", "tok")],
+    ("x-api-key", "sk-env"),
+    "authorization"
+)]
+#[tokio::test]
+async fn the_auth_token_env_is_a_bearer_only_without_a_key(
+    call: MessagesCall,
+    #[case] values: &[(&str, &str)],
+    #[case] expected: (&str, &str),
+    #[case] absent: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_with(
+        Arc::new(RecordingSecrets::new(values.iter().copied())),
+        MessagesCall {
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await
+    .expect("messages call succeeds");
+
+    let request = only_request(&upstream).await;
+    let (name, value) = expected;
+    assert_eq!(request.header_values(name), [value]);
+    assert_eq!(request.header(absent), None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) {
+    let error = run_with(
+        Arc::new(RecordingSecrets::new([("AZURE_API_KEY", "sk-azure")])),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            ..call
+        },
+    )
+    .await
+    .err()
+    .expect("azure needs a base");
+
+    assert_eq!(error, Error::Auth(litellm_auth::Error::MissingAzureApiBase));
 }

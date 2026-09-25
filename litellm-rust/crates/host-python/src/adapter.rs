@@ -134,6 +134,13 @@ pub trait ProtocolHost: Send + Sync {
         response: <Self::Protocol as Protocol>::Response,
     ) -> PyResult<Py<PyAny>>;
 
+    /// What the stream carries at hand-off, as the caller's stream receives it.
+    fn head(
+        &mut self,
+        py: Python<'_>,
+        head: <Self::Protocol as Protocol>::StreamHead,
+    ) -> PyResult<Py<PyAny>>;
+
     /// One streamed chunk as the caller receives it.
     fn chunk(
         &mut self,
