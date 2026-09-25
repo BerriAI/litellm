@@ -84,7 +84,7 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """
         Count tokens using Google Gen AI Studio countTokens endpoint.

@@ -3,10 +3,12 @@ Test cases for spend log cleanup functionality
 """
 
 import asyncio
+import logging
 import math
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -793,18 +795,20 @@ async def test_spend_logs_retention_alone_does_not_touch_the_session_rollup():
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
     assert any('"LiteLLM_SpendLogs"' in sql for sql in tables)
     assert not any('"LiteLLM_AutoRouterSession"' in sql for sql in tables)
+    assert not any('"LiteLLM_AutoRouterUserSession"' in sql for sql in tables)
     assert not any('"LiteLLM_HealthCheckTable"' in sql for sql in tables)
 
 
 @pytest.mark.asyncio
-async def test_session_retention_alone_cleans_only_the_session_rollup():
-    client = _mock_prisma_for_retention([0])
+async def test_session_retention_alone_cleans_both_session_rollups():
+    client = _mock_prisma_for_retention([0, 0])
     cleaner = SpendLogCleanup(general_settings={"maximum_autorouter_session_retention_period": "365d"})
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
-    assert len(tables) == 1
+    assert len(tables) == 2
     assert '"LiteLLM_AutoRouterSession"' in tables[0]
+    assert '"LiteLLM_AutoRouterUserSession"' in tables[1]
 
 
 @pytest.mark.asyncio
@@ -825,7 +829,7 @@ async def test_health_check_retention_alone_cleans_only_the_health_check_table()
 
 @pytest.mark.asyncio
 async def test_each_retention_key_cuts_off_at_its_own_horizon():
-    client = _mock_prisma_for_retention([0, 0, 0, 0])
+    client = _mock_prisma_for_retention([0, 0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
@@ -839,6 +843,8 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
         (
             "LiteLLM_AutoRouterSession"
             if '"LiteLLM_AutoRouterSession"' in call[0][0]
+            else "LiteLLM_AutoRouterUserSession"
+            if '"LiteLLM_AutoRouterUserSession"' in call[0][0]
             else "LiteLLM_HealthCheckTable"
             if '"LiteLLM_HealthCheckTable"' in call[0][0]
             else "logs"
@@ -848,6 +854,7 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
     now = datetime.now(timezone.utc)
     assert (now - cutoffs["logs"]).days == 7
     assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
+    assert cutoffs["LiteLLM_AutoRouterUserSession"] == cutoffs["LiteLLM_AutoRouterSession"]
     assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
 
 
@@ -1415,5 +1422,218 @@ def test_the_reported_run_outcome_is_the_most_significant_reason_in_any_order(st
     results into one answer: a first-match-wins implementation would pass on
     whichever order happened to be written and fail on its mirror.
     """
-    results = tuple(TableCleanupResult(rows_deleted=0, stop_reason=reason) for reason in stop_reasons)
+    results = tuple(
+        TableCleanupResult(table_name=f"t{i}", rows_deleted=0, stop_reason=reason)
+        for i, reason in enumerate(stop_reasons)
+    )
     assert SpendLogCleanup._run_outcome(results) == expected
+
+
+_OTHER_OUTCOMES: Final = ("completed", "budget_exhausted", "batch_cap_reached", "skipped_locked", "skipped_disabled")
+
+
+def _runs_recorded(outcome: str) -> float:
+    """The real ``litellm_spend_log_cleanup_runs_total`` sample for one outcome, 0 when unset"""
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value("litellm_spend_log_cleanup_runs_total", {"outcome": outcome}) or 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_run_records_aborted_and_logs_its_progress_before_re_raising(monkeypatch):
+    """A run cut short by shutdown must leave its outcome and how far it got behind"""
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(cleanup_module, "verbose_proxy_logger", mock_logger)
+    aborted_runs_before = _runs_recorded("aborted")
+    other_runs_before = {outcome: _runs_recorded(outcome) for outcome in _OTHER_OUTCOMES}
+
+    third_batch_reached = asyncio.Event()
+
+    async def _execute_raw(sql, *args):
+        if third_batch_reached.is_set():
+            raise AssertionError("no batch may be issued after the cancelled one")
+        if _execute_raw.calls < 2:
+            _execute_raw.calls += 1
+            return 150
+        third_batch_reached.set()
+        await asyncio.Event().wait()
+
+    _execute_raw.calls = 0
+    mock_prisma_client = MagicMock()
+    _wire_tx(mock_prisma_client.db)
+    mock_prisma_client.db.execute_raw = _execute_raw
+
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = MagicMock()
+    cleaner.pod_lock_manager.redis_cache = MagicMock()
+    cleaner.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    cleaner.pod_lock_manager.release_lock = AsyncMock()
+
+    run = asyncio.ensure_future(cleaner.cleanup_old_spend_logs(mock_prisma_client))
+    await asyncio.wait_for(third_batch_reached.wait(), timeout=5)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert _runs_recorded("aborted") == aborted_runs_before + 1
+    assert {outcome: _runs_recorded(outcome) for outcome in _OTHER_OUTCOMES} == other_runs_before
+    cleaner.pod_lock_manager.release_lock.assert_awaited_once()
+    mock_logger.exception.assert_not_called()
+    (error_call,) = mock_logger.error.call_args_list
+    rendered = error_call[0][0] % error_call[0][1:]
+    assert rendered.startswith("Spend log cleanup cancelled after ")
+    assert "s (rows_deleted=300, batches=2)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatch):
+    """The scheduler holds one cleaner for the life of the process, so progress must not carry over"""
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(cleanup_module, "verbose_proxy_logger", mock_logger)
+
+    mock_prisma_client = MagicMock()
+    _wire_tx(mock_prisma_client.db)
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[150, 0, 0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[150, asyncio.CancelledError()])
+    with pytest.raises(asyncio.CancelledError):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    (error_call,) = mock_logger.error.call_args_list
+    rendered = error_call[0][0] % error_call[0][1:]
+    assert "(rows_deleted=150, batches=1)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
+    """With APSCHEDULER_MAX_INSTANCES above one, two runs share the cleaner but not their progress"""
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(cleanup_module, "verbose_proxy_logger", mock_logger)
+
+    first_batch_done = asyncio.Event()
+    second_run_done = asyncio.Event()
+
+    async def _slow_execute_raw(sql, *args):
+        first_batch_done.set()
+        await second_run_done.wait()
+        return 100
+
+    slow_client = MagicMock()
+    _wire_tx(slow_client.db)
+    slow_client.db.execute_raw = _slow_execute_raw
+    fast_client = MagicMock()
+    _wire_tx(fast_client.db)
+    fast_client.db.execute_raw = AsyncMock(side_effect=[150, 150, 0, 0])
+
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    slow_run = asyncio.ensure_future(cleaner.cleanup_old_spend_logs(slow_client))
+    await asyncio.wait_for(first_batch_done.wait(), timeout=5)
+    await cleaner.cleanup_old_spend_logs(fast_client)
+    second_run_done.set()
+    await asyncio.sleep(0)
+    slow_run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await slow_run
+
+    (error_call,) = mock_logger.error.call_args_list
+    rendered = error_call[0][0] % error_call[0][1:]
+    assert "(rows_deleted=100, batches=1)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
+    """
+    Both spend-log tables share one run budget. Before the fix the spend-log
+    loop ran against the whole deadline, so a backlog that outlasted the budget
+    meant LiteLLM_SpendLogToolIndex never received a single delete batch, run
+    after run. The index table must still get its own share of the budget.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_spend_logs_cleanup_max_batches": 500,
+            "maximum_spend_logs_cleanup_run_budget": "1s",
+        }
+    )
+    cleaner.pod_lock_manager = None
+
+    started_at = time.monotonic()
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+    elapsed = time.monotonic() - started_at
+
+    tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
+    assert tables.count("LiteLLM_SpendLogs") > 0
+    assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
+    assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
+
+
+@pytest.mark.asyncio
+async def test_run_that_leaves_backlog_logs_a_warning_summary_naming_each_table(caplog):
+    """
+    Operators running at warning or error level saw nothing when a run stopped
+    with expired rows still present. A run that ends on a bound must emit one
+    WARNING line that names every table, its rows deleted and its stop reason.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_spend_logs_cleanup_max_batches": 2,
+        }
+    )
+    cleaner.pod_lock_manager = None
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    summaries = [record for record in caplog.records if "Spend log cleanup run finished" in record.getMessage()]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.levelno == logging.WARNING
+    message = summary.getMessage()
+    assert "outcome=batch_cap_reached" in message
+    assert "LiteLLM_SpendLogs: deleted=2000 stop_reason=batch_cap_reached" in message
+    assert "LiteLLM_SpendLogToolIndex: deleted=2000 stop_reason=batch_cap_reached" in message
+
+
+@pytest.mark.asyncio
+async def test_run_that_drains_every_table_logs_the_summary_at_info_not_warning(caplog):
+    """A healthy run must not page anyone: the summary stays at INFO."""
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    summaries = [record for record in caplog.records if "Spend log cleanup run finished" in record.getMessage()]
+    assert len(summaries) == 1
+    assert summaries[0].levelno == logging.INFO
+    assert "outcome=completed" in summaries[0].getMessage()

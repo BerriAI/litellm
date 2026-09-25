@@ -17,10 +17,13 @@ model LiteLLM_BudgetTable {
   max_parallel_requests Int?
   tpm_limit     BigInt?
   rpm_limit     BigInt?
+  tpd_limit     BigInt?
   model_max_budget Json?
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
+  temp_budget_increase Float?
+  temp_budget_expiry DateTime?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -69,7 +72,9 @@ model LiteLLM_AgentsTable {
   agent_card_params Json
   static_headers       Json?          @default("{}")
   extra_headers        String[]       @default([])
+  kill_switch          Json?
   agent_access_groups String[]       @default([])
+  access_group_ids     String[]       @default([])
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   spend      Float    @default(0.0)
@@ -133,6 +138,7 @@ model LiteLLM_TeamTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    tpd_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
     blocked Boolean @default(false)
@@ -203,6 +209,7 @@ model LiteLLM_DeletedTeamTable {
     max_parallel_requests   Int?
     tpm_limit               BigInt?
     rpm_limit               BigInt?
+    tpd_limit               BigInt?
     budget_duration         String?
     budget_reset_at         DateTime?
     blocked                 Boolean  @default(false)
@@ -425,6 +432,7 @@ model LiteLLM_VerificationToken {
     key_alias   String?
     soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     expires    DateTime?
     models     String[]
     aliases    Json  @default("{}")
@@ -440,6 +448,7 @@ model LiteLLM_VerificationToken {
     blocked Boolean?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    tpd_limit     BigInt?
     max_budget Float?    
     budget_duration String? 
     budget_reset_at DateTime?
@@ -485,6 +494,10 @@ model LiteLLM_VerificationToken {
 
 model LiteLLM_JWTKeyMapping {
     id                String   @id @default(uuid())
+    jwt_issuer        String   @default("")  // Scopes the mapping to one configured issuer; "" matches any issuer.
+                                              // Not nullable: Postgres unique constraints treat every NULL as
+                                              // distinct, so a nullable column would let multiple unscoped
+                                              // mappings collide on the same claim without a constraint violation.
     jwt_claim_name    String   // e.g. "sub", "email"
     jwt_claim_value   String   // The claim value to match
     token             String   // Hashed virtual key (FK)
@@ -497,8 +510,8 @@ model LiteLLM_JWTKeyMapping {
 
     litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade)
 
-    @@unique([jwt_claim_name, jwt_claim_value])
-    @@index([jwt_claim_name, jwt_claim_value, is_active])
+    @@unique([jwt_issuer, jwt_claim_name, jwt_claim_value])
+    @@index([jwt_issuer, jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at
@@ -522,6 +535,7 @@ model LiteLLM_DeletedVerificationToken {
     key_alias               String?
     soft_budget_cooldown    Boolean  @default(false)
     spend                   Float    @default(0.0)
+    total_spend             Float    @default(0.0)
     expires                 DateTime?
     models                  String[]
     aliases                 Json     @default("{}")
@@ -536,6 +550,7 @@ model LiteLLM_DeletedVerificationToken {
     blocked                 Boolean?
     tpm_limit               BigInt?
     rpm_limit               BigInt?
+    tpd_limit               BigInt?
     max_budget              Float?
     budget_duration         String?
     budget_reset_at         DateTime?
@@ -795,6 +810,8 @@ model LiteLLM_DailyUserSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -805,6 +822,37 @@ model LiteLLM_DailyUserSpend {
   @@index([model])
   @@index([mcp_namespaced_tool_name])
   @@index([endpoint])
+}
+
+// Key-free daily rollup of LiteLLM_DailyUserSpend, read by the global usage view
+model LiteLLM_DailyGlobalSpend {
+  id                  String   @id @default(uuid())
+  date                String
+  model               String?
+  model_group         String?
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  endpoint               String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([date, model, model_group, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
+  @@index([date])
 }
 
 // Track daily organization spend metrics per model and key
@@ -831,6 +879,8 @@ model LiteLLM_DailyOrganizationSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -867,6 +917,8 @@ model LiteLLM_DailyEndUserSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -902,6 +954,8 @@ model LiteLLM_DailyAgentSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -937,6 +991,8 @@ model LiteLLM_DailyTeamSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
@@ -975,6 +1031,8 @@ model LiteLLM_DailyTagSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -1051,6 +1109,12 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([unified_object_id])
   @@index([model_object_id])
   @@index([team_id, created_at(sort: Desc)])
+}
+
+model LiteLLM_ManagedFileContentTable {
+  id         String   @id @default(uuid())
+  content    Bytes
+  created_at DateTime @default(now())
 }
 
 model LiteLLM_ManagedVectorStoreTable {
@@ -1358,6 +1422,8 @@ model LiteLLM_PolicyAttachmentTable {
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  priority         Int?                    // Explicit execution order
+  is_default       Boolean   @default(false)  // Applied only when no non-default attachment matches
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
@@ -1490,6 +1556,36 @@ model LiteLLM_AdaptiveRouterSession {
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
 }
 
+model LiteLLM_AutoRouterBaselineComparison {
+  scope               String   @id
+  api_key             String
+  session_id          String
+  router_name         String
+  initial_equivalent  Boolean
+  revision            BigInt   @default(0)
+  published_revision  BigInt   @default(0)
+  history             String?
+  attempted_at        DateTime?
+  retired             Boolean  @default(false)
+  updated_at          DateTime @default(now())
+
+  @@index([api_key, session_id, router_name], map: "idx_autorouter_baseline_scope")
+  @@index([updated_at], map: "idx_autorouter_baseline_updated")
+}
+
+model LiteLLM_AutoRouterBaselineObservation {
+  request_id  String  @id
+  scope       String
+  started_at  Float
+  revision    BigInt
+  data        String
+  publication String?
+  conflicted  Boolean @default(false)
+
+  @@index([scope, started_at, request_id], map: "idx_autorouter_baseline_event_order")
+  @@index([scope, revision, started_at], map: "idx_autorouter_baseline_event_revision")
+}
+
 model LiteLLM_AutoRouterSession {
   api_key               String
   session_id            String
@@ -1516,6 +1612,10 @@ model LiteLLM_AutoRouterSession {
   total_tokens          BigInt   @default(0)
   spend                 Float    @default(0)
   saved_spend           Float    @default(0)
+  savings_estimated_turns Int    @default(0)
+  savings_estimated_actual_spend Float @default(0)
+  savings_estimated_saved_spend Float @default(0)
+  savings_estimated_baseline_models Json @default("{}")
   classifier_cost       Float    @default(0)
   classifier_cost_recorded_turns Int @default(0)
   tier_turns            Json     @default("{}")
@@ -1523,6 +1623,47 @@ model LiteLLM_AutoRouterSession {
 
   @@id([api_key, session_id, router_name])
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
+}
+
+model LiteLLM_AutoRouterUserSession {
+  user_id               String
+  api_key               String
+  session_id            String
+  router_name           String
+  router_type           String
+  first_turn_at         DateTime
+  last_turn_at          DateTime
+  last_model            String
+  models                Json     @default("{}")
+  turns                 Int      @default(0)
+  unordered_turns       Int      @default(0)
+  covered_turns         Int      @default(0)
+  cache_hits            Int      @default(0)
+  same_model_turns      Int      @default(0)
+  same_model_hits       Int      @default(0)
+  first_visit_turns     Int      @default(0)
+  first_visit_hits      Int      @default(0)
+  return_turns          Int      @default(0)
+  return_hits           Int      @default(0)
+  return_expired_misses Int      @default(0)
+  return_within_ttl_misses  Int      @default(0)
+  ttl_5m_turns          Int      @default(0)
+  ttl_1h_turns          Int      @default(0)
+  total_tokens          BigInt   @default(0)
+  spend                 Float    @default(0)
+  saved_spend           Float    @default(0)
+  savings_estimated_turns Int    @default(0)
+  savings_estimated_actual_spend Float @default(0)
+  savings_estimated_saved_spend Float @default(0)
+  savings_estimated_baseline_models Json @default("{}")
+  classifier_cost       Float    @default(0)
+  classifier_cost_recorded_turns Int @default(0)
+  tier_turns            Json     @default("{}")
+  baseline_models       Json     @default("{}")
+
+  @@id([user_id, api_key, session_id, router_name])
+  @@index([last_turn_at], map: "idx_autorouter_user_session_last_turn")
+  @@index([user_id, last_turn_at], map: "idx_autorouter_user_session_user_last_turn")
 }
 
 // Shadow eval: evaluation of an auto-router against one or more keys' live traffic, in

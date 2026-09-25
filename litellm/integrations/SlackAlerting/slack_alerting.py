@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -99,6 +100,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args={},
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
+        async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -107,13 +109,16 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = internal_usage_cache or DualCache()
-        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_http_handler = async_http_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
+        self._periodic_flush_task: asyncio.Task[None] | None = None
         self.hanging_request_check = AlertingHangingRequestCheck(
             slack_alerting_object=self,
         )
@@ -124,6 +129,12 @@ class SlackAlerting(CustomBatchLogger):
         self.digest_buckets: dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
+
+    def _ensure_periodic_flush_task(self) -> None:
+        if self.periodic_started and (self._periodic_flush_task is None or not self._periodic_flush_task.done()):
+            return
+        self._periodic_flush_task = asyncio.create_task(self.periodic_flush())
+        self.periodic_started = True
 
     def update_values(
         self,
@@ -137,17 +148,14 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started:
-                asyncio.create_task(self.periodic_flush())
-                self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
                 self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
@@ -647,10 +655,10 @@ class SlackAlerting(CustomBatchLogger):
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
-                event_message += "5% Threshold Crossed "
+                event_message += "5% or less of budget remaining"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
-                event_message += "15% Threshold Crossed"
+                event_message += "15% or less of budget remaining"
 
         return event, event_message
 
@@ -1442,9 +1450,8 @@ Model Info:
             return
 
         # Start periodic flush if not already started
-        if not self.periodic_started and self.alerting is not None and len(self.alerting) > 0:
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+        if self.alerting is not None and len(self.alerting) > 0:
+            self._ensure_periodic_flush_task()
 
         if "webhook" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
             await self.send_webhook_alert(webhook_event=user_info)
@@ -1583,12 +1590,12 @@ Model Info:
         if not self.log_queue:
             return
 
-        squashed_queue: Final = squash_payloads(self.log_queue)
-        tasks: Final = [
-            send_to_webhook(slackAlertingInstance=self, item=item["item"], count=item["count"])
-            for item in squashed_queue.values()
-        ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            *(
+                send_to_webhook(slackAlertingInstance=self, item=squashed.item, count=squashed.count)
+                for squashed in squash_payloads(self.log_queue)
+            )
+        )
         self.log_queue.clear()
 
     async def _flush_digest_buckets(self):

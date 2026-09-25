@@ -107,7 +107,7 @@ def validate_password_policy(password: str, general_settings: Mapping[str, objec
     )
 
 
-def _hibp_client() -> AsyncHTTPHandler:
+def get_hibp_client() -> AsyncHTTPHandler:
     return get_async_httpx_client(
         llm_provider=httpxSpecialProvider.PasswordBreachCheck,
         params={"timeout": HIBP_TIMEOUT_SECONDS},  # mutable-ok: callee takes a bare dict (PEP 589)
@@ -155,7 +155,7 @@ async def is_password_breached(
     corpus, or HIBP is unreachable (fail open)."""
     if not is_breach_check_enabled(general_settings):
         return False
-    return await _is_password_breached(password, client if client is not None else _hibp_client())
+    return await _is_password_breached(password, client if client is not None else get_hibp_client())
 
 
 def breached_password_error() -> ProxyException:

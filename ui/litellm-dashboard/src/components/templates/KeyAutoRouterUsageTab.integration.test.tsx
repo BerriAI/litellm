@@ -32,6 +32,8 @@ const stats = {
   avg_session_seconds: 30,
   avg_tokens_per_session: 100,
   spend: 1.25,
+  savings_estimated_turns: 4,
+  savings_estimated_actual_spend: 1.25,
   classifier_cost: 0.25,
   saved_spend: 8.75,
   baseline_spend: 10,

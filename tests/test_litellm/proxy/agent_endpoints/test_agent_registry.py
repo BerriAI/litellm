@@ -15,6 +15,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
     _restore_redacted_litellm_params,
     redact_sensitive_agent_litellm_params,
 )
+from litellm.types.agents import PatchAgentRequest
 
 # Obviously-fake stand-ins for a real AWS credential pair (LIT-6736 regression
 # fixtures) -- never a real key shape, and must never appear in any response.
@@ -450,7 +451,7 @@ async def test_update_agent_in_db_raises_when_row_deleted_mid_update():
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
-        return_value=SimpleNamespace(litellm_params={}, object_permission_id=None)
+        return_value=SimpleNamespace(litellm_params={}, object_permission_id=None, kill_switch=None)
     )
     mock_prisma.db.litellm_agentstable.update = AsyncMock(return_value=None)
 
@@ -735,6 +736,7 @@ async def test_update_agent_in_db_preserves_secret_when_echoed_back_redacted():
                 "model": "bedrock/agentcore/my-agent",
             },
             object_permission_id=None,
+            kill_switch=None,
         )
     )
     updated_agent = MagicMock()
@@ -783,6 +785,7 @@ async def test_update_agent_in_db_preserves_secret_when_key_omitted_entirely():
         return_value=SimpleNamespace(
             litellm_params={"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY},
             object_permission_id=None,
+            kill_switch=None,
         )
     )
     updated_agent = MagicMock()
@@ -829,6 +832,7 @@ async def test_update_agent_in_db_preserves_secret_nested_under_a_non_sensitive_
                 }
             },
             object_permission_id=None,
+            kill_switch=None,
         )
     )
     updated_agent = MagicMock()
@@ -877,6 +881,7 @@ async def test_update_agent_in_db_clears_secret_on_explicit_empty_value():
         return_value=SimpleNamespace(
             litellm_params={"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY},
             object_permission_id=None,
+            kill_switch=None,
         )
     )
     updated_agent = MagicMock()
@@ -990,3 +995,292 @@ async def test_patch_agent_in_db_preserves_secret_when_echoed_back_redacted():
     stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
     assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
     assert stored_params["is_public"] is True
+
+
+def _agent_row_mock(access_group_ids: list[str]) -> MagicMock:
+    row: Final = MagicMock()
+    row.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+        "access_group_ids": access_group_ids,
+    }
+    row.object_permission = None
+    return row
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_persists_deduplicated_access_group_ids():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_create = AsyncMock(return_value=_agent_row_mock(["ag-1", "ag-2"]))
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    result: Final = await registry.add_agent_to_db(
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "access_group_ids": ["ag-1", "ag-2", "ag-1"],
+        },
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+
+    assert tuple(mock_create.call_args.kwargs["data"]["access_group_ids"]) == ("ag-1", "ag-2")
+    assert result.access_group_ids == ["ag-1", "ag-2"]
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_without_access_group_ids_leaves_column_to_its_default():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_create = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    await registry.add_agent_to_db(
+        agent={"agent_name": "Test Agent", "agent_card_params": _sample_agent_card_params()},
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+
+    assert "access_group_ids" not in mock_create.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("patch_body", "expected"),
+    [
+        ({"access_group_ids": ["ag-2", "ag-3"]}, ["ag-2", "ag-3"]),
+        ({"access_group_ids": []}, []),
+        ({"access_group_ids": None}, []),
+    ],
+)
+async def test_patch_agent_in_db_replaces_access_group_ids_when_provided(
+    patch_body: PatchAgentRequest, expected: list[str]
+):
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Test Agent",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "access_group_ids": ["ag-1"],
+        }
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock(expected))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent=patch_body, prisma_client=mock_prisma, updated_by="test-user"
+    )
+
+    assert tuple(mock_update.call_args.kwargs["data"]["access_group_ids"]) == tuple(expected)
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_keeps_access_group_ids_when_omitted():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Old Name",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "access_group_ids": ["ag-1"],
+        }
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock(["ag-1"]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent={"agent_name": "New Name"}, prisma_client=mock_prisma, updated_by="test-user"
+    )
+
+    assert "access_group_ids" not in mock_update.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body_access_group_ids", "expected"),
+    [(["ag-9", "ag-9"], ["ag-9"]), (None, []), ("omitted", [])],
+)
+async def test_update_agent_in_db_always_writes_access_group_ids(body_access_group_ids, expected: list[str]):
+    """PUT is a full replacement: omitting the field clears any previously attached groups."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            litellm_params={}, object_permission_id=None, kill_switch=None, access_group_ids=["ag-1"]
+        )
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock(expected))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+    body: Final = {
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {"model": "bedrock/agentcore/my-agent"},
+        **({} if body_access_group_ids == "omitted" else {"access_group_ids": body_access_group_ids}),
+    }
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123", agent=body, prisma_client=mock_prisma, updated_by="test-user"
+    )
+
+    assert tuple(mock_update.call_args.kwargs["data"]["access_group_ids"]) == tuple(expected)
+
+
+_KILL_SWITCH: Final = {
+    "url": "https://ops.example.com/kill",
+    "method": "POST",
+    "headers": {"X-Env": "prod"},
+    "query_params": {"reason": "manual"},
+    "body": {"action": "stop"},
+    "auth": {"type": "bearer", "token": "tok-real"},
+}
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_stores_kill_switch_json_and_a_json_null_when_unset():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_create = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    await registry.add_agent_to_db(
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "kill_switch": _KILL_SWITCH,
+        },
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+    assert json.loads(mock_create.call_args.kwargs["data"]["kill_switch"]) == _KILL_SWITCH
+
+    await registry.add_agent_to_db(
+        agent={"agent_name": "Plain Agent", "agent_card_params": _sample_agent_card_params()},
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+    assert mock_create.call_args.kwargs["data"]["kill_switch"] == json.dumps(None)
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_rejects_a_kill_switch_with_a_non_http_url():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.create = AsyncMock(return_value=_agent_row_mock([]))
+
+    with pytest.raises(Exception, match="absolute http"):
+        await registry.add_agent_to_db(
+            agent={
+                "agent_name": "Test Agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "kill_switch": {**_KILL_SWITCH, "url": "ops.example.com/kill"},
+            },
+            prisma_client=mock_prisma,
+            created_by="test-user",
+        )
+    mock_prisma.db.litellm_agentstable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_keeps_kill_switch_when_omitted_and_clears_it_on_null():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Old",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "kill_switch": _KILL_SWITCH,
+        }
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent={"agent_name": "New"}, prisma_client=mock_prisma, updated_by="u"
+    )
+    assert "kill_switch" not in mock_update.call_args.kwargs["data"]
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent={"kill_switch": None}, prisma_client=mock_prisma, updated_by="u"
+    )
+    assert mock_update.call_args.kwargs["data"]["kill_switch"] == json.dumps(None), (
+        "prisma-client-py silently drops None, so the clear must be written as the JSON literal null"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_restores_the_stored_kill_switch_secret_behind_the_marker():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "A",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "kill_switch": _KILL_SWITCH,
+        }
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "kill_switch": {
+                **_KILL_SWITCH,
+                "url": "https://ops.example.com/v2/kill",
+                "auth": {"type": "bearer", "token": REDACTED_BY_LITELM_STRING},
+            }
+        },
+        prisma_client=mock_prisma,
+        updated_by="u",
+    )
+
+    assert json.loads(mock_update.call_args.kwargs["data"]["kill_switch"]) == {
+        **_KILL_SWITCH,
+        "url": "https://ops.example.com/v2/kill",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_clears_kill_switch_when_omitted_and_restores_secret_when_echoed():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(litellm_params={}, object_permission_id=None, kill_switch=json.dumps(_KILL_SWITCH))
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+    base: Final = {"agent_name": "Test Agent", "agent_card_params": _sample_agent_card_params(), "litellm_params": {}}
+
+    await registry.update_agent_in_db(agent_id="agent-123", agent=base, prisma_client=mock_prisma, updated_by="u")
+    assert mock_update.call_args.kwargs["data"]["kill_switch"] == json.dumps(None)
+
+    echoed: Final = {**_KILL_SWITCH, "auth": {"type": "bearer", "token": REDACTED_BY_LITELM_STRING}}
+    await registry.update_agent_in_db(
+        agent_id="agent-123", agent={**base, "kill_switch": echoed}, prisma_client=mock_prisma, updated_by="u"
+    )
+    assert json.loads(mock_update.call_args.kwargs["data"]["kill_switch"]) == _KILL_SWITCH
+
+
+def test_load_agents_from_config_exposes_a_typed_kill_switch():
+    registry: Final = AgentRegistry()
+
+    registry.load_agents_from_config(
+        [{"agent_name": "cfg-agent", "agent_card_params": _sample_agent_card_params(), "kill_switch": _KILL_SWITCH}]
+    )
+
+    (agent,) = registry.get_agent_list()
+    assert agent.kill_switch is not None
+    assert agent.kill_switch.model_dump() == _KILL_SWITCH

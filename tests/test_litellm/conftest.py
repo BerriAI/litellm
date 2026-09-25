@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import httpx
 import pytest
+from pytest_socket import _remove_restrictions
 
 import asyncio
 
@@ -204,6 +205,21 @@ def local_model_cost_map(monkeypatch):
     finally:
         litellm.model_cost = original_model_cost
         litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    """Pin the bundled ``anthropic_beta_headers_config.json`` so beta header assertions
+    do not depend on the network-fetched copy or on what earlier tests left cached."""
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    try:
+        yield
+    finally:
+        monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+        reload_beta_headers_config()
 
 
 def _run_coroutine_if_needed(result):
@@ -492,6 +508,14 @@ def setup_and_teardown():
 
     # Teardown - no need to manually manage event loops with pytest-asyncio auto mode
     print(f"[conftest] Module teardown complete (worker: {worker_id or 'master'})")
+
+
+def pytest_collectstart():
+    _remove_restrictions()
+
+
+def pytest_runtest_setup():
+    _remove_restrictions()
 
 
 def pytest_collection_modifyitems(config, items):

@@ -336,7 +336,7 @@ def validate_url(url: str) -> tuple[str, str]:
                 raise SSRFError(
                     f"URL targets a blocked address ({resolved_ip}). "
                     "If this is a legitimate internal service, add the host "
-                    "to `user_url_allowed_hosts` in general_settings."
+                    "to `user_url_allowed_hosts` in litellm_settings."
                 )
 
     # For HTTPS with SSL verification enabled, TLS certificate validation
@@ -418,7 +418,7 @@ def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
-def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
+def safe_get(client: _UrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
 
@@ -461,7 +461,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     raise SSRFError("Too many redirects")
 
 
-async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
+async def async_safe_get(client: _AsyncUrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)

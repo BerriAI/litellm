@@ -1,11 +1,13 @@
 import json
-from typing import NoReturn
+from datetime import datetime, timedelta
+from typing import Final, NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
@@ -26,6 +28,7 @@ class StreamingWrapper:
 
 class FakeRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -36,6 +39,7 @@ class FakeRouter:
 
 class AlwaysFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -100,6 +104,7 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 class RecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.received_kwargs = None
@@ -161,6 +166,7 @@ async def test_run_async_fallback_skips_original_model_group():
 
 class AttemptRecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_model_groups = []
@@ -470,6 +476,8 @@ class AccessCheckedRouter(AttemptRecordingRouter):
         self.allowed_models = allowed_models
         self.access_checks = []
 
+    fallback_budget_check = None
+
     async def fallback_access_check(self, *, model, request_kwargs, llm_router):
         self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
         return model in self.allowed_models
@@ -541,6 +549,7 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
 
 class RecordingFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_models = []
@@ -955,7 +964,11 @@ class TestTriggerCooldownForFailedDeployment:
         """The proxy's x-litellm-timeout header lets a caller set an arbitrarily short
         timeout, which litellm.Timeout reports as status 408 regardless of the
         deployment's actual health. Without this guard, a caller could force a 408 on
-        every deployment in the fallback chain from a single request."""
+        every deployment in the fallback chain from a single request.
+
+        The failure logger never stamps end_time for a fallback hop (has_logged_async_failure
+        is already set), so model_call_details still carries the previous hop's end_time, which
+        predates this hop's api_call_start_time. The guard must not trust it."""
         mock_router = MagicMock()
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
@@ -973,10 +986,60 @@ class TestTriggerCooldownForFailedDeployment:
                 litellm_router=mock_router,
                 kwargs={"client_side_timeout": True},
                 exception=exc,
+                model_call_details={
+                    "litellm_params": {"client_side_timeout": True, "timeout": 0.5},
+                    "api_call_start_time": datetime.now() - timedelta(seconds=1),
+                    "end_time": datetime.now() - timedelta(seconds=5),
+                },
             )
 
             mock_set_cooldown.assert_not_called()
             mock_increment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_still_cools_down_provider_408_before_caller_deadline(self):
+        """client_side_timeout only records that the caller configured a timeout. A 408
+        that comes back before that deadline was raised by the provider itself, so it is
+        a real health signal and must still cool the deployment down."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=60,
+            num_retries=0,
+        )
+        exc = litellm.Timeout(message="timeout", model="gpt-5.6", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+        started = datetime.now()
+
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router,
+            kwargs={"client_side_timeout": True},
+            exception=exc,
+            model_call_details={
+                "litellm_params": {"client_side_timeout": True, "timeout": 30},
+                "api_call_start_time": started,
+                "end_time": started + timedelta(seconds=1),
+            },
+        )
+
+        assert (
+            get_deployment_failures_for_current_minute(
+                litellm_router_instance=router, deployment_id="fallback-deployment"
+            )
+            == 1
+        )
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
+        assert [entry[0] for entry in active] == ["fallback-deployment"]
 
     def test_still_cools_down_408_without_client_side_timeout_flag(self):
         """The client-side-timeout guard is scoped to caller-supplied timeouts only: a
@@ -998,6 +1061,7 @@ class TestTriggerCooldownForFailedDeployment:
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
         fallback_access_check = None
+        fallback_budget_check = None
 
         def __init__(self):
             self.cooldown_time = 60.0
@@ -1242,6 +1306,14 @@ class TestOrderedFallbackLookupGroups:
             "requested-model",
         )
 
+    def test_fallback_hop_resumes_the_original_groups_chain_last(self):
+        from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
+
+        kwargs = {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+
+        assert fallback_lookup_groups(kwargs, "fb1") == ("fb1", "primary")
+        assert fallback_lookup_groups({"metadata": {"original_model_group": 42}}, "fb1") == ("fb1",)
+
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (
             get_fallback_model_group_for_lookup_groups,
@@ -1252,3 +1324,78 @@ class TestOrderedFallbackLookupGroups:
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
         assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
+
+
+class TestHasUnattemptedFallbackTarget:
+    def test_exhausted_chain_is_not_recoverable_but_a_fresh_entry_is(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            has_unattempted_fallback_target,
+        )
+
+        attempted: Final = AttemptedFallbackTargets()
+        attempted.record("primary")
+        attempted.record("fb1")
+        attempted.record("fb2")
+
+        assert has_unattempted_fallback_target(["fb1", "fb2"], {"attempted_targets": attempted}) is False
+        assert has_unattempted_fallback_target(["fb1", "fb3"], {"attempted_targets": attempted}) is True
+        assert has_unattempted_fallback_target(["fb1"], {}) is True
+        assert has_unattempted_fallback_target(None, {}) is False
+
+
+def test_get_fallback_model_group_matches_provider_prefixed_key():
+    """A bare model group routed via a wildcard (e.g. "gpt-4o" through
+    "openai/*") must match a fallback keyed on the provider-prefixed name,
+    which is the form the Admin UI offers for wildcard routes."""
+    fallbacks = [{"openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_get_fallback_model_group_exact_match_beats_prefixed_match():
+    fallbacks = [
+        {"openai/gpt-4o": ["claude-3-haiku"]},
+        {"gpt-4o": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_ignores_unknown_models():
+    """Provider inference fails for unknown bare names - the lookup must not
+    raise and must fall through to the generic fallback."""
+    fallbacks = [
+        {"openai/some-model": ["claude-3-haiku"]},
+        {"*": ["gemini-1.5-flash"]},
+    ]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="some-unknown-model-xyz")
+
+    assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+def test_get_fallback_model_group_prefixed_match_skips_prefixed_model_group():
+    """An already-prefixed model group must not double-prefix."""
+    fallbacks = [{"openai/openai/gpt-4o": ["claude-3-haiku"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
+
+    assert fallback_model_group is None
+
+
+def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias-style group name has no provider, and resolving it prints the SDK's provider-list banner,
+    so the lookup only infers a provider when some key is spelled <provider>/<group>."""
+
+    resolver: Final = MagicMock(return_value=("my-alias", "openai", None, None))
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", resolver)
+    fallbacks: Final = [{"gpt-5.5-pro": ["claude-sonnet-4-6"]}, {"*": ["gpt-5.5-mini"]}]
+
+    assert get_fallback_model_group(fallbacks=fallbacks, model_group="my-alias") == (["gpt-5.5-mini"], 1)
+    resolver.assert_not_called()

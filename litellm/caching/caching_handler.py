@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -34,7 +34,8 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
-from litellm.types.caching import CachedEmbedding
+from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
+from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -73,9 +74,10 @@ class CachingHandlerResponse(BaseModel):
     For embeddings there can be a cache hit for some of the inputs in the list and a cache miss for others
     """
 
-    cached_result: Any | None = None
+    cached_result: object | None = None
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    embedding_uncached_input: list[str | list[int]] | None = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
@@ -107,17 +109,31 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
+def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
+    if kwargs.get("stream", False) is True:
+        return True
+    return converted_stream_requested(kwargs) and not kwargs.get("_agentic_loop_depth")
+
+
+def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> bool:
     """
-    When stream=True, do not run success callbacks at cache-hit time.
+    When the cache hit is replayed as a stream, do not run success callbacks at cache-hit time.
 
     Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
     replay uses CachedResponsesAPIStreamingIterator; cached Anthropic Messages
     replay uses CachedAnthropicMessagesStreamIterator. All invoke logging success
     handlers when the stream finishes; firing them here too would double-count
-    spend and callback records.
+    spend and callback records. A plain (non-stream) replay logs here, since nothing
+    else will.
     """
-    return kwargs.get("stream", False) is True
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        CachedAnthropicMessagesStreamIterator,
+    )
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(
+        cached_result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, CachedAnthropicMessagesStreamIterator)
+    )
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
@@ -151,6 +167,37 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
 def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
+
+
+class _CachedEmbeddingRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding: list[float] | str | None
+    index: int | None
+    object: str | None
+    model: str | None
+    prompt_tokens: int | None
+    prompt_tokens_details: dict | None
+    format_version: int
+
+
+def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
+    try:
+        record: Final = _CachedEmbeddingRecord.model_validate(entry)
+    except ValidationError:
+        return None
+    if record.format_version != EMBEDDING_CACHE_FORMAT_VERSION:
+        return None
+    cached: Final[CachedEmbedding] = {
+        "embedding": record.embedding,
+        "index": record.index,
+        "object": record.object,
+        "model": record.model,
+        "prompt_tokens": record.prompt_tokens,
+        "prompt_tokens_details": record.prompt_tokens_details,
+        "format_version": record.format_version,
+    }
+    return cached
 
 
 class LLMCachingHandler:
@@ -267,7 +314,7 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
-                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         # LOG SUCCESS
                         self._async_log_cache_hit_on_callbacks(
                             logging_obj=logging_obj,
@@ -305,6 +352,7 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
+                        embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
                     )
 
             verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -381,9 +429,10 @@ class LLMCachingHandler:
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=False,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
-                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         logging_obj.handle_sync_success_callbacks_for_async_calls(
                             result=cached_result,
                             start_time=start_time,
@@ -642,32 +691,30 @@ class LLMCachingHandler:
         if _caching_handler_response.final_embedding_cached_response is None:
             return embedding_response
 
-        idx = 0
-        final_data_list: Final = []
-        for item in _caching_handler_response.final_embedding_cached_response.data:
-            if item is None and embedding_response.data is not None:
-                final_data_list.append(embedding_response.data[idx])
-                idx += 1
-            else:
-                final_data_list.append(item)
-
-        _caching_handler_response.final_embedding_cached_response.data = final_data_list
-        _caching_handler_response.final_embedding_cached_response._hidden_params["cache_hit"] = True
-        _caching_handler_response.final_embedding_cached_response._response_ms = (
-            end_time - start_time
-        ).total_seconds() * 1000
-
-        ## USAGE
-        if (
-            _caching_handler_response.final_embedding_cached_response.usage is not None
-            and embedding_response.usage is not None
-        ):
-            _caching_handler_response.final_embedding_cached_response.usage = self.combine_usage(
-                usage1=_caching_handler_response.final_embedding_cached_response.usage,
-                usage2=embedding_response.usage,
-            )
-
-        return _caching_handler_response.final_embedding_cached_response
+        cached: Final = _caching_handler_response.final_embedding_cached_response
+        fresh_items: Final = iter(embedding_response.data or ())
+        merged_usage: Final = (
+            self.combine_usage(usage1=cached.usage, usage2=embedding_response.usage)
+            if cached.usage is not None and embedding_response.usage is not None
+            else cached.usage
+        )
+        merged: Final = EmbeddingResponse(
+            model=cached.model,
+            data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
+                item
+                if item is not None
+                else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
+                for position, item in enumerate(cached.data)
+            ],
+            usage=merged_usage,
+            hidden_params={  # mutable-ok: EmbeddingResponse._hidden_params is a mutable dict field
+                **cached._hidden_params,
+                "cache_hit": True,
+            },
+            _response_headers=cached._response_headers,
+        )
+        merged._response_ms = (end_time - start_time).total_seconds() * 1000
+        return merged
 
     def _async_log_cache_hit_on_callbacks(
         self,
@@ -707,7 +754,7 @@ class LLMCachingHandler:
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: dict[str, object], args: tuple[object, ...]
-    ) -> Any | None:
+    ) -> object | None:
         """
         Internal method to
         - get cache key
@@ -755,7 +802,7 @@ class LLMCachingHandler:
                         dynamic_cache_object=self.dual_cache,
                     )
                 )
-            cached_result = await asyncio.gather(*tasks)
+            cached_result = [_current_format_embedding_entry(entry) for entry in await asyncio.gather(*tasks)]
             ## check if cached result is None ##
             if cached_result is not None and isinstance(cached_result, list):
                 # set cached_result to None if all elements are None
@@ -823,7 +870,7 @@ class LLMCachingHandler:
         if (call_type == CallTypes.acompletion.value or call_type == CallTypes.completion.value) and isinstance(
             cached_result, dict
         ):
-            if kwargs.get("stream", False) is True:
+            if _stream_replay_requested(kwargs):
                 cached_result = self._convert_cached_stream_response(
                     cached_result=cached_result,
                     call_type=call_type,
@@ -838,7 +885,7 @@ class LLMCachingHandler:
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
         ) and isinstance(cached_result, dict):
-            if kwargs.get("stream", False) is True:
+            if _stream_replay_requested(kwargs):
                 cached_result = self._convert_cached_stream_response(
                     cached_result=cached_result,
                     call_type=call_type,
@@ -893,7 +940,7 @@ class LLMCachingHandler:
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(cached_result, dict):
             use_chat_completion_cache: Final = _is_chat_completion_cached_dict(cached_result)
             if use_chat_completion_cache:
-                if kwargs.get("stream", False) is True:
+                if _stream_replay_requested(kwargs):
                     bridge_call_type: Final = (
                         CallTypes.acompletion.value if call_type == "aresponses" else CallTypes.completion.value
                     )
@@ -921,7 +968,7 @@ class LLMCachingHandler:
                 ):
                     response_obj._hidden_params["cache_hit"] = True
 
-                if kwargs.get("stream", False) is True:
+                if _stream_replay_requested(kwargs):
                     cached_result = CachedResponsesAPIStreamingIterator(
                         response=response_obj,
                         logging_obj=logging_obj,
@@ -953,7 +1000,7 @@ class LLMCachingHandler:
 
     def _convert_cached_stream_response(
         self,
-        cached_result: Any,
+        cached_result: dict[str, object],
         call_type: str,
         logging_obj: LiteLLMLoggingObj,
         model: str,
@@ -982,7 +1029,7 @@ class LLMCachingHandler:
 
     async def async_set_cache(
         self,
-        result: Any,
+        result: object,
         original_function: Callable,
         kwargs: dict[str, Any],
         args: tuple[object, ...] | None = None,
@@ -1050,7 +1097,7 @@ class LLMCachingHandler:
 
     def sync_set_cache(
         self,
-        result: Any,
+        result: object,
         kwargs: dict[str, object],
         args: tuple[object, ...] | None = None,
     ):

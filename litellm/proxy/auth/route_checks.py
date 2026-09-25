@@ -1,5 +1,5 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Collection
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -24,10 +24,14 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
     [
         # user
         "/user/new",
+        "/management/v1/users/bulk",
         "/user/delete",
+        "/management/v1/users/bulk_delete",
         "/user/bulk_update",
         # team
         "/team/new",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/update",
         "/team/delete",
         "/team/block",
@@ -136,6 +140,9 @@ class RouteChecks:
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
                     if allowed_route == "llm_api_routes":
+                        if route == "/auto_router/session" and RouteChecks._get_request_method(request) == "GET":
+                            return True
+
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )
@@ -271,7 +278,11 @@ class RouteChecks:
             route=route,
             method=RouteChecks._get_request_method(request=request),
         ):
-            RouteChecks._require_auth_pass_through_access(route=route, valid_token=valid_token)
+            RouteChecks._require_auth_pass_through_access(
+                route=route,
+                valid_token=valid_token,
+                jwt_team_allowed_routes=RouteChecks._jwt_team_allowed_routes(valid_token=valid_token),
+            )
         elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
@@ -329,7 +340,12 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
+            valid_token.is_team_service_account
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+            )
+        ):
             pass
         elif valid_token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
@@ -594,7 +610,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: Sequence[str]) -> bool:
+    def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
@@ -678,14 +694,41 @@ class RouteChecks:
         )
 
     @staticmethod
+    def jwt_team_routes_grant_pass_through(route: str, team_allowed_routes: Collection[str]) -> bool:
+        """
+        Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Blanket grants never do:
+        a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
+        no path segment (``*``, ``/*``) is skipped.
+        """
+        return any(
+            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            for allowed_route in team_allowed_routes
+            if allowed_route.rstrip("*").strip("/")
+        )
+
+    @staticmethod
+    def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
+        """``team_allowed_routes`` for team tokens built by JWT auth; JWT-mapped virtual keys stay key-scoped."""
+        if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
+            return ()
+
+        from litellm.proxy.proxy_server import jwt_handler
+
+        return jwt_handler.litellm_jwtauth.team_allowed_routes
+
+    @staticmethod
     def _require_auth_pass_through_access(
         route: str,
         valid_token: UserAPIKeyAuth,
+        jwt_team_allowed_routes: Collection[str] = (),
     ) -> None:
         """
-        Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
+        Require an explicit grant for auth=true pass-through: ``allowed_passthrough_routes`` on the
+        key or team, or an explicit JWT ``team_allowed_routes`` entry.
         """
         if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+            return
+        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=jwt_team_allowed_routes):
             return
         raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
@@ -765,9 +808,13 @@ class RouteChecks:
     _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES = frozenset(
         [
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/bulk_update",
             "/team/new",
+            "/management/v1/teams/{team_id}/members/bulk_delete",
+            "/management/v1/teams/{team_id}/members/bulk_update",
             "/team/update",
             "/team/delete",
             "/model/new",
@@ -832,7 +879,7 @@ class RouteChecks:
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email can be updated",
                             )
-            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+            elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
             ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
@@ -868,12 +915,16 @@ class RouteChecks:
         if route == "/user/password/change":
             return
 
+        # Self-service logout; the endpoint only revokes the caller's own session key.
+        if route == "/session/logout":
+            return
+
         # Hard-block known write routes regardless of HTTP method (defensive
         # — these are POSTs in practice, but pinning them here protects
         # against future GET-shaped writes).
-        if route in RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES or (
-            route.startswith("/key/") and route.endswith("/regenerate")
-        ):
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES
+        ) or (route.startswith("/key/") and route.endswith("/regenerate")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",

@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
+    system_messages_first,
     tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -28,9 +29,8 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -276,12 +276,20 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
+        request_params: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in optional_params.items()
+                if key != "tool_choice" or optional_params.get("tools") or optional_params.get("functions")
+            }
+        )
         return {
             "model": model,
             "messages": azure_messages,
-            **optional_params,
+            **request_params,
             **sanitized_tools_update(optional_params),
         }
 
@@ -295,7 +303,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

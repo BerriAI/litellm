@@ -8030,6 +8030,37 @@ class TestPKCEStateCookieBinding:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enable_sso_debug_value", [None, "false", "0"])
+async def test_sso_debug_routes_return_404_unless_explicitly_enabled(enable_sso_debug_value):
+    """
+    /sso/debug/login and /sso/debug/callback must 404 unless ENABLE_SSO_DEBUG is
+    explicitly set to a truthy value.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import debug_sso_callback, debug_sso_login
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+    mock_request.cookies = {}
+    mock_request.query_params = {}
+
+    env = {"GENERIC_CLIENT_ID": "test_client_id"}
+    if enable_sso_debug_value is not None:
+        env["ENABLE_SSO_DEBUG"] = enable_sso_debug_value
+
+    with patch.dict(os.environ, env, clear=False):
+        if enable_sso_debug_value is None:
+            os.environ.pop("ENABLE_SSO_DEBUG", None)
+
+        with pytest.raises(HTTPException) as login_exc:
+            await debug_sso_login(mock_request)
+        with pytest.raises(HTTPException) as callback_exc:
+            await debug_sso_callback(mock_request)
+
+    assert login_exc.value.status_code == 404
+    assert callback_exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_debug_sso_callback_renders_full_jwt_claims():
     """
     /sso/debug/callback should render the complete set of claims returned by the
@@ -8080,7 +8111,7 @@ async def test_debug_sso_callback_renders_full_jwt_claims():
     with (
         patch.dict(
             os.environ,
-            {"GENERIC_CLIENT_ID": "test_client_id"},
+            {"GENERIC_CLIENT_ID": "test_client_id", "ENABLE_SSO_DEBUG": "true"},
             clear=False,
         ),
         patch(
@@ -8165,7 +8196,7 @@ async def test_debug_sso_callback_handles_missing_raw_response():
     with (
         patch.dict(
             os.environ,
-            {"MICROSOFT_CLIENT_ID": "test_microsoft_id"},
+            {"MICROSOFT_CLIENT_ID": "test_microsoft_id", "ENABLE_SSO_DEBUG": "true"},
             clear=False,
         ),
         patch.object(
@@ -8213,7 +8244,7 @@ async def _render_debug_page(provider_env, id_jag_registered, force_inert=False)
         return parsed
 
     stack = [
-        patch.dict(os.environ, provider_env, clear=False),
+        patch.dict(os.environ, {**provider_env, "ENABLE_SSO_DEBUG": "true"}, clear=False),
         patch(  # test-quality-ok: endpoint test stubs the upstream generic IdP boundary
             "litellm.proxy.management_endpoints.ui_sso.get_generic_sso_response", side_effect=fake_generic
         ),
@@ -8334,6 +8365,7 @@ async def _render_legacy_login_page(env_overrides, general_settings):
             "GOOGLE_CLIENT_ID",
             "GENERIC_CLIENT_ID",
             "LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT",
+            "UI_PASSWORD",
         ):
             os.environ.pop(var, None)
         os.environ.update(env_overrides)
@@ -8384,6 +8416,20 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
     assert response.status_code == 200
     assert "Default Credentials" not in body
     assert "MASTER_KEY" not in body
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_hides_credentials_hint_when_ui_password_set():
+    response = await _render_legacy_login_page(
+        env_overrides={"UI_PASSWORD": "s3cret-pass"},
+        general_settings={},
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" not in body
+    assert "MASTER_KEY" not in body
+    assert 'name="username"' in body
 
 
 @pytest.mark.asyncio

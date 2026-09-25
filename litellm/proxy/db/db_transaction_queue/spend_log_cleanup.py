@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
@@ -36,8 +37,31 @@ StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reac
 class TableCleanupResult:
     """Outcome of pruning one table, so the caller can report why a run ended."""
 
+    table_name: str
     rows_deleted: int
     stop_reason: StopReason
+
+
+class _RunProgress:
+    """How far one cleanup run has got, reported if that run is cancelled"""
+
+    def __init__(self) -> None:
+        self.rows_deleted: int = 0
+        self.batches: int = 0
+
+    def record_batch(self, rows_deleted: int) -> None:
+        self.rows_deleted += rows_deleted
+        self.batches += 1
+
+
+_run_progress: ContextVar[_RunProgress] = ContextVar("spend_log_cleanup_run_progress")
+
+
+def _record_run_batch(rows_deleted: int) -> None:
+    """Count a batch towards the run in progress, if a run is what issued it"""
+    progress: Final = _run_progress.get(None)
+    if progress is not None:
+        progress.record_batch(rows_deleted)
 
 
 class _RemainingRow(BaseModel):
@@ -422,6 +446,7 @@ class SpendLogCleanup:
 
             total_deleted += deleted_count
             run_count += 1
+            _record_run_batch(deleted_count)
 
             # Add a small sleep to prevent overwhelming the database
             await asyncio.sleep(0.1)
@@ -448,11 +473,11 @@ class SpendLogCleanup:
         from the last run that finished inside its budget.
         """
         if time.monotonic() >= deadline:
-            return TableCleanupResult(rows_deleted=rows_deleted, stop_reason=stop_reason)
+            return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
         remaining: Final = await self._count_remaining(prisma_client, cutoff_date, table_name, time_column, deadline)
         if remaining is not None:
             SpendLogCleanupMetrics.set_rows_remaining(table_name, remaining)
-        return TableCleanupResult(rows_deleted=rows_deleted, stop_reason=stop_reason)
+        return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
 
     async def _delete_old_logs(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
@@ -488,6 +513,18 @@ class SpendLogCleanup:
             cutoff_date,
             table_name="LiteLLM_AutoRouterSession",
             key_columns=("api_key", "session_id", "router_name"),
+            time_column="last_turn_at",
+            deadline=deadline,
+        )
+
+    async def _delete_old_autorouter_user_session_rows(
+        self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_AutoRouterUserSession",
+            key_columns=("user_id", "api_key", "session_id", "router_name"),
             time_column="last_turn_at",
             deadline=deadline,
         )
@@ -535,7 +572,9 @@ class SpendLogCleanup:
             )
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
-        logs_result: Final = await self._delete_old_logs(prisma_client, cutoff_date, deadline)
+        logs_result: Final = await self._delete_old_logs(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+        )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
         index_result: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date, deadline)
@@ -549,9 +588,28 @@ class SpendLogCleanup:
         Prune auto-router session rollup rows, which carry their own retention horizon.
         """
         session_cutoff: Final = datetime.now(timezone.utc) - timedelta(seconds=float(retention_seconds))
-        sessions_result: Final = await self._delete_old_autorouter_session_rows(prisma_client, session_cutoff, deadline)
+        from litellm.proxy.db.baseline_accounting import BaselineAccountingStore
+
+        if remaining_ms := self._remaining_timeout_ms(deadline)():
+            try:
+                await BaselineAccountingStore.for_client(prisma_client).retire_before(
+                    session_cutoff,
+                    self.batch_size,
+                    remaining_ms,
+                )
+            except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
+                verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
+        sessions_result: Final = await self._delete_old_autorouter_session_rows(
+            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
+        )
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
-        return (sessions_result,)
+        user_sessions_result: Final = await self._delete_old_autorouter_user_session_rows(
+            prisma_client, session_cutoff, deadline
+        )
+        verbose_proxy_logger.info(
+            "Deleted %s expired auto-router user session rollup rows", user_sessions_result.rows_deleted
+        )
+        return (sessions_result, user_sessions_result)
 
     async def _clean_health_checks(
         self, prisma_client: PrismaClient, retention_seconds: int, deadline: float
@@ -583,6 +641,17 @@ class SpendLogCleanup:
             return "batch_cap_reached"
         return "completed"
 
+    @staticmethod
+    def _log_run_summary(outcome: RunOutcome, results: tuple[TableCleanupResult, ...], elapsed_seconds: float) -> None:
+        per_table: Final = ", ".join(
+            f"{result.table_name}: deleted={result.rows_deleted} stop_reason={result.stop_reason}" for result in results
+        )
+        message: Final = "Spend log cleanup run finished: outcome=%s elapsed=%.1fs [%s]"
+        if outcome == "completed":
+            verbose_proxy_logger.info(message, outcome, elapsed_seconds, per_table)
+            return
+        verbose_proxy_logger.warning(message, outcome, elapsed_seconds, per_table)
+
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
@@ -590,6 +659,9 @@ class SpendLogCleanup:
         If no pod_lock_manager, runs cleanup without distributed locking.
         """
         lock_acquired = False
+        run_started_at: Final = time.monotonic()
+        progress: Final = _RunProgress()
+        progress_token: Final = _run_progress.set(progress)
         try:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
             self._refresh_bounds()
@@ -666,10 +738,20 @@ class SpendLogCleanup:
                 else ()
             )
 
-            SpendLogCleanupMetrics.record_run(
-                self._run_outcome(spend_log_results + session_results + health_check_results)
-            )
+            results: Final = spend_log_results + session_results + health_check_results
+            outcome: Final = self._run_outcome(results)
+            SpendLogCleanupMetrics.record_run(outcome)
+            self._log_run_summary(outcome, results, time.monotonic() - run_started_at)
 
+        except asyncio.CancelledError:
+            verbose_proxy_logger.error(
+                "Spend log cleanup cancelled after %.2fs (rows_deleted=%d, batches=%d); the next run resumes from here",
+                time.monotonic() - run_started_at,
+                progress.rows_deleted,
+                progress.batches,
+            )
+            SpendLogCleanupMetrics.record_run("aborted")
+            raise
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
             # timeout is often empty and gives operators no signal to diagnose.
@@ -681,6 +763,7 @@ class SpendLogCleanup:
             SpendLogCleanupMetrics.record_run("aborted")
             return  # Return after error handling
         finally:
+            _run_progress.reset(progress_token)
             # Only release the lock if it was actually acquired
             if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
                 await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
