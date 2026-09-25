@@ -16,7 +16,9 @@ without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 `# rebind-ok: <reason>`), LIT011 (parameter rebinding or in-place mutation), and
 LIT012 (TypedDict field without a `ReadOnly[...]` qualifier; suppress with
 `# writable-ok: <reason>`), and LIT014 (comprehension with more than one `for`
-or `if` clause; suppress with `# comprehension-ok: <reason>`) carry limits at
+or `if` clause; suppress with `# comprehension-ok: <reason>` on a spanned
+line, which belongs to the innermost violating comprehension spanning it and
+to any single-line violating comprehension on that line) carry limits at
 or above their current count to ratchet down; LIT005 (`*-ok` suppression
 without a reason) is frozen at limit 0
 so any net-new reasonless suppression trips the gate; LIT013 (`*-ok` suppression
@@ -200,7 +202,8 @@ def cmd_check(base: str) -> None:
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
         "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`, "
-        "`# rebind-ok: <reason>`, `# writable-ok: <reason>`), or remove an equal "
+        "`# rebind-ok: <reason>`, `# writable-ok: <reason>`, "
+        "`# comprehension-ok: <reason>`), or remove an equal "
         "number elsewhere; the ceiling "
         "is the limit in type-discipline-budget.json."
     )

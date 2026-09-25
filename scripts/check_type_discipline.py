@@ -110,9 +110,9 @@ LIT014  Comprehension with more than one `for` clause or more than one `if` clau
         split the comprehension into a helper generator, a named intermediate, or
         a plain loop instead. A comprehension nested inside another's element or
         iterable is its own node and is judged separately. Suppress with
-        `# comprehension-ok: <reason>` on any line the comprehension spans; when
-        comprehensions nest, the comment belongs to the innermost one spanning
-        that line.
+        `# comprehension-ok: <reason>` on any line the comprehension spans. The
+        marker belongs to the innermost violating comprehension spanning that
+        line, and also to any single-line violating comprehension on that line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -1058,25 +1058,42 @@ def _span(node: ast.expr) -> range:
     return range(node.lineno, (node.end_lineno or node.lineno) + 1)
 
 
+def _clause_counts(node: ast.expr) -> tuple[int, int]:
+    return (
+        len(node.generators),
+        sum(len(g.ifs) for g in node.generators),
+    )
+
+
+def _violates(node: ast.expr) -> bool:
+    for_count, if_count = _clause_counts(node)
+    return for_count > 1 or if_count > 1
+
+
 def _comprehension_owners(tree: ast.AST, ok_lines: frozenset[int]) -> Mapping[int, int]:
     """id(node) -> marker line for each `# comprehension-ok` line's owner.
 
-    A marker belongs to the innermost comprehension whose span contains it
-    (line span first, column width breaks ties), so a comment inside a nested
-    comprehension never silences the enclosing one.
+    Only violating comprehensions own markers. Each marker belongs to the
+    innermost violating comprehension whose span contains it (line span first,
+    column width breaks ties) plus every violating comprehension whose whole
+    span is that single line, so a comment inside a nested comprehension never
+    silences a multi-line enclosing one and a violation sharing its only line
+    can still be suppressed.
     """
-    comps: Final = tuple(n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES))
+    violating: Final = tuple(
+        n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n)
+    )
 
     def nesting_key(node: ast.expr) -> tuple[int, int]:
         return (len(_span(node)), (node.end_col_offset or node.col_offset) - node.col_offset)
 
-    def owner(line: int) -> ast.expr | None:
-        containing: Final = tuple(n for n in comps if line in _span(n))
-        return min(containing, key=nesting_key, default=None)
+    def owners(line: int) -> tuple[ast.expr, ...]:
+        containing: Final = tuple(n for n in violating if line in _span(n))
+        innermost: Final = min(containing, key=nesting_key, default=None)
+        single_line: Final = tuple(n for n in violating if len(_span(n)) == 1 and n.lineno == line)
+        return (*single_line, *(() if innermost is None else (innermost,)))
 
-    return MappingProxyType(
-        {id(o): line for line in ok_lines if (o := owner(line)) is not None}
-    )
+    return MappingProxyType({id(o): line for line in ok_lines for o in owners(line)})
 
 
 def iter_comprehension_violations(
@@ -1091,12 +1108,9 @@ def iter_comprehension_violations(
     """
     owners: Final = _comprehension_owners(tree, ok_lines)
     for node in ast.walk(tree):
-        if not isinstance(node, COMPREHENSION_NODES):
+        if not isinstance(node, COMPREHENSION_NODES) or not _violates(node):
             continue
-        for_count = len(node.generators)
-        if_count = sum(len(g.ifs) for g in node.generators)
-        if for_count <= 1 and if_count <= 1:
-            continue
+        for_count, if_count = _clause_counts(node)
         yield (
             Violation(
                 path,
