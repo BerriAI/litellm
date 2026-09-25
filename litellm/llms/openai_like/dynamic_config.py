@@ -49,6 +49,19 @@ def _completion_window_metadata_maps(
     )
 
 
+def _validate_merge_request(
+    request: Mapping[str, object], extra_body: Mapping[str, object] | None, provider: SimpleProviderConfig
+) -> None:
+    raw_model: Final = request.get("model")
+    validate_caller_completion_window(
+        MappingProxyType(
+            {**request, **(MappingProxyType({"extra_body": extra_body}) if extra_body else MappingProxyType({}))}
+        ),
+        provider,
+        raw_model if isinstance(raw_model, str) else "",
+    )
+
+
 def _caller_completion_window(body: Mapping[str, object]) -> object:
     metadata, extra_metadata = _completion_window_metadata_maps(body)
     if "completion_window" in extra_metadata:
@@ -251,17 +264,7 @@ def create_config_class(provider: SimpleProviderConfig):
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if service_tier_as_completion_window_enabled(provider):
-                raw_model: Final = request.get("model")
-                validate_caller_completion_window(
-                    MappingProxyType(
-                        {
-                            **request,
-                            **(MappingProxyType({"extra_body": extra_body}) if extra_body else MappingProxyType({})),
-                        }
-                    ),
-                    provider,
-                    raw_model if isinstance(raw_model, str) else "",
-                )
+                _validate_merge_request(request, extra_body, provider)
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 
@@ -476,17 +479,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if service_tier_as_completion_window_enabled(provider):
-                raw_model: Final = request.get("model")
-                validate_caller_completion_window(
-                    MappingProxyType(
-                        {
-                            **request,
-                            **(MappingProxyType({"extra_body": extra_body}) if extra_body else MappingProxyType({})),
-                        }
-                    ),
-                    provider,
-                    raw_model if isinstance(raw_model, str) else "",
-                )
+                _validate_merge_request(request, extra_body, provider)
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 

@@ -1002,6 +1002,22 @@ def _traffic_type_service_tier(hidden_params: object, service_tier: str | None) 
     return _map_traffic_type_to_service_tier(raw_traffic_type) if raw_traffic_type else service_tier
 
 
+def _billed_service_tier(
+    completion_response: object,
+    service_tier: str | None,
+    window_params: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
+) -> str | None:
+    hidden_params: Final = (
+        getattr(completion_response, "_hidden_params", None) if completion_response is not None else None
+    )
+    return _service_tier_billed_by_completion_window(
+        service_tier=_traffic_type_service_tier(hidden_params, service_tier),
+        optional_params=window_params,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+
 def _service_tier_billed_by_completion_window(
     service_tier: str | None,
     optional_params: Mapping[str, object] | None,
@@ -1018,10 +1034,13 @@ def _service_tier_billed_by_completion_window(
 def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
-    usage_obj: Final = (
-        completion_response.get("usage")
-        if isinstance(completion_response, dict)
-        else getattr(completion_response, "get", lambda x: None)("usage")
+    usage_obj: Final = cast(
+        Usage | ResponseAPIUsage | dict | BaseModel,
+        (
+            completion_response.get("usage")
+            if isinstance(completion_response, dict)
+            else getattr(completion_response, "get", lambda x: None)("usage")
+        ),
     )
 
     if usage_obj is None:
@@ -1562,15 +1581,11 @@ def completion_cost(
                             "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
                             e,
                         )
-                (hidden_params_for_tier,) = (
-                    (getattr(completion_response, "_hidden_params", None) if completion_response is not None else None),
-                )
-                (billed_service_tier,) = (
-                    _service_tier_billed_by_completion_window(
-                        service_tier=_traffic_type_service_tier(hidden_params_for_tier, resolved_service_tier),
-                        optional_params=window_params,
-                        custom_llm_provider=custom_llm_provider,
-                    ),
+                billed_service_tier = _billed_service_tier(
+                    completion_response=completion_response,
+                    service_tier=resolved_service_tier,
+                    window_params=window_params,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
