@@ -41,9 +41,21 @@ class CredentialHelperUtils:
         # is kept in memory and should remain unencrypted.
         return CredentialItem(
             credential_name=credential.credential_name,
+            credential_alias=credential.credential_alias,
             credential_values=encrypted_credential_values,
             credential_info=credential.credential_info or {},
         )
+
+
+def _reject_blank_alias(credential_alias: str | None) -> None:
+    if credential_alias is None or credential_alias.strip():
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "credential_alias cannot be blank. Omit it to keep the current alias or send null to clear it"
+        },
+    )
 
 
 def _credential_exists_detail(credential_name: str) -> str:
@@ -98,6 +110,7 @@ async def create_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        _reject_blank_alias(credential.credential_alias)
         credential_values: Final = (
             _resolve_deployment_credentials(llm_router, credential.model_id)
             if credential.model_id
@@ -110,6 +123,7 @@ async def create_credential(
             )
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
+            credential_alias=credential.credential_alias,
             credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(credential_values),
             credential_info=credential.credential_info,
         )
@@ -157,6 +171,7 @@ async def get_credentials(
         masked_credentials: Final = [
             {
                 "credential_name": credential.credential_name,
+                "credential_alias": credential.credential_alias,
                 "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
             }
@@ -187,6 +202,7 @@ async def get_credential_by_name(
             if credential.credential_name == credential_name:
                 masked_credential = CredentialItem(
                     credential_name=credential.credential_name,
+                    credential_alias=credential.credential_alias,
                     credential_values=_get_masked_values(
                         credential.credential_values,
                         unmasked_length=4,
@@ -290,35 +306,16 @@ def update_db_credential(
     """
     Update a credential in the DB.
     """
-    merged_credential: Final = CredentialItem(
-        credential_name=db_credential.credential_name,
-        credential_info=db_credential.credential_info,
-        credential_values=db_credential.credential_values,
-    )
-
     encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(
         updated_patch,
         new_encryption_key,
     )
-    # update model name
-    if encrypted_credential.credential_name:
-        merged_credential.credential_name = encrypted_credential.credential_name
-
-    # update litellm params
-    if encrypted_credential.credential_values:
-        # Encrypt any sensitive values
-        encrypted_params: Final = {k: v for k, v in encrypted_credential.credential_values.items()}
-
-        merged_credential.credential_values.update(encrypted_params)
-
-    # update model info
-    if encrypted_credential.credential_info:
-        """Update credential info"""
-        if "credential_info" not in merged_credential.credential_info:
-            merged_credential.credential_info = {}
-        merged_credential.credential_info.update(encrypted_credential.credential_info)
-
-    return merged_credential
+    return CredentialItem(
+        credential_name=db_credential.credential_name,
+        credential_alias=updated_patch.credential_alias,
+        credential_values={**db_credential.credential_values, **encrypted_credential.credential_values},
+        credential_info={**(db_credential.credential_info or {}), **(encrypted_credential.credential_info or {})},
+    )
 
 
 @router.patch(
@@ -340,6 +337,14 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        if credential.credential_name is not None and credential.credential_name != credential_name:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "credential_name is immutable. Use credential_alias to give the credential a display label"
+                },
+            )
+        _reject_blank_alias(credential.credential_alias)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -349,8 +354,14 @@ async def update_credential(
         db_credential: Final = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        credential_alias: Final = (
+            credential.credential_alias
+            if "credential_alias" in credential.model_fields_set
+            else db_credential.credential_alias
+        )
         patch: Final = CredentialItem(
-            credential_name=credential.credential_name,
+            credential_name=credential_name,
+            credential_alias=credential_alias,
             credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
             credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(
                 _resolve_deployment_credentials(llm_router, credential.model_id)
@@ -371,7 +382,6 @@ async def update_credential(
         )
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        new_name: Final = merged_credential.credential_name
         existing_in_memory: CredentialItem | None = None
         for cred in litellm.credential_list:
             if cred.credential_name == credential_name:
@@ -386,13 +396,11 @@ async def update_credential(
             if patch.credential_info:
                 in_memory_info.update(patch.credential_info)
             updated_in_memory: Final = CredentialItem(
-                credential_name=new_name,
+                credential_name=credential_name,
+                credential_alias=merged_credential.credential_alias,
                 credential_values=in_memory_values,
                 credential_info=in_memory_info,
             )
-            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
-            if new_name != credential_name:
-                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
             CredentialAccessor.upsert_credentials([updated_in_memory])
 
         return {"success": True, "message": "Credential updated successfully"}

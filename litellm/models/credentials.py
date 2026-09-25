@@ -12,6 +12,7 @@ from pydantic import BaseModel, model_validator
 
 class CredentialBase(BaseModel):
     credential_name: str
+    credential_alias: str | None = None
     credential_info: dict
 
 
@@ -32,7 +33,8 @@ class CreateCredentialItem(CredentialBase):
 
 
 class UpdateCredentialItem(BaseModel):
-    credential_name: str
+    credential_name: str | None = None
+    credential_alias: str | None = None
     credential_info: Mapping[str, object]
     credential_values: Mapping[str, object] | None = None
     model_id: str | None = None

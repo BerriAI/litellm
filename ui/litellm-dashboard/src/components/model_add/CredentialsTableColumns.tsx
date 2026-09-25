@@ -106,6 +106,21 @@ export const getCredentialsTableColumns = ({
       ),
     },
     {
+      id: "credential_alias",
+      accessorKey: "credential_alias",
+      meta: { title: "Alias" },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Alias" />,
+      size: 200,
+      enableSorting: true,
+      cell: ({ row }) => {
+        const alias = row.original.credential_alias;
+        if (!alias) {
+          return <span className="text-sm text-muted-foreground">-</span>;
+        }
+        return <span className="truncate text-sm">{alias}</span>;
+      },
+    },
+    {
       id: "provider",
       accessorKey: "credential_info.custom_llm_provider",
       meta: { title: "Provider" },

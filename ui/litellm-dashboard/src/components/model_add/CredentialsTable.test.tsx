@@ -46,9 +46,32 @@ describe("CredentialsTable", () => {
 
   it("should render the data column headers", () => {
     render(<CredentialsTable {...defaultProps} />);
-    for (const header of ["Credential Name", "Provider"]) {
+    for (const header of ["Credential Name", "Alias", "Provider"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
+  });
+
+  it("should render the alias in its row and a dash when there is none", () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "aliased",
+        credential_alias: "Prod OpenAI",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "openai" },
+      },
+      {
+        credential_name: "unaliased",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    ];
+    render(<CredentialsTable {...defaultProps} credentials={credentials} />);
+
+    const aliasedRow = screen.getByText("aliased").closest("tr")!;
+    expect(within(aliasedRow).getByText("Prod OpenAI")).toBeInTheDocument();
+
+    const unaliasedRow = screen.getByText("unaliased").closest("tr")!;
+    expect(within(unaliasedRow).getByText("-")).toBeInTheDocument();
   });
 
   it("should display each credential name", () => {
@@ -69,7 +92,7 @@ describe("CredentialsTable", () => {
     ];
     render(<CredentialsTable {...defaultProps} credentials={credentials} />);
     const row = screen.getAllByRole("row").slice(1)[0];
-    expect(within(row).getByText("-")).toBeInTheDocument();
+    expect(within(row).getAllByText("-")).toHaveLength(2);
   });
 
   it("should sort by credential name ascending by default", () => {

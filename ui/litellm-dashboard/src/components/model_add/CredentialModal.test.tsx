@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
@@ -123,6 +124,77 @@ describe("CredentialModal", () => {
       });
 
       expect(screen.getByLabelText("Credential Name:")).toBeDisabled();
+    });
+  });
+
+  describe("credential alias", () => {
+    const fillRequiredAddFields = async (user: ReturnType<typeof userEvent.setup>) => {
+      fireEvent.change(screen.getByLabelText("Credential Name:"), { target: { value: "new-cred" } });
+      const providerInput = await screen.findByPlaceholderText("Select a provider");
+      await user.click(providerInput);
+      await user.click(await screen.findByText("OpenAI"));
+      fireEvent.change(await screen.findByLabelText("OpenAI API Key"), { target: { value: "sk-test" } });
+    };
+
+    it("submits the alias with the name in add mode", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const onSubmit = vi.fn();
+      renderModal({ mode: "add", onSubmit });
+
+      await fillRequiredAddFields(user);
+      fireEvent.change(screen.getByLabelText("Alias:"), { target: { value: "Prod" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({ credential_name: "new-cred", credential_alias: "Prod" });
+    });
+
+    it("submits no credential_alias key when the alias is left blank in add mode", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const onSubmit = vi.fn();
+      renderModal({ mode: "add", onSubmit });
+
+      await fillRequiredAddFields(user);
+      fireEvent.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("credential_alias");
+    });
+
+    it("prefills the alias and submits an edited alias", async () => {
+      const onSubmit = vi.fn();
+      renderModal({
+        mode: "edit",
+        onSubmit,
+        existingCredential: { ...mockCredential, credential_alias: "Prod" },
+      });
+
+      const aliasInput = screen.getByLabelText("Alias:") as HTMLInputElement;
+      expect(aliasInput.value).toBe("Prod");
+
+      fireEvent.change(aliasInput, { target: { value: "Staging" } });
+      fireEvent.click(screen.getByRole("button", { name: "Update Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        credential_name: "test-credential",
+        credential_alias: "Staging",
+      });
+    });
+
+    it("submits credential_alias: null when the alias is cleared in edit mode", async () => {
+      const onSubmit = vi.fn();
+      renderModal({
+        mode: "edit",
+        onSubmit,
+        existingCredential: { ...mockCredential, credential_alias: "Prod" },
+      });
+
+      fireEvent.change(screen.getByLabelText("Alias:"), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "Update Credential" }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].credential_alias).toBeNull();
     });
   });
 });
