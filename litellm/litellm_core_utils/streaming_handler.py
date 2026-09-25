@@ -1505,7 +1505,11 @@ class CustomStreamWrapper:
                 self.tool_call = True
 
             if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+                model_response.usage = (
+                    Usage(**chunk.usage.model_dump())  # pyright: ignore[reportAny]  # model_dump() is dict[str, Any]
+                    if isinstance(chunk.usage, BaseModel) and not isinstance(chunk.usage, Usage)
+                    else chunk.usage
+                )
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
