@@ -61,7 +61,10 @@ help:
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
+# CI lints and checks on 3.12; 3.13+ dedents docstrings at compile time, which rewrites the OpenAPI snapshot
+PYTHON_VERSION := 3.12
 UV_RUN := $(UV) run --no-sync
+UV_SYNC := $(UV) sync --python $(PYTHON_VERSION)
 BASE_REF ?=
 export BASE_REF
 RESOLVE_BASE = python3 scripts/default_branch.py --base "$(BASE_REF)"
@@ -85,12 +88,12 @@ info:
 # a lint/format target doesn't tear the proxy extras (prisma, websockets, ...) out from
 # under a dev's venv (CI installs its own env per job, so it is unaffected by this).
 install-dev:
-	$(UV) sync --inexact --frozen
+	$(UV_SYNC) --inexact --frozen
 
 # Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
 # machine-wide slots the CPU-bound gates below share.
 bootstrap:
-	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
+	$(UV_SYNC) --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
@@ -102,17 +105,17 @@ bootstrap:
 	@echo "bootstrap: done"
 
 install-proxy-dev:
-	$(UV) sync --frozen --group proxy-dev --extra proxy
+	$(UV_SYNC) --frozen --group proxy-dev --extra proxy
 
 # CI-compatible installations (matches GitHub workflows exactly)
 install-dev-ci:
-	$(UV) sync --frozen
+	$(UV_SYNC) --frozen
 
 install-proxy-dev-ci:
-	$(UV) sync --frozen --group proxy-dev --extra proxy
+	$(UV_SYNC) --frozen --group proxy-dev --extra proxy
 
 install-test-deps: install-proxy-dev
-	$(UV) sync --frozen --all-groups --all-extras
+	$(UV_SYNC) --frozen --all-groups --all-extras
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
 
 install-helm-unittest:
@@ -144,7 +147,7 @@ lint-fetch-base:
 # own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
 # gen:api and the running proxy need.
 lint-install:
-	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
+	$(UV_SYNC) --inexact --frozen --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
@@ -295,10 +298,10 @@ pre-commit:
 test-rust-extension:
 	@temporary=$$(mktemp -d) && \
 	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
-	$(UV) build --python 3.12 --wheel --out-dir "$$temporary/wheels" && \
+	$(UV) build --python $(PYTHON_VERSION) --wheel --out-dir "$$temporary/wheels" && \
 	set -- "$$temporary"/wheels/*.whl && \
 	[ "$$#" -eq 1 ] && \
-	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
+	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV_SYNC) --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
 		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
