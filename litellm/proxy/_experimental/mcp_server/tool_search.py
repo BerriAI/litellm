@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -634,7 +635,7 @@ async def handle_mcp_tool_call(
 
         raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
-    return await execute_mcp_tool(
+    result: Final = await execute_mcp_tool(
         name=tool_name,
         arguments=arguments,
         allowed_mcp_servers=allowed_mcp_servers,
@@ -649,3 +650,4 @@ async def handle_mcp_tool_call(
         requested_server_id=requested_server_id,
         guardrail_context=guardrail_context,
     )
+    return complete_call_tool_result(result, WireCompat.LEGACY)

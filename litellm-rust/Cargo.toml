@@ -12,6 +12,7 @@ repository = "https://github.com/BerriAI/litellm"
 litellm-tracing = { path = "crates/tracing" }
 tracing = "0.1"
 litellm-core = { path = "crates/core" }
+litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framing = { path = "crates/framer" }
