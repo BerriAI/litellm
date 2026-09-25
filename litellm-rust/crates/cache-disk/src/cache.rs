@@ -5,8 +5,8 @@ use std::{
 };
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheCodec, CacheConnectionResult, CacheConnectionStatus,
-    CounterCache, DeleteCache, Error, ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, BatchEntry, CacheCodec, CounterCache, DeleteCache, DisconnectCache,
+    Error, ExactCacheContext, FlushCache,
 };
 
 use crate::{DiskStore, DiskcacheSqliteStore, PythonDiskCacheAdapter, StoredValue, ValueAdapter};
@@ -150,29 +150,6 @@ impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BaseCache for DiskCache<S, D,
         })
         .await
     }
-
-    async fn disconnect(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        let result = Self::run_blocking(Arc::clone(&self.store), |store| {
-            store.probe().map(|_| CacheConnectionResult {
-                status: CacheConnectionStatus::Success,
-                message: "Disk cache connection test successful".into(),
-                error: None,
-            })
-        })
-        .await;
-        Ok(match result {
-            Ok(result) => result,
-            Err(error) => CacheConnectionResult {
-                status: CacheConnectionStatus::Failed,
-                message: format!("Disk cache connection failed: {error}"),
-                error: Some(error.to_string()),
-            },
-        })
-    }
 }
 
 impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BatchCache for DiskCache<S, D, A> {
@@ -241,9 +218,13 @@ impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> FlushCache for DiskCache<S, D
     }
 }
 
-impl<S: CacheCodec<Value = f64>, D: DiskStore, A: ValueAdapter> CounterCache
-    for DiskCache<S, D, A>
-{
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> DisconnectCache for DiskCache<S, D, A> {
+    async fn disconnect(&self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> CounterCache for DiskCache<S, D, A> {
     fn increment_cache(
         &self,
         key: &str,
@@ -264,6 +245,7 @@ impl<S: CacheCodec<Value = f64>, D: DiskStore, A: ValueAdapter> CounterCache
         key: &str,
         amount: f64,
         context: ExactCacheContext,
+        _refresh_ttl: bool,
     ) -> Result<f64, Error> {
         let key = key.to_string();
         let adapter = Arc::clone(&self.adapter);

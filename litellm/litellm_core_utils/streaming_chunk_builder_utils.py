@@ -165,6 +165,14 @@ class _UsageSummary(TypedDict):
     cost: float | None
 
 
+def _reports_prompt_side_usage(usage_summary: "_UsageSummary") -> bool:
+    return (
+        (usage_summary["prompt_tokens"] or 0) > 0
+        or (usage_summary["cache_creation_input_tokens"] or 0) > 0
+        or (usage_summary["cache_read_input_tokens"] or 0) > 0
+    )
+
+
 def capture_cache_creation_token_details(
     prompt_tokens_details: PromptTokensDetailsWrapper | None,
     current: CacheCreationTokenDetails | None,
@@ -467,9 +475,7 @@ class ChunkProcessor:
 
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
-    ) -> list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a list field
+    ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
         tool_calls_list: list[
             ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
         ] = []  # mutable-ok: see return type
@@ -888,11 +894,11 @@ class ChunkProcessor:
                 if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
                     completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_creation_input_tokens is None
                 ):
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_read_input_tokens"] > 0 or cache_read_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_read_input_tokens is None
                 ):
                     cache_read_input_tokens = usage_chunk_dict["cache_read_input_tokens"]
                 if usage_chunk_dict["completion_tokens_details"] is not None:

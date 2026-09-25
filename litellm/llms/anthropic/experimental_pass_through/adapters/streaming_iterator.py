@@ -11,7 +11,6 @@ from typing import (
     Final,
     Literal,
     Protocol,
-    cast,  # noqa: TID251  # rebuilt message_delta dict spans the ContentBlockDelta/MessageBlockDelta union
     get_args,
 )
 
@@ -27,6 +26,7 @@ from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContextManagementResponse,
     MessageBlockDelta,
+    MessageDelta,
     StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
@@ -68,15 +68,11 @@ def _error_status_and_message(exc: Exception) -> tuple[int, str]:
 
 def _mid_stream_error_sse_event(exc: Exception) -> bytes:
     from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
-        AnthropicExceptionMapping,
+        anthropic_error_sse_frame,
     )
 
     status_code, message = _error_status_and_message(exc)
-    error_response = AnthropicExceptionMapping.transform_to_anthropic_error(
-        status_code=status_code,
-        raw_message=message,
-    )
-    return f"event: error\ndata: {json.dumps(error_response)}\n\n".encode()
+    return anthropic_error_sse_frame(status_code=status_code, raw_message=message).encode()
 
 
 def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
@@ -1028,26 +1024,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self,
         processed_chunk: ContentBlockDelta | MessageBlockDelta,
     ) -> ContentBlockDelta | MessageBlockDelta:
-        if processed_chunk.get("type") != "message_delta" or not self._refusal_text:
+        if processed_chunk["type"] != "message_delta" or not self._refusal_text:
             return processed_chunk
-        delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
+        delta: Final = processed_chunk["delta"]
         if delta.get("stop_reason") == "max_tokens":
             return processed_chunk
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             refusal_stop_details,
         )
 
-        return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
-            ContentBlockDelta | MessageBlockDelta,
-            {  # mutable-ok: fresh translation payload; never mutated after construction
-                **processed_chunk,
-                "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
-                    **delta,
-                    "stop_reason": "refusal",
-                    "stop_details": refusal_stop_details(self._refusal_text),
-                },
-            },
-        )
+        refusal_delta: Final[MessageDelta] = {
+            **delta,
+            "stop_reason": "refusal",
+            "stop_details": refusal_stop_details(self._refusal_text),
+        }
+        refusal_chunk: Final[MessageBlockDelta] = {**processed_chunk, "delta": refusal_delta}
+        return refusal_chunk
 
     @staticmethod
     def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:

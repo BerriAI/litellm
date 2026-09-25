@@ -15,6 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import completion, completion_cost, embedding
+from openai.types import CreateEmbeddingResponse
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
+from tests.capturing_transport import CapturingTransport
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 litellm.set_verbose = False
@@ -1268,23 +1271,15 @@ def test_encoding_format_omitted_by_default_for_openai_sdk(monkeypatch):
     Optional global override: `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT`.
     """
     monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
-    captured_bodies = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_bodies.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            json={
-                "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
-                "model": "text-embedding-ada-002",
-                "usage": {"prompt_tokens": 1, "total_tokens": 1},
-            },
+    transport = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="text-embedding-ada-002",
+            usage=EmbeddingUsage(prompt_tokens=1, total_tokens=1),
         )
-
-    client = openai.OpenAI(
-        api_key="sk-test", http_client=httpx.Client(transport=httpx.MockTransport(handler))
     )
+    client = openai.OpenAI(api_key="sk-test", http_client=httpx.Client(transport=transport))
 
     response = embedding(
         model="text-embedding-ada-002",
@@ -1294,7 +1289,7 @@ def test_encoding_format_omitted_by_default_for_openai_sdk(monkeypatch):
     )
 
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
-    assert "encoding_format" not in captured_bodies[0], (
+    assert "encoding_format" not in transport.request_bodies[0], (
         "encoding_format should be omitted from the upstream request when not provided by user"
     )
 

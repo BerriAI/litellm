@@ -1,9 +1,10 @@
+import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
+import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import { transitionClassifierType } from "./classifier_type_transition";
 import JevClassifierConfig from "./JevClassifierConfig";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,13 +26,10 @@ import ClassifierTypeRadios from "./ClassifierTypeRadios";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
-  ClassificationFrequency,
   ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityRouterConfigValue,
-  classificationFrequency,
-  withClassificationFrequency,
   DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
   MIN_QUOTED_CONTEXT_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
@@ -171,6 +169,7 @@ interface ClassificationMethodConfigProps {
   showValidationErrors?: boolean;
   /** The resolved default model - see resolveComplexityDefaultModel. Names and gates the radio. */
   defaultModel?: string;
+  advancedOnly?: boolean;
 }
 
 export const InactiveHeuristicV2Threshold: React.FC<Pick<ClassificationMethodConfigProps, "value" | "onChange">> = ({
@@ -215,13 +214,11 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   onCustomTechnicalKeywordsChange,
   showValidationErrors = false,
   defaultModel,
+  advancedOnly = false,
 }) => {
   const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
   const classifierType = effectiveClassifierType(value);
-  const sessionFrequencyRestriction = restrictedBy(value, "sessionAffinity");
-  const classifierModelMissing =
-    showValidationErrors && usesLlmClassifier(classifierType) && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
   const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
   const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
@@ -282,23 +279,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange(nextValue);
   };
 
-  const handleClassifierModelChange = (model: string | null) => {
-    if (model === null) return;
-    if (model === value.classifier_llm_config?.model) return;
-    const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config ?? {
-      model: "",
-      timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-    };
-    onChange({
-      ...value,
-      classifier_llm_config: {
-        ...classifierLlmConfig,
-        model,
-        timeout_ms: classifierLlmConfig.timeout_ms,
-      },
-    });
-  };
-
   const handleClassifierReasoningEffortChange = (reasoningEffort: ReasoningEffort | undefined) => {
     if (!value.classifier_llm_config) return;
     const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config;
@@ -350,10 +330,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, classifier_fallback: fallback });
   };
 
-  const handleClassificationFrequencyChange = (frequency: ClassificationFrequency) => {
-    onChange(withClassificationFrequency(value, frequency));
-  };
-
   const handleClassifierContextWindowSizeChange = (windowSize: number) => {
     onChange({
       ...value,
@@ -389,7 +365,50 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
   return (
     <>
-      <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
+      {!advancedOnly && (
+        <>
+          <ClassifierTypeRadios
+            value={value}
+            classifierType={classifierType}
+            onTypeChange={handleClassifierTypeChange}
+          />
+          <ClassifierPrimarySettings
+            value={value}
+            onChange={onChange}
+            modelOptions={modelOptions}
+            showValidationErrors={showValidationErrors}
+          />
+        </>
+      )}
+      {advancedOnly && ["llm", "heuristic_first", "hybrid"].includes(classifierType) && (
+        <div className="space-y-2">
+          <Label htmlFor="auto-router-local-checks">Local checks before the judge</Label>
+          <Select
+            items={[
+              { value: "llm", label: "Always use the judge" },
+              { value: "heuristic_first", label: "Heuristic first" },
+              { value: "hybrid", label: "Hybrid" },
+            ]}
+            value={classifierType}
+            onValueChange={(next) => {
+              if (next === "llm" || next === "heuristic_first" || next === "hybrid") handleClassifierTypeChange(next);
+            }}
+          >
+            <SelectTrigger id="auto-router-local-checks" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="llm">Always use the judge</SelectItem>
+              <SelectItem value="heuristic_first" disabled={Boolean(value.custom_tier_set)}>
+                Heuristic first
+              </SelectItem>
+              <SelectItem value="hybrid" disabled={Boolean(value.custom_tier_set)}>
+                Hybrid
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {classifierType === "custom" && (
         <ClassifierPluginTimeoutField value={value} onChange={onChange} showValidationErrors={showValidationErrors} />
@@ -474,66 +493,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      <div className="mt-4 space-y-2">
-        <strong className="block font-semibold">How often to classify</strong>
-        <RadioGroup
-          value={classificationFrequency(value)}
-          onValueChange={(frequency: unknown) =>
-            handleClassificationFrequencyChange(frequency as ClassificationFrequency)
-          }
-        >
-          <div className="inline-flex flex-col gap-2">
-            <Label className="items-start font-normal leading-normal">
-              <RadioGroupItem value="every_request" className="mt-0.5" />
-              <span>
-                <span>Every request</span>{" "}
-                <span className="text-muted-foreground">: score every turn, tool-result continuations included</span>
-              </span>
-            </Label>
-            <Label className="items-start font-normal leading-normal">
-              <RadioGroupItem value="user_turn" className="mt-0.5" />
-              <span>
-                <span>Every new user message</span>{" "}
-                <span className="text-muted-foreground">
-                  : score each new human ask, then hold that tier for the tool calls that follow it
-                </span>
-              </span>
-            </Label>
-            <Label className="items-start font-normal leading-normal">
-              <RadioGroupItem value="session" className="mt-0.5" disabled={Boolean(sessionFrequencyRestriction)} />
-              <span>
-                <span>Once per session</span>{" "}
-                <span className="text-muted-foreground">
-                  {sessionFrequencyRestriction?.reason ??
-                    ": score the first turn only, then hold that tier and its deployment for the whole session"}
-                </span>
-              </span>
-            </Label>
-          </div>
-        </RadioGroup>
-        <p className="text-sm text-muted-foreground">
-          Holding the tier keeps an agent on one model for a whole tool loop and cuts scoring cost. A turn the router
-          cannot match to a held decision, such as one with no session id or an expired one, is scored again
-        </p>
-      </div>
-
       {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
-          <div>
-            <strong className="block mb-1 font-semibold">Classifier Model</strong>
-            <SearchSelect
-              options={modelOptions}
-              value={value.classifier_llm_config?.model ?? ""}
-              onValueChange={handleClassifierModelChange}
-              placeholder="Select the model that will classify request complexity"
-              emptyText="No models found"
-              allowClear={false}
-              className={classifierModelMissing ? "border-destructive" : undefined}
-              aria-label="Classifier Model"
-            />
-            {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
-          </div>
           <ClassifierReasoningEffortSelect
             model={classifierModel}
             value={classifierReasoningEffort}
@@ -583,6 +545,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
+            <AutoRouterAllowanceNote
+              feature="tier_or_classifier_prompt"
+              label="Custom instructions and examples share the custom-tier allowance"
+            />
             {!value.custom_tier_set && usesCustomPrompt ? (
               <ClassifierPromptEditor
                 systemPrompt={value.classifier_llm_config?.system_prompt}
@@ -676,7 +642,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             <span className="text-xs text-muted-foreground">
               Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
-              LLM and JEV default to 3 turns; JEV sends them to the configured TypeSafe endpoint. Set to 0 to omit
+              LLM and Jev default to 3 turns; Jev sends them to the configured TypeSafe endpoint. Set to 0 to omit
               conversation history. The current message and selected system text are still sent.
             </span>
           </div>
@@ -769,6 +735,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
+      {["heuristic", "heuristic_first", "hybrid"].includes(classifierType) && (
+        <AutoRouterAllowanceNote feature="heuristic_tuning" label="Custom scoring rules" />
+      )}
       <HeuristicScoringConfig value={value} onChange={onChange} />
 
       <HowClassificationWorks value={value} />

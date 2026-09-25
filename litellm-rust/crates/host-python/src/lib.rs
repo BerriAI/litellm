@@ -1,6 +1,6 @@
 //! The CPython runtime adapter: value marshalling, interpreter detachment, the tokio and
 //! asyncio glue, and the driver that runs a native [`Machine`](litellm_host::machine::Machine)
-//! against a Python route host and a Python lifecycle. Everything here is Python-specific by
+//! against a Python protocol host and a Python lifecycle. Everything here is Python-specific by
 //! construction; another host language gets its own crate of the same shape.
 
 mod adapter;
@@ -8,13 +8,14 @@ mod argument;
 mod callable;
 mod driver;
 mod execution;
+mod file_reader;
 mod fork_gate;
 mod gil;
 mod handle;
 mod marshal;
 
 pub use adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, ProtocolHost, PythonLifecycle, missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;
@@ -24,10 +25,13 @@ pub use execution::{
     reserve_process_for_forking, run_async, run_async_value, run_sync, run_sync_value,
     runtime_started,
 };
+pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
-pub use gil::{release_count, release_gil};
+pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};
-pub use marshal::{Pythonized, from_py, from_py_argument, panic_to_pyerr, to_py};
+pub use marshal::{
+    Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
+};
 
 /// Starts the interpreter and imports the standard modules the tests share, once, so
 /// parallel test threads never race a first import of `asyncio`.
@@ -40,4 +44,25 @@ pub(crate) fn initialize_python() {
             py.import("asyncio").expect("asyncio imports");
         });
     });
+}
+
+#[cfg(test)]
+pub(crate) struct InitializedPython;
+
+#[cfg(test)]
+impl InitializedPython {
+    pub(crate) fn attach<F, R>(&self, f: F) -> R
+    where
+        F: for<'py> FnOnce(pyo3::Python<'py>) -> R,
+    {
+        pyo3::Python::attach(f)
+    }
+}
+
+#[cfg(test)]
+#[rstest::fixture]
+#[once]
+pub(crate) fn initialized_python() -> InitializedPython {
+    initialize_python();
+    InitializedPython
 }

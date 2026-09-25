@@ -3,8 +3,8 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_host::{machine::Machine, route::Route};
-use litellm_host_python::{RouteHost, lookup, run_call};
+use litellm_host::{machine::Machine, protocol::Protocol};
+use litellm_host_python::{ProtocolHost, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -63,25 +63,25 @@ impl PublicCall {
     }
 }
 
-/// Runs one native call under the legacy `Logging` contract: the route host projects from
+/// Runs one native call under the legacy `Logging` contract: the protocol host projects from
 /// the keyword view the contract prepares, and the contract observes the call.
 pub fn run_legacy_call<H, M>(
     py: Python<'_>,
     surface: LegacySurface,
     call: PublicCall,
     machine: M,
-    route: H,
+    host: H,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
-    H: RouteHost + 'static,
-    M: Machine<Route = H::Route, Complete = <H::Route as Route>::Response> + 'static,
+    H: ProtocolHost + 'static,
+    M: Machine<Protocol = H::Protocol, Complete = <H::Protocol as Protocol>::Response> + 'static,
 {
     let arguments = call.kwargs.clone_ref(py);
     run_call(
         py,
         machine,
-        route,
+        host,
         Box::new(LegacyLogging::new(py, surface, call, asynchronous)),
         arguments,
         asynchronous,

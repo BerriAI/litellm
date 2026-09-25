@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge.catalog import Rules
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,7 @@ class ProviderDefaults:
 @dataclass(frozen=True, slots=True)
 class SecretManager:
     readable: bool
+    native: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,18 +62,24 @@ class SecretManagerBinding:
     settings_object: object
 
 
-def warn(message: str) -> None:
-    from litellm._logging import verbose_logger
-
-    verbose_logger.warning("%s", message)
-
-
-def secret_manager() -> SecretManager:
+def secret_manager(rules: Rules | None = None) -> SecretManager:
+    import litellm
+    from litellm.rust_bridge.catalog import SecretManagerContext, decision
+    from litellm.rust_bridge.configuration import Decision
     from litellm.secret_managers.main import (
         _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
     )
 
-    return SecretManager(readable=_should_read_secret_from_secret_manager())
+    readable: Final = _should_read_secret_from_secret_manager()
+    system: Final = (
+        litellm._key_management_system  # pyright: ignore[reportPrivateUsage]  # canonical key management globals are private
+    )
+    native: Final = (
+        readable
+        and system is not None
+        and decision(SecretManagerContext(system=system.value), rules) is not Decision.PYTHON
+    )
+    return SecretManager(readable=readable, native=native)
 
 
 def secret_manager_binding() -> SecretManagerBinding:

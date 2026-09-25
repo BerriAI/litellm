@@ -102,7 +102,7 @@ pub(crate) fn call_config(
     .without_missing_files(&|path: &Path| path.exists());
     let resolution = Resolution::from(&settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
-        PythonSettings::warn(py, &unsupported.to_string())?;
+        crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
     }
     Ok(resolution.config)
 }

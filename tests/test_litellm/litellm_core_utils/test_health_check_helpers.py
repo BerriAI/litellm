@@ -2,6 +2,8 @@
 
 import struct
 import zlib
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -363,6 +365,26 @@ async def test_batch_health_check_uses_alist_batches_for_supported_providers():
 
 
 @pytest.mark.asyncio
+async def test_batch_health_check_hands_the_resolved_provider_to_alist_batches():
+    filtered_model_params: Final = {
+        "model": "xai/grok-4.3",
+        "api_key": "sk-test",
+        "litellm_metadata": {"tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]},
+    }
+
+    with patch("litellm.alist_batches", new_callable=AsyncMock, return_value={}) as mock_alist:
+        await HealthCheckHelpers._batch_health_check(
+            custom_llm_provider="xai",
+            model_params={**filtered_model_params, "messages": []},
+            filtered_model_params=filtered_model_params,
+        )
+
+    assert mock_alist.call_args.kwargs["custom_llm_provider"] == "xai"
+    assert mock_alist.call_args.kwargs["model"] == "xai/grok-4.3"
+    assert mock_alist.call_args.kwargs["api_key"] == "sk-test"
+
+
+@pytest.mark.asyncio
 async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
     """Providers not in LIST_BATCHES_SUPPORTED_PROVIDERS fall back to acompletion."""
     mock_logging_obj = MagicMock()
@@ -482,3 +504,51 @@ async def test_ocr_health_check_sends_the_document_kind_the_provider_config_acce
     document = mock_aocr.call_args.kwargs["document"]
     assert document["type"] == expected_document_type
     assert document[expected_document_type].startswith(expected_uri_prefix)
+
+
+def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
+    from litellm.realtime_api import main as realtime_main
+
+    seen = []
+    with patch.object(realtime_main, "get_azure_ad_token", lambda params: seen.append(params) or "ad-token"):
+        headers = realtime_main._realtime_health_check_auth_headers(
+            "azure",
+            None,
+            MappingProxyType({"api_base": "https://x.openai.azure.com", "self": 1, "params": 2, "__class__": 3}),
+        )
+
+    assert dict(headers) == {"Authorization": "Bearer ad-token"}
+    assert seen[0].api_base == "https://x.openai.azure.com"
+    assert seen[0].model_extra == {}
+
+
+def test_ocr_health_check_document_uses_the_native_binding():
+    from litellm.litellm_core_utils.health_check_helpers import (
+        _ocr_health_check_document,  # pyright: ignore[reportPrivateUsage]  # tests the health-check wiring
+    )
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
+
+    document: Final = {
+        "type": "image_url",
+        "image_url": "data:image/png;base64,iVBORw0KGgo=",
+    }
+    NATIVE_OCR_HEALTH_CHECK_DOCUMENT.override(lambda model, provider: document)
+    try:
+        assert _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral") is document
+    finally:
+        NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()
+
+
+def test_ocr_health_check_document_raises_without_the_extension():
+    from litellm.litellm_core_utils.health_check_helpers import (
+        _ocr_health_check_document,  # pyright: ignore[reportPrivateUsage]  # tests the health-check wiring
+    )
+    from litellm.rust_bridge import runtime
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
+
+    NATIVE_OCR_HEALTH_CHECK_DOCUMENT.override(None)
+    try:
+        with pytest.raises(runtime.NoPythonImplementationError):
+            _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral")
+    finally:
+        NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()

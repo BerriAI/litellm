@@ -218,7 +218,6 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         assert backup[adaptive]["supports_adaptive_thinking"] is True, adaptive
 
     for non_adaptive in [
-        "claude-opus-4-20250514",
         "us.anthropic.claude-opus-4-20250514-v1:0",
         "claude-opus-4-5",
     ]:

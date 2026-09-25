@@ -6,8 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: "Closed issue number to comment on manually."
-        required: true
+        description: "Closed issue number to comment on and close the superseded pull requests of. Ignored by a sweep."
+        required: false
+      sweep:
+        description: "Close every open pull request whose linked issues were all fixed on the default branch. Reads every open pull request, so run it at most once an hour."
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/issue_fixed_comment.yml
@@ -39,16 +43,17 @@ jobs:
         with:
           bun-version: "1.4.0"
 
-      - name: Test the closer lookup, the release placement and the comment
+      - name: Test the closer lookup, the release placement, the comment and the superseded pull request close
         run: bun test scripts/comment-fixed-issue.test.ts
 
   comment-fixed-issue:
     if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Checkout scripts
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -59,13 +64,16 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          # Exact version, never latest: the next step holds an issues: write token
+          # Exact version, never latest: the next step holds issues: write and pull-requests: write tokens
           bun-version: "1.4.0"
 
-      - name: Name the release that carries the fix
+      - name: Name the release that carries the fix and close the pull requests it supersedes
+        shell: bash
         run: bun run scripts/comment-fixed-issue.ts | tee -a "${GITHUB_STEP_SUMMARY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          SWEEP: ${{ github.event.inputs.sweep }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DRY_RUN: ${{ vars.ISSUE_FIXED_COMMENT_ENABLED != 'true' }}
+          CLOSE_PRS_DRY_RUN: ${{ vars.ISSUE_FIXED_CLOSE_PRS_ENABLED != 'true' }}

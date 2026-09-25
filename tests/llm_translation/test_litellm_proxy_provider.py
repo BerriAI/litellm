@@ -2,6 +2,8 @@ import json
 import re
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock
 
 
@@ -12,7 +14,12 @@ import pytest
 from unittest.mock import MagicMock, patch
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 import pytest_asyncio
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
+from openai.types import CreateEmbeddingResponse, Embedding
+from openai.types.create_embedding_response import Usage
+
+from tests.capturing_transport import CapturingTransport
+from tests._vcr_conftest_common import rewound_new_episodes_cassette
 
 
 @pytest.mark.asyncio
@@ -87,60 +94,59 @@ async def test_litellm_gateway_from_sdk_structured_output():
         assert "json_schema" in json_schema
 
 
-@pytest.mark.parametrize("is_async", [False, True])
+_GATEWAY_EMBEDDING_RESPONSE: Final = CreateEmbeddingResponse(
+    object="list",
+    data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+    model="my-vllm-model",
+    usage=Usage(prompt_tokens=2, total_tokens=2),
+)
+
+
+async def _gateway_embedding_via_injected_client(
+    is_async: bool,
+) -> tuple[CapturingTransport, litellm.EmbeddingResponse]:
+    transport: Final = CapturingTransport(_GATEWAY_EMBEDDING_RESPONSE)
+    response: Final = (
+        await litellm.aembedding(
+            model="litellm_proxy/my-vllm-model",
+            input="Hello world",
+            client=AsyncOpenAI(api_key="fake-key", http_client=httpx.AsyncClient(transport=transport)),
+            api_base="my-custom-api-base",
+        )
+        if is_async
+        else litellm.embedding(
+            model="litellm_proxy/my-vllm-model",
+            input="Hello world",
+            client=OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport)),
+            api_base="my-custom-api-base",
+        )
+    )
+    return transport, response
+
+
+@pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.asyncio
-async def test_litellm_gateway_from_sdk_embedding(is_async):
+async def test_litellm_gateway_from_sdk_embedding(is_async: bool):
     litellm.set_verbose = True
     litellm._turn_on_debug()
 
-    captured_bodies = []
+    transport, response = await _gateway_embedding_via_injected_client(is_async)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_bodies.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            json={
-                "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
-                "model": "my-vllm-model",
-                "usage": {"prompt_tokens": 2, "total_tokens": 2},
-            },
-        )
-
-    if is_async:
-        from openai import AsyncOpenAI
-
-        openai_client = AsyncOpenAI(
-            api_key="fake-key",
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        )
-        response = await litellm.aembedding(
-            model="litellm_proxy/my-vllm-model",
-            input="Hello world",
-            client=openai_client,
-            api_base="my-custom-api-base",
-        )
-    else:
-        from openai import OpenAI
-
-        openai_client = OpenAI(
-            api_key="fake-key",
-            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-        response = litellm.embedding(
-            model="litellm_proxy/my-vllm-model",
-            input="Hello world",
-            client=openai_client,
-            api_base="my-custom-api-base",
-        )
-
-    request_body = captured_bodies[0]
-    print("Request body - {}".format(request_body))
-
+    request_body: Final = transport.request_bodies[0]
     assert "Hello world" == request_body["input"]
     assert "my-vllm-model" == request_body["model"]
     assert "encoding_format" not in request_body
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk_embedding_under_foreign_cassette(tmp_path: Path):
+    with rewound_new_episodes_cassette(tmp_path):
+        sync_transport, _ = await _gateway_embedding_via_injected_client(is_async=False)
+        async_transport, _ = await _gateway_embedding_via_injected_client(is_async=True)
+
+    assert tuple(body["input"] for body in sync_transport.request_bodies) == ("Hello world",)
+    assert tuple(body["input"] for body in async_transport.request_bodies) == ("Hello world",)
 
 
 @pytest.mark.parametrize("is_async", [False, True])
@@ -204,11 +210,14 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         "created": 1,
         "data": [{"url": "https://example.com/image.png"}],
     }
+    mock_raw_response = MagicMock()
+    mock_raw_response.parse.return_value = mock_openai_response
+    mock_raw_response.headers = {}
 
     if is_async:
         # Mock the AsyncOpenAI client that gets created inside _get_openai_client
         mock_async_client = AsyncMock()
-        mock_async_client.images.generate = AsyncMock(return_value=mock_openai_response)
+        mock_async_client.images.with_raw_response.generate = AsyncMock(return_value=mock_raw_response)
 
         with patch(
             "litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client
@@ -228,14 +237,14 @@ async def test_litellm_gateway_image_generation_direct(is_async):
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
             # Verify the AsyncOpenAI client was called correctly
-            mock_async_client.images.generate.assert_awaited_once()
-            call_kwargs = mock_async_client.images.generate.call_args.kwargs
+            mock_async_client.images.with_raw_response.generate.assert_awaited_once()
+            call_kwargs = mock_async_client.images.with_raw_response.generate.call_args.kwargs
             assert call_kwargs["model"] == "dall-e-3"
             assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
     else:
         # Mock the sync OpenAI client that gets created inside _get_openai_client
         mock_sync_client = MagicMock()
-        mock_sync_client.images.generate.return_value = mock_openai_response
+        mock_sync_client.images.with_raw_response.generate.return_value = mock_raw_response
 
         with patch(
             "litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client
@@ -254,8 +263,8 @@ async def test_litellm_gateway_image_generation_direct(is_async):
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
             # Verify the OpenAI client was called correctly
-            mock_sync_client.images.generate.assert_called_once()
-            call_kwargs = mock_sync_client.images.generate.call_args.kwargs
+            mock_sync_client.images.with_raw_response.generate.assert_called_once()
+            call_kwargs = mock_sync_client.images.with_raw_response.generate.call_args.kwargs
             assert call_kwargs["model"] == "dall-e-3"
             assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
 
@@ -279,6 +288,7 @@ async def test_litellm_gateway_from_sdk_image_edit(is_async):
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data

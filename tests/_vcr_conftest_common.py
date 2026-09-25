@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import atexit
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -15,10 +16,18 @@ import socket
 import sys
 import threading
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
+from unittest import mock
 
+import aiohttp
 import pytest
+import vcr
 import vcr.matchers as _vcr_matchers
+import vcr.patch as _vcr_patch
 
 from tests._vcr_redis_persister import (
     MAX_EPISODES_PER_CASSETTE,
@@ -43,7 +52,7 @@ from tests._vcr_redis_persister import (
 # network call entirely, so skip tests record nothing (NOOP) and passing tests
 # stop carrying a volatile github episode. This matches the established idiom in
 # the unit-test suite, which sets the same flag (see e.g.
-# tests/test_litellm/test_cost_calculator.py). ``setdefault`` so an explicit
+# tests/unit/test_cost_calculator.py). ``setdefault`` so an explicit
 # override still wins.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
@@ -127,9 +136,7 @@ def emit_vcr_diagnostic_log(terminalreporter) -> None:
             with open(path, "r", encoding="utf-8") as fh:
                 content = fh.read()
         except OSError as exc:
-            read_errors.append(
-                f"  [failed to read {name}: {type(exc).__name__}: {exc}]"
-            )
+            read_errors.append(f"  [failed to read {name}: {type(exc).__name__}: {exc}]")
             continue
         for line in content.splitlines():
             if not line.strip():
@@ -142,9 +149,7 @@ def emit_vcr_diagnostic_log(terminalreporter) -> None:
         return
 
     terminalreporter.write_sep("=", "VCR DIAGNOSTIC LOG", bold=True)
-    terminalreporter.write_line(
-        f"  source dir: {directory}  (deduplicated; full log archived as a CI artifact)"
-    )
+    terminalreporter.write_line(f"  source dir: {directory}  (deduplicated; full log archived as a CI artifact)")
     for line in read_errors:
         terminalreporter.write_line(line)
 
@@ -235,9 +240,7 @@ def pin_httpx_multipart_boundary(monkeypatch) -> None:
             boundary = VCR_FIXED_MULTIPART_BOUNDARY.encode("ascii")
         return _original_init(self, data=data, files=files, boundary=boundary, **kwargs)
 
-    monkeypatch.setattr(
-        _httpx_multipart.MultipartStream, "__init__", _init_with_fixed_boundary
-    )
+    monkeypatch.setattr(_httpx_multipart.MultipartStream, "__init__", _init_with_fixed_boundary)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -270,11 +273,7 @@ def _replace_b64_json_in_place(obj) -> bool:
     changed = False
     if isinstance(obj, dict):
         for key, value in obj.items():
-            if (
-                key == "b64_json"
-                and isinstance(value, str)
-                and len(value) > len(VCR_IMAGE_B64_PLACEHOLDER)
-            ):
+            if key == "b64_json" and isinstance(value, str) and len(value) > len(VCR_IMAGE_B64_PLACEHOLDER):
                 obj[key] = VCR_IMAGE_B64_PLACEHOLDER
                 changed = True
             elif _replace_b64_json_in_place(value):
@@ -296,16 +295,12 @@ def _strip_image_b64_payloads(response):
     preserves all those checks while shrinking cassettes by ~99%.
     """
     if not isinstance(response, dict):
-        vcr_diag_write_line(
-            f"[vcr-strip-b64] response is {type(response).__name__!r}, not "
-            "dict; skipping b64 scrub"
-        )
+        vcr_diag_write_line(f"[vcr-strip-b64] response is {type(response).__name__!r}, not dict; skipping b64 scrub")
         return response
     body = response.get("body")
     if not isinstance(body, dict):
         vcr_diag_write_line(
-            f"[vcr-strip-b64] response['body'] is {type(body).__name__!r}, "
-            "not dict; skipping b64 scrub"
+            f"[vcr-strip-b64] response['body'] is {type(body).__name__!r}, not dict; skipping b64 scrub"
         )
         return response
     raw = body.get("string")
@@ -316,10 +311,7 @@ def _strip_image_b64_payloads(response):
         try:
             text = bytes(raw).decode("utf-8")
         except UnicodeDecodeError:
-            vcr_diag_write_line(
-                "[vcr-strip-b64] response body bytes are not valid UTF-8; "
-                "skipping b64 scrub"
-            )
+            vcr_diag_write_line("[vcr-strip-b64] response body bytes are not valid UTF-8; skipping b64 scrub")
             return response
         was_bytes = True
     elif isinstance(raw, str):
@@ -327,8 +319,7 @@ def _strip_image_b64_payloads(response):
         was_bytes = False
     else:
         vcr_diag_write_line(
-            f"[vcr-strip-b64] response['body']['string'] is "
-            f"{type(raw).__name__!r}, not bytes/str; skipping b64 scrub"
+            f"[vcr-strip-b64] response['body']['string'] is {type(raw).__name__!r}, not bytes/str; skipping b64 scrub"
         )
         return response
 
@@ -349,9 +340,7 @@ def _strip_image_b64_payloads(response):
         for key in list(headers):
             if str(key).lower() == "content-length":
                 value = headers[key]
-                headers[key] = (
-                    [new_len_value] if isinstance(value, list) else new_len_value
-                )
+                headers[key] = [new_len_value] if isinstance(value, list) else new_len_value
     return response
 
 
@@ -409,15 +398,11 @@ def _canonical_body(request) -> tuple[bytes, str]:
 # selected. This mirrors the existing SigV4 / multipart-boundary / b64-image
 # normalizations already in this module, and means the already-bloated
 # cassettes start replaying immediately without a flush + re-record.
-_VCR_UUID_RE = re.compile(
-    rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
+_VCR_UUID_RE = re.compile(rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _VCR_LITELLM_BATCH_JOB_RE = re.compile(rb"litellm-batch-[0-9a-fA-F]{8}")
 # ISO-8601 timestamps, e.g. ``2026-05-25T03:40:37.262045Z`` /
 # ``2026-05-25T03:40:37+00:00``.
-_VCR_ISO_TS_RE = re.compile(
-    rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
-)
+_VCR_ISO_TS_RE = re.compile(rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
 # Unix epoch as 13-digit milliseconds, then 10-digit ``time.time()`` float,
 # then 10-digit integer seconds. Anchored to ``1`` + 9/12 digits, which keeps
 # them inside the 2001-2033 / 2001-2033 epoch windows and avoids matching
@@ -639,10 +624,7 @@ def _should_drop_telemetry_record(request) -> bool:
         return False
     if not _is_telemetry_request(request):
         return False
-    if (
-        _is_telemetry_export_request(request)
-        and not _current_test_replays_telemetry_export()
-    ):
+    if _is_telemetry_export_request(request) and not _current_test_replays_telemetry_export():
         return True
     return not _current_test_records_telemetry()
 
@@ -767,9 +749,7 @@ def _iter_header_values(headers, name: str):
             yield value
 
 
-_AWS_SIGV4_CREDENTIAL_RE = re.compile(
-    r"AWS4-HMAC-SHA256\s+Credential=([^/\s,]+)/", re.IGNORECASE
-)
+_AWS_SIGV4_CREDENTIAL_RE = re.compile(r"AWS4-HMAC-SHA256\s+Credential=([^/\s,]+)/", re.IGNORECASE)
 
 # Google OAuth2 access tokens always start with ``ya29.`` regardless of how
 # they were minted (service account, metadata server, impersonation).
@@ -891,9 +871,7 @@ def _normalize_multipart_boundary(request) -> None:
         return
 
     try:
-        headers[content_type_key] = content_type_value.replace(
-            match.group(0), fixed_param
-        )
+        headers[content_type_key] = content_type_value.replace(match.group(0), fixed_param)
     except (TypeError, AttributeError):
         return
 
@@ -985,8 +963,7 @@ def _materialize_iterable_body(request) -> None:
         uri = getattr(request, "uri", getattr(request, "url", "?"))
         first_type = type(chunks[0]).__name__ if chunks else "empty"
         vcr_diag_write_line(
-            f"[vcr-materialize] FALLBACK: {method} {uri} chunk type "
-            f"{first_type!r} not coerced to bytes; storing b''"
+            f"[vcr-materialize] FALLBACK: {method} {uri} chunk type {first_type!r} not coerced to bytes; storing b''"
         )
         out = b""
 
@@ -1026,9 +1003,7 @@ def _key_fingerprint_matcher(r1, r2) -> None:
         return
 
     def _fp(req):
-        for value in _iter_header_values(
-            getattr(req, "headers", None), KEY_FINGERPRINT_HEADER
-        ):
+        for value in _iter_header_values(getattr(req, "headers", None), KEY_FINGERPRINT_HEADER):
             if value is None:
                 continue
             return value if isinstance(value, str) else str(value)
@@ -1159,13 +1134,11 @@ def _print_atexit_banner() -> None:
         _emit("VCR CASSETTE CACHE DEGRADED")
         if save_failures:
             _emit(
-                f"  {save_failures} cassette save failure(s); last error: "
-                f"{health.get('save_failure_last_error', '')}"
+                f"  {save_failures} cassette save failure(s); last error: {health.get('save_failure_last_error', '')}"
             )
         if load_failures:
             _emit(
-                f"  {load_failures} cassette load failure(s); last error: "
-                f"{health.get('load_failure_last_error', '')}"
+                f"  {load_failures} cassette load failure(s); last error: {health.get('load_failure_last_error', '')}"
             )
         if snapshot:
             _emit(_format_capacity_line(snapshot))
@@ -1276,11 +1249,7 @@ class _RespxUsageVisitor(ast.NodeVisitor):
         if isinstance(dec, ast.Call):
             dec = dec.func
         if isinstance(dec, ast.Attribute):
-            return (
-                isinstance(dec.value, ast.Name)
-                and dec.value.id == "respx"
-                and dec.attr == "mock"
-            )
+            return isinstance(dec.value, ast.Name) and dec.value.id == "respx" and dec.attr == "mock"
         return False
 
     def _is_pytest_mark_respx(self, dec: ast.expr) -> bool:
@@ -1307,9 +1276,7 @@ class _RespxUsageVisitor(ast.NodeVisitor):
         # ``def test_foo(respx_mock): ...`` — pytest supplies the fixture
         # whenever the parameter name appears, regardless of marker.
         all_args = (
-            list(args.args)
-            + list(args.kwonlyargs)
-            + (list(args.posonlyargs) if hasattr(args, "posonlyargs") else [])
+            list(args.args) + list(args.kwonlyargs) + (list(args.posonlyargs) if hasattr(args, "posonlyargs") else [])
         )
         for a in all_args:
             if a.arg == "respx_mock":
@@ -1566,9 +1533,7 @@ def _emit_outcome_payload(
             },
         )
     )
-    node.user_properties.append(
-        (_USER_PROP_RECORDED_BY, os.environ.get("PYTEST_XDIST_WORKER", ""))
-    )
+    node.user_properties.append((_USER_PROP_RECORDED_BY, os.environ.get("PYTEST_XDIST_WORKER", "")))
 
 
 def aggregate_report_outcome(report) -> None:
@@ -1616,9 +1581,7 @@ def aggregate_report_outcome(report) -> None:
     if verdict == VERDICT_MISS_OVERFLOW:
         _session_stats["overflow_tests"].append(nodeid)
     elif verdict == VERDICT_UNMARKED_LIVE_CALL:
-        _session_stats["unmarked_live_call_tests"].append(
-            (nodeid, list(outcome.get("live_call_hosts") or []))
-        )
+        _session_stats["unmarked_live_call_tests"].append((nodeid, list(outcome.get("live_call_hosts") or [])))
 
     skip_reason = outcome.get("skip_reason")
     if skip_reason:
@@ -1635,9 +1598,7 @@ def session_stats_snapshot() -> dict:
         "overflow_tests": list(_session_stats["overflow_tests"]),
         "unmarked_live_call_tests": list(_session_stats["unmarked_live_call_tests"]),
         "skip_reason_counts": dict(_session_stats["skip_reason_counts"]),
-        "skip_reason_examples": {
-            k: list(v) for k, v in _session_stats["skip_reason_examples"].items()
-        },
+        "skip_reason_examples": {k: list(v) for k, v in _session_stats["skip_reason_examples"].items()},
     }
 
 
@@ -1810,9 +1771,7 @@ def record_vcr_outcome(request, vcr) -> None:
     # Cassette is None ⇒ test wasn't VCR-marked. Honor the skip reason
     # we tagged at collection time, and pull live-call hosts captured by
     # the socket probe (if any).
-    skip_reason = getattr(
-        request.node, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_FILE_OPT_OUT
-    )
+    skip_reason = getattr(request.node, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_FILE_OPT_OUT)
     _session_stats["skip_reason_counts"][skip_reason] += 1
 
     hosts = getattr(request.node, _LIVE_CALL_BUFFER_KEY, []) or []
@@ -1837,9 +1796,7 @@ def record_vcr_outcome(request, vcr) -> None:
         live_call_hosts=hosts,
     )
     if vcr_outcome_logging_enabled():
-        request.node.user_properties.append(
-            (_USER_PROP_VERDICT_LINE, _format_verdict_line(verdict, None, extra))
-        )
+        request.node.user_properties.append((_USER_PROP_VERDICT_LINE, _format_verdict_line(verdict, None, extra)))
 
 
 def install_live_call_probe(request, vcr) -> None:
@@ -1858,9 +1815,7 @@ def install_live_call_probe(request, vcr) -> None:
     # Track the current test for telemetry-leak suppression (applies to every
     # test, VCR-marked or not). See ``_should_drop_telemetry_record``.
     global _current_test_nodeid
-    _current_test_nodeid = str(
-        getattr(getattr(request, "node", None), "nodeid", "") or ""
-    )
+    _current_test_nodeid = str(getattr(getattr(request, "node", None), "nodeid", "") or "")
     if vcr is not None or vcr_disabled():
         return None
     probe = _LiveCallProbe()
@@ -1876,10 +1831,7 @@ def _format_capacity_line(snapshot: dict) -> str:
     pct = float(snapshot.get("used_pct", 0.0) or 0.0)
     used_mb = used / (1024 * 1024)
     cap_mb = cap / (1024 * 1024)
-    return (
-        f"  Cassette Redis usage: {used_mb:.1f} MiB / {cap_mb:.1f} MiB "
-        f"({pct:.1f}% of maxmemory)"
-    )
+    return f"  Cassette Redis usage: {used_mb:.1f} MiB / {cap_mb:.1f} MiB ({pct:.1f}% of maxmemory)"
 
 
 def emit_vcr_classification_summary(terminalreporter) -> None:
@@ -1940,14 +1892,10 @@ def emit_vcr_classification_summary(terminalreporter) -> None:
     total_leaks = sum(leak_counts.values())
     terminalreporter.write_sep("-", "VCR COST LEAK CHECK", bold=True)
     if total_leaks:
-        rendered = ", ".join(
-            f"{verdict}={count}" for verdict, count in leak_counts.items() if count
-        )
+        rendered = ", ".join(f"{verdict}={count}" for verdict, count in leak_counts.items() if count)
         terminalreporter.write_line(f"  FAIL: {rendered}")
     else:
-        terminalreporter.write_line(
-            "  PASS: no overflow, partial, not-persisted, or unmarked live-call verdicts"
-        )
+        terminalreporter.write_line("  PASS: no overflow, partial, not-persisted, or unmarked live-call verdicts")
 
     overflow = snapshot["overflow_tests"]
     if overflow:
@@ -2007,18 +1955,14 @@ def emit_cassette_cache_session_banner(terminalreporter) -> None:
     snapshot = cassette_cache_capacity_snapshot()
 
     if save_failures or load_failures:
-        terminalreporter.write_sep(
-            "=", "VCR CASSETTE CACHE DEGRADED", red=True, bold=True
-        )
+        terminalreporter.write_sep("=", "VCR CASSETTE CACHE DEGRADED", red=True, bold=True)
         if save_failures:
             terminalreporter.write_line(
-                f"  {save_failures} cassette save failure(s); last error: "
-                f"{health.get('save_failure_last_error', '')}"
+                f"  {save_failures} cassette save failure(s); last error: {health.get('save_failure_last_error', '')}"
             )
         if load_failures:
             terminalreporter.write_line(
-                f"  {load_failures} cassette load failure(s); last error: "
-                f"{health.get('load_failure_last_error', '')}"
+                f"  {load_failures} cassette load failure(s); last error: {health.get('load_failure_last_error', '')}"
             )
         terminalreporter.write_line(
             "  Tests still passed because cassette persistence is best-effort, "
@@ -2031,9 +1975,7 @@ def emit_cassette_cache_session_banner(terminalreporter) -> None:
         return
 
     if snapshot and snapshot["used_pct"] >= CASSETTE_CACHE_HIGH_WATER_FRACTION * 100:
-        terminalreporter.write_sep(
-            "=", "VCR CASSETTE CACHE NEAR CAPACITY", yellow=True, bold=True
-        )
+        terminalreporter.write_sep("=", "VCR CASSETTE CACHE NEAR CAPACITY", yellow=True, bold=True)
         terminalreporter.write_line(_format_capacity_line(snapshot))
         terminalreporter.write_line(
             "  No save failures yet, but Redis is approaching maxmemory. "
@@ -2082,13 +2024,104 @@ class VerboseReporterState:
         if reporter is None:
             return
         verdict = next(
-            (
-                v
-                for k, v in (report.user_properties or [])
-                if k == _USER_PROP_VERDICT_LINE
-            ),
+            (v for k, v in (report.user_properties or []) if k == _USER_PROP_VERDICT_LINE),
             None,
         )
         if not verdict:
             return
         reporter.write_line(f"{verdict} :: {report.nodeid}")
+
+
+@dataclass(frozen=True, slots=True)
+class VcrPatchPoint:
+    owner: object
+    attribute: str
+    original: object
+
+    @property
+    def name(self) -> str:
+        return f"{_patch_owner_name(self.owner)}.{self.attribute}"
+
+    def current(self) -> object:
+        current: Final[object] = getattr(self.owner, self.attribute)
+        return current
+
+    def is_patched(self) -> bool:
+        return self.current() is not self.original
+
+    def restore(self) -> None:
+        setattr(self.owner, self.attribute, self.original)
+
+
+def _patch_owner_name(owner: object) -> str:
+    if inspect.isclass(owner):
+        return f"{owner.__module__}.{owner.__qualname__}"
+    if inspect.ismodule(owner):
+        return owner.__name__
+    return repr(owner)
+
+
+def _vcr_patch_point(patcher: mock._patch[object]) -> VcrPatchPoint:
+    owner: Final[object] = patcher.getter()
+    return VcrPatchPoint(owner=owner, attribute=patcher.attribute, original=patcher.new)
+
+
+_VCR_PATCH_POINTS: Final = (
+    *(_vcr_patch_point(patcher) for patcher in _vcr_patch.reset_patchers()),
+    VcrPatchPoint(aiohttp.ClientSession, "_request", _vcr_patch._AiohttpClientSessionRequest),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VcrPatchLeak:
+    patch_points: tuple[str, ...]
+    cassette_paths: tuple[str, ...]
+
+
+def _cassette_paths_wrapped_into(fn: object) -> tuple[str, ...]:
+    if not inspect.isfunction(fn):
+        return ()
+    cassette: Final = inspect.getclosurevars(fn).nonlocals.get("cassette")
+    own: Final = (str(cassette._path),) if isinstance(cassette, vcr.cassette.Cassette) else ()
+    return own + _cassette_paths_wrapped_into(getattr(fn, "__wrapped__", None))
+
+
+def detect_vcr_patch_leak() -> VcrPatchLeak | None:
+    leaked: Final = tuple(point for point in _VCR_PATCH_POINTS if point.is_patched())
+    if not leaked:
+        return None
+    return VcrPatchLeak(
+        patch_points=tuple(point.name for point in leaked),
+        cassette_paths=tuple(
+            dict.fromkeys(path for point in leaked for path in _cassette_paths_wrapped_into(point.current()))
+        ),
+    )
+
+
+def restore_vcr_patch_points() -> None:
+    for point in _VCR_PATCH_POINTS:
+        point.restore()
+
+
+def guard_vcr_patch_points(item: pytest.Item, teardown_failed: bool) -> None:
+    leak: Final = detect_vcr_patch_leak()
+    if leak is None:
+        return
+    restore_vcr_patch_points()
+    if teardown_failed:
+        return
+    pytest.fail(
+        f"{item.nodeid} finished with a vcrpy cassette still patched into "
+        f"{', '.join(leak.patch_points)} (cassettes: {', '.join(leak.cassette_paths) or 'unknown'}); "
+        "the originals were restored so later tests are unaffected",
+        pytrace=False,
+    )
+
+
+@contextmanager
+def rewound_new_episodes_cassette(cassette_dir: Path) -> Iterator[vcr.cassette.Cassette]:
+    cassette_path: Final = cassette_dir / "rewound_owner.yaml"
+    cassette_path.write_text("interactions: []\nversion: 1\n")
+    recorder: Final = vcr.VCR(cassette_library_dir=str(cassette_dir))
+    with recorder.use_cassette(cassette_path.name, record_mode="new_episodes") as cassette:
+        yield cassette

@@ -56,8 +56,8 @@ from litellm.integrations.otel.plumbing.context import (
     request_root_http_route,
     request_root_span,
     resolve_mcp_span_context,
-    resolve_parent_context,
     resolve_request_span_context,
+    resolve_service_span_context,
     set_request_baggage,
     set_request_root_span,
 )
@@ -240,7 +240,7 @@ class OpenTelemetryV2(CustomLogger):
         provider: Final = resolve_logger_provider(self.config, logger_provider)
         if provider is None:
             return None
-        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME))
+        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME), provider.resource)
 
     # ====================================================================== #
     #  Proxy global registration
@@ -561,6 +561,7 @@ class OpenTelemetryV2(CustomLogger):
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
             trace=call.trace,
+            session_id=call.session_id,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -670,14 +671,17 @@ class OpenTelemetryV2(CustomLogger):
         # rides along and the call nests under whatever request phase is active —
         # e.g. a DB lookup under the live ``auth`` span), falling back to the
         # server span the proxy threaded as ``parent_otel_span``. A background
-        # service call has neither, so it starts its own root trace.
-        parent_context: Final = resolve_parent_context(threaded=parent_otel_span)
+        # service call has neither, so it starts its own root trace, as does one
+        # that finished after the request span ended (linked back to it).
+        end_time_ns: Final = to_ns(end_time)
+        parent_context, links = resolve_service_span_context(threaded=parent_otel_span, end_time_ns=end_time_ns)
         return self._emitter.emit(
             role,
             data,
             parent_context=parent_context,
             start_time_ns=to_ns(start_time),
-            end_time_ns=to_ns(end_time),
+            end_time_ns=end_time_ns,
+            links=links,
         )
 
     # ====================================================================== #

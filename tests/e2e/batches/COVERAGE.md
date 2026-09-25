@@ -22,6 +22,7 @@ failures are hard test failures (see `tests/e2e/AGENTS.md`).
 | Bedrock   | yes (unified only) | yes | yes | yes (unfiltered managed list) | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 | Bedrock GovCloud (`us-gov-west-1`) | yes (unified only) | yes | no | no | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` on model, resolved from `AWS_GOVCLOUD_ACCESS_KEY_ID` / `AWS_GOVCLOUD_SECRET_ACCESS_KEY` / `AWS_GOVCLOUD_BATCH_S3_BUCKET` / `AWS_GOVCLOUD_BATCH_ROLE_ARN`) |
 | Bedrock split S3 identity | no | no | no | no | yes (file upload, content, delete) | S3 signed with `s3_access_key_id` / `s3_secret_access_key` (`AWS_S3_ONLY_ACCESS_KEY_ID` / `AWS_S3_ONLY_SECRET_ACCESS_KEY`, object rights on `AWS_BATCH_S3_BUCKET` only) while `aws_*` is `AWS_BEDROCK_ONLY_ACCESS_KEY_ID` / `AWS_BEDROCK_ONLY_SECRET_ACCESS_KEY`, an identity with no S3 rights on that bucket |
+| Bedrock blank S3 env | yes (unified only, on an owned gateway exporting `AWS_S3_ENCRYPTION_KEY_ID` / `AWS_S3_BUCKET_OWNER` as empty strings) | no | no | no | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` in the gateway config); blank env vars must be treated as unset, not serialized |
 
 Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
 lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).

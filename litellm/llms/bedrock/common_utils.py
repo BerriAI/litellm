@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -86,6 +86,15 @@ class BedrockError(BaseLLMException):
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
+_STREAM_CHUNK_SIZE_VALIDATOR: Final[TypeAdapter[int | None]] = TypeAdapter(int | None, config=ConfigDict(strict=True))
+
+
+def stream_chunk_size_from(litellm_params: Mapping[str, object]) -> int | None:
+    raw: Final = litellm_params.get("stream_chunk_size")
+    try:
+        return _STREAM_CHUNK_SIZE_VALIDATOR.validate_python(raw)
+    except ValidationError as e:
+        raise BedrockError(status_code=400, message=f"Invalid stream_chunk_size={raw!r}. Expected int. Error: {e}")
 
 
 def merge_bedrock_aws_request_params(
@@ -818,6 +827,28 @@ def _mantle_api_base_from_env() -> str | None:
     return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
+def bedrock_supports_openai_responses(model: str | None, model_cost: Mapping[str, object]) -> bool:
+    """Whether a Bedrock model is served by bedrock-runtime's OpenAI Responses surface.
+
+    Purely data-driven from the model's price-map capability signal -- ``/v1/responses``
+    in ``supported_endpoints`` -- and overridable via ``register_model`` and proxy
+    ``model_info``, so onboarding a model is a JSON change, never a code change.
+    There is deliberately no model-name match: AWS exposes this surface per model,
+    not per family, and the two Bedrock endpoints do not agree with each other
+    (bedrock-runtime accepts Codex's ``additional_tools`` items where
+    bedrock-mantle rejects them), so a name-shaped gate would be wrong.
+    A model absent from ``model_cost`` has no signal and returns False, leaving the
+    chat-completions bridge in place exactly as before.
+    """
+    if not model:
+        return False
+    candidates: Final = (model_cost.get(key) for key in (model, f"bedrock/{model}"))
+    return any(
+        isinstance(entry, Mapping) and "/v1/responses" in (entry.get("supported_endpoints") or ())
+        for entry in candidates
+    )
+
+
 def build_mantle_messages_url(
     api_base: str | None,
     aws_bedrock_runtime_endpoint: str | None,
@@ -1186,6 +1217,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         base_model: Final = BedrockModelInfo.get_base_model(model)
         alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
+            return "converse"
+        if _OPENAI_FAMILY_MODEL_RE.search(base_model):
             return "converse"
         return "invoke"
 
@@ -1593,7 +1626,7 @@ def _resolve_s3_setting(
         source.get(param_name) for source in (litellm_params, optional_params) if source is not None
     )
     explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
-    return explicit or get_secret_str(env_var)
+    return explicit or get_secret_str(env_var) or None
 
 
 class CommonBatchFilesUtils:
