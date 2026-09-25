@@ -263,5 +263,13 @@ class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteL
     table_name = "litellm_adaptiveroutersession"
 
 
+class SCIMSourceRepository(PrismaTableRepository["prisma_models.LiteLLM_SCIMSource"]):
+    table_name = "litellm_scimsource"
+
+
+class SCIMResourceRepository(PrismaTableRepository["prisma_models.LiteLLM_SCIMResource"]):
+    table_name = "litellm_scimresource"
+
+
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
     table_name = "litellm_retiredagent"
