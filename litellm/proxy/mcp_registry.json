@@ -220,7 +220,7 @@
     {
       "name": "microsoft_365",
       "title": "Microsoft 365 (Graph)",
-      "description": "Outlook mail and calendar, OneDrive and SharePoint files, and Teams through Microsoft Graph, with each user's own Entra ID sign-in",
+      "description": "Outlook mail and calendar, OneDrive and SharePoint files, and Teams through Microsoft Graph, with each user's own Entra ID sign-in. Self-hosted: run ms-365-mcp-server next to the proxy and point the URL at it",
       "icon_url": "/ui/assets/logos/microsoft_365.svg",
       "category": "Productivity",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.Softeria%2Fms-365-mcp-server",

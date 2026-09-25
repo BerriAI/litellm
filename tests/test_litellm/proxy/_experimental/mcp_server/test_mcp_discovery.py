@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Final
 
 import pytest
 
@@ -98,6 +99,27 @@ class TestMCPRegistryFile:
         expected = {"github", "slack", "postgresql", "snowflake", "atlassian", "microsoft_365"}
         missing = expected - names
         assert not missing, f"Missing well-known servers: {missing}"
+
+    def test_microsoft_365_is_a_self_hosted_streamable_http_server(self, registry_path):
+        """The Graph server runs next to the proxy in org mode, so the entry must be streamable HTTP at /mcp."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+        entry: Final = next(s for s in data["servers"] if s["name"] == "microsoft_365")
+        assert entry["transport"] == "http"
+        assert entry["url"].endswith("/mcp")
+        assert entry["category"] == "Productivity"
+        assert "ms-365-mcp-server" in entry["registry_url"]
+
+    def test_bundled_icons_exist(self, registry_path):
+        """An icon served from the proxy's own assets must ship in the built dashboard or the card renders blank."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+        logos_dir: Final = os.path.join(os.path.dirname(registry_path), "_experimental", "out", "assets", "logos")
+        bundled: Final = [s for s in data["servers"] if s.get("icon_url", "").startswith("/ui/assets/logos/")]
+        assert bundled, "at least one registry entry ships its own icon"
+        for server in bundled:
+            icon: Final = os.path.join(logos_dir, os.path.basename(server["icon_url"]))
+            assert os.path.isfile(icon), f"{server['name']} points at a missing icon {server['icon_url']}"
 
     def test_env_vars_structure(self, registry_path):
         with open(registry_path, "r") as f:
