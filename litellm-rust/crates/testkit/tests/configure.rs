@@ -115,7 +115,7 @@ fn opencode_uses_a_different_provider_package_for_every_wire() {
             .configure(&version(), &settings(wire), dir.path())
             .unwrap();
         let config: serde_json::Value =
-            serde_json::from_str(&spec.files.values().next().unwrap()).unwrap();
+            serde_json::from_str(spec.files.values().next().unwrap()).unwrap();
         config["provider"]["litellm"]["npm"]
             .as_str()
             .unwrap()
