@@ -86,6 +86,7 @@ def test_user_activity_export_csv_downloads_every_key(gateway: Gateway) -> None:
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/csv"), response.headers
         assert "attachment" in response.headers["content-disposition"], response.headers
+        assert response.text.splitlines()[0].startswith("Date,User,User ID,Key Alias,Key ID,Spend ($),"), response.text
         records: Final = tuple(csv.DictReader(io.StringIO(response.text)))
         assert len(records) == 3, response.text
         assert sorted(record["Key ID"] for record in records) == sorted(digests), response.text

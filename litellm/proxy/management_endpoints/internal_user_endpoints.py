@@ -3145,9 +3145,9 @@ def _user_export_row(row: TeamDailyActivityExportRow) -> UserDailyActivityExport
 
 
 def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[str, ...]:
-    base: Final = ("Date", "User ID")
+    base: Final = ("Date", "User", "User ID")
     if export_type == "daily_with_keys":
-        return (*base, "Key Alias", "Key ID", "User Email", *EXPORT_CSV_METRIC_HEADERS)
+        return (*base, "Key Alias", "Key ID", *EXPORT_CSV_METRIC_HEADERS)
     if export_type == "daily_with_models":
         return (
             *base,
@@ -3168,10 +3168,10 @@ def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[
 def _user_export_csv_record(row: UserDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
-        "User ID": row.user_id,
+        "User": csv_safe(row.user_email) if row.user_email else "-",
+        "User ID": csv_safe(row.user_id),
         "Key Alias": csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
-        "User Email": csv_safe(row.user_email) if row.user_email else "-",
         "Model": csv_safe(row.model) if row.model else "-",
         "Spend ($)": f"{row.spend:.4f}",
         "Flat Cost ($)": f"{row.flat_cost:.4f}",

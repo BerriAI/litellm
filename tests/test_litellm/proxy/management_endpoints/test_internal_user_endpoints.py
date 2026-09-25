@@ -5176,10 +5176,10 @@ def test_user_export_csv_columns_match_the_dashboard_client_layout():
     assert records == [
         {
             "Date": "2026-06-01",
+            "User": "u@example.com",
             "User ID": "user-1",
             "Key Alias": "key-alias-1",
             "Key ID": "key-1",
-            "User Email": "u@example.com",
             "Spend ($)": "1.5000",
             "Requests": "2",
             "Successful Requests": "2",
@@ -5202,11 +5202,12 @@ def test_user_export_csv_omits_key_columns_for_the_plain_daily_scope():
     text: Final = _user_export_csv("daily", (_user_export_row_instance(),))
 
     assert text.splitlines()[0] == (
-        "Date,User ID,Spend ($),Requests,Successful Requests,Failed Requests,"
+        "Date,User,User ID,Spend ($),Requests,Successful Requests,Failed Requests,"
         "Total Tokens,Prompt Tokens,Completion Tokens,Cache Read Input Tokens,Cache Creation Input Tokens"
     )
     assert list(csv.reader(io.StringIO(text)))[1] == [
         "2026-06-01",
+        "-",
         "user-1",
         "1.5000",
         "2",
@@ -5227,14 +5228,16 @@ def test_user_export_csv_escapes_formula_aliases_and_keeps_dash_placeholder():
     from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
 
     row: Final = _user_export_row_instance(
+        user_id="=cmd",
         key_alias='=HYPERLINK("http://evil.example","x")',
         user_email="@cmd",
     )
 
     record: Final = next(csv.DictReader(io.StringIO(_user_export_csv("daily_with_keys", (row,)))))
 
+    assert record["User ID"] == "'=cmd"
     assert record["Key Alias"] == '\'=HYPERLINK("http://evil.example","x")'
-    assert record["User Email"] == "'@cmd"
+    assert record["User"] == "'@cmd"
     assert record["Key ID"] == "-"
 
 
