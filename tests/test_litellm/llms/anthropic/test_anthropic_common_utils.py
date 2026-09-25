@@ -54,6 +54,85 @@ def test_is_claude_code_one_shot_subagent_request(messages, system, expected):
     )
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # Identity sentence alone -> drop the whole block.
+        ("You are Claude Code, Anthropic's official CLI for Claude.", None),
+        # Identity sentence followed by the rest of the system prompt -> keep the rest.
+        (
+            "You are Claude Code, Anthropic's official CLI for Claude.\nYou are an interactive agent.",
+            "You are an interactive agent.",
+        ),
+        # Leading/trailing whitespace around the bare sentence is treated as drop-only.
+        ("  You are Claude Code, Anthropic's official CLI for Claude.  ", None),
+        # Non-Claude-Code prompts are untouched.
+        ("You are a helpful assistant.", "You are a helpful assistant."),
+        # A sentence that merely mentions Claude Code is untouched.
+        ("You are Claude Code's helper.", "You are Claude Code's helper."),
+    ],
+)
+def test_strip_claude_code_identity(text, expected):
+    from litellm.llms.anthropic.common_utils import strip_claude_code_identity
+
+    assert strip_claude_code_identity(text) == expected
+
+
+CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+@pytest.mark.parametrize(
+    "system_param,expected",
+    [
+        # String form: identity sentence alone -> drop the whole system param.
+        (CLAUDE_CODE_IDENTITY, None),
+        # String form: identity followed by the real prompt -> keep the real prompt.
+        (f"{CLAUDE_CODE_IDENTITY}\nYou are an interactive agent.", "You are an interactive agent."),
+        # String form: non-identity text is untouched.
+        ("You are a helpful assistant.", "You are a helpful assistant."),
+        # List form: identity text block is dropped, non-text blocks and the
+        # surviving text block are preserved.
+        (
+            [
+                {"type": "text", "text": CLAUDE_CODE_IDENTITY},
+                {"type": "text", "text": "real system prompt"},
+            ],
+            [{"type": "text", "text": "real system prompt"}],
+        ),
+        # List form: identity-only text means every block is dropped.
+        ([{"type": "text", "text": CLAUDE_CODE_IDENTITY}], None),
+        # List form: non-text blocks survive identity stripping untouched.
+        (
+            [
+                {"type": "text", "text": CLAUDE_CODE_IDENTITY},
+                {"type": "text", "text": "real system prompt", "cache_control": {"type": "ephemeral"}},
+            ],
+            [{"type": "text", "text": "real system prompt", "cache_control": {"type": "ephemeral"}}],
+        ),
+        # List form: identity + real content in the same block -> rewritten block.
+        (
+            [{"type": "text", "text": f"{CLAUDE_CODE_IDENTITY}\nreal system prompt"}],
+            [{"type": "text", "text": "real system prompt"}],
+        ),
+        # List form: a non-text block (type "other") is kept as-is.
+        (
+            [{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "other", "foo": "bar"}],
+            [{"type": "other", "foo": "bar"}],
+        ),
+        # List form: non-dict items are kept as-is.
+        ([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, "loose item"], ["loose item"]),
+        # Non-string, non-list system payload is passed through untouched.
+        (None, None),
+    ],
+)
+def test_strip_claude_code_identity_from_system(system_param, expected):
+    from litellm.llms.anthropic.common_utils import (
+        strip_claude_code_identity_from_system,
+    )
+
+    assert strip_claude_code_identity_from_system(system_param) == expected
+
+
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 

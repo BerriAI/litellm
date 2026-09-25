@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.llms.anthropic.common_utils import strip_claude_code_identity_from_system
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
@@ -1229,6 +1230,23 @@ class LiteLLMAnthropicMessagesAdapter:
         # Debug: Processing Anthropic message request
         new_messages: list[AllMessageValues] = []
         tool_name_mapping: dict[str, str] = {}
+
+        # Strip Claude Code's self-identification from the system prompt before
+        # translating to an OpenAI chat-completions request. This bridge only runs
+        # for non-Anthropic models (first-party servers take the native
+        # AnthropicMessagesConfig path), so "You are Claude Code" is always a
+        # false self-description here and must not reach the target model.
+        system_param: Final = anthropic_message_request.get("system")
+        if system_param is not None:
+            stripped_system = strip_claude_code_identity_from_system(system_param)
+            if stripped_system is None or stripped_system != system_param:
+                # This adapter is also invoked with a read-only wire-body mapping
+                # (shadow evaluation); mutate a copy, never the caller's request.
+                anthropic_message_request = cast(AnthropicMessagesRequest, dict(anthropic_message_request))
+                if stripped_system is None:
+                    anthropic_message_request.pop("system", None)
+                else:
+                    anthropic_message_request["system"] = stripped_system
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
         messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(

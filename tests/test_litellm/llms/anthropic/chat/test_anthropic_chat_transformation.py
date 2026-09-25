@@ -5832,6 +5832,120 @@ def test_should_strip_billing_metadata_by_provider(module_path, class_name, expe
     assert config_cls().should_strip_billing_metadata() is expected_strip
 
 
+@pytest.mark.parametrize(
+    "module_path, class_name, expected_strip",
+    [
+        # First-party and Claude-serving providers keep the identity sentence: the
+        # model genuinely *is* Claude, even via Bedrock/Vertex/Azure.
+        ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
+        (
+            "litellm.llms.anthropic.experimental_pass_through.messages.transformation",
+            "AnthropicMessagesConfig",
+            False,
+        ),
+        (
+            "litellm.llms.bedrock.claude_platform.transformation",
+            "BedrockClaudePlatformConfig",
+            False,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
+            "VertexAIAnthropicConfig",
+            False,
+        ),
+        ("litellm.llms.azure_ai.anthropic.transformation", "AzureAnthropicConfig", False),
+        # Non-Claude Anthropic-compatible endpoints strip the false self-description.
+        ("litellm.llms.minimax.messages.transformation", "MinimaxMessagesConfig", True),
+        (
+            "litellm.llms.deepseek.messages.transformation",
+            "DeepSeekAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.tencent.messages.transformation",
+            "TencentAnthropicMessagesConfig",
+            True,
+        ),
+    ],
+)
+def test_should_strip_claude_code_identity_by_provider(
+    module_path, class_name, expected_strip
+):
+    import importlib
+
+    config_cls = getattr(importlib.import_module(module_path), class_name)
+    assert config_cls().should_strip_claude_code_identity() is expected_strip
+
+
+def _system_with_identity_block(identity_sentence: str) -> list:
+    return [
+        {
+            "role": "system",
+            "content": [
+                # Claude Code sends the identity sentence as its own text block.
+                {"type": "text", "text": identity_sentence},
+                {"type": "text", "text": "real system prompt"},
+            ],
+        }
+    ]
+
+
+def test_messages_request_strips_claude_code_identity_for_minimax():
+    from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = MinimaxMessagesConfig()
+    assert config.should_strip_claude_code_identity() is True
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result.get("system", [])]
+    assert "You are Claude Code, Anthropic's official CLI for Claude." not in texts
+    assert "real system prompt" in texts
+
+
+def test_messages_request_keeps_claude_code_identity_for_first_party():
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AnthropicMessagesConfig()
+    assert config.should_strip_claude_code_identity() is False
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result.get("system", [])]
+    assert "You are Claude Code, Anthropic's official CLI for Claude." in texts
+    assert "real system prompt" in texts
+
+
 def test_namespace_tool_flat_nested_tools_are_extracted():
     """Codex sends nested tools in flat format {type, name, description, parameters} with no 'function' wrapper.
     These must be normalized and mapped without raising KeyError: 'function'."""
@@ -6379,6 +6493,27 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
     assert result["tools"][0]["name"] == "write_file"
 
 
+def test_messages_request_strips_identity_only_system_for_minimax():
+    """Identity-only system drops the whole system param (pop path)."""
+    from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = MinimaxMessagesConfig()
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "system" not in result
 # ---------------------------------------------------------------------------
 # Mid-conversation ``role: "system"`` on the chat completions path.
 #

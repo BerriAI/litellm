@@ -2862,6 +2862,68 @@ def test_translate_completion_input_params_keeps_provider_native_tools():
     assert translated["tools"] == [{"googleMaps": {}}]
 
 
+CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+@pytest.mark.parametrize(
+    "system,expected_system_content",
+    [
+        # Identity sentence alone -> the whole system message is dropped. The bridge
+        # only serves non-Anthropic models, so the first-party case is never here.
+        (CLAUDE_CODE_IDENTITY, None),
+        # Identity followed by the real prompt -> the real prompt survives.
+        (f"{CLAUDE_CODE_IDENTITY}\nYou are an interactive agent.", "You are an interactive agent."),
+        # Non-identity system prompt is passed through untouched.
+        ("You are a helpful assistant.", "You are a helpful assistant."),
+    ],
+)
+def test_translate_anthropic_to_openai_strips_claude_code_identity(system, expected_system_content):
+    """The chat-completions bridge must not forward Claude Code's self-identification upstream."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="hosted_vllm/kimi-k3",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            system=system,
+        ),
+        custom_llm_provider="hosted_vllm",
+    )
+
+    system_messages = [m for m in openai_request["messages"] if m["role"] == "system"]
+    if expected_system_content is None:
+        assert system_messages == []
+    else:
+        assert len(system_messages) == 1
+        assert system_messages[0]["content"] == expected_system_content
+
+
+def test_translate_anthropic_to_openai_strips_claude_code_identity_read_only_request():
+    """Identity stripping must not mutate a read-only request (shadow evaluation passes a
+    MappingProxyType, so the adapter must copy before rewriting ``system``)."""
+    from types import MappingProxyType
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request = MappingProxyType(
+        {
+            "model": "hosted_vllm/kimi-k3",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "system": f"{CLAUDE_CODE_IDENTITY}\nYou are an interactive agent.",
+        }
+    )
+
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=request,
+        custom_llm_provider="hosted_vllm",
+    )
+
+    system_messages = [m for m in openai_request["messages"] if m["role"] == "system"]
+    assert [m["content"] for m in system_messages] == ["You are an interactive agent."]
+
+
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
     """
     Test that reasoning_content is converted to thinking block when thinking_blocks is not present.

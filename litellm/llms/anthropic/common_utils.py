@@ -79,6 +79,9 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+_CLAUDE_CODE_IDENTITY: Final = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
@@ -119,6 +122,65 @@ def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
     fetches, such as gateway model discovery, as `claude-code/<version>`"""
     return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
+
+
+def strip_claude_code_identity(text: str) -> str | None:
+    """Remove Claude Code's self-identification sentence from a single system text block.
+
+    Claude Code prefixes its system prompt with ``You are Claude Code, Anthropic's
+    official CLI for Claude.``. When that prompt is forwarded to a non-Claude model
+    (e.g. a DeepSeek-compatible or OpenAI-like Anthropic-compatible endpoint), the
+    sentence is a false self-description and should be dropped before sending
+    upstream. Returns ``None`` when the text was nothing but the identity sentence
+    (so callers can drop the whole block), otherwise the text with the sentence and
+    its framing whitespace removed.
+    """
+    stripped: Final = text.strip()
+    if stripped == _CLAUDE_CODE_IDENTITY:
+        return None
+    if stripped.startswith(_CLAUDE_CODE_IDENTITY):
+        return text.replace(_CLAUDE_CODE_IDENTITY, "", 1).lstrip("\n")
+    return text
+
+
+def strip_claude_code_identity_from_system(
+    system_param: str | list[object] | None,
+) -> str | list[object] | None:
+    """Strip Claude Code's self-identification sentence from a full system parameter.
+
+    Unlike :func:`strip_claude_code_identity`, which operates on a single text
+    block, this handles the whole ``system`` value of an Anthropic Messages
+    request -- either a plain string or a list of system content blocks.
+    Non-text blocks are kept as-is; text blocks have the identity sentence
+    removed, and are dropped entirely when it was the only content.
+
+    Returns ``None`` when every block was dropped so callers can remove the whole
+    ``system`` parameter.
+    """
+    if isinstance(system_param, str):
+        return strip_claude_code_identity(system_param)
+    if isinstance(system_param, list):
+        filtered_list: Final = []  # mutable-ok: API message payload
+        for content_block in system_param:
+            if isinstance(content_block, dict):
+                text = content_block.get("text", "")
+                content_type = content_block.get("type", "")
+                if content_type != "text":
+                    filtered_list.append(content_block)
+                    continue
+                stripped_text = strip_claude_code_identity(text)
+                if stripped_text is None:
+                    continue
+                if stripped_text == text:
+                    filtered_list.append(content_block)
+                else:
+                    rewritten = {**content_block, "text": stripped_text}  # mutable-ok: API message payload
+                    filtered_list.append(rewritten)
+            else:
+                # Keep non-dict items as-is.
+                filtered_list.append(content_block)
+        return filtered_list if len(filtered_list) > 0 else None
+    return system_param
 
 
 def _validated_claude_code_mapping(value: object) -> dict[object, object] | None:
