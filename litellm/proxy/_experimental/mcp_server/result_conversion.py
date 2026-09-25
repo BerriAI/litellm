@@ -89,8 +89,7 @@ def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolRes
             )
         case Exception():
             return error_text_result(outcome)
-        case _:
-            return assert_never(outcome)
+    return assert_never(outcome)
 
 
 def complete_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolResult:

@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_auth_header,
     _request_extra_headers,
     _request_resolved_auth_headers,
+    _request_upstream_url,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -39,6 +40,43 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 )
 
 GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_http_method_returns_text_without_sending_request(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    tool: Final = create_tool_function("/echo", "HEAD", {}, "https://upstream.example")
+    token: Final = _request_upstream_url.set("https://outer.example/request")
+    try:
+        assert await tool() == TextResult("Unsupported HTTP method: head")
+        assert len(respx_mock.calls) == 0
+        assert _request_upstream_url.get() == "https://outer.example/request"
+    finally:
+        _request_upstream_url.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body,expected", [
+    (' { "ok": true }\n', JsonResult({"ok": True}, ' { "ok": true }\n')),
+    (' [1, 2]\n', JsonResult([1, 2], ' [1, 2]\n')),
+    ('false', JsonResult(False, 'false')),
+    ('0', JsonResult(0, '0')),
+    ('""', JsonResult("", '""')),
+    ('null', TextResult('null')),
+    ('{"unfinished":', TextResult('{"unfinished":')),
+    ('', TextResult('')),
+])
+async def test_http_response_preserves_body_and_classifies_json(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+    body: str, expected: TextResult | JsonResult,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    tool: Final = create_tool_function("/echo", "get", {}, "https://upstream.example")
+    destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text=body)
+    assert await tool() == expected
+    assert destination.call_count == 1
 
 
 @pytest.mark.asyncio

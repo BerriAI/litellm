@@ -2,10 +2,10 @@ import json
 from typing import Final
 
 import pytest
-from mcp.types import CallToolResult, InputRequiredResult, TextContent, Tool
+from mcp.types import CallToolResult, ImageContent, InputRequiredResult, TextContent, Tool
 from mcp_types.methods import serialize_server_result
 from mcp_types.version import KNOWN_PROTOCOL_VERSIONS, MODERN_PROTOCOL_VERSIONS
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     INPUT_REQUIRED_UNSUPPORTED_MESSAGE,
@@ -139,6 +139,26 @@ class TestSdkResultArm:
     def test_legacy_keeps_object_structured_content(self):
         incoming = CallToolResult(content=[], structured_content={"a": 1}, is_error=False)
         assert to_call_tool_result(incoming, WireCompat.LEGACY) is incoming
+
+    @pytest.mark.parametrize("value", [False, 0, "", []])
+    def test_legacy_downgrade_preserves_falsy_values_and_non_text_blocks(self, value: JsonValue) -> None:
+        incoming: Final = CallToolResult(
+            content=[
+                ImageContent(type="image", data="AA==", mime_type="image/png"),
+                TextContent(type="text", text="Done"),
+            ],
+            structured_content=value,
+            meta={"trace": "t1"},
+            is_error=True,
+        )
+        before: Final = incoming.model_dump(by_alias=True)
+        result: Final = to_call_tool_result(incoming, WireCompat.LEGACY)
+        assert isinstance(result, CallToolResult)
+        assert result.content == [*incoming.content, TextContent(type="text", text=json.dumps(value))]
+        assert result.structured_content is None
+        assert result.meta == incoming.meta
+        assert result.is_error is True
+        assert incoming.model_dump(by_alias=True) == before
 
     def test_is_error_survives_downgrade(self):
         incoming = CallToolResult(content=[], structured_content=7, is_error=True)
