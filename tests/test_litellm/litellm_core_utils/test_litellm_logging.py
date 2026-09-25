@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import datetime
 import json
 import logging
@@ -8833,3 +8834,41 @@ def test_extract_response_obj_and_hidden_params_reads_binary_content_hidden_para
 
     assert hidden_params == {"headers": {"x-request-id": "req_tts"}}
     assert response_obj["object"] == "binary"
+
+
+def _preserved_thinking_client_turns() -> tuple[list[dict], list[dict]]:
+    turn_n = [{"role": "user", "content": "First question"}]
+    reply = {
+        "role": "assistant",
+        "content": "First answer",
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": "sig-1"}],
+    }
+    return turn_n, [*turn_n, reply, {"role": "user", "content": "Second question"}]
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_with_unchanged_variables_replays_a_byte_identical_prefix(logging_obj, tmp_path):
+    """A prompt template rendered with the same variables on every turn must prepend the
+    same messages, or the signed thinking blocks in the history lose their binding."""
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+
+    (tmp_path / "greeting.prompt").write_text(
+        "---\nmodel: claude-fable-5-1\n---\nSystem: You are a {{persona}}. Answer in one sentence.\n"
+    )
+    manager = DotpromptManager(prompt_directory=str(tmp_path))
+    compiled = [
+        await logging_obj.async_get_chat_completion_prompt(
+            model="claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            non_default_params={},
+            prompt_variables={"persona": "pirate"},
+            prompt_id="greeting",
+            prompt_management_logger=manager,
+        )
+        for turn in _preserved_thinking_client_turns()
+    ]
+    (_, messages_n, _), (_, messages_n_plus_one, _) = compiled
+
+    assert json.dumps(messages_n_plus_one[: len(messages_n)], sort_keys=True) == json.dumps(messages_n, sort_keys=True)
+    assert messages_n[0] == {"role": "system", "content": "You are a pirate. Answer in one sentence."}
+    assert len(messages_n_plus_one) == len(messages_n) + 2
