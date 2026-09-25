@@ -2461,6 +2461,12 @@ def test_is_gemini_3_or_newer():
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro") == False
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash") == False
 
+    assert VertexGeminiConfig._is_gemini_3_or_newer("4965075652664360960") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/4965075652664360960") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/ft-uuid") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemma-3-27b-it") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemma-3-27b-it") == False
+
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
@@ -2502,6 +2508,26 @@ def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
         }
         assert mapped["temperature"] == 1.0
         assert "thinkingBudget" not in mapped["thinkingConfig"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["4965075652664360960", "gemini/4965075652664360960", "gemini/ft-uuid", "gemma-3-27b-it"],
+)
+def test_fine_tuned_endpoint_and_gemma_get_no_gemini_3_default_temperature(model: str):
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={"max_tokens": 10},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped["max_output_tokens"] == 10
+    assert "temperature" not in mapped
 
 
 

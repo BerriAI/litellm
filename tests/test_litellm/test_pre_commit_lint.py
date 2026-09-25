@@ -161,7 +161,7 @@ def _commit_all(repo: Path, message: str) -> None:
     )
 
 
-def _set_base_ref(repo: Path, branch: str = "litellm_internal_staging") -> None:
+def _set_base_ref(repo: Path, branch: str = "release_branch") -> None:
     remote = repo.parent / "remote.git"
     subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
     subprocess.run(["git", "update-ref", f"refs/heads/{branch}", "HEAD"], cwd=remote, check=True)
@@ -176,7 +176,7 @@ def _stage_file(repo: Path, relative: str, body: str) -> None:
     subprocess.run(["git", "add", relative], cwd=repo, check=True)
 
 
-@pytest.mark.parametrize("branch", ["litellm_internal_staging", "main"])
+@pytest.mark.parametrize("branch", ["release_branch", "main"])
 def test_nothing_staged_scopes_to_working_tree_diff_and_runs_checks(tmp_path: Path, branch: str) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")

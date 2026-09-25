@@ -2017,8 +2017,8 @@ def _deployment_model_info(
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
         return None
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-    if litellm_params is None:
+    litellm_params: Final = litellm_logging_obj.litellm_params
+    if not litellm_params:
         return None
     return next(
         (
@@ -2036,7 +2036,9 @@ def _ocr_model_info(
     router_model_id: str | None,
 ) -> OCRPricing | None:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    litellm_params: Final = (
+        litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
+    )
     if litellm_params is None:
         return deployment_info
     return _layered_ocr_pricing(litellm_params, deployment_info)
@@ -2375,6 +2377,11 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
         base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
     model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
@@ -2386,6 +2393,7 @@ def default_image_cost_calculator(
 
     models_to_check: Final = (
         model_name_with_quality,
+        provider_first_model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
