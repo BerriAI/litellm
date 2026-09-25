@@ -264,6 +264,17 @@ def _assistant_part_renders(part: object) -> bool:
     )
 
 
+def _separate_thinking_blocks_render(message: object, parts: Sequence[object]) -> bool:
+    """``thinking_blocks`` reach the wire only when no inline thinking part claims the slot.
+
+    The converter skips the separate blocks as soon as the content list carries a
+    ``thinking`` or ``redacted_thinking`` part, whether or not that part itself renders.
+    """
+    if any(message_field(part, "type") in _THINKING_BLOCK_TYPES for part in parts):
+        return False
+    return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
+
+
 def _assistant_renders(message: object) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this assistant message.
 
@@ -275,9 +286,10 @@ def _assistant_renders(message: object) -> bool:
     content: Final = message_field(message, "content")
     if isinstance(content, str):
         return True
+    parts: Final = parts_of(content)
     return (
-        any(_assistant_part_renders(part) for part in parts_of(content))
-        or any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
+        any(_assistant_part_renders(part) for part in parts)
+        or _separate_thinking_blocks_render(message, parts)
         or bool(message_field(message, "tool_calls"))
         or bool(message_field(message, "function_call"))
         or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))

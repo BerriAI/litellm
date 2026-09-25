@@ -6575,6 +6575,21 @@ ASSISTANT_TURN_BY_SHAPE = {
         "content": None,
         "thinking_blocks": [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("abc")}],
     },
+    "unsigned-inline-part-hides-signed-block": {
+        "role": "assistant",
+        "content": [{"type": "thinking", "thinking": "hm"}],
+        "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}],
+    },
+    "inline-redacted-part-hides-redacted-block": {
+        "role": "assistant",
+        "content": [{"type": "redacted_thinking", "data": "x"}],
+        "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}],
+    },
+    "text-part-beside-signed-block": {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "First answer"}],
+        "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}],
+    },
 }
 
 

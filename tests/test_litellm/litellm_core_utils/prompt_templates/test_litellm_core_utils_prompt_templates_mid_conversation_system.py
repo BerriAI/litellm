@@ -269,6 +269,16 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
             "content": None,
             "thinking_blocks": [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("abc")}],
         },
+        {
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": "unsigned"}],
+            "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "redacted_thinking", "data": "x"}],
+            "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}],
+        },
         litellm.Message(role="assistant", content=None),
     ],
     ids=[
@@ -277,6 +287,8 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
         "unsigned-thinking-part",
         "encrypted-thinking-part",
         "encrypted-redacted-thinking-block",
+        "unsigned-inline-part-hides-signed-block",
+        "inline-redacted-part-hides-redacted-block",
         "pydantic-none",
     ],
 )
