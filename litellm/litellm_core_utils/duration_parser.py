@@ -14,9 +14,13 @@ from zoneinfo import ZoneInfo
 
 from litellm._logging import verbose_logger
 
+#   "daily" maps to "1d" rather than the equivalent "24h": both are 86400s to
+#   `duration_in_seconds`, but only the day form is routed to the day handler,
+#   which honours `reset_time_of_day`. "24h" is a sub-day duration and lands on
+#   an hour boundary instead, so a configured `budget_reset_time` was ignored.
 _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "hourly": "1h",
-    "daily": "24h",
+    "daily": "1d",
     "weekly": "7d",
     "monthly": "30d",
 }
