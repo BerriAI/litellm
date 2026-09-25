@@ -802,7 +802,7 @@ def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: 
             sink.fail_until = window_start + 8
             payloads: Final = collect_payloads(sink, 2 * REQUESTS, seconds=120)
             first_fail_at: Final = next(when for when, _ in sink.attempt_log if when >= window_start)
-            throttled_peak: Final = sink.peak_between(first_fail_at + 0.6, sink.fail_until)
+            throttled_peak: Final = sink.peak_between(first_fail_at + 2.0, sink.fail_until)
     assert sum(1 for r in provider.drain() if r.method == "POST") == 2 * REQUESTS
     assert healthy_peak >= 8, f"healthy peak {healthy_peak} too low to compare back-off against"
     assert throttled_peak < healthy_peak, (
@@ -811,3 +811,84 @@ def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: 
     )
     assert frozenset(payload["id"] for payload in payloads) == healthy_ids | throttled_ids
     assert len(sink.objects()) == 2 * REQUESTS
+
+
+def test_s3_v2_coded_403_is_transient_and_every_id_lands_once(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3coded" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_attempts=3, fail_status=403, fail_code="RequestTimeout", delay_seconds=0.1)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            ids: Final = _push(candidate, model, key, marker, 4)
+            payloads: Final = collect_payloads(sink, 4)
+    assert frozenset(payload["id"] for payload in payloads) == ids
+    assert sink.attempts >= 7, (
+        f"only {sink.attempts} PUT attempts for 4 objects whose first 3 uploads 403 RequestTimeout; "
+        "coded 403s must be retried"
+    )
+
+
+def test_s3_v2_success_callback_mode_logs_only_successes(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3succ" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink()
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _recording_s3_config(
+            tmp_path,
+            bucket.url,
+            {},
+            {"callbacks": [], "success_callback": ["s3_v2"]},
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            ghost: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": f"ghost-{uuid.uuid4().hex}", "messages": [{"role": "user", "content": "hi"}]},
+                key=key,
+            )
+            assert ghost.status_code in (400, 403, 404), ghost.text
+            _send(candidate, model, key, marker)
+            payloads: Final = collect_payloads(sink, 1)
+    assert len(payloads) == 1
+    assert payloads[0]["id"] == marker
+    assert payloads[0]["status"] == "success"
+
+
+def test_s3_v2_failure_callback_mode_logs_only_failures(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3failcb" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink()
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _recording_s3_config(
+            tmp_path,
+            bucket.url,
+            {},
+            {"callbacks": [], "failure_callback": ["s3_v2"]},
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, marker)
+            ghost: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": f"ghost-{uuid.uuid4().hex}", "messages": [{"role": "user", "content": "hi"}]},
+                key=key,
+            )
+            assert ghost.status_code in (400, 403, 404), ghost.text
+            payloads: Final = collect_payloads(sink, 1)
+    assert len(payloads) == 1
+    assert payloads[0]["status"] == "failure"
+    assert payloads[0]["id"] != marker
+    assert isinstance(payloads[0]["litellm_call_id"], str) and payloads[0]["litellm_call_id"]

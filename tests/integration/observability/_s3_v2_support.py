@@ -28,6 +28,7 @@ class RecordingS3Sink:
     fail_until: float = 0.0
     fail_status: int = 503
     fail_code: str = "SinkFailure"
+    fail_body: bytes | None = None
     delay_seconds: float = 0.5
     lock: threading.Lock = field(default_factory=threading.Lock)
     in_flight: int = 0
@@ -58,7 +59,9 @@ class RecordingS3Sink:
         if failing:
             return Reply(
                 status=self.fail_status,
-                body=f"<Error><Code>{self.fail_code}</Code></Error>".encode(),
+                body=self.fail_body
+                if self.fail_body is not None
+                else f"<Error><Code>{self.fail_code}</Code></Error>".encode(),
                 content_type="application/xml",
             )
         return Reply()
@@ -250,7 +253,13 @@ SURFACES: Final = ("chat", "chat_stream", "messages", "messages_stream", "respon
 
 
 def call_surface(
-    candidate: Gateway, surface: str, openai_model: str, anthropic_model: str, key: str, marker: str
+    candidate: Gateway,
+    surface: str,
+    openai_model: str,
+    anthropic_model: str,
+    key: str,
+    marker: str,
+    no_cache: bool = True,
 ) -> tuple[str, str | None]:
     """Drive one request through the given surface; return (client-visible response id, x-litellm-call-id)."""
     base: Final = str(candidate.client.base_url).rstrip("/")
@@ -259,7 +268,7 @@ def call_surface(
         reply: Final = openai.OpenAI(base_url=f"{base}/v1", api_key=key).chat.completions.create(
             model=openai_model,
             messages=[{"role": "user", "content": marker}],
-            extra_body={"cache": {"no-cache": True}},
+            extra_body={"cache": {"no-cache": True}} if no_cache else {},
         )
         return reply.id, None
 
@@ -268,7 +277,7 @@ def call_surface(
             model=openai_model,
             messages=[{"role": "user", "content": marker}],
             stream=True,
-            extra_body={"cache": {"no-cache": True}},
+            extra_body={"cache": {"no-cache": True}} if no_cache else {},
         )
         seen = ""
         async for chunk in stream:
@@ -293,7 +302,7 @@ def call_surface(
         response: Final = candidate.request(
             "POST",
             "/v1/responses",
-            {"model": openai_model, "input": marker, "cache": {"no-cache": True}},
+            {"model": openai_model, "input": marker, **({"cache": {"no-cache": True}} if no_cache else {})},
             key=key,
         )
         assert response.status_code == 200, response.text
@@ -348,6 +357,10 @@ def matched_ids(
     for payload in payloads:
         if payload["id"] in response_ids:
             landed.append(payload["id"])
+            continue
+        uncached: Final = str(payload["id"]).rsplit("_cache_hit", 1)[0]
+        if uncached in response_ids:
+            landed.append(str(payload["id"]))
             continue
         assert payload["litellm_call_id"] in call_ids, f"unmatched payload {payload['id']!r}"
         landed.append(str(payload["id"]))
