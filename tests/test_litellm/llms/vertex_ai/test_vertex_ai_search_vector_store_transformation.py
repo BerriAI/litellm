@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,7 @@ from litellm.exceptions import BadRequestError
 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
     VertexSearchAPIVectorStoreConfig,
 )
+from litellm.types.vector_stores import VectorStoreSearchResponse
 
 
 def test_should_encode_vertex_search_vector_store_id_in_complete_url():
@@ -305,7 +307,7 @@ _CHUNK_NAME = (
 )
 
 
-def _search_response(payload):
+def _search_response(payload: Mapping[str, object]) -> VectorStoreSearchResponse:
     return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_response(
         response=SimpleNamespace(json=lambda: payload, status_code=200, headers={}),
         litellm_logging_obj=SimpleNamespace(model_call_details={"query": "hello"}),
@@ -412,7 +414,7 @@ def test_chunk_hit_without_uri_or_title_falls_back_to_document_id():
     ],
     ids=["segments", "answers", "snippets", "content_less_segment", "title"],
 )
-def test_document_hit_text_prefers_extractive_content(derived, expected_text):
+def test_document_hit_text_prefers_extractive_content(derived: Mapping[str, object], expected_text: str) -> None:
     payload = {"results": [{"id": "doc-1", "document": {"derivedStructData": derived}}]}
 
     result = _search_response(payload)["data"][0]
