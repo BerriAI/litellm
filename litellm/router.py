@@ -614,6 +614,17 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
     return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
 
 
+MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
+
+
+def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
+    from litellm.responses.streaming_iterator import PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
+
+    if held_event_count >= MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS:
+        return False
+    return getattr(item, "type", None) in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
+
+
 class FallbackAwareAnthropicMessagesStream:
     """
     Bare async generators can't carry the `_hidden_params` attribute the
@@ -3332,78 +3343,30 @@ class Router:
                 await self._async_generator.aclose()
 
         async def stream_with_fallbacks():
-            fallback_response = None
+            held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
             try:
                 async for item in source_iterator:
+                    if _responses_stream_holds_event(item, len(held_lifecycle_events)):
+                        held_lifecycle_events = (*held_lifecycle_events, item)
+                        continue
+                    for held_event in held_lifecycle_events:
+                        yield held_event
+                    held_lifecycle_events = ()
                     yield item
+                for held_event in held_lifecycle_events:
+                    yield held_event
             except MidStreamFallbackError as e:
-                partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
-                try:
-                    model_group: Final = cast(str, initial_kwargs.get("model"))
-                    fallbacks: Final[list | None] = initial_kwargs.get("fallbacks", self.fallbacks)
-                    context_window_fallbacks: Final[list | None] = initial_kwargs.get(
-                        "context_window_fallbacks", self.context_window_fallbacks
+                async with contextlib.aclosing(
+                    self._aresponses_fallback_attempt(
+                        e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
                     )
-                    content_policy_fallbacks: Final[list | None] = initial_kwargs.get(
-                        "content_policy_fallbacks", self.content_policy_fallbacks
-                    )
-                    initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_responses_attempt
-                    if e.is_pre_first_chunk or not e.generated_content:
-                        # No content generated before the error — retry with the
-                        # original input. Adding a continuation prompt would
-                        # waste tokens and confuse the model.
-                        pass
-                    else:
-                        initial_kwargs["input"] = Router._build_responses_continuation_input(
-                            initial_kwargs.get("input"),
-                            e.generated_content,
-                        )
-                    # The Responses-API path stores observability metadata
-                    # under "litellm_metadata" (not the default "metadata") —
-                    # see _ageneric_api_call_with_fallbacks. Mirroring that
-                    # here ensures model_group, model_group_alias, and trace
-                    # ids land in the same key litellm.aresponses reads from.
-                    self._update_kwargs_before_fallbacks(
-                        model=model_group,
-                        kwargs=initial_kwargs,
-                        metadata_variable_name="litellm_metadata",
-                    )
-                    # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
-                    # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
-                    fallback_trigger: Final[Exception] = (
-                        e.original_exception
-                        if isinstance(e.original_exception, litellm.ContentPolicyViolationError)
-                        else e
-                    )
-                    fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=fallback_trigger,
-                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
-                        fallbacks=fallbacks,
-                        context_window_fallbacks=context_window_fallbacks,
-                        content_policy_fallbacks=content_policy_fallbacks,
-                        model_group=model_group,
-                        args=(),
-                        kwargs=initial_kwargs,
-                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
-                    )
-
-                    prepared_fallback_hidden_params = wrapper.adopt_fallback_headers(fallback_response)
-                    if hasattr(fallback_response, "__aiter__"):
-                        async for fallback_item in fallback_response:
-                            Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
-                            if partial_usage is not None:
-                                Router._combine_responses_fallback_usage(fallback_item, partial_usage)
-                            yield fallback_item
-                    else:
-                        yield fallback_response
-                except Exception as fallback_error:
-                    verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
-                    if (
-                        isinstance(fallback_error, MidStreamFallbackError)
-                        and fallback_error.original_exception is not None
-                    ):
-                        raise fallback_error.original_exception from fallback_error
-                    raise fallback_error
+                ) as fallback_stream:
+                    async for fallback_item in fallback_stream:
+                        yield fallback_item
+            except Exception:
+                for held_event in held_lifecycle_events:
+                    yield held_event
+                raise
             finally:
                 with anyio.CancelScope(shield=True):
                     if hasattr(source_iterator, "aclose"):
@@ -3414,17 +3377,102 @@ class Router:
                                 "stream_with_fallbacks(aresponses): error closing source: %s",
                                 exc,
                             )
-                    if fallback_response is not None and hasattr(fallback_response, "aclose"):
-                        try:
-                            await fallback_response.aclose()
-                        except BaseException as exc:
-                            verbose_router_logger.debug(
-                                "stream_with_fallbacks(aresponses): error closing fallback: %s",
-                                exc,
-                            )
 
         wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
         return wrapper
+
+    async def _aresponses_fallback_attempt(
+        self,
+        e: "MidStreamFallbackError",
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],  # mutable-ok: hidden params
+        held_lifecycle_events: tuple[object, ...],
+    ) -> AsyncGenerator[object, None]:
+        """
+        Re-enters the Router's fallback chain for a mid-stream Responses API error and yields
+        whatever the fallback attempt produces. The lifecycle events the primary stream held
+        back reach the client only when no fallback lands, so the client sees exactly one
+        response announced, the one whose id completes. Split out of
+        _aresponses_streaming_iterator to keep each function's cyclomatic complexity within
+        the repo's C901 budget.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
+        fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
+        try:
+            model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
+            fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
+                "fallbacks", self.fallbacks
+            )
+            context_window_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "context_window_fallbacks", self.context_window_fallbacks
+            )
+            content_policy_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "content_policy_fallbacks", self.content_policy_fallbacks
+            )
+            initial_kwargs["original_function"] = (  # rebind-ok: the fallback chain re-enters on the same kwargs
+                self._ageneric_api_call_with_fallbacks_responses_attempt
+            )
+            if e.generated_content and not e.is_pre_first_chunk:
+                initial_kwargs["input"] = Router._build_responses_continuation_input(  # rebind-ok: fallback hop input
+                    initial_kwargs.get("input"),
+                    e.generated_content,
+                )
+            # The Responses-API path stores observability metadata
+            # under "litellm_metadata" (not the default "metadata") —
+            # see _ageneric_api_call_with_fallbacks. Mirroring that
+            # here ensures model_group, model_group_alias, and trace
+            # ids land in the same key litellm.aresponses reads from.
+            self._update_kwargs_before_fallbacks(
+                model=model_group,
+                kwargs=initial_kwargs,
+                metadata_variable_name="litellm_metadata",
+            )
+            # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
+            # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
+            fallback_trigger: Final[Exception] = (
+                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+            )
+            fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
+                e=fallback_trigger,
+                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                fallbacks=fallbacks,
+                context_window_fallbacks=context_window_fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
+                model_group=model_group,
+                args=(),
+                kwargs=initial_kwargs,
+                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            )
+            prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
+            if hasattr(fallback_response, "__aiter__"):
+                async for fallback_item in fallback_response:
+                    Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
+                    if partial_usage is not None:
+                        Router._combine_responses_fallback_usage(fallback_item, partial_usage)
+                    yield fallback_item
+            else:
+                yield fallback_response
+        except Exception as fallback_error:
+            verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
+            if fallback_response is None:
+                for held_event in held_lifecycle_events:
+                    yield held_event
+            if isinstance(fallback_error, MidStreamFallbackError) and fallback_error.original_exception is not None:
+                raise fallback_error.original_exception from fallback_error
+            raise
+        finally:
+            if fallback_response is not None and hasattr(fallback_response, "aclose"):
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await fallback_response.aclose()
+                    except BaseException as exc:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks(aresponses): error closing fallback: %s",
+                            exc,
+                        )
 
     def _completion_streaming_iterator(
         self,
