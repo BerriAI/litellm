@@ -62,10 +62,15 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
         "not_found_error": 404,
         "rate_limit_error": 429,
         "api_error": 500,
+        "internal_server_error": 500,
         "overloaded_error": 503,
         "timeout_error": 504,
     }
 )
+
+# Unknown Anthropic / OpenAI-compatible error `type` values default to 400 so a
+# client-side/vendor 4xx is not escalated into a synthetic 500 (and cooldown).
+ANTHROPIC_ERROR_STATUS_CODE_DEFAULT: Final = 400
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")

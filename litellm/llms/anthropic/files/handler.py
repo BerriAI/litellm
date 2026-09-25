@@ -22,7 +22,11 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
 
 from ..chat.transformation import AnthropicConfig
-from ..common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, AnthropicModelInfo
+from ..common_utils import (
+    ANTHROPIC_ERROR_STATUS_CODE_DEFAULT,
+    ANTHROPIC_ERROR_STATUS_CODE_MAP,
+    AnthropicModelInfo,
+)
 
 
 class AnthropicFilesHandler:
@@ -221,7 +225,9 @@ class AnthropicFilesHandler:
                     error_message = error_obj.get("message", "Unknown error")
                     error_type = error_obj.get("type", "api_error")
 
-                    status_code = ANTHROPIC_ERROR_STATUS_CODE_MAP.get(error_type, 500)
+                    status_code = ANTHROPIC_ERROR_STATUS_CODE_MAP.get(
+                        error_type, ANTHROPIC_ERROR_STATUS_CODE_DEFAULT
+                    )
 
                     error_body_errored: OpenAIErrorBody = {
                         "error": {

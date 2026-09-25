@@ -5167,3 +5167,102 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_translate_anthropic_to_openai_tool_result_only_continuation_has_user_role():
+    """Regression for #42432: Anthropic tool-result continuation without a
+    system prompt must still yield a user/system role for OpenAI-compatible
+    providers (otherwise upstream returns 400 and LiteLLM may cool the
+    deployment down).
+    """
+    req = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 64,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "Read",
+                        "input": {"path": "/tmp/x"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "file contents",
+                    }
+                ],
+            },
+        ],
+    }
+
+    openai_req, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=req
+    )
+    roles = [m["role"] for m in openai_req["messages"]]
+    assert "user" in roles or "system" in roles
+    assert roles == ["user", "assistant", "tool"]
+    assert openai_req["messages"][0] == {"role": "user", "content": ""}
+
+
+def test_translate_anthropic_to_openai_empty_user_content_still_has_user_role():
+    """Regression for #42432: user message with empty content list must not
+    produce an empty OpenAI messages array.
+    """
+    req = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": []}],
+    }
+    openai_req, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=req
+    )
+    roles = [m["role"] for m in openai_req["messages"]]
+    assert roles == ["user"]
+    assert openai_req["messages"][0]["content"] == ""
+
+
+def test_translate_anthropic_to_openai_with_system_keeps_existing_roles():
+    """With a top-level system prompt, tool-result continuation already has
+    a system role — no extra empty user message should be injected.
+    """
+    req = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 64,
+        "system": "You are helpful.",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "Read",
+                        "input": {"path": "/tmp/x"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "file contents",
+                    }
+                ],
+            },
+        ],
+    }
+    openai_req, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=req
+    )
+    roles = [m["role"] for m in openai_req["messages"]]
+    assert roles == ["system", "assistant", "tool"]
