@@ -141,7 +141,12 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
     return None
 
 
-def _request_is_streaming(data: object) -> bool:
+_REALTIME_STREAMING_HOOKS: Final = frozenset({GuardrailEventHooks.realtime_input_transcription})
+
+
+def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
+    if event_type in _REALTIME_STREAMING_HOOKS:
+        return True
     if not isinstance(data, Mapping):
         return False
     return data.get("stream") is True
@@ -998,9 +1003,7 @@ class CustomGuardrail(CustomLogger):
 
         return name in suppressed_compression_guardrails()
 
-    def apply_stream_scope(
-        self, stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None
-    ) -> None:
+    def apply_stream_scope(self, stream_scope: object) -> None:
         default, by_hook = runtime_stream_scope(stream_scope)
         self.stream_scope_default: GuardrailStreamScope = default
         self.stream_scope_by_hook: MappingProxyType[str, GuardrailStreamScope] = by_hook
@@ -1009,7 +1012,7 @@ class CustomGuardrail(CustomLogger):
         scope: Final = self.stream_scope_by_hook.get(event_type.value, self.stream_scope_default)
         if scope == "both":
             return True
-        is_streaming: Final = _request_is_streaming(data)
+        is_streaming: Final = _request_is_streaming(data, event_type)
         if scope == "streaming":
             return is_streaming
         return not is_streaming

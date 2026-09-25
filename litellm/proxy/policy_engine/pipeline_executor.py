@@ -8,6 +8,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 import copy
 import time
 from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_g
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineExecutionResult,
     PipelineStep,
@@ -263,6 +265,30 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
             user_api_key_dict=self.user_api_key_dict,
         )
         return recorder.inputs
+
+
+_PIPELINE_EVENT_HOOKS: Final = MappingProxyType(
+    {
+        "pre_call": GuardrailEventHooks.pre_call,
+        "post_call": GuardrailEventHooks.post_call,
+        "during_call": GuardrailEventHooks.during_call,
+    }
+)
+
+
+def _pipeline_stream_scope_allows(
+    callback: CustomGuardrail,
+    hook_input: Mapping[str, object],
+    mode: str,
+    streaming_chunks: list[object] | None,
+) -> bool:
+    event_type: Final = _PIPELINE_EVENT_HOOKS.get(mode)
+    if event_type is None:
+        return True
+    return callback._stream_scope_allows(
+        hook_input if streaming_chunks is None else {**hook_input, "stream": True},
+        event_type,
+    )
 
 
 def _prepare_hook_input(
@@ -517,6 +543,8 @@ class PipelineExecutor:
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
+        if not _pipeline_stream_scope_allows(callback, hook_input, mode, streaming_chunks):
+            return ("pass", None, None, None)
         snapshot_entries_before: Final = len(_recorded_guardrail_information(hook_input))
 
         # Use unified_guardrail path if callback implements apply_guardrail

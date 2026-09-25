@@ -950,13 +950,14 @@ def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, Guard
 
 
 def runtime_stream_scope(
-    stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None,
+    stream_scope: object,
 ) -> tuple[GuardrailStreamScope, MappingProxyType[str, GuardrailStreamScope]]:
-    if stream_scope is None:
+    coerced: Final = coerce_stream_scope(stream_scope)
+    if coerced is None:
         return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType({})
-    if isinstance(stream_scope, str):
-        return stream_scope, MappingProxyType({})
-    return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(dict(stream_scope))
+    if isinstance(coerced, str):
+        return coerced, MappingProxyType({})
+    return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails

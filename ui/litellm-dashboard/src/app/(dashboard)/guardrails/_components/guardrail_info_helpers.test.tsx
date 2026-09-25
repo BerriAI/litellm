@@ -18,6 +18,7 @@ import {
   formatGuardrailStreamScope,
   streamScopeByModeFromConfig,
   streamScopeForMode,
+  streamScopeForUpdate,
   streamScopePayload,
 } from "./guardrail_info_helpers";
 
@@ -301,6 +302,12 @@ describe("guardrail_info_helpers", () => {
       expect(formatGuardrailStreamScope({ post_call: "streaming", pre_call: "both" })).toBe(
         "post_call: Streaming only, pre_call: Streaming and non-streaming",
       );
+    });
+
+    it("emits both on update only when a prior restriction is cleared", () => {
+      expect(streamScopeForUpdate(["post_call"], { post_call: "streaming" }, undefined)).toBe("streaming");
+      expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, "streaming")).toBe("both");
+      expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, undefined)).toBeUndefined();
     });
   });
 });

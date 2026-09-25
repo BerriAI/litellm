@@ -610,6 +610,42 @@ class TestCustomGuardrailStreamScope:
         assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
         assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
 
+    def test_direct_constructor_normalizes_mixed_case_map_keys(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope={"Pre_Call": "streaming"},
+        )
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.pre_call) is False
+
+    def test_realtime_transcription_counts_as_streaming(self):
+        streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.realtime_input_transcription,
+            stream_scope="streaming",
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                {"litellm_metadata": {}}, GuardrailEventHooks.realtime_input_transcription
+            )
+            is True
+        )
+        non_streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.realtime_input_transcription,
+            stream_scope="non_streaming",
+        )
+        assert (
+            non_streaming_only.should_run_guardrail(
+                {"litellm_metadata": {}}, GuardrailEventHooks.realtime_input_transcription
+            )
+            is False
+        )
+
 
 class TestApplyGuardrailCheck:
     def test_apply_guardrail_check_only_on_direct_implementation(self):

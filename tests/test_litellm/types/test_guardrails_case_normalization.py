@@ -7,7 +7,7 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
-from litellm.types.guardrails import BaseLitellmParams, LitellmParams
+from litellm.types.guardrails import BaseLitellmParams, LitellmParams, runtime_stream_scope
 
 
 class TestLitellmParamsCaseNormalization:
@@ -210,3 +210,12 @@ class TestStreamScopeValidation:
     def test_invalid_map_value_is_rejected(self):
         with pytest.raises(ValidationError, match="stream_scope must be one of"):
             LitellmParams(guardrail="bedrock", mode="post_call", stream_scope={"post_call": "sometimes"})
+
+    def test_runtime_stream_scope_normalizes_direct_constructor_maps(self):
+        default, by_hook = runtime_stream_scope({"Pre_Call": "streaming"})
+        assert default == "both"
+        assert dict(by_hook) == {"pre_call": "streaming"}
+
+    def test_runtime_stream_scope_rejects_invalid_direct_input(self):
+        with pytest.raises(ValueError, match="stream_scope must be one of"):
+            runtime_stream_scope("chunks")

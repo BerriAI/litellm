@@ -96,6 +96,20 @@ class AlwaysPassGuardrail(CustomGuardrail):
         return None
 
 
+class StreamScopedPassGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str, stream_scope: object):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+            stream_scope=stream_scope,
+        )
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+
+
 class PassthroughBlockGuardrail(CustomGuardrail):
     """Mock guardrail that blocks using the legacy passthrough contract."""
 
@@ -376,6 +390,33 @@ async def test_block_carries_original_guardrail_exception(monkeypatch):
     assert isinstance(result.original_exception, HTTPException)
     assert result.original_exception.status_code == 400
     assert result.original_exception.detail == "Content policy violation"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_honors_stream_scope(monkeypatch):
+    guard = StreamScopedPassGuardrail(guardrail_name="stream-only", stream_scope="streaming")
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+    skipped = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="stream-only", on_fail="block", on_pass="allow")],
+        mode="pre_call",
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="stream-scope",
+    )
+    assert guard.calls == 0
+    assert skipped.terminal_action == "allow"
+
+    ran = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="stream-only", on_fail="block", on_pass="allow")],
+        mode="pre_call",
+        data={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="stream-scope",
+    )
+    assert guard.calls == 1
+    assert ran.terminal_action == "allow"
 
 
 @pytest.mark.asyncio

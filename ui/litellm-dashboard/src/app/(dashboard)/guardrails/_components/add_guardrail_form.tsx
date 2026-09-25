@@ -25,7 +25,7 @@ import {
   toModeArray,
   type GuardrailStreamScope,
 } from "./guardrail_info_helpers";
-import { StreamScopeFields } from "./StreamScopeFields";
+import { StreamScopeFormField } from "./StreamScopeFields";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
@@ -764,22 +764,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           )}
         </GuardrailField>
 
-        <GuardrailField
-          control={form.control}
-          name="stream_scope_by_mode"
-          label={labelWithHint(
-            "Request shape",
-            "Run this guardrail on streaming requests, non-streaming requests, or both, for each selected mode.",
-          )}
-        >
-          {({ value, onChange }) => (
-            <StreamScopeFields
-              modes={toModeArray(form.watch("mode"))}
-              value={(value as Record<string, GuardrailStreamScope> | undefined) ?? {}}
-              onChange={onChange}
-            />
-          )}
-        </GuardrailField>
+        <StreamScopeFormField control={form.control} modes={toModeArray(form.watch("mode"))} />
 
         <GuardrailField
           control={form.control}

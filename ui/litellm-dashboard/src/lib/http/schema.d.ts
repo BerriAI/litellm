@@ -25559,6 +25559,13 @@ export interface components {
              */
             sticky_session_routing: boolean | null;
             /**
+             * Stream Scope
+             * @description Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.
+             */
+            stream_scope?: ("streaming" | "non_streaming" | "both") | {
+                [key: string]: "streaming" | "non_streaming" | "both";
+            } | null;
+            /**
              * Template Id
              * @description The ID of your Model Armor template
              */
@@ -34754,6 +34761,13 @@ export interface components {
              * @default true
              */
             sticky_session_routing: boolean | null;
+            /**
+             * Stream Scope
+             * @description Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.
+             */
+            stream_scope?: ("streaming" | "non_streaming" | "both") | {
+                [key: string]: "streaming" | "non_streaming" | "both";
+            } | null;
             /**
              * Template Id
              * @description The ID of your Model Armor template

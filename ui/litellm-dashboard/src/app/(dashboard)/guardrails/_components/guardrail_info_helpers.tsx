@@ -324,3 +324,20 @@ export const formatGuardrailStreamScope = (raw: unknown): string => {
   }
   return "";
 };
+
+export const streamScopeForUpdate = (
+  modes: string[],
+  nextByMode: Record<string, GuardrailStreamScope>,
+  previousRaw: unknown,
+  previousModes: string[] = modes,
+): GuardrailStreamScope | Record<string, GuardrailStreamScope> | undefined => {
+  const nextStreamScope = streamScopePayload(modes, nextByMode);
+  const previousStreamScope = streamScopePayload(
+    previousModes,
+    streamScopeByModeFromConfig(previousRaw, previousModes),
+  );
+  if (JSON.stringify(nextStreamScope ?? "both") === JSON.stringify(previousStreamScope ?? "both")) {
+    return undefined;
+  }
+  return nextStreamScope ?? "both";
+};

@@ -1,6 +1,8 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { GuardrailField, labelWithHint, type GuardrailFormControl } from "./GuardrailFormField";
 import {
   STREAM_SCOPE_OPTIONS,
+  formatGuardrailStreamScope,
   type GuardrailStreamScope,
   isGuardrailStreamScope,
 } from "./guardrail_info_helpers";
@@ -9,6 +11,9 @@ const STREAM_SCOPE_ITEMS = STREAM_SCOPE_OPTIONS.map((option) => ({
   label: option.label,
   value: option.value,
 }));
+
+const REQUEST_SHAPE_HINT =
+  "Run this guardrail on streaming requests, non-streaming requests, or both, for each selected mode.";
 
 export const StreamScopeFields = ({
   modes,
@@ -52,6 +57,39 @@ export const StreamScopeFields = ({
           </div>
         );
       })}
+    </div>
+  );
+};
+
+export const StreamScopeFormField = ({ control, modes }: { control: GuardrailFormControl; modes: string[] }) => (
+  <GuardrailField
+    control={control}
+    name="stream_scope_by_mode"
+    label={labelWithHint("Request shape", REQUEST_SHAPE_HINT)}
+  >
+    {({ value, onChange }) => (
+      <StreamScopeFields
+        modes={modes}
+        value={(value as Record<string, GuardrailStreamScope> | undefined) ?? {}}
+        onChange={onChange}
+      />
+    )}
+  </GuardrailField>
+);
+
+export const GuardrailStreamScopeCaption = ({ raw }: { raw: unknown }) => {
+  const label = formatGuardrailStreamScope(raw);
+  if (!label) return null;
+  return <p className="mt-1 text-sm text-muted-foreground">{label}</p>;
+};
+
+export const GuardrailStreamScopeDetail = ({ raw }: { raw: unknown }) => {
+  const label = formatGuardrailStreamScope(raw);
+  if (!label) return null;
+  return (
+    <div>
+      <p className="font-medium">Request shape</p>
+      <div>{label}</div>
     </div>
   );
 };
