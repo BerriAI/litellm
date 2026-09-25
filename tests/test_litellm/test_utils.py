@@ -6237,6 +6237,53 @@ def test_calculate_max_parallel_requests_precedence(
     )
 
 
+def test_get_provider_google_genai_generate_content_config_vertex_partner_models():
+    """
+    https://github.com/BerriAI/litellm/issues/41835
+    Vertex Grok (vertex_ai/xai/grok-*) is rejected on /v1beta/models/{model}:generateContent
+    because get_provider_google_genai_generate_content_config() only falls back to the
+    litellm.completion() adapter for Vertex Partner models, and xai/ was missing from
+    PartnerModelPrefixes. Ensure xai/grok-* now returns None (i.e. the generateContent
+    endpoint routes it through the chat-completions adapter like other Model Garden
+    OpenAI-compatible partners), while gemini models still get the native config.
+    """
+    from litellm.types.utils import LlmProviders
+
+    # Grok via Model Garden -> through the completion adapter (None)
+    assert (
+        ProviderConfigManager.get_provider_google_genai_generate_content_config(
+            model="xai/grok-4.6", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+    assert (
+        ProviderConfigManager.get_provider_google_genai_generate_content_config(
+            model="xai/grok-4.1-fast-non-reasoning", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+
+    # Other existing partner models are unaffected
+    assert (
+        ProviderConfigManager.get_provider_google_genai_generate_content_config(
+            model="claude-3-5-sonnet-20241022", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+
+    # Native Gemini models still get the Vertex Google Gen AI config
+    from litellm.llms.vertex_ai.google_genai.transformation import (
+        VertexAIGoogleGenAIConfig,
+    )
+
+    assert isinstance(
+        ProviderConfigManager.get_provider_google_genai_generate_content_config(
+            model="gemini-1.5-pro", provider=LlmProviders.VERTEX_AI
+        ),
+        VertexAIGoogleGenAIConfig,
+    )
+
+
 class _NamedStream(io.BytesIO):
     def __init__(self, name: str | int) -> None:
         super().__init__(b"%PDF-1.4 secret document body")

@@ -9944,6 +9944,19 @@ class ProviderConfigManager:
                 return None
 
             #########################################################
+            # Model Garden publisher models served via the OpenAI-compatible
+            # route (e.g. xai/grok-*) are not Vertex Partner "raw" models, but
+            # they still go through the litellm.completion() adapter (which
+            # dispatches them to the Model Garden OpenAI-compatible handler),
+            # never through the Google Gen AI config. Without this case the
+            # unified Gemini-style endpoint POST /v1beta/models/{model}:generateContent
+            # would treat e.g. vertex_ai/xai/grok-* as a native Gemini model
+            # and fail with a protocol mismatch.
+            #########################################################
+            if model.startswith("xai/"):
+                return None
+
+            #########################################################
             # If the model is not a Vertex Partner model, return the Vertex AI Google Gen AI Config
             # This is for Vertex `gemini` models
             #########################################################
