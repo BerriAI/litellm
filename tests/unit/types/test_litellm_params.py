@@ -586,6 +586,24 @@ def test_owned_leaf_literals_reject_unknown_values(leaf: type, sample: Mapping[s
         _strict_leaf_validation(leaf, instance)
 
 
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "simple-shuffle",
+        "least-busy",
+        "usage-based-routing",
+        "latency-based-routing",
+        "cost-based-routing",
+        "usage-based-routing-v2",
+        "lar1",
+    ],
+)
+def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str) -> None:
+    instance: Final = _leaf_instance(litellm_params.RoutingOptions, {"routing_strategy": strategy})
+
+    assert _strict_leaf_validation(litellm_params.RoutingOptions, instance) is instance
+
+
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "credentials": (
