@@ -1687,7 +1687,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             **user_api_key_metadata,
             **parent_correlation.as_search_metadata(),
             "model_group": search_tool_name,
-            "user_api_key": user_api_key_auth.api_key,
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_auth),
             "user_api_key_auth": user_api_key_auth,
         }
 

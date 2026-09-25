@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.classifier_logging import classifier_audit_field
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
@@ -1925,7 +1926,7 @@ async def get_key_spend_report(
     scoped_api_key = _resolve_spend_report_scope(
         user_api_key_dict=user_api_key_dict,
         requested=requested,
-        caller_value=user_api_key_dict.api_key,
+        caller_value=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
         scope_name="api_key",
     )
     db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(

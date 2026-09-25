@@ -15,7 +15,8 @@ from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import GLOBAL_SPEND_TABLE_NAME, reconciled_through
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
-    attach_user_emails,
+    attach_user_details,
+    recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
 )
@@ -551,11 +552,12 @@ async def get_api_key_metadata(
                 e,
             )
 
-    still_missing: Final = api_keys - frozenset(result)
+    from_session_keys: Final = await recover_cli_session_key_metadata(prisma_client, api_keys - frozenset(result))
+    still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
     from_reverse_hash: Final = (
         await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA
     )
-    after_token_recovery: Final = MappingProxyType({**result, **from_reverse_hash})
+    after_token_recovery: Final = MappingProxyType({**result, **from_session_keys, **from_reverse_hash})
     unresolved: Final = api_keys - frozenset(after_token_recovery)
     from_spend_logs: Final = (
         await recover_key_metadata_from_spend_logs(prisma_client, unresolved, spend_logs_window)
@@ -563,7 +565,7 @@ async def get_api_key_metadata(
         else _EMPTY_KEY_METADATA
     )
     combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
-    return await attach_user_emails(prisma_client, combined)
+    return await attach_user_details(prisma_client, combined)
 
 
 def _adjust_dates_for_timezone(

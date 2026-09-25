@@ -231,6 +231,39 @@ async def test_execute_search_passes_selected_search_tool_litellm_params(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_execute_search_attributes_cli_session_spend_to_the_per_user_alias_not_the_login_token(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="perplexity-sonar-pro")
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "perplexity-sonar-pro",
+            "litellm_params": {"search_provider": "perplexity", "api_key": "fake-key"},
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        user_id="alice",
+        key_alias="cli-session-alice",
+        is_session_token=True,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": session}}},
+    )
+
+    forwarded_metadata = mock_asearch.await_args.kwargs["litellm_metadata"]
+    assert forwarded_metadata["user_api_key"] == "cli-session-alice"
+    assert forwarded_metadata["user_api_key_hash"] == "cli-session-alice"
+
+
+@pytest.mark.asyncio
 async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
     """An intercepted search is billed and logged against the key that made the LLM request.
 
