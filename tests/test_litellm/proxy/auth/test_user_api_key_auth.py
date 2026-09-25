@@ -9175,3 +9175,42 @@ async def test_centralized_authorization_preserves_database_free_config_agents(m
         is None
     )
     assert auth.managed_agent_policy is None
+
+
+@pytest.mark.asyncio
+async def test_managed_virtual_key_cannot_access_provider_resource_routes(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    policy = AgentResponse(
+        agent_id="managed",
+        agent_name="Managed",
+        agent_card_params={},
+        identity_managed=True,
+        identity=AgentIdentityBinding(
+            agent_id="managed",
+            provider="microsoft_entra",
+            tenant_id="tenant",
+            client_id="application",
+            service_principal_id="principal",
+            issuer="issuer",
+            revision="revision",
+        ),
+        object_permission={"models": ["test-model"]},
+    )
+    database = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    request = _alias_request("/v1/files", {})
+    request.scope["method"] = "GET"
+    auth = UserAPIKeyAuth(agent_id="managed", api_key="persisted-key", models=["test-model"])
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(auth, request, {}, "/v1/files", "persisted-key")
+    assert denied.value.code == "403"

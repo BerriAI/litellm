@@ -1,14 +1,76 @@
 from collections.abc import Mapping
+from itertools import product
 from types import MappingProxyType
 from typing import Annotated, Final
 
 from pydantic import Field, TypeAdapter, ValidationError
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
+
+_MANAGED_MODEL_ROUTES: Final = frozenset(
+    f"{prefix}/{operation}"
+    for prefix, operation in product(
+        ("", "/v1"),
+        (
+            "chat/completions",
+            "completions",
+            "embeddings",
+            "responses",
+            "messages",
+            "messages/count_tokens",
+            "images/generations",
+            "images/edits",
+            "audio/transcriptions",
+            "audio/speech",
+            "moderations",
+            "rerank",
+            "ocr",
+        ),
+    )
+) | frozenset(
+    (
+        "/openai/v1/responses",
+        "/v2/rerank",
+        "/claude_code_gateway/v1/messages",
+        "/claude_code_gateway/v1/messages/count_tokens",
+        "/cursor/chat/completions",
+    )
+)
+_MANAGED_MODEL_PATHS: Final = (
+    "/engines/{model}/chat/completions",
+    "/engines/{model}/completions",
+    "/engines/{model}/embeddings",
+    "/openai/deployments/{model}/chat/completions",
+    "/openai/deployments/{model}/completions",
+    "/openai/deployments/{model}/embeddings",
+    "/v1beta/models/{model_name:path}:countTokens",
+    "/v1beta/models/{model_name:path}:generateContent",
+    "/v1beta/models/{model_name:path}:streamGenerateContent",
+    "/models/{model_name:path}:countTokens",
+    "/models/{model_name:path}:generateContent",
+    "/models/{model_name:path}:streamGenerateContent",
+)
+_MANAGED_MCP_ROUTES: Final = tuple(
+    route for route in LiteLLMRoutes.mcp_inference_routes.value if route not in ("/token", "/introspect")
+)
+
+
+def managed_agent_route_allowed(route: str, method: str | None) -> bool:
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    if route in ("/agents", "/v1/agents"):
+        return method in (None, "GET", "HEAD")
+    if route in ("/realtime", "/v1/realtime", "/openai/v1/realtime"):
+        return method in (None, "GET")
+    if route in _MANAGED_MODEL_ROUTES or RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
+        return method in (None, "POST")
+    return RouteChecks.check_route_access(route, _MANAGED_MCP_ROUTES) or RouteChecks.check_route_access(
+        route, LiteLLMRoutes.agent_inference_routes.value
+    )
 
 
 async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:

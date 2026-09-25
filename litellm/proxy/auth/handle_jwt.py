@@ -52,6 +52,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
 from litellm.proxy.agent_endpoints.identity import agent_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
@@ -2505,7 +2506,7 @@ class JWTAuthManager:
         if managed is not None:
             if not handler.managed_issuer_is_trusted(jwt_valid_token.get("iss")):
                 raise HTTPException(403, "Managed agents require trusted JWT issuer and audience validation")
-            if not RouteChecks.is_llm_api_route(route) and route not in ("/v1/agents", "/agents"):
+            if not managed_agent_route_allowed(route, request_method):
                 raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
             evidence: Final = await AgentIdentityStore.from_client(prisma_client).record_authentication(managed)
             if isinstance(evidence, AgentIdentityFailure):

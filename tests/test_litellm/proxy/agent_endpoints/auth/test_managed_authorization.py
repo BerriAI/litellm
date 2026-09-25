@@ -391,3 +391,31 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
     await prepare_agent_invocation(auth, "missing", None)
     assert auth.invoked_agent_id is None
     assert auth.billing_agent_policy is None
+
+
+@pytest.mark.parametrize(
+    "route,method,allowed",
+    [
+        ("/v1/agents", "GET", True),
+        ("/v1/agents", "POST", False),
+        ("/v1/chat/completions", "POST", True),
+        ("/v1/chat/completions", "DELETE", False),
+        ("/openai/deployments/model/chat/completions", "POST", True),
+        ("/v1beta/models/gemini-model:generateContent", "POST", True),
+        ("/v1/realtime", "GET", True),
+        ("/v1/realtime", "POST", False),
+        ("/v1/realtime/client_secrets", "POST", False),
+        ("/mcp/tools/call", "POST", True),
+        ("/a2a/target/message/send", "POST", True),
+        ("/v1/agents/target", "PATCH", False),
+        ("/v1/responses/other-response", "GET", False),
+        ("/v1/files", "GET", False),
+        ("/v1/files", "POST", False),
+        ("/openai/v1/files", "GET", False),
+        ("/anthropic/v1/files", "GET", False),
+    ],
+)
+def test_managed_route_scope_excludes_provider_resources(route: str, method: str, allowed: bool) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
+
+    assert managed_agent_route_allowed(route, method) is allowed

@@ -7716,8 +7716,18 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["autonomous", "both", "delegated"])
 @pytest.mark.parametrize("audience_validation", (True, False))
+@pytest.mark.parametrize(
+    "route,allowed",
+    [
+        ("/chat/completions", True), ("/v1/messages", True), ("/v1/responses", True),
+        ("/mcp-rest/tools/call", True), ("/a2a/target", True),
+        ("/v1/files", False), ("/v1/batches", False), ("/v1/vector_stores", False),
+        ("/v1/containers", False), ("/openai/v1/files", False),
+        ("/v1/responses/other-response", False), ("/v1/realtime/client_secrets", False),
+    ],
+)
 async def test_managed_application_uses_persisted_identity_without_provisioning_human(
-    monkeypatch: pytest.MonkeyPatch, mode: str, audience_validation: bool
+    monkeypatch: pytest.MonkeyPatch, mode: str, audience_validation: bool, route: str, allowed: bool
 ) -> None:
     from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
@@ -7778,7 +7788,7 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
         jwt_handler=handler,
         request_data={},
         general_settings={},
-        route="/chat/completions",
+        route=route,
         prisma_client=database,
         user_api_key_cache=cache,
         parent_otel_span=None,
@@ -7786,7 +7796,7 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
     )
     if not audience_validation:
         monkeypatch.delenv("JWT_AUDIENCE")
-    if mode == "delegated" or not audience_validation:
+    if mode == "delegated" or not audience_validation or not allowed:
         with pytest.raises(HTTPException) as failure:
             await JWTAuthManager.auth_builder(**arguments)
         assert failure.value.status_code == 403

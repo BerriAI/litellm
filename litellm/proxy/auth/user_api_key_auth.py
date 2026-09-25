@@ -3196,6 +3196,7 @@ async def _authorize_authenticated_request(
         from litellm.proxy.agent_endpoints.auth.managed_authorization import (
             admit_managed_actor,
             invocation_target,
+            managed_agent_route_allowed,
             prepare_agent_invocation,
         )
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
@@ -3204,6 +3205,10 @@ async def _authorize_authenticated_request(
         store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
         if user_api_key_auth_obj.agent_id is not None:
             await admit_managed_actor(user_api_key_auth_obj, store)
+        if user_api_key_auth_obj.managed_agent_policy is not None and not managed_agent_route_allowed(
+            route, request.method
+        ):
+            raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
         target_name: Final = invocation_target(route, request_data)
         if target_name is not None:
             await prepare_agent_invocation(
