@@ -631,6 +631,13 @@ class TestVertexGemmaCompletion:
             assert span.get_metric("_dd.llmobs.total_tokens") == 114
         else:
             assert all(getattr(chunk, "usage", None) is None for chunk in chunks)
+            # The wrapper still accumulates the provider's usage for LiteLLM's own
+            # accounting; ddtrace only reads emitted chunks, so without an explicit
+            # include_usage request its span carries no token metric.
+            from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+            assert calculate_total_usage(chunks=stream.chunks).total_tokens == 114
+            assert span.get_metric("_dd.llmobs.total_tokens") is None
 
     @pytest.mark.asyncio
     async def test_acompletion_filters_stream_and_stream_options(self):
