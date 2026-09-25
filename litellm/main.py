@@ -5535,7 +5535,7 @@ def completion(
                 base_model=base_model,
             )
 
-        if provider_config is not None:
+        if provider_config is not None and custom_llm_provider != "openai":
             messages = provider_config.translate_developer_role_to_system_role(messages=messages)
 
         if (

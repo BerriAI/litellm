@@ -683,6 +683,39 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
+def _convert_const_to_enum(schema: object, depth: int = 0) -> None:
+    pending: Final[list[tuple[object, int]]] = [  # mutable-ok: depth-capped worklist avoids recursive schema traversal
+        (schema, depth)
+    ]
+    while pending:
+        current_schema, current_depth = pending.pop()
+        if current_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+        if not isinstance(current_schema, dict):
+            continue
+
+        if "const" in current_schema and "enum" not in current_schema:
+            const_value = current_schema["const"]
+            if not isinstance(const_value, str):
+                raise ValueError("Gemini function declarations only support string const values.")
+            del current_schema["const"]
+            current_schema["type"] = "string"
+            current_schema["enum"] = [const_value]  # mutable-ok: JSON Schema enum values must be an array
+
+        next_depth = current_depth + 1
+        properties = current_schema.get("properties")
+        if isinstance(properties, dict):
+            pending.extend((value, next_depth) for value in properties.values())
+
+        items = current_schema.get("items")
+        if items is not None:
+            pending.append((items, next_depth))
+
+        any_of = current_schema.get("anyOf")
+        if isinstance(any_of, list):
+            pending.extend((value, next_depth) for value in any_of)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -711,6 +744,8 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    _convert_const_to_enum(parameters)
 
     _convert_schema_types(parameters)
 

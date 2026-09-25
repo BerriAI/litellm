@@ -102,6 +102,12 @@ class AzureOpenAIConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
+        return messages
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "temperature",

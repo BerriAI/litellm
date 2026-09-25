@@ -3,9 +3,9 @@ from unittest.mock import patch
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
-
 from litellm.llms.vertex_ai.common_utils import (
+    _build_vertex_schema,
+    _convert_const_to_enum,
     _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
@@ -1755,3 +1755,50 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+def test_build_vertex_schema_converts_string_const_to_single_value_enum():
+    parameters = {
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "currency": {"const": "USD"},
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "choices": {
+                        "type": "array",
+                        "items": {"anyOf": [{"const": "fixed"}, {"type": "string"}]},
+                    }
+                },
+            },
+        },
+        "required": ["currency", "amount"],
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    currency = result["properties"]["currency"]
+    assert "const" not in currency
+    assert currency["enum"] == ["USD"]
+    assert currency["type"] == "string"
+    choices = result["properties"]["nested"]["properties"]["choices"]
+    assert choices["items"]["anyOf"][0] == {"type": "string", "enum": ["fixed"]}
+
+
+@pytest.mark.parametrize("value", [5, 1.5, True, None, ["USD"], {"code": "USD"}])
+def test_build_vertex_schema_rejects_const_values_gemini_cannot_enforce(value):
+    parameters = {"type": "object", "properties": {"currency": {"const": value}}}
+
+    with pytest.raises(ValueError, match="only support string const values"):
+        _build_vertex_schema(parameters)
+
+
+def test_convert_const_to_enum_ignores_non_schema_values():
+    assert _convert_const_to_enum("not-a-schema") is None
+
+
+def test_convert_const_to_enum_rejects_excessive_depth():
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded",
+    ):
+        _convert_const_to_enum({}, depth=DEFAULT_MAX_RECURSE_DEPTH + 1)
