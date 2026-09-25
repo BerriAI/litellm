@@ -1071,14 +1071,15 @@ describe("entity daily activity aggregated/search/export helpers", () => {
     async ({ fnName, path, idsParam, ids, expected }) => {
       const mockFetch = setupSuccessfulFetch();
 
-      await Networking[fnName]({
+      const exportArgs = {
         accessToken: "token",
         startTime,
         endTime,
         entityIds: [...ids],
-        exportType: "daily_with_keys",
-        format: "csv",
-      });
+        exportType: "daily_with_keys" as const,
+        format: "csv" as const,
+      };
+      await Networking[fnName](exportArgs);
 
       const parsed = calledUrl(mockFetch);
       expect(parsed.pathname).toBe(`/litellm/${path}/daily/activity/export`);

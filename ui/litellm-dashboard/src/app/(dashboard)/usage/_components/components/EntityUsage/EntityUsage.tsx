@@ -197,6 +197,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
+  const paginatedActivityArgs = {
+    fetchFn,
+    args: [accessToken, startTime, endTime, entityFilterArg],
+    enabled,
+    aggregatedFetchFn,
+  };
   const {
     data: spendDataRaw,
     isFetchingMore,
@@ -205,12 +211,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     failed,
     coversRange,
     cancel,
-  } = usePaginatedDailyActivity({
-    fetchFn,
-    args: [accessToken, startTime, endTime, entityFilterArg],
-    enabled,
-    aggregatedFetchFn,
-  });
+  } = usePaginatedDailyActivity(paginatedActivityArgs);
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
   const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
@@ -236,7 +237,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const keySearchFn = ENTITY_KEY_SEARCH_FNS[entityType];
   const searchKeys = useCallback(
     (query: string) => {
-      if (!keySearchFn || !accessToken || !startTime || !endTime) return Promise.resolve({});
+      const searchTimesReady = accessToken && startTime && endTime;
+      if (!keySearchFn || !searchTimesReady) return Promise.resolve({});
       const entityIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
       return keySearchFn(accessToken, startTime, endTime, query, entityIds).then((data) =>
         processActivityData(data, "api_keys", teams || []),
@@ -737,17 +739,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   ];
 
   const exportFn = ENTITY_EXPORT_FNS[entityType];
+  const exportTimesReady = accessToken && startTime && endTime;
   const serverExport: ServerExport | undefined =
-    exportFn !== undefined && apiKeyTruncation !== undefined && accessToken && startTime && endTime
-      ? (scope, format) =>
-          exportFn({
+    exportFn !== undefined && apiKeyTruncation !== undefined && exportTimesReady
+      ? (scope, format) => {
+          const exportArgs = {
             accessToken,
             startTime,
             endTime,
             entityIds: entityFilterArg as string[] | null,
             exportType: scope,
             format,
-          })
+          };
+          return exportFn(exportArgs);
+        }
       : undefined;
 
   const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation: serverExport ? null : apiKeyTruncation };
