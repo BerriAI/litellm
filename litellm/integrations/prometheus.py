@@ -18,7 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK, PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -131,7 +131,7 @@ def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrisma
     """View a repository's prisma table through the pagination surface budget metrics need."""
     return cast(
         _PaginatedPrismaTable[_TableRowT],
-        repository.table,  # cast-ok: prisma rows carry the budget columns the domain model declares
+        repository.table,
     )
 
 
@@ -214,17 +214,22 @@ def _get_proxy_llm_router() -> Router | None:
     return llm_router
 
 
-def _bounded_requested_model_label(requested_model: str | None, router_originated: bool = False) -> str | None:
+def _bounded_requested_model_label(requested_model: object, router_originated: bool = False) -> str | None:
     """
     Bound ``requested_model`` label cardinality: names the router recognizes
     (model names, deployment ids, aliases, routing groups, team public model
     names) or matches via a global or team wildcard/pattern route keep their
     own label value; any other client-supplied string collapses into the
-    single ``other`` bucket. With no proxy router to vouch for the string,
-    client-supplied values collapse to ``other`` while ``router_originated``
-    values (emitted by an SDK ``Router``'s own deployment failure and
-    fallback events, where the proxy router never exists) pass through.
+    single ``other`` bucket, as does any non-string request ``model`` value.
+    With no proxy router to vouch for the string, client-supplied values
+    collapse to ``other`` while ``router_originated`` values (emitted by an
+    SDK ``Router``'s own deployment failure and fallback events, where the
+    proxy router never exists) pass through.
     """
+    if requested_model is None:
+        return None
+    if not isinstance(requested_model, str):
+        return UNRECOGNIZED_REQUESTED_MODEL_LABEL
     if not requested_model:
         return requested_model
     llm_router: Final = _get_proxy_llm_router()
@@ -722,6 +727,15 @@ class PrometheusLogger(CustomLogger):
                     "has a non-zero rate, by reason (missing_pricing_key, pricing_not_applied, cost_calculation_error)"
                 ),
                 labelnames=self.get_labels_for_metric("litellm_zero_cost_requests_total"),
+            )
+
+            self.litellm_spend_capture_rate = self._gauge_factory(
+                "litellm_spend_capture_rate",
+                (
+                    "Share of the provider's bill LiteLLM captured as spend over the scheduled check's window "
+                    "(captured spend / provider bill), by api_provider; NaN when the last check produced no rate"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_spend_capture_rate"),
             )
 
             # Cache metrics
@@ -2023,6 +2037,15 @@ class PrometheusLogger(CustomLogger):
         )
         self.litellm_zero_cost_requests_total.labels(**labels).inc()
 
+    def set_spend_capture_rate(self, api_provider: str, capture_rate: float | None) -> None:
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            enum_values=UserAPIKeyLabelValues(api_provider=api_provider),
+        )
+        gauge: Final = self.litellm_spend_capture_rate
+        series: Final = gauge.labels(**labels) if labels else gauge
+        series.set(math.nan if capture_rate is None else capture_rate)
+
     @staticmethod
     def _get_remaining_from_v3_rate_limit_headers(
         standard_logging_payload: StandardLoggingPayload | None,
@@ -2600,6 +2623,7 @@ class PrometheusLogger(CustomLogger):
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         status_code: Final = self._extract_status_code(exception=original_exception)
 
@@ -2618,7 +2642,9 @@ class PrometheusLogger(CustomLogger):
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
-                hashed_api_key=None if status_code == 401 else user_api_key_dict.api_key,
+                hashed_api_key=None
+                if status_code == 401
+                else LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
@@ -2773,6 +2799,13 @@ class PrometheusLogger(CustomLogger):
         - increment deployment failure responses metric
         - increment deployment total requests metric
 
+        Both counters also carry a model_group label. When a deployment was
+        actually selected, model_group is the router-resolved value and is
+        trusted as-is. On a pre-routing reject (no deployment selected), it
+        is caller-supplied via litellm_params.metadata and is bounded with
+        _bounded_requested_model_label the same way requested_model is, so an
+        unrecognized value cannot mint unbounded label series.
+
         Args:
             request_kwargs: dict
 
@@ -2832,13 +2865,14 @@ class PrometheusLogger(CustomLogger):
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id)
+            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id
                 label_api_base = api_base
                 label_api_provider = llm_provider
                 label_requested_model = model_group or litellm_model_name
+                label_model_group = model_group
             else:
                 label_litellm_model_name = ""
                 label_model_id = ""
@@ -2847,6 +2881,7 @@ class PrometheusLogger(CustomLogger):
                 label_requested_model = (
                     _bounded_requested_model_label(litellm_model_name or model_group, router_originated=True) or ""
                 )
+                label_model_group = _bounded_requested_model_label(model_group, router_originated=True)
 
             enum_values: Final = UserAPIKeyLabelValues(
                 litellm_model_name=label_litellm_model_name,
@@ -2856,6 +2891,7 @@ class PrometheusLogger(CustomLogger):
                 exception_status=exception_status,
                 exception_class=(self._get_exception_class_name(exception) if exception else None),
                 requested_model=label_requested_model,
+                model_group=label_model_group,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
                 user_email=user_email,
@@ -2907,9 +2943,21 @@ class PrometheusLogger(CustomLogger):
         model_id: str | None,
         api_base: str | None,
         llm_provider: str | None,
+        model_group: str | None,
     ):
         """
         Set the deployment TPM and RPM limits metrics
+
+        Args:
+            model_info: the deployment's static model_info config (id, tpm, rpm, etc.)
+            litellm_params: the deployment's litellm_params, as a tpm/rpm fallback source
+            litellm_model_name: the resolved deployment model name
+            model_id: the deployment's model_id
+            api_base: the deployment's api_base
+            llm_provider: the deployment's custom_llm_provider
+            model_group: the router-resolved model_group the deployment belongs to,
+                from the caller's already-resolved enum_values.model_group (trusted,
+                not caller-supplied at this call site)
         """
         tpm: Final = model_info.get("tpm") or litellm_params.get("tpm")
         rpm: Final = model_info.get("rpm") or litellm_params.get("rpm")
@@ -2922,6 +2970,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    model_group=model_group,
                 ),
             )
             self.litellm_deployment_tpm_limit.labels(**_labels).set(tpm)
@@ -2934,6 +2983,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    model_group=model_group,
                 ),
             )
             self.litellm_deployment_rpm_limit.labels(**_labels).set(rpm)
@@ -3053,6 +3103,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     llm_provider=llm_provider,
+                    model_group=enum_values.model_group,
                 )
 
             remaining_requests: int | None = None

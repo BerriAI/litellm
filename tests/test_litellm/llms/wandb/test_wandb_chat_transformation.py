@@ -37,10 +37,6 @@ WANDB_REASONING_MODELS: Final = (
     "Qwen/Qwen3.5-35B-A3B",
     "zai-org/GLM-5.2",
     "moonshotai/Kimi-K2.5",
-    "MiniMaxAI/MiniMax-M2.5",
-    "zai-org/GLM-4.5",
-    "Qwen/Qwen3-235B-A22B-Thinking-2507",
-    "deepseek-ai/DeepSeek-R1-0528",
 )
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import json
 import uuid
 from types import SimpleNamespace
@@ -541,26 +542,48 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
     assert json.loads(last_content[-1]["text"]) == schema
 
 
-def test_output_config_format_forwarded_for_bedrock_chat_invoke_request():
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-8"])
+def test_output_config_format_inlined_for_bedrock_chat_invoke_opus_4_7_and_4_8(local_model_cost_map, model):
+    """Bedrock rejects ``output_config.format`` on Claude Opus 4.7 and 4.8, so the
+    Invoke chat path inlines the schema into the last user message and keeps effort,
+    driven by the cost map alone (no capability stub)."""
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"effort": "xhigh", "format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
+    assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
+def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
-    for models with native structured-output support (Claude Opus 4.7)."""
+    for models with native structured-output support (Claude Sonnet 4.6)."""
     schema_format = {
         "type": "json_schema",
         "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
-        model="anthropic.claude-opus-4-7",
+        model="us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "test"}],
         optional_params={
             "max_tokens": 100,
-            "output_config": {"effort": "xhigh", "format": schema_format},
+            "output_config": {"effort": "max", "format": schema_format},
         },
         litellm_params={},
         headers={},
     )
 
-    assert result.get("output_config") == {"effort": "xhigh", "format": schema_format}
+    assert result.get("output_config") == {"effort": "max", "format": schema_format}
     assert "answer" not in json.dumps(result["messages"])
 
 
@@ -988,3 +1011,102 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     )
 
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+def _mid_conversation_system_conversation() -> list[dict]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+        {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"},
+        {"role": "assistant", "content": "Second answer"},
+        {"role": "user", "content": "Third question"},
+    ]
+
+
+def test_chat_unflagged_model_converts_mid_conversation_system_instead_of_hoisting(local_model_cost_map):
+    """A hoisted reminder rewrites the top-level system block and invalidates the
+    prompt cache for the whole conversation (#36559)."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/us.anthropic.claude-opus-4-7",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "assistant", "user"]
+    texts = [b["text"] for b in result["messages"][2]["content"] if b.get("type") == "text"]
+    assert texts[0] == "Second question"
+    assert texts[-1] == "<system-reminder>Answer with exactly one word.</system-reminder>"
+
+
+def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/us.anthropic.claude-opus-4-8",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+    assert result["messages"][3] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
+    }
+
+
+def _thinking_reply(text: str) -> dict:
+    return {
+        "role": "assistant",
+        "content": text,
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": f"sig-{text}"}],
+    }
+
+
+def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], list[dict], list[dict]]:
+    turn_n = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "First question"}]
+    reminder = {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"}
+    second_question = {"role": "user", "content": "Second question"}
+    second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
+    turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
+    turn_n_plus_two = [*turn_n_plus_one, _thinking_reply("Second answer"), {"role": "user", "content": "Third question"}]
+    return turn_n, turn_n_plus_one, turn_n_plus_two
+
+
+def _replayed_prefix(request: dict, message_count: int) -> str:
+    replayed = {
+        "system": request.get("system"),
+        "tools": request.get("tools"),
+        "messages": request["messages"][:message_count],
+    }
+    return json.dumps(replayed, sort_keys=True)
+
+
+def _assert_prefix_stable(requests: list[dict]) -> None:
+    for earlier, later in zip(requests, requests[1:]):
+        count = len(earlier["messages"])
+        assert _replayed_prefix(later, count) == _replayed_prefix(earlier, count)
+
+
+@pytest.mark.parametrize("reminder_after_user", [True, False])
+def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_conversation_reminder(
+    local_model_cost_map, reminder_after_user
+):
+    """Preserved thinking binds each signed block to the request prefix it was created
+    under (``system``, ``tools`` and the earlier messages), so turn N's transformed
+    request must be a byte-identical prefix of turn N+1's or the block is dropped."""
+    requests = [
+        AmazonAnthropicClaudeConfig().transform_request(
+            model="invoke/us.anthropic.claude-fable-5-1", messages=copy.deepcopy(turn), optional_params={}, litellm_params={}, headers={}
+        )
+        for turn in _preserved_thinking_turns(reminder_after_user)
+    ]
+
+    _assert_prefix_stable(requests)
+    assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
+    assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]

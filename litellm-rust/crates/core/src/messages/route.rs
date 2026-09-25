@@ -1,4 +1,8 @@
-use std::{sync::Mutex, time::Duration};
+use std::{
+    convert::Infallible,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use litellm_auth::SecretValue;
@@ -6,29 +10,24 @@ use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{
     event::{MachineEvent, RawResponse, RequestContext, WireRequest},
     host::{Demand, Host},
-    machine::{HostChannel, MachineFault, RouteMachine},
-    route::Route,
+    machine::{CallMachine, HostChannel, MachineFault},
+    protocol::Protocol,
 };
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_secrets::source::SecretSource;
+use litellm_types::{
+    llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
+    utils::ProviderSpecificHeaders,
+};
 use serde_json::{Map, Value};
 
 use super::{
     Error,
     common_utils::messages_provider_config,
     handler::{decode_response, network, provider_error, send},
-    prepare::prepare_provider_request,
-    types::MessagesRequest,
+    prepare::{prepare_provider_request, resolve_provider},
+    types::{MessagesRequest, MessagesShaping},
 };
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MessagesOp {
-    ProjectRequest,
-}
-
-pub enum MessagesOpResult {
-    Request(Box<MessagesCall>),
-}
 
 /// The caller's request as the host projects it.
 pub struct MessagesCall {
@@ -38,7 +37,9 @@ pub struct MessagesCall {
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
+    pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,
+    pub shaping: MessagesShaping,
 }
 
 impl MessagesCall {
@@ -55,11 +56,11 @@ pub enum MessagesOutput {
 
 pub struct Messages;
 
-impl Route for Messages {
+impl Protocol for Messages {
     type Response = MessagesOutput;
     type Error = Error;
-    type Op = MessagesOp;
-    type OpResult = MessagesOpResult;
+    type Projection = MessagesCall;
+    type Op = Infallible;
     type Chunk = Bytes;
     type StreamHead = ();
 }
@@ -69,13 +70,12 @@ impl From<MachineFault> for Error {
         Self::InvalidRequest(match fault {
             MachineFault::Abandoned => "messages host driver was abandoned".into(),
             MachineFault::Protocol(message) => format!("messages {message}"),
-            MachineFault::Mismatch => "invalid messages host operation result".into(),
         })
     }
 }
 
 pub type MessagesHost = HostChannel<Messages>;
-pub type MessagesMachine = RouteMachine<Messages>;
+pub type MessagesMachine = CallMachine<Messages>;
 
 /// Whether this route serves the request, decided before any callback runs so a host
 /// can still run its own path.
@@ -105,37 +105,46 @@ impl LocalMessagesHost {
 }
 
 impl Host<Messages> for LocalMessagesHost {
-    async fn route(&self, op: MessagesOp) -> Result<MessagesOpResult, Error> {
-        match op {
-            MessagesOp::ProjectRequest => self
-                .call
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take()
-                .map(|call| MessagesOpResult::Request(Box::new(call)))
-                .ok_or_else(|| {
-                    Error::InvalidRequest("messages request was already projected".into())
-                }),
-        }
+    async fn project(&self) -> Result<MessagesCall, Error> {
+        self.call
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+    }
+
+    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
+        match op {}
     }
 }
 
-pub fn messages_machine() -> MessagesMachine {
-    RouteMachine::new(|host| Box::pin(execute(host)))
+pub fn messages_machine(secrets: Arc<dyn SecretSource>) -> MessagesMachine {
+    CallMachine::new(move |host| Box::pin(execute(host, secrets.clone())))
 }
 
-async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
-    let MessagesOpResult::Request(call) = host.route(MessagesOp::ProjectRequest).await?;
+async fn execute(
+    host: MessagesHost,
+    secrets: Arc<dyn SecretSource>,
+) -> Result<MessagesOutput, Error> {
+    let call = host.project().await?;
     let stream = call.streams();
-    let request = prepare_provider_request(MessagesRequest {
-        model: &call.model,
-        body: Value::Object(call.body.clone()),
-        api_key: call.api_key.as_deref(),
-        api_base: call.api_base.as_deref(),
-        custom_llm_provider: call.custom_llm_provider.as_deref(),
-        extra_headers: call.extra_headers.clone(),
-        timeout: call.timeout,
-    })?;
+    let resolved = resolve_provider(&call.model, call.custom_llm_provider.as_deref())?;
+    let secrets = secrets.resolve(resolved.config.secret_names()).await?;
+    let request = prepare_provider_request(
+        MessagesRequest {
+            model: &call.model,
+            body: Value::Object(call.body.clone()),
+            api_key: call.api_key.as_deref(),
+            api_base: call.api_base.as_deref(),
+            custom_llm_provider: call.custom_llm_provider.as_deref(),
+            extra_headers: call.extra_headers.clone(),
+            provider_specific_header: call.provider_specific_header.clone(),
+            timeout: call.timeout,
+            shaping: call.shaping.clone(),
+        },
+        resolved,
+        secrets.as_ref(),
+    )?;
     if stream && request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::Unsupported("streaming messages for this provider"));
     }

@@ -29,5 +29,4 @@ pub trait DiskStore: Send + Sync + 'static {
         now: f64,
         apply: &mut dyn FnMut(Option<StoredValue>) -> Result<(StoredValue, Option<f64>), Error>,
     ) -> Result<(), Error>;
-    fn probe(&self) -> Result<(), Error>;
 }

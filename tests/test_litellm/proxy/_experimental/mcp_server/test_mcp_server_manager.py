@@ -8709,6 +8709,35 @@ class TestMCPServerManagerExpandToolPermissions:
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["write_file"]})
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
 
+    def test_wildcard_survives_expansion_as_list_entry(self):
+        """["*"] stays in the expanded list so the caller's wildcard check
+        (``_union_tool_grants``) can read it; this function only normalizes
+        keys and never maps grants to None."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["*"]})
+        assert result == {"uuid-a": ["*"]}
+
+    def test_wildcard_unions_with_concrete_names_across_keys_for_same_server(self):
+        """An alias key carrying ["*"] unioned with an id key naming one tool
+        keeps both entries; interpretation of the wildcard belongs to the
+        caller, not the expansion."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alias-a", alias="alias-a")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["*"]})
+        assert sorted(result["uuid-a"]) == ["*", "read_file"]
+
+    def test_empty_list_stays_deny_all(self):
+        """[] is deny-all, a distinct meaning from no entry (unrestricted);
+        the key must survive expansion rather than disappear."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": []})
+        assert result == {"uuid-a": []}
+
 
 class TestOAuthDiscoverySSRFGuard:
     """SSRF guard for the OAuth metadata discovery follow-up fetches.
@@ -14516,3 +14545,62 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+class TestSharedIdentifierPrefixWarning:
+    """Two stored rows sharing lowercased alias-or-server_name publish one tool
+    prefix; reload must surface them once so the ambiguity is visible."""
+
+    @pytest.mark.asyncio
+    async def test_reload_warns_once_per_shared_identifier(self, caplog):
+        manager = MCPServerManager()
+        rows = [
+            LiteLLM_MCPServerTable(
+                server_id="srv-a", server_name="alpha", alias="shared", url="https://a.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-b", server_name="beta", alias="Shared", url="https://b.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-c", server_name="gamma", alias="lonely", url="https://c.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+        ]
+        raw_rows = [MagicMock(model_dump=lambda row=row: row.model_dump()) for row in rows]
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=raw_rows)
+
+        async def build_from_table(table, **_kwargs):
+            return MCPServer(
+                server_id=table.server_id,
+                name=table.alias or table.server_name,
+                alias=table.alias,
+                server_name=table.server_name,
+                url=table.url,
+                transport=table.transport,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+            patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        shared_warnings = [m for m in caplog.messages if "share the identifier" in m]
+        assert len(shared_warnings) == 1
+        assert "srv-a" in shared_warnings[0]
+        assert "srv-b" in shared_warnings[0]
+        assert "srv-c" not in shared_warnings[0]
+        assert "'shared'" in shared_warnings[0]

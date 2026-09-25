@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use litellm_secrets_azure::{AzureKeyVault, Error};
 use litellm_secrets_types::{Secret, SecretValue};
+use rstest::{fixture, rstest};
 use serde::Deserialize;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -17,12 +18,14 @@ fn manager(server: &MockServer) -> AzureKeyVault {
     .unwrap()
 }
 
+#[rstest]
 #[tokio::test]
 async fn reads_secret_with_bearer_token_and_api_version() {
     let server = MockServer::start().await;
     Mock::given(path("/secrets/OPENAI-API-KEY"))
         .and(query_param("api-version", "7.4"))
         .and(header("authorization", "Bearer fake"))
+        .and(header("accept", "application/json"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"value": "s3cret", "id": "secret-id"})),
@@ -32,7 +35,7 @@ async fn reads_secret_with_bearer_token_and_api_version() {
         .await;
 
     let secret = manager(&server)
-        .get_secret_from_azure_key_vault("OPENAI-API-KEY")
+        .get_secret("OPENAI-API-KEY")
         .await
         .unwrap()
         .unwrap();
@@ -40,6 +43,24 @@ async fn reads_secret_with_bearer_token_and_api_version() {
     assert_eq!(secret, Secret::String(SecretValue::new("s3cret")));
 }
 
+#[rstest]
+#[tokio::test]
+async fn preserves_secret_contents_and_redacts_debug_output() {
+    let server = MockServer::start().await;
+    let value = " \tvalue-π\n";
+    Mock::given(path("/secrets/NAME"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"value": value})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let secret = manager(&server).get_secret("NAME").await.unwrap().unwrap();
+
+    assert_eq!(secret.as_str(), Some(value));
+    assert!(!format!("{secret:?}").contains(value));
+}
+
+#[rstest]
 #[tokio::test]
 async fn percent_encodes_secret_name_path_segment() {
     let server = MockServer::start().await;
@@ -53,7 +74,7 @@ async fn percent_encodes_secret_name_path_segment() {
         .await;
 
     let secret = manager(&server)
-        .get_secret_from_azure_key_vault("name/with spaces")
+        .get_secret("name/with spaces")
         .await
         .unwrap()
         .unwrap();
@@ -61,9 +82,12 @@ async fn percent_encodes_secret_name_path_segment() {
     assert_eq!(secret.as_str(), Some("value"));
 }
 
-#[rstest::rstest]
+#[rstest]
 #[case::not_found(404, None)]
+#[case::unauthorized(401, Some(401))]
 #[case::forbidden(403, Some(403))]
+#[case::throttled(429, Some(429))]
+#[case::server_error(500, Some(500))]
 #[tokio::test]
 async fn handles_statuses(#[case] status: u16, #[case] expected_status: Option<u16>) {
     let server = MockServer::start().await;
@@ -73,9 +97,7 @@ async fn handles_statuses(#[case] status: u16, #[case] expected_status: Option<u
         .mount(&server)
         .await;
 
-    let result = manager(&server)
-        .get_secret_from_azure_key_vault("NAME")
-        .await;
+    let result = manager(&server).get_secret("NAME").await;
 
     match expected_status {
         None => assert_eq!(result.unwrap(), None),
@@ -83,6 +105,7 @@ async fn handles_statuses(#[case] status: u16, #[case] expected_status: Option<u
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn missing_value_is_an_error() {
     let server = MockServer::start().await;
@@ -93,41 +116,43 @@ async fn missing_value_is_an_error() {
         .await;
 
     assert!(matches!(
-        manager(&server)
-            .get_secret_from_azure_key_vault("NAME")
-            .await,
+        manager(&server).get_secret("NAME").await,
         Err(Error::MissingValue)
     ));
 }
 
-#[test]
-fn new_validates_vault_environment() {
-    assert!(matches!(
-        AzureKeyVault::new(Arc::new(|_: &str| None)),
-        Err(Error::MissingEnvironment("AZURE_KEY_VAULT_URI"))
-    ));
-    assert!(matches!(
-        AzureKeyVault::new(Arc::new(|name: &str| {
-            (name == "AZURE_KEY_VAULT_URI").then(|| "http://vault.example".to_owned())
-        })),
-        Err(Error::VaultUri)
-    ));
-    assert!(matches!(
-        AzureKeyVault::new(Arc::new(|name: &str| {
-            (name == "AZURE_KEY_VAULT_URI").then(|| "vault.example".to_owned())
-        })),
-        Err(Error::VaultUri)
-    ));
+#[rstest]
+#[case::missing(None, true)]
+#[case::http(Some("http://vault.example"), false)]
+#[case::relative(Some("vault.example"), false)]
+#[case::malformed(Some("://"), false)]
+fn new_validates_vault_environment(
+    #[case] uri: Option<&'static str>,
+    #[case] missing_environment: bool,
+) {
+    let result = AzureKeyVault::new(Arc::new(move |name: &str| {
+        (name == "AZURE_KEY_VAULT_URI")
+            .then(|| uri.map(str::to_owned))
+            .flatten()
+    }));
+
+    if missing_environment {
+        assert!(matches!(
+            result,
+            Err(Error::MissingEnvironment("AZURE_KEY_VAULT_URI"))
+        ));
+    } else {
+        assert!(matches!(result, Err(Error::VaultUri)));
+    }
 }
 
-#[rstest::rstest]
-#[case("https://myvault.vault.azure.net", "https://vault.azure.net/.default")]
-#[case(
+#[rstest]
+#[case::public_cloud("https://myvault.vault.azure.net", "https://vault.azure.net/.default")]
+#[case::government_cloud(
     "https://v.vault.usgovcloudapi.net/",
     "https://vault.usgovcloudapi.net/.default"
 )]
-#[case("http://localhost:8080", "https://localhost/.default")]
-#[test]
+#[case::local("http://localhost:8080", "https://localhost/.default")]
 fn derives_scope_from_vault_host(#[case] uri: &str, #[case] expected: &str) {
     let manager = AzureKeyVault::with_client(
         reqwest::Client::new(),
@@ -139,6 +164,7 @@ fn derives_scope_from_vault_host(#[case] uri: &str, #[case] expected: &str) {
     assert_eq!(manager.scope(), expected);
 }
 
+#[rstest]
 #[tokio::test]
 async fn missing_credentials_do_not_request_vault() {
     let server = MockServer::start().await;
@@ -150,7 +176,7 @@ async fn missing_credentials_do_not_request_vault() {
 
     assert!(
         manager_without_credentials(&server)
-            .get_secret_from_azure_key_vault("NAME")
+            .get_secret("NAME")
             .await
             .is_err()
     );
@@ -192,11 +218,15 @@ struct FixtureExpected {
     error: Option<bool>,
 }
 
+#[fixture]
+fn parity_fixture() -> Fixture {
+    serde_json::from_str(include_str!("fixtures/key_vault_parity.json")).unwrap()
+}
+
+#[rstest]
 #[tokio::test]
-async fn parity_fixture_matches_python_backend_contract() {
-    let fixture: Fixture =
-        serde_json::from_str(include_str!("fixtures/key_vault_parity.json")).unwrap();
-    for case in fixture.cases {
+async fn parity_fixture_matches_python_backend_contract(parity_fixture: Fixture) {
+    for case in parity_fixture.cases {
         let server = MockServer::start().await;
         Mock::given(path(format!("/secrets/{}", case.secret_name)))
             .respond_with(
@@ -205,9 +235,7 @@ async fn parity_fixture_matches_python_backend_contract() {
             .expect(1)
             .mount(&server)
             .await;
-        let result = manager(&server)
-            .get_secret_from_azure_key_vault(&case.secret_name)
-            .await;
+        let result = manager(&server).get_secret(&case.secret_name).await;
         if case.expected.missing == Some(true) {
             assert_eq!(result.unwrap(), None);
         } else if case.expected.error == Some(true) {
@@ -219,4 +247,23 @@ async fn parity_fixture_matches_python_backend_contract() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn trait_read_limits_the_operation_duration() {
+    use litellm_secrets_types::{AzureOperationContext, BaseSecretManager};
+    use std::time::Duration;
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+        .mount(&server)
+        .await;
+    let manager = manager(&server);
+    let context = AzureOperationContext {
+        timeout: Some(Duration::from_millis(30)),
+    };
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Timeout)
+    ));
 }

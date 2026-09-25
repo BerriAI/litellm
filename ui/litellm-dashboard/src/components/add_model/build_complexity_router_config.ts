@@ -414,8 +414,8 @@ export const getReminderMarkersError = (pairs: ReminderMarkerPair[] | undefined)
   for (const [index, pair] of (pairs ?? []).entries()) {
     const open = pair.open.trim().toLowerCase();
     const close = pair.close.trim().toLowerCase();
-    if (!open || !close) return `Reminder marker pair ${index + 1} needs both an opening and a closing delimiter`;
-    if (open === close) return `Reminder marker pair ${index + 1} must use different opening and closing delimiters`;
+    if (!open || !close) return `Tag pair ${index + 1} needs both an opening and a closing tag`;
+    if (open === close) return `Tag pair ${index + 1} must use different opening and closing tags`;
   }
   return null;
 };

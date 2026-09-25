@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ func retryModelRead(d *schema.ResourceData, m interface{}, maxRetries int) error
 const (
 	endpointModelNew    = "/model/new"
 	endpointModelUpdate = "/model/update"
+	endpointModelPatch  = "/model/%s/update"
 	endpointModelInfo   = "/model/info"
 	endpointModelDelete = "/model/delete"
 )
@@ -246,12 +248,13 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
 		ModelInfo: ModelInfo{
-			ID:        modelID,
-			DBModel:   true,
-			BaseModel: pricingBaseModel,
-			Tier:      d.Get("tier").(string),
-			Mode:      d.Get("mode").(string),
-			TeamID:    d.Get("team_id").(string),
+			ID:          modelID,
+			DBModel:     true,
+			BaseModel:   pricingBaseModel,
+			Tier:        d.Get("tier").(string),
+			Mode:        d.Get("mode").(string),
+			TeamID:      d.Get("team_id").(string),
+			DisplayName: d.Get("display_name").(string),
 		},
 		Additional: make(map[string]interface{}),
 	}
@@ -275,11 +278,30 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
 
+	if isUpdate && d.HasChange("display_name") {
+		if err := patchModelDisplayName(client, modelID, d.Get("display_name").(string)); err != nil {
+			return fmt.Errorf("failed to update model display_name: %w", err)
+		}
+	}
+
 	d.SetId(modelID)
 
 	log.Printf("[INFO] Model created with ID %s. Starting retry mechanism to read the model...", modelID)
 	// Read back the resource with retries to ensure the state is consistent
 	return retryModelRead(d, m, 5)
+}
+
+// /model/update only merges litellm_params, so model_info changes go through the PATCH endpoint.
+func patchModelDisplayName(client *Client, modelID, displayName string) error {
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
+		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = handleAPIResponse(resp, nil, client)
+	return err
 }
 
 func resourceLiteLLMModelCreate(d *schema.ResourceData, m interface{}) error {
@@ -327,6 +349,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
+	d.Set("display_name", modelResp.ModelInfo.DisplayName)
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))

@@ -11,6 +11,7 @@ from litellm.rust_bridge.catalog import (
     CacheRule,
     Context,
     Delivery,
+    LoggerContext,
     Route,
     RouteContext,
     RouteRule,
@@ -50,13 +51,8 @@ def test_shipped_decisions(
     context: Final = RouteContext(route, provider=provider, model="test-model", delivery=delivery)
 
     if route is Route.OCR:
-        enabled: Final = environment == "1" if environment is not None else process is not False
-        assert catalog.rollout(context) is Rollout.RUST_OPT_OUT
-        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
-    elif route in (Route.MESSAGES, Route.TOKEN_COUNTER, Route.TOKENIZER):
-        enabled: Final = environment == "1" if environment is not None else process is True
-        assert catalog.rollout(context) is Rollout.RUST_OPT_IN
-        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
+        assert catalog.rollout(context) is Rollout.RUST_REQUIRED
+        assert catalog.decision(context) is Decision.RUST_REQUIRED
     elif route is Route.TRANSCRIPTION and provider == "bedrock":
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
@@ -91,6 +87,13 @@ def test_backend_rollouts_stay_on_python_when_global_rust_is_enabled(
 
     assert catalog.rollout(context) is Rollout.PYTHON_ONLY
     assert catalog.decision(context) is Decision.PYTHON
+
+
+def test_logger_rollout_obeys_the_global_switch() -> None:
+    assert catalog.rollout(LoggerContext()) is Rollout.RUST_OPT_IN
+    assert catalog.decision(LoggerContext()) is Decision.PYTHON
+    configuration.rust(True)
+    assert catalog.decision(LoggerContext()) is Decision.RUST_WITH_FALLBACK
 
 
 def test_response_cache_rules_select_the_whole_backend_runtime() -> None:
@@ -134,14 +137,18 @@ def test_first_matching_rule_respects_every_constraint(context: RouteContext, ex
 
 @pytest.mark.parametrize("process", (None, False, True))
 @pytest.mark.parametrize("environment", (None, "0", "1"))
-def test_textract_ocr_has_no_python_path_to_opt_out_to(
+def test_ocr_has_no_python_path_to_opt_out_to(
     monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None
 ) -> None:
     configuration.rust(process)
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
 
-    assert catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m")) is Decision.RUST_REQUIRED
+    assert catalog.decision(RouteContext(Route.OCR, model="m")) is Decision.RUST_REQUIRED
+    assert (
+        catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m"))
+        is Decision.RUST_REQUIRED
+    )
 
 
 @pytest.mark.parametrize(

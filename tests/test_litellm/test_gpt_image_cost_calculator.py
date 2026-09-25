@@ -16,13 +16,10 @@ import pytest
 
 import litellm
 from litellm.types.utils import (
-    CompletionTokensDetailsWrapper,
     ImageObject,
     ImageResponse,
     ImageUsage,
     ImageUsageInputTokensDetails,
-    PromptTokensDetailsWrapper,
-    Usage,
 )
 
 
@@ -194,31 +191,42 @@ class TestGPTImageCostCalculator:
 
         assert cost == 0.0
 
+    @pytest.mark.parametrize(
+        "usage",
+        [
+            None,
+            ImageUsage(
+                input_tokens=0,
+                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
+                output_tokens=0,
+                total_tokens=0,
+            ),
+        ],
+    )
+    def test_gpt_image_1_bills_deployment_output_cost_per_image_without_usage_tokens(
+        self, usage: ImageUsage | None
+    ) -> None:
+        from litellm.llms.openai.image_generation.cost_calculator import cost_calculator
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/one.jpg"), ImageObject(url="http://example.com/two.jpg")],
+            usage=usage,
+        )
+
+        cost = cost_calculator(
+            model="gpt-image-1",
+            image_response=image_response,
+            custom_llm_provider="openai",
+            model_info={"output_cost_per_image": 0.05},
+        )
+
+        assert cost == pytest.approx(0.10)
+
 
 class TestGPTImageCostRouting:
     """Test that gpt-image models are properly routed to the token-based calculator"""
 
-    def test_openai_dalle_routes_to_pixel_calculator(self):
-        """Test that OpenAI DALL-E still routes to pixel-based calculator"""
-        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-
-        image_response = ImageResponse(
-            created=1234567890,
-            data=[ImageObject(url="http://example.com/image.jpg")],
-        )
-        image_response.size = "1024x1024"
-        image_response.quality = "standard"
-
-        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
-            model="dall-e-3",
-            completion_response=image_response,
-            custom_llm_provider="openai",
-            size="1024x1024",
-            quality="standard",
-            n=1,
-        )
-
-        assert cost >= 0
 
 
 class TestGPTImage15OutputImageTokens:

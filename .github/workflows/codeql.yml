@@ -67,13 +67,19 @@ jobs:
       # further up the stack are modified. The suppression is scoped to this one
       # file/rule pair via SARIF post-filtering so every other callsite of
       # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
-      - name: Filter SARIF (OCI sha256)
+      # The same query fires on the HIBP k-anonymity lookup in
+      # litellm/proxy/auth/password_policy.py, where the password's SHA-1 is only
+      # a lookup key into the haveibeenpwned range API (the protocol mandates
+      # SHA-1) and the digest itself never leaves the proxy beyond its first 5
+      # characters.
+      - name: Filter SARIF (OCI sha256, HIBP sha1)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           # These SHA-256 digests are opaque ownership/cache identifiers, not password hashes.
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
             -litellm/proxy/_types.py:py/weak-sensitive-data-hashing
             -litellm/proxy/realtime_endpoints/call_sessions.py:py/weak-sensitive-data-hashing
             -litellm/proxy/realtime_endpoints/live.py:py/weak-sensitive-data-hashing

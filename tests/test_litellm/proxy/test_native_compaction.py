@@ -113,8 +113,10 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
         })))
         return asyncio.sleep(0, result=ModelResponse(id="private-summary", model="compactor"))
 
+    monkeypatch.setattr(litellm, "max_budget", 0)
     monkeypatch.setattr(proxy_server.app, "dependency_overrides", {})
     monkeypatch.setattr(proxy_server, "master_key", "sk-master-fixture")
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
     monkeypatch.setattr(proxy_server, "prisma_client", object())
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "llm_router", None)

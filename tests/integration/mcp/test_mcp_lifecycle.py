@@ -1,3 +1,4 @@
+import functools
 import json
 import uuid
 from contextlib import ExitStack
@@ -6,14 +7,22 @@ from typing import Final
 
 import pytest
 import yaml
+from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from integration._support.mcp import (
+    McpCaller,
+    Outcome,
+    call_tool,
+    mcp_peer,
+    register_mcp,
+    tool_calls,
+    tool_names,
+)
 from integration._support.process import owned_proxy
-from integration._support.mcp import call_tool, mcp_peer, register_mcp, tool_names
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")
@@ -249,12 +258,12 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
             for alias in aliases
         )
         for virtual in (False, True):
-            keys: Final = tuple(
+            keys = tuple(
                 scenario.key(object_permission={"mcp_servers": [server], "mcp_tool_search_enabled": virtual})
                 for server in servers
             )
             for server, alias, key in zip(servers, aliases, keys):
-                catalog: Final = gateway.request("GET", "/mcp-rest/tools/list", key=key)
+                catalog = gateway.request("GET", "/mcp-rest/tools/list", key=key)
                 assert catalog.status_code == 200, catalog.text
                 if virtual:
                     assert {tool["name"] for tool in catalog.json()["tools"]} == {
@@ -263,7 +272,7 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
                         "agent_search",
                         "skill_search",
                     }, catalog.text
-                    search: Final = gateway.request(
+                    search = gateway.request(
                         "POST",
                         "/mcp-rest/tools/call",
                         {"name": "mcp_tool_search", "arguments": {"query": "add", "top_k": 10}},
@@ -278,7 +287,7 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
                     assert {tool["name"] for tool in catalog.json()["tools"]} == {"add", "multiply", "fail"}
             for server_index, caller_index in ((0, 0), (1, 0), (1, 1)):
                 peer.drain()
-                response: Final = gateway.request(
+                response = gateway.request(
                     "POST",
                     "/mcp-rest/tools/call",
                     {
@@ -292,15 +301,227 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
                     },
                     key=keys[caller_index],
                 )
-                observed: Final = peer.drain()
+                observed = peer.drain()
                 if server_index != caller_index:
                     assert response.status_code == 403 and "not allowed" in response.text, response.text
-                    assert observed == (), "forbidden server reached the upstream"
+                    assert tool_calls(observed) == (), "forbidden server reached the upstream"
                     continue
                 assert response.status_code == 200 and response.json()["isError"] is False, response.text
                 assert response.json()["content"][0]["text"] == "8", response.text
-                calls: Final = tuple(item for item in observed if item["body"].get("method") == "tools/call")
+                calls = tuple(item for item in observed if item["body"].get("method") == "tools/call")
                 assert len(calls) == 1
                 assert calls[0]["headers"][b"x-integration-server"] == aliases[server_index].encode()
-                expected_auth: Final = f"Bearer synthetic-{aliases[server_index]}".encode() if authenticated else None
-                assert all(item["headers"].get(b"authorization") == expected_auth for item in observed)
+                assert all(
+                    item["headers"].get(b"authorization")
+                    == (f"Bearer synthetic-{_server_alias(item)}".encode() if authenticated else None)
+                    for item in observed
+                ), observed
+
+
+def _matches_grants(expected: set[str], view: Outcome) -> bool:
+    return view.error is None and set(view.tools) == expected
+
+
+def _granted_view(worker: Gateway, key: str) -> Outcome:
+    return McpCaller(worker, key, "mcp").list_tools()
+
+
+def _server_alias(call: dict[str, object]) -> str:
+    headers: Final = call["headers"]
+    assert isinstance(headers, dict)
+    return headers[b"x-integration-server"].decode()
+
+
+@pytest.mark.timeout(600)
+def test_generated_create_edit_grant_revoke_delete_call_keeps_grants_and_tool_lists_consistent(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with mcp_peer() as upstream, bounded_http_requests((gateway, peer), limit=6000) as budget:
+
+        class Fleet(RuleBasedStateMachine):
+            def __init__(self) -> None:
+                super().__init__()
+                self.resources = ExitStack()
+                self.servers: dict[str, str] = {}
+                self.grants: dict[str, set[str]] = {}
+                self.keys: tuple[str, ...] = ()
+                try:
+                    self.scenario = self.resources.enter_context(gateway.scenario())
+                    self.create()
+                    self.keys = tuple(
+                        self.scenario.key(object_permission={"mcp_servers": list(self.servers.values())[:count]})
+                        for count in (0, 1)
+                    )
+                    self.grants = {self.keys[0]: set(), self.keys[1]: set(self.servers)}
+                except BaseException:
+                    with budget.cleanup():
+                        self.resources.close()
+                    raise
+
+            @rule()
+            def create(self) -> None:
+                if len(self.servers) >= 3:
+                    return
+                alias: Final = "fleet" + uuid.uuid4().hex[:8]
+                identity: Final = register_mcp(
+                    self.scenario, upstream, alias, static_headers={"X-Integration-Server": alias}
+                )
+                self.servers[alias] = identity
+
+            @rule(index=st.integers(0, 2), suffix=st.sampled_from(("", "renamed")))
+            def edit(self, index: int, suffix: str) -> None:
+                if not self.servers:
+                    return
+                alias: Final = sorted(self.servers)[index % len(self.servers)]
+                response: Final = gateway.request(
+                    "PUT",
+                    "/v1/mcp/server",
+                    {"server_id": self.servers[alias], "description": alias + suffix, "alias": alias},
+                )
+                assert response.status_code in (200, 202), response.text
+
+            @rule(key_index=st.integers(0, 1), index=st.integers(0, 2), granted=st.booleans())
+            def grant_or_revoke(self, key_index: int, index: int, granted: bool) -> None:
+                if not self.servers:
+                    return
+                previous: Final = self.keys[key_index]
+                alias: Final = sorted(self.servers)[index % len(self.servers)]
+                wanted: Final = (self.grants[previous] | {alias}) if granted else (self.grants[previous] - {alias})
+                key: Final = self.scenario.key(
+                    object_permission={"mcp_servers": [self.servers[a] for a in sorted(wanted)]}
+                )
+                self.keys = tuple(key if i == key_index else k for i, k in enumerate(self.keys))
+                del self.grants[previous]
+                self.grants[key] = wanted
+
+            @rule(index=st.integers(0, 2))
+            def delete(self, index: int) -> None:
+                if len(self.servers) <= 1:
+                    return
+                alias: Final = sorted(self.servers)[index % len(self.servers)]
+                response: Final = gateway.request("DELETE", f"/v1/mcp/server/{self.servers[alias]}")
+                assert response.status_code in (200, 202), response.text
+                del self.servers[alias]
+                for key in self.keys:
+                    self.grants[key].discard(alias)
+
+            @invariant()
+            def tool_lists_and_calls_match_grants_on_both_workers(self) -> None:
+                for key in self.keys:
+                    expected = {f"{alias}-{tool}" for alias in self.grants[key] for tool in ("add", "multiply", "fail")}
+                    for worker in (gateway, peer):
+                        listing = eventually(
+                            functools.partial(_granted_view, worker, key),
+                            functools.partial(_matches_grants, expected),
+                            seconds=40,
+                            return_last_on_timeout=True,
+                        )
+                        assert set(listing.tools) == expected, (worker.client.base_url, listing.raw)
+                    upstream.drain()
+                    caller = McpCaller(gateway, key, "mcp")
+                    for alias in self.grants[key]:
+                        served = caller.call(f"{alias}-add", {"a": 2, "b": 3})
+                        assert served.text == "5", served.raw
+                    reached = tool_calls(upstream.drain())
+                    assert sorted(_server_alias(call) for call in reached) == sorted(self.grants[key]), reached
+                    for alias in set(self.servers) - self.grants[key]:
+                        denied = caller.call(f"{alias}-add", {"a": 2, "b": 3})
+                        assert denied.error is not None and denied.text != "5", denied.raw
+                    assert tool_calls(upstream.drain()) == (), "a revoked or never-granted call reached the peer"
+
+            def teardown(self) -> None:
+                with budget.cleanup():
+                    self.resources.close()
+
+        run_state_machine_as_test(Fleet, settings=settings(LIFECYCLE_SETTINGS, max_examples=5, stateful_step_count=6))
+
+
+def test_key_grant_added_by_key_update_is_visible_to_mcp_tool_listing_before_the_cache_ttl(gateway: Gateway) -> None:
+    with mcp_peer() as upstream, gateway.scenario() as scenario:
+        alias: Final = "late" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": []})
+        assert _granted_view(gateway, key).tools == ()
+        updated: Final = gateway.request(
+            "POST", "/key/update", {"key": key, "object_permission": {"mcp_servers": [identity]}}
+        )
+        assert updated.status_code == 200, updated.text
+        seen: Final = eventually(
+            lambda: _granted_view(gateway, key), lambda view: view.tools != (), seconds=15, return_last_on_timeout=True
+        )
+        assert set(seen.tools) == {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}, seen.raw
+
+
+def _update_tool_permissions(
+    gateway: Gateway, key: str, identity: str, permissions: dict[str, list[str]] | None
+) -> None:
+    updated: Final = gateway.request(
+        "POST",
+        "/key/update",
+        {"key": key, "object_permission": {"mcp_servers": [identity], "mcp_tool_permissions": permissions}},
+    )
+    assert updated.status_code == 200, updated.text
+
+
+def _listing_on_both(
+    gateway: Gateway, peer: Gateway, key: str, expected: set[str]
+) -> None:
+    for worker in (gateway, peer):
+        listing: Final = eventually(
+            functools.partial(_granted_view, worker, key),
+            functools.partial(_matches_grants, expected),
+            seconds=15,
+            return_last_on_timeout=True,
+        )
+        assert set(listing.tools) == expected, (worker.client.base_url, listing.raw)
+
+
+def _multiply_outcome_on_both(gateway: Gateway, peer: Gateway, key: str, alias: str) -> tuple[Outcome, Outcome]:
+    return (
+        McpCaller(gateway, key, "mcp").call(f"{alias}-multiply", {"a": 2, "b": 3}),
+        McpCaller(peer, key, "mcp").call(f"{alias}-multiply", {"a": 2, "b": 3}),
+    )
+
+
+def test_key_update_tool_permission_widen_narrow_and_clear_apply_on_both_workers(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with mcp_peer() as upstream, gateway.scenario() as scenario:
+        alias: Final = "perm" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(
+            object_permission={"mcp_servers": [identity], "mcp_tool_permissions": {identity: ["add"]}}
+        )
+        add_only: Final = {f"{alias}-add"}
+        all_tools: Final = {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}
+        upstream.drain()
+
+        _listing_on_both(gateway, peer, key, add_only)
+        denied: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert all(call.error is not None and call.text != "6" for call in denied), [call.raw for call in denied]
+        assert tool_calls(upstream.drain()) == (), "a denied call reached the peer"
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add", "multiply"]})
+        _listing_on_both(gateway, peer, key, {f"{alias}-add", f"{alias}-multiply"})
+        widened: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in widened] == ["6", "6"], [call.raw for call in widened]
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add"]})
+        _listing_on_both(gateway, peer, key, add_only)
+        upstream.drain()
+        narrowed: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert all(call.error is not None and call.text != "6" for call in narrowed), [call.raw for call in narrowed]
+        assert tool_calls(upstream.drain()) == (), "a revoked call reached the peer"
+
+        _update_tool_permissions(gateway, key, identity, {})
+        _listing_on_both(gateway, peer, key, all_tools)
+        cleared: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in cleared] == ["6", "6"], [call.raw for call in cleared]
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add"]})
+        _listing_on_both(gateway, peer, key, add_only)
+
+        _update_tool_permissions(gateway, key, identity, None)
+        _listing_on_both(gateway, peer, key, all_tools)
+        nulled: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in nulled] == ["6", "6"], [call.raw for call in nulled]

@@ -4,9 +4,24 @@ on:
   workflow_call:
     inputs:
       test-path:
-        description: "Pytest path(s) to run"
+        description: >-
+          Space-separated pytest paths to run. A path that no longer exists is
+          dropped with a warning instead of being passed to pytest, because one
+          missing path makes pytest-xdist collect nothing and report exit 5, which
+          the step treats as a drained shard. Options are passed through as
+          written, so use the `--flag=value` form: a bare `--ignore path` would
+          have its path existence-checked like any other token.
         required: true
         type: string
+      fork-flag:
+        description: >-
+          Codecov flag of the `.circleci/tests.yml` job that now owns part of
+          this shard. CircleCI does not run on pull requests from forks, so on
+          those events this shard also runs the files
+          `.circleci/scripts/unit_selection.sh` lists for the flag.
+        required: false
+        type: string
+        default: ""
       workers:
         description: "Number of pytest-xdist workers"
         required: false
@@ -86,6 +101,7 @@ jobs:
       pull-requests: read
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
+      has-coverage: ${{ steps.tests.outputs.has-coverage }}
     services:
       redis:
         image: ${{ inputs.artifact-name == 'proxy-auth' && 'redis:8.2.9-alpine@sha256:30abb90e62f14b737010746def3ba99cc79fe19dcdb3d37b41f21fc62e7da19d' || '' }}
@@ -164,10 +180,13 @@ jobs:
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
+        id: tests
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
+          FORK_FLAG: ${{ inputs.fork-flag }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
@@ -176,15 +195,32 @@ jobs:
           COVERAGE_CORE: sysmon
           LITELLM_TEST_REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
         run: |
-          found_path=false
-          for path in ${TEST_PATH}; do
-            if [ -e "${path%%::*}" ]; then
-              found_path=true
-              break
-            fi
+          echo "has-coverage=false" >> "$GITHUB_OUTPUT"
+          selection="${TEST_PATH}"
+          if [ "${IS_FORK}" = "true" ] && [ -n "${FORK_FLAG}" ]; then
+            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${FORK_FLAG}" | tr '\n' ' ')"
+          fi
+          if [ -z "${selection// /}" ]; then
+            echo "shard selection is empty on this event (CircleCI flag ${FORK_FLAG:-none} owns it); nothing to run"
+            exit 0
+          fi
+          pytest_args=()
+          existing_paths=0
+          for token in ${selection}; do
+            case "${token}" in
+              -*) pytest_args+=("${token}") ;;
+              *)
+                if [ -e "${token%%::*}" ]; then
+                  pytest_args+=("${token}")
+                  existing_paths=$((existing_paths + 1))
+                else
+                  echo "::warning::${token} does not exist; drop it from this shard's test-path"
+                fi
+                ;;
+            esac
           done
-          if [ "$found_path" = false ]; then
-            echo "No path in TEST_PATH exists (${TEST_PATH}); nothing to run"
+          if [ "${existing_paths}" -eq 0 ]; then
+            echo "No path in the selection exists (${selection}); nothing to run"
             exit 0
           fi
           xdist_args=()
@@ -192,7 +228,7 @@ jobs:
             xdist_args=(-n "${WORKERS}" --dist="${DIST}")
           fi
           set +e
-          uv run --no-sync pytest ${TEST_PATH:?} \
+          uv run --no-sync pytest "${pytest_args[@]}" \
             --tb=short -vv \
             --maxfail="${MAX_FAILURES}" \
             "${xdist_args[@]}" \
@@ -206,8 +242,11 @@ jobs:
             --cov-config=pyproject.toml
           status=$?
           set -e
+          if [ -f coverage.xml ]; then
+            echo "has-coverage=true" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$status" -eq 5 ]; then
-            echo "pytest collected no tests from ${TEST_PATH}; passing"
+            echo "pytest collected no tests from ${selection}; passing"
             exit 0
           fi
           exit "$status"
@@ -223,7 +262,7 @@ jobs:
   upload-coverage:
     name: Upload coverage to Codecov
     needs: run
-    if: always() && needs.run.outputs.decision != 'skip'
+    if: always() && needs.run.outputs.decision != 'skip' && needs.run.outputs.has-coverage == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

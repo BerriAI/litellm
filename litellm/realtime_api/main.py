@@ -130,15 +130,15 @@ def _get_realtime_http_provider_config(
 @wrapper_client
 async def acreate_realtime_client_secret(
     model: str | None = None,
-    session: dict[str, Any] | None = None,
-    expires_after: dict[str, Any] | None = None,
+    session: Mapping[str, object] | None = None,
+    expires_after: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
     req: Final = RealtimeClientSecretRequest(
         model=model,
-        session=RealtimeSessionConfig(**session) if session else None,
-        expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
+        session=RealtimeSessionConfig.model_validate(session) if session else None,
+        expires_after=RealtimeExpiresAfter.model_validate(expires_after) if expires_after else None,
     )
     model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
@@ -649,12 +649,14 @@ def _azure_realtime_health_protocol(
 
 
 def _realtime_health_check_auth_headers(
-    custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, Any]
+    custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, object]
 ) -> Mapping[str, str]:
     if custom_llm_provider == "azure":
         return azure_realtime.get_auth_headers(
             api_key=api_key,
-            azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
+            azure_ad_token=(
+                None if api_key else get_azure_ad_token(GenericLiteLLMParams.model_validate(dict(model_params)))
+            ),
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS

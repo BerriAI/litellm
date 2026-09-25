@@ -303,6 +303,7 @@ describe("KeyEditView", () => {
               fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
             }),
           }),
+          expect.any(Array),
         );
       });
     });
@@ -323,6 +324,7 @@ describe("KeyEditView", () => {
               fallbacks: null,
             }),
           }),
+          expect.any(Array),
         );
       });
     });
@@ -632,7 +634,10 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ throttle_on_budget_exceeded: true }),
+        expect.any(Array),
+      );
     });
   });
 
@@ -662,7 +667,10 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ enable_prompt_caching: true }),
+        expect.any(Array),
+      );
     });
   });
 
@@ -1526,7 +1534,10 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null, team_id: null }));
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ organization_id: null, team_id: null }),
+          expect.any(Array),
+        );
       });
       expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toMatchObject({
         organization_id: null,
@@ -1568,7 +1579,9 @@ describe("KeyEditView", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach)));
+      await waitFor(() =>
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach), expect.any(Array)),
+      );
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
       view.rerender(renderEditor({ ...key, project_id: null }));
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeEnabled();
@@ -1866,7 +1879,10 @@ describe("KeyEditView", () => {
       await save();
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "svc-b-budget" }));
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ end_user_budget_id: "svc-b-budget" }),
+          expect.any(Array),
+        );
       });
     });
 
@@ -1878,7 +1894,7 @@ describe("KeyEditView", () => {
       await save();
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }));
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }), expect.any(Array));
       });
     });
 
@@ -2600,5 +2616,33 @@ describe("KeyEditView", () => {
         expect(onSubmitMock.mock.calls[0][0]).toStrictEqual({ token: "test-token-123", rpm_limit: "25" });
       },
     );
+  });
+
+  describe("disable_global_guardrails toggle gating", () => {
+    const renderAs = (userRole: string) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole={userRole}
+          premiumUser={true}
+        />,
+      );
+
+    it("hides the switch from a non-admin", async () => {
+      renderAs("Internal User");
+      await screen.findByRole("button", { name: /save changes/i });
+
+      expect(screen.queryByRole("switch", { name: /disable global guardrails/i })).not.toBeInTheDocument();
+    });
+
+    it("shows the switch to a proxy admin", async () => {
+      renderAs("Admin");
+
+      expect(await screen.findByRole("switch", { name: /disable global guardrails/i })).toBeInTheDocument();
+    });
   });
 });
