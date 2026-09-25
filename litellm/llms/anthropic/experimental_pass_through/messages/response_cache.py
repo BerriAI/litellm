@@ -1,7 +1,7 @@
 import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -49,6 +49,24 @@ class AnthropicMessagesStreamCacheWriter:
     @property
     def has_buffered_provider_output(self) -> bool:
         return getattr(self.stream, "has_buffered_provider_output", False) is True
+
+    @property
+    def chunks(self) -> list | None:
+        return cast(  # cast-ok: the billing helper itself treats chunks as an opaque getattr
+            "list | None", getattr(self.stream, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> list | None:
+        return cast(  # cast-ok: messages is a plain list on the inner stream
+            "list | None", getattr(self.stream, "messages", None)
+        )
+
+    @property
+    def model(self) -> str | None:
+        return cast(  # cast-ok: model is a str on the inner stream
+            "str | None", getattr(self.stream, "model", None)
+        )
 
     def __aiter__(self) -> "AnthropicMessagesStreamCacheWriter":
         return self
