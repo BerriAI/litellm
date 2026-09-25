@@ -403,6 +403,107 @@ class TestAzureExceptionMapping:
         assert "optional_pre_call_checks" in error.message
         assert "docs.litellm.ai" in error.message
 
+    def test_azure_prompt_content_filter_maps_to_content_policy_violation(self):
+        mock_exception = Exception("Bad request")
+        mock_exception.body = {
+            "error": {
+                "message": (
+                    "The response was filtered due to the prompt triggering "
+                    "Azure OpenAI’s content management policy. Please modify your prompt and retry."
+                ),
+                "type": "invalid_request_error",
+                "param": "prompt",
+                "code": "content_filter",
+                "content_filters": [
+                    {
+                        "blocked": True,
+                        "source_type": "prompt",
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": False, "severity": "safe"},
+                            "violence": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "jailbreak": {"detected": True, "filtered": True},
+                        },
+                    }
+                ],
+                "innererror": {"code": "ContentFiltered"},
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(ContentPolicyViolationError) as exc_info:
+            exception_type(
+                model="azure/gpt-4",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        e = exc_info.value
+        assert e.provider_specific_fields is not None
+        assert e.provider_specific_fields["innererror"]["code"] == "ContentFiltered"
+        assert e.provider_specific_fields["inner_error"]["code"] == "ContentFiltered"
+
+    def test_azure_content_filtered_innererror_without_top_code(self):
+        mock_exception = Exception("Bad request")
+        mock_exception.body = {
+            "error": {
+                "code": "invalid_request_error",
+                "innererror": {"code": "ContentFiltered"},
+                "message": "The request was rejected.",
+                "type": "invalid_request_error",
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(ContentPolicyViolationError) as exc_info:
+            exception_type(
+                model="azure/gpt-4",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        e = exc_info.value
+        assert e.provider_specific_fields is not None
+        assert e.provider_specific_fields["innererror"]["code"] == "ContentFiltered"
+
+    def test_azure_ordinary_invalid_request_stays_bad_request(self):
+        from litellm.exceptions import BadRequestError
+
+        mock_exception = Exception(
+            "Error code: 400 - {'error': {'message': \"Invalid 'temperature': decimal above maximum value. "
+            "Expected a value <= 2, but got 200 instead.\", 'type': 'invalid_request_error', "
+            "'param': 'temperature', 'code': 'decimal_above_max_value'}}"
+        )
+        mock_exception.body = {
+            "error": {
+                "message": (
+                    "Invalid 'temperature': decimal above maximum value. "
+                    "Expected a value <= 2, but got 200 instead."
+                ),
+                "type": "invalid_request_error",
+                "param": "temperature",
+                "code": "decimal_above_max_value",
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+        mock_exception.status_code = 400
+
+        with pytest.raises(BadRequestError) as exc_info:
+            exception_type(
+                model="azure/gpt-4",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        assert not isinstance(exc_info.value, ContentPolicyViolationError)
+
     def test_openai_invalid_encrypted_content_error(self):
         """Test that OpenAI invalid_encrypted_content errors also get helpful guidance."""
         from litellm.exceptions import BadRequestError
