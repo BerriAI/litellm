@@ -218,7 +218,7 @@ ProxyRouteType: TypeAlias = Literal[
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
-StreamChunkSerializer = Callable[[Any], str]
+StreamChunkSerializer = Callable[[object], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
 StreamErrorSerializer = Callable[[ProxyException], str]
 
@@ -459,7 +459,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     return True
 
 
-async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
+async def _cancel_pending_gather_tasks(tasks: Sequence["asyncio.Task[object]"]) -> None:
     pending_tasks: Final = [task for task in tasks if not task.done()]
     for task in pending_tasks:
         task.cancel()
@@ -1999,6 +1999,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None = None,
         llm_router: Router | None = None,
         rate_limited_model: str | None = None,
+        skip_guardrails: bool = False,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2187,6 +2188,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+            skip_guardrails=skip_guardrails,
         )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
@@ -2206,7 +2208,7 @@ class ProxyBaseLLMRequestProcessing:
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
         # add_litellm_data_to_request predates that mutation.
-        refresh_proxy_server_request_body_snapshot(self.data)
+        refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
         verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
@@ -2321,7 +2323,7 @@ class ProxyBaseLLMRequestProcessing:
         return fallbacks if isinstance(fallbacks, list) and fallbacks else None
 
     @staticmethod
-    def _resolve_fallback_models(model: str, fallbacks: list) -> list | None:
+    def _resolve_fallback_models(model: str, fallbacks: list) -> list[str] | None:
         from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
         fallback_model_group, generic_fallback_idx = get_fallback_model_group(
@@ -2779,15 +2781,6 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                     )
                     if route_type == "aresponses":
-                        # Streaming /v1/responses returns here without
-                        # reaching the non-streaming ownership tail below.
-                        # Wrap the SSE generator so container ownership is
-                        # written once the upstream iterator finishes
-                        # assembling ``completed_response`` — otherwise
-                        # code-interpreter containers created during the
-                        # stream stay unregistered and follow-up file API
-                        # calls 403. Covers the background-polling path
-                        # too, which loops ``body_iterator`` end-to-end.
                         selected_data_generator = (
                             ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
                                 original_stream_response=response,
@@ -3009,50 +3002,50 @@ class ProxyBaseLLMRequestProcessing:
         wrapped_generator: Any,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        """Forward SSE chunks, then record container ownership at stream end.
+        """Forward SSE chunks and record container ownership before the terminal chunk goes out.
 
         Streaming ``/v1/responses`` short-circuits out of
         ``base_process_llm_request`` before the non-streaming ownership
-        tail runs, so without this wrap the
-        ``LiteLLM_ManagedObjectTable`` row for any container created
-        during the stream is never written and follow-up file API calls
-        return 403.
+        tail runs. The OpenAI SDK closes the connection at ``data: [DONE]``
+        and starlette cancels the body task on disconnect, so a write that
+        waits for the generator to finish never lands. The iterator sets
+        ``completed_response`` before it hands over its terminal chunk, so
+        the ``LiteLLM_ManagedObjectTable`` row is written the moment it
+        appears, ahead of the chunk carrying ``response.completed``.
         """
-        try:
-            async for chunk in wrapped_generator:
+        async for chunk in wrapped_generator:
+            completed_obj = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+                original_stream_response
+            )
+            if completed_obj is None:
                 yield chunk
-        finally:
-            try:
-                completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-                    original_stream_response
-                )
-                if completed_obj is not None:
-                    await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
-                        response=completed_obj,
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                else:
-                    # Silent skip caused #30210: the proxy's Router wrapper
-                    # of the responses streaming iterator wasn't propagating
-                    # ``completed_response``, so this hook recorded nothing
-                    # and follow-up /v1/containers/<id>/files calls 403'd
-                    # for non-admin keys with no proxy-side hint. Log a
-                    # warning so future regressions of the same shape
-                    # surface in operator logs.
-                    verbose_proxy_logger.warning(
-                        "Container ownership recording skipped on streaming "
-                        "/v1/responses: no completed_response on stream "
-                        "iterator %s. If this stream created any tool "
-                        "container (e.g. code_interpreter), follow-up "
-                        "/v1/containers/<id>/files calls will 403 for "
-                        "non-admin keys.",
-                        type(original_stream_response).__name__,
-                    )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Container ownership recording failed after streaming responses call: %s",
-                    e,
-                )
+                continue
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=completed_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+            yield chunk
+            async for remaining_chunk in wrapped_generator:
+                yield remaining_chunk
+            return
+        late_completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+            original_stream_response
+        )
+        if late_completed_obj is not None:
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=late_completed_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+            return
+        verbose_proxy_logger.warning(
+            "Container ownership recording skipped on streaming "
+            "/v1/responses: no completed_response on stream "
+            "iterator %s. If this stream created any tool "
+            "container (e.g. code_interpreter), follow-up "
+            "/v1/containers/<id>/files calls will 403 for "
+            "non-admin keys.",
+            type(original_stream_response).__name__,
+        )
 
     async def base_passthrough_process_llm_request(
         self,
@@ -3143,7 +3136,7 @@ class ProxyBaseLLMRequestProcessing:
 
         logging_obj._on_detached_stream_failure = _on_detached_stream_failure
 
-    def _is_streaming_response(self, response: Any) -> bool:
+    def _is_streaming_response(self, response: object) -> bool:
         """
         Check if the response object is actually a streaming response by inspecting its type.
 
@@ -3257,7 +3250,7 @@ class ProxyBaseLLMRequestProcessing:
 
     async def _handle_non_streaming_allm_passthrough_route(
         self,
-        response: Any,
+        response: _UpstreamHttpResponse,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         custom_headers: Mapping[str, str],
@@ -3850,7 +3843,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def async_streaming_data_generator(
-        response: Any,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
@@ -3991,7 +3984,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def async_sse_data_generator(
-        response: Any,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,

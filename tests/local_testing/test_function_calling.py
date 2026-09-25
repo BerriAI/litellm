@@ -324,7 +324,7 @@ def test_parallel_function_call_anthropic_error_msg(model, messages):
     Anthropic (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
     inject a dummy tool so CLIs work with ``modify_params`` left off. Bedrock
     Converse's no-raise behavior is covered offline in
-    ``tests/test_litellm/llms/bedrock/chat/test_converse_transformation.py``
+    ``tests/unit/llms/bedrock/chat/test_converse_transformation.py``
     (see #24158, #27138), which needs no live credentials.
     """
     # Force modify_params off as a clean baseline: it exercises the Anthropic
