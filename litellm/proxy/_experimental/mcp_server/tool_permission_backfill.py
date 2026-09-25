@@ -247,14 +247,21 @@ async def _convert_one_row(
     conversion: Final = convert_row(row, await gather_inventories(granted, manager, inventory_cache))
     if isinstance(conversion, Unavailable):
         return conversion.server_ids
+    stored_fields: Final = (
+        ("mcp_servers", raw_row.mcp_servers),
+        ("mcp_access_groups", raw_row.mcp_access_groups),
+        ("mcp_toolsets", raw_row.mcp_toolsets),
+        ("mcp_tool_permissions", raw_row.mcp_tool_permissions),
+    )
     updated: Final = await ObjectPermissionRepository(prisma_client).table.update_many(
         where={
             "object_permission_id": row.object_permission_id,
             "mcp_permission_version": {"in": [0, None]},
-            "mcp_servers": {"equals": raw_row.mcp_servers},
-            "mcp_access_groups": {"equals": raw_row.mcp_access_groups},
-            "mcp_toolsets": {"equals": raw_row.mcp_toolsets},
-            "mcp_tool_permissions": {"equals": raw_row.mcp_tool_permissions},
+            # prisma-client-py has no DbNull/JsonNull sentinel for `equals` on a
+            # Json? column, so a stored NULL field is left unguarded rather than
+            # filtered with a wrong null literal; the id and version still bound
+            # the CAS.
+            **{field: {"equals": value} for field, value in stored_fields if value is not None},
         },
         data={
             "mcp_tool_overrides": json.dumps(dict(conversion.mcp_tool_overrides)),

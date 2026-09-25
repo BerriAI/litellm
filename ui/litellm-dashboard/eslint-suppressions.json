@@ -1719,11 +1719,6 @@
       "count": 1
     }
   },
-  "src/components/mcp_server_management/MCPToolPermissions.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    }
-  },
   "src/components/mcp_tools/MCPToolArgumentsForm.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -2069,6 +2064,9 @@
   },
   "src/components/templates/key_edit_view.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    },
+    "max-lines": {
       "count": 1
     }
   },

@@ -9,6 +9,28 @@ export type McpGrantSource =
   | { readonly kind: "toolset"; readonly name: string }
   | { readonly kind: "toolPermission" };
 
+export interface McpToolOverrideEntry {
+  allow: string[];
+  deny: string[];
+}
+
+export interface McpToolState {
+  readonly checked: boolean;
+  readonly locked: boolean;
+}
+
+// The OpenAPI schema types the stored entry's arrays as optional; the forms and write helpers
+// work with concrete arrays, so rows read from the API are defaulted here.
+export const normalizeMcpToolOverrides = (
+  raw: Readonly<Record<string, { allow?: readonly string[]; deny?: readonly string[] }>> | null | undefined,
+): Record<string, McpToolOverrideEntry> =>
+  Object.fromEntries(
+    Object.entries(raw ?? {}).map(([key, entry]) => [
+      key,
+      { allow: [...(entry.allow ?? [])], deny: [...(entry.deny ?? [])] },
+    ]),
+  );
+
 export interface EffectiveMcpServer {
   readonly server: MCPServer;
   // The mcp_tool_permissions key an edit writes to. The backend accepts a server id, name or
@@ -32,6 +54,10 @@ export interface EffectiveMcpServer {
   // What this level actually allows on the server, which is what the backend enforces: the keyed
   // union widened by the toolset grant. `undefined` means nothing restricts the server from here.
   readonly allowedTools: readonly string[] | undefined;
+  // The merged mcp_tool_overrides entry for this server across every key naming it, or `undefined`
+  // when no key holds one. Overrides are per-tool allow/deny exceptions layered on the convention:
+  // on an unrestricted server a `deny` removes a non-delete tool and an `allow` re-arms a delete.
+  readonly overrides: McpToolOverrideEntry | undefined;
   readonly source: McpGrantSource;
 }
 
@@ -42,6 +68,7 @@ interface ResolveInput {
   readonly selectedToolsets: readonly string[];
   readonly toolsets: readonly MCPToolset[];
   readonly toolPermissions: Readonly<Record<string, readonly string[]>>;
+  readonly toolOverrides?: Readonly<Record<string, McpToolOverrideEntry>>;
 }
 
 // Access groups come back as plain names, but older records carry `{ name }` objects.
@@ -83,7 +110,7 @@ export const mcpServersForIdentifier = (allServers: readonly MCPServer[], identi
 // server's id, so the catalog decides membership rather than a field-by-field comparison.
 export const mcpToolPermissionKeysFor = (
   server: MCPServer,
-  toolPermissions: Readonly<Record<string, readonly string[]>>,
+  toolPermissions: Readonly<Record<string, unknown>>,
   allServers: readonly MCPServer[],
 ): readonly string[] =>
   [server.server_id, server.server_name, server.alias].filter(
@@ -103,7 +130,7 @@ const mcpKeyNamesOneServerOnly = (allServers: readonly MCPServer[], key: string)
 // id-keyed entry rather than rewriting the shared one, which would edit the other server too.
 export const mcpToolPermissionKeyFor = (
   server: MCPServer,
-  toolPermissions: Readonly<Record<string, readonly string[]>>,
+  toolPermissions: Readonly<Record<string, unknown>>,
   allServers: readonly MCPServer[],
 ): string =>
   mcpToolPermissionKeysFor(server, toolPermissions, allServers).find((key) =>
@@ -119,6 +146,21 @@ export const mcpAllowedToolsFor = (
   const keys = mcpToolPermissionKeysFor(server, toolPermissions, allServers);
   if (keys.length === 0) return undefined;
   return [...new Set(keys.flatMap((key) => toolPermissions[key] ?? []))];
+};
+
+// The override entry merged across every key naming this server, `undefined` when no key has one.
+// The backend unions allow/deny across equivalent keys the same way it unions allowlists.
+export const mcpToolOverridesFor = (
+  server: MCPServer,
+  toolOverrides: Readonly<Record<string, McpToolOverrideEntry>>,
+  allServers: readonly MCPServer[],
+): McpToolOverrideEntry | undefined => {
+  const entries = mcpToolPermissionKeysFor(server, toolOverrides, allServers).map((key) => toolOverrides[key]);
+  if (entries.length === 0) return undefined;
+  return {
+    allow: [...new Set(entries.flatMap((entry) => entry.allow ?? []))],
+    deny: [...new Set(entries.flatMap((entry) => entry.deny ?? []))],
+  };
 };
 
 // Tool names the given toolsets grant on this server, `undefined` when they grant none.
@@ -174,6 +216,7 @@ export const resolveEffectiveMcpServers = ({
   selectedToolsets,
   toolsets,
   toolPermissions,
+  toolOverrides,
 }: ResolveInput): readonly EffectiveMcpServer[] => {
   const entry = (server: MCPServer, source: McpGrantSource): EffectiveMcpServer => {
     const keys = mcpToolPermissionKeysFor(server, toolPermissions, allServers);
@@ -192,6 +235,7 @@ export const resolveEffectiveMcpServers = ({
         keyedTools === undefined && toolsetTools === undefined
           ? undefined
           : [...new Set([...(keyedTools ?? []), ...(toolsetTools ?? [])])],
+      overrides: toolOverrides === undefined ? undefined : mcpToolOverridesFor(server, toolOverrides, allServers),
       source,
     };
   };
@@ -227,3 +271,71 @@ export const resolveEffectiveMcpServers = ({
       candidates.findIndex((other) => other.server.server_id === candidate.server.server_id) === index,
   );
 };
+
+// The checked/locked state a checkbox shows for one tool, mirroring the backend's
+// level_allowed_tools: a keyed allowlist stays a closed editable list, a toolset grant is
+// checked-but-locked, and an unrestricted (convention) server allows every non-delete tool unless
+// a stored deny says otherwise — an allow only re-arms a delete, and deny always beats allow.
+export const mcpToolState = (
+  entry: EffectiveMcpServer,
+  toolName: string,
+  isDeleteTool: boolean,
+): McpToolState => {
+  const denied = (entry.overrides?.deny ?? []).includes(toolName);
+  if ((entry.toolsetTools ?? []).includes(toolName)) {
+    return { checked: !denied, locked: true };
+  }
+  if (entry.keyedTools !== undefined) {
+    return { checked: entry.keyedTools.includes(toolName), locked: false };
+  }
+  if (entry.toolsetTools !== undefined) {
+    return { checked: false, locked: true };
+  }
+  const allowed = (entry.overrides?.allow ?? []).includes(toolName);
+  return { checked: (isDeleteTool ? false : !denied) || (allowed && !denied), locked: false };
+};
+
+// Whether this server is edited through overrides (convention mode) rather than a closed
+// mcp_tool_permissions allowlist. The backend treats the same condition the same way.
+export const isConventionServer = (entry: EffectiveMcpServer): boolean =>
+  entry.keyedTools === undefined && entry.toolsetTools === undefined;
+
+// Apply one checkbox change to the server's override entry: a delete tool can only be added to or
+// removed from `allow` (a deny would never let it back on), and a non-delete tool flips its `deny`
+// membership. Every other key in the map, and tools this edit did not touch, is preserved as-is.
+export const applyToolOverrideWrite = ({
+  toolOverrides,
+  permissionKey,
+  toolName,
+  isDeleteTool,
+  checked,
+}: {
+  readonly toolOverrides: Readonly<Record<string, McpToolOverrideEntry>>;
+  readonly permissionKey: string;
+  readonly toolName: string;
+  readonly isDeleteTool: boolean;
+  readonly checked: boolean;
+}): Record<string, McpToolOverrideEntry> => {
+  const existing = toolOverrides[permissionKey] ?? { allow: [], deny: [] };
+  const drop = (list: readonly string[]): string[] => list.filter((name) => name !== toolName);
+  const written: McpToolOverrideEntry = isDeleteTool
+    ? { allow: checked ? [...drop(existing.allow), toolName] : drop(existing.allow), deny: [...existing.deny] }
+    : { allow: [...existing.allow], deny: checked ? drop(existing.deny) : [...drop(existing.deny), toolName] };
+  return { ...toolOverrides, [permissionKey]: written };
+};
+
+// Fold a list of {name, isDeleteTool} toggles over the same server entry, for Select All /
+// Deselect All applied to the displayed editable tools.
+export const applyToolOverrideWrites = ({
+  toolOverrides,
+  permissionKey,
+  edits,
+}: {
+  readonly toolOverrides: Readonly<Record<string, McpToolOverrideEntry>>;
+  readonly permissionKey: string;
+  readonly edits: readonly { toolName: string; isDeleteTool: boolean; checked: boolean }[];
+}): Record<string, McpToolOverrideEntry> =>
+  edits.reduce((overrides, edit) => {
+    const write = { toolOverrides: overrides, permissionKey, toolName: edit.toolName, isDeleteTool: edit.isDeleteTool, checked: edit.checked };
+    return applyToolOverrideWrite(write);
+  }, { ...toolOverrides });

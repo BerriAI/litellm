@@ -144,6 +144,22 @@ async def test_runner_converts_row_with_cas_update():
 
 
 @pytest.mark.asyncio
+async def test_runner_omits_cas_equals_filter_for_null_fields():
+    row = _row(mcp_tool_permissions=None)
+    prisma = _prisma([row])
+    manager = _manager(inventories={"server-a": INVENTORY})
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    ):
+        report = await run_mcp_tool_permission_backfill(prisma, manager)
+    assert report.converted == {"perm-1"}
+    where = prisma.db.litellm_objectpermissiontable.update_many.await_args.kwargs["where"]
+    assert "mcp_tool_permissions" not in where
+    assert where["mcp_permission_version"] == {"in": [0, None]}
+
+
+@pytest.mark.asyncio
 async def test_runner_unavailable_server_skips_row_no_write():
     prisma = _prisma([_row()])
     manager = _manager(inventories={"server-a": None})

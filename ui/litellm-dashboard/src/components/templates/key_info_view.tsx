@@ -267,6 +267,7 @@ export default function KeyInfoView({
       }
       delete formValues.mcp_servers_and_groups;
       delete formValues.mcp_tool_permissions;
+      delete formValues.mcp_tool_overrides;
 
       // Handle agent permissions
       if (formValues.agents_and_groups !== undefined) {

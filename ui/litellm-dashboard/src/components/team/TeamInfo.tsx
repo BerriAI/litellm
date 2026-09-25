@@ -92,6 +92,7 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import {
   mcpServersForIdentifier,
+  normalizeMcpToolOverrides,
   resolveEffectiveMcpServers,
   type EffectiveMcpServer,
 } from "../mcp_server_management/effectiveMcpServers";
@@ -398,6 +399,7 @@ const teamUpdateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_overrides: z.record(z.string(), z.object({ allow: z.array(z.string()), deny: z.array(z.string()) })).optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -448,6 +450,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   allowed_passthrough_routes: [],
   mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
   mcp_tool_permissions: {},
+  mcp_tool_overrides: {},
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
   object_permission_skills: [],
@@ -513,6 +516,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     toolsets: info.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
+  mcp_tool_overrides: normalizeMcpToolOverrides(info.object_permission?.mcp_tool_overrides),
   agents_and_groups: {
     agents: info.object_permission?.agents || [],
     accessGroups: info.object_permission?.agent_access_groups || [],
@@ -604,6 +608,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const killSwitchOn = form.watch("disable_global_guardrails");
   const watchedMcpSelection = form.watch("mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const watchedToolOverrides = form.watch("mcp_tool_overrides");
   const mcpLookupFailure =
     (
       [
@@ -1085,11 +1090,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (mcpToolPermissions) {
         updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
       }
+      if (values.mcp_tool_overrides && Object.keys(values.mcp_tool_overrides).length > 0) {
+        updateData.object_permission.mcp_tool_overrides = values.mcp_tool_overrides;
+      }
       if (toolsets) {
         updateData.object_permission.mcp_toolsets = toolsets;
       }
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
+      delete values.mcp_tool_overrides;
 
       // Handle agent permissions
       const { agents, accessGroups: agentAccessGroups } = values.agents_and_groups || {
@@ -1905,6 +1914,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       selectedToolsets={watchedMcpSelection?.toolsets || []}
                       toolPermissions={watchedToolPermissions || {}}
                       onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                      toolOverrides={watchedToolOverrides || {}}
+                      onOverridesChange={(overrides) => form.setValue("mcp_tool_overrides", overrides)}
                     />
                   </div>
 

@@ -32508,6 +32508,10 @@ export interface components {
             mcp_access_groups?: string[] | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
+            /** Mcp Tool Overrides */
+            mcp_tool_overrides?: {
+                [key: string]: components["schemas"]["MCPToolOverrideEntry"];
+            } | null;
             /** Mcp Tool Permissions */
             mcp_tool_permissions?: {
                 [key: string]: string[];
@@ -32550,13 +32554,23 @@ export interface components {
              * @default []
              */
             mcp_access_groups: string[] | null;
+            /** Mcp Permission Version */
+            mcp_permission_version?: number | null;
             /**
              * Mcp Servers
              * @default []
              */
             mcp_servers: string[] | null;
+            /** Mcp Tool Overrides */
+            mcp_tool_overrides?: {
+                [key: string]: components["schemas"]["MCPToolOverrideEntry"];
+            } | null;
             /** Mcp Tool Permissions */
             mcp_tool_permissions?: {
+                [key: string]: string[];
+            } | null;
+            /** Mcp Tool Permissions Archive */
+            mcp_tool_permissions_archive?: {
                 [key: string]: string[];
             } | null;
             /** Mcp Tool Search Enabled */
@@ -35184,6 +35198,18 @@ export interface components {
             rejected: number;
             /** Total */
             total: number;
+        };
+        /**
+         * MCPToolOverrideEntry
+         * @description Per-server tool overrides stored on an object permission row's
+         *     ``mcp_tool_overrides``: ``allow`` re-arms names the convention denies,
+         *     ``deny`` disables names the convention or an allowlist would permit.
+         */
+        MCPToolOverrideEntry: {
+            /** Allow */
+            allow?: string[];
+            /** Deny */
+            deny?: string[];
         };
         /**
          * MCPToolSearchSettings

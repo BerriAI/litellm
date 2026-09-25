@@ -93,6 +93,7 @@ export interface AgentFormValues {
   access_group_ids?: string[];
   allowed_mcp_servers_and_groups?: McpServerSelection;
   mcp_tool_permissions?: Record<string, string[]>;
+  mcp_tool_overrides?: Record<string, { allow: string[]; deny: string[] }>;
   defaultInputModes?: string[];
   defaultOutputModes?: string[];
   enable_tracing?: boolean;

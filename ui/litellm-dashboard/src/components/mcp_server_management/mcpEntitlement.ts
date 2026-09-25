@@ -6,6 +6,7 @@ export interface McpEntitlementUpdate {
   mcp_access_groups: string[];
   mcp_toolsets: string[];
   mcp_tool_permissions: Record<string, string[]>;
+  mcp_tool_overrides: Record<string, { allow: string[]; deny: string[] }>;
 }
 
 const asStringArray = (value: unknown): string[] =>
@@ -15,6 +16,17 @@ const asToolPermissions = (value: unknown): Record<string, string[]> => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([serverId, tools]) => [serverId, asStringArray(tools)]),
+  );
+};
+
+const asToolOverrides = (value: unknown): Record<string, { allow: string[]; deny: string[] }> => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(([serverId, entry]) => {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const override = entry as Record<string, unknown>;
+      return [[serverId, { allow: asStringArray(override.allow), deny: asStringArray(override.deny) }]];
+    }),
   );
 };
 
@@ -84,6 +96,11 @@ export const extractMcpEntitlement = (
     mcp_toolsets: mcpToolsets,
     mcp_tool_permissions: Object.fromEntries(
       Object.entries(asToolPermissions(formValues.mcp_tool_permissions)).filter(
+        ([permissionKey]) => grantsEveryServer || grantsServerNamedBy(permissionKey),
+      ),
+    ),
+    mcp_tool_overrides: Object.fromEntries(
+      Object.entries(asToolOverrides(formValues.mcp_tool_overrides)).filter(
         ([permissionKey]) => grantsEveryServer || grantsServerNamedBy(permissionKey),
       ),
     ),

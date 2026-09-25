@@ -766,6 +766,8 @@ export function KeyEditView({
               selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
               onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+              toolOverrides={form.watch("mcp_tool_overrides") || {}}
+              onOverridesChange={(overrides) => form.setValue("mcp_tool_overrides", overrides)}
             />
           </div>
 

@@ -111,11 +111,12 @@ describe("MCPToolPermissions", () => {
       error: false,
     });
 
+    // A closed allowlist makes the server legacy-editable, so Select All writes the list.
     renderWithProviders(
       <MCPToolPermissions
         accessToken={mockAccessToken}
         selectedServers={[mockServerId]}
-        toolPermissions={{}}
+        toolPermissions={{ [mockServerId]: ["read_wiki_structure"] }}
         onChange={mockOnChange}
       />,
     );
@@ -224,19 +225,20 @@ describe("MCPToolPermissions", () => {
       expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, groupServer.server_id);
     });
 
-    it("shows every tool selected in flat view for an unrestricted access-group server", async () => {
+    it("shows non-delete tools checked and the delete unchecked in flat view for an unrestricted access-group server", async () => {
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
       vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
       vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
 
-      const mockOnChange = vi.fn();
+      const mockOnOverridesChange = vi.fn();
       renderWithProviders(
         <MCPToolPermissions
           accessToken={mockAccessToken}
           selectedServers={[]}
           selectedAccessGroups={["production-group"]}
           toolPermissions={{}}
-          onChange={mockOnChange}
+          onChange={vi.fn()}
+          onOverridesChange={mockOnOverridesChange}
         />,
       );
 
@@ -245,10 +247,12 @@ describe("MCPToolPermissions", () => {
 
       const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
       expect(listIssues).toBeChecked();
-      expect(deleteIssue).toBeChecked();
+      expect(deleteIssue).not.toBeChecked();
 
       await userEvent.click(listIssues);
-      expect(mockOnChange).toHaveBeenCalledWith({ [groupServer.server_id]: ["delete_issue"] });
+      expect(mockOnOverridesChange).toHaveBeenCalledWith({
+        [groupServer.server_id]: { allow: [], deny: ["list_issues"] },
+      });
     });
 
     it("marks an access-group server as inherited and leaves a directly selected one unmarked", async () => {
@@ -522,10 +526,7 @@ describe("MCPToolPermissions", () => {
 
       expect(await screen.findByText("Payments")).toBeInTheDocument();
       expect(screen.queryByText("srv-collide")).not.toBeInTheDocument();
-      await waitFor(() => {
-        expect(mockOnChange).toHaveBeenCalledWith({ "srv-collide": ["list_issues"] });
-      });
-      expect(mockOnChange.mock.calls.every(([written]) => !Object.hasOwn(written, "srv-twin"))).toBe(true);
+      expect(mockOnChange).not.toHaveBeenCalled();
       expect(networking.listMCPTools).not.toHaveBeenCalledWith(mockAccessToken, "srv-twin");
     });
 
@@ -549,7 +550,7 @@ describe("MCPToolPermissions", () => {
       expect(mockOnChange).not.toHaveBeenCalled();
     });
 
-    it("keeps blocking delete tools by default for a directly selected server", async () => {
+    it("blocks delete tools by default for a directly selected server without writing an allowlist", async () => {
       const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer]);
       vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
@@ -565,9 +566,12 @@ describe("MCPToolPermissions", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(mockOnChange).toHaveBeenCalledWith({ [directServer.server_id]: ["list_issues"] });
-      });
+      await screen.findByText("Direct Server");
+      await userEvent.click(screen.getByText("Flat List"));
+
+      expect(screen.getByRole("checkbox", { name: "list_issues" })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "delete_issue" })).not.toBeChecked();
+      expect(mockOnChange).not.toHaveBeenCalled();
     });
 
     it("shows a server that only a stale tool-permission entry still entitles", async () => {
@@ -986,6 +990,152 @@ describe("MCPToolPermissions", () => {
       expect(readGroupToggle).toBeChecked();
       expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
       expect(screen.getByRole("checkbox", { name: "delete_document" })).not.toBeChecked();
+    });
+  });
+});
+
+describe("convention (unrestricted) server overrides", () => {
+  const mockAccessToken = "test-token";
+  const mockServerId = "srv-conv-1";
+  const mockServerName = "Convention Server";
+  const convServer = { server_id: mockServerId, server_name: mockServerName, alias: mockServerName };
+  const convTools = [
+    { name: "list_items", description: "List items" },
+    { name: "get_item", description: "Fetch one item" },
+    { name: "delete_item", description: "Destroy an item" },
+  ];
+
+  const renderConvention = ({
+    toolOverrides,
+    onOverridesChange = vi.fn(),
+    onChange = vi.fn(),
+  }: {
+    toolOverrides?: Record<string, { allow: string[]; deny: string[] }>;
+    onOverridesChange?: (overrides: Record<string, { allow: string[]; deny: string[] }>) => void;
+    onChange?: (permissions: Record<string, string[]>) => void;
+  }) =>
+    renderWithProviders(
+      <MCPToolPermissions
+        accessToken={mockAccessToken}
+        selectedServers={[mockServerId]}
+        toolPermissions={{}}
+        onChange={onChange}
+        toolOverrides={toolOverrides ?? {}}
+        onOverridesChange={onOverridesChange}
+      />,
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    testQueryClient.clear();
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([convServer]);
+    vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: convTools, error: false });
+  });
+
+  it("checks non-delete tools and leaves the delete unchecked, without writing anything", async () => {
+    const onChange = vi.fn();
+    renderConvention({ onChange });
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Flat List"));
+
+    expect(screen.getByRole("checkbox", { name: "list_items" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "delete_item" })).not.toBeChecked();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("honors a stored deny for a non-delete tool and a stored allow for a delete", async () => {
+    renderConvention({ toolOverrides: { [mockServerId]: { allow: ["delete_item"], deny: ["list_items"] } } });
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Flat List"));
+
+    expect(screen.getByRole("checkbox", { name: "list_items" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "delete_item" })).toBeChecked();
+  });
+
+  it("writes a deny when a non-delete tool is unchecked and removes it when re-checked", async () => {
+    const Harness = () => {
+      const [overrides, setOverrides] = useState<Record<string, { allow: string[]; deny: string[] }>>({});
+      return (
+        <>
+          <MCPToolPermissions
+            accessToken={mockAccessToken}
+            selectedServers={[mockServerId]}
+            toolPermissions={{}}
+            onChange={vi.fn()}
+            toolOverrides={overrides}
+            onOverridesChange={setOverrides}
+          />
+          <output>{JSON.stringify(overrides)}</output>
+        </>
+      );
+    };
+    renderWithProviders(<Harness />);
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Flat List"));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "list_items" }));
+    expect(screen.getByRole("status")).toHaveTextContent(`"${mockServerId}":{"allow":[],"deny":["list_items"]}`);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "list_items" }));
+    expect(screen.getByRole("status")).toHaveTextContent(`"${mockServerId}":{"allow":[],"deny":[]}`);
+  });
+
+  it("writes an allow for a delete tool and never writes it a deny", async () => {
+    const onOverridesChange = vi.fn();
+    renderConvention({ onOverridesChange });
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Flat List"));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "delete_item" }));
+    expect(onOverridesChange).toHaveBeenCalledWith({ [mockServerId]: { allow: ["delete_item"], deny: [] } });
+  });
+
+  it("leaves other servers' entries and non-displayed tools untouched on toggle", async () => {
+    const onOverridesChange = vi.fn();
+    const toolOverrides = {
+      [mockServerId]: { allow: [], deny: ["hidden_tool"] },
+      "srv-other": { allow: ["x"], deny: ["y"] },
+    };
+    renderConvention({ toolOverrides, onOverridesChange });
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Flat List"));
+    await userEvent.click(screen.getByRole("checkbox", { name: "list_items" }));
+
+    const written = onOverridesChange.mock.calls.at(-1)?.[0] as Record<string, { allow: string[]; deny: string[] }>;
+    expect(written["srv-other"]).toEqual({ allow: ["x"], deny: ["y"] });
+    expect(written[mockServerId]).toEqual({ allow: [], deny: ["hidden_tool", "list_items"] });
+  });
+
+  it("Select All approves the delete and clears displayed denies only", async () => {
+    const onOverridesChange = vi.fn();
+    const toolOverrides = { [mockServerId]: { allow: [], deny: ["list_items", "hidden_tool"] } };
+    renderConvention({ toolOverrides, onOverridesChange });
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Select All"));
+
+    expect(onOverridesChange).toHaveBeenCalledWith({
+      [mockServerId]: { allow: ["delete_item"], deny: ["hidden_tool"] },
+    });
+  });
+
+  it("Deselect All writes denies for displayed non-deletes and removes the delete's allow", async () => {
+    const onOverridesChange = vi.fn();
+    const toolOverrides = { [mockServerId]: { allow: ["delete_item"], deny: ["hidden_tool"] } };
+    renderConvention({ toolOverrides, onOverridesChange });
+
+    await screen.findByText(mockServerName);
+    await userEvent.click(screen.getByText("Deselect All"));
+
+    expect(onOverridesChange).toHaveBeenCalledWith({
+      [mockServerId]: { allow: [], deny: ["hidden_tool", "list_items", "get_item"] },
     });
   });
 });

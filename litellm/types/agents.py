@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr, StrictInt
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.mcp import MCPToolOverrideEntry
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageResponse
@@ -174,6 +175,7 @@ class AgentObjectPermission(TypedDict, total=False):
     mcp_access_groups: list[str] | None
     mcp_toolsets: ReadOnly[Sequence[str] | None]
     mcp_tool_permissions: dict[str, list[str]] | None
+    mcp_tool_overrides: dict[str, MCPToolOverrideEntry] | None
     models: list[str] | None
     agents: list[str] | None
 

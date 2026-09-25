@@ -81,6 +81,11 @@ const readToolPermissions = (raw: unknown): unknown | undefined => {
   return Object.keys(permissions as object).length > 0 ? permissions : undefined;
 };
 
+const readToolOverrides = (raw: unknown): unknown | undefined => {
+  const overrides = raw || {};
+  return Object.keys(overrides as object).length > 0 ? overrides : undefined;
+};
+
 const parseMetadata = (raw: unknown): unknown => {
   try {
     return JSON.parse((raw as string) || "{}");
@@ -110,6 +115,7 @@ interface PermissionSources {
   readonly vectorStores: unknown[] | undefined;
   readonly mcp: McpSelection | undefined;
   readonly toolPermissions: unknown | undefined;
+  readonly toolOverrides: unknown | undefined;
   readonly extraMcpAccessGroups: unknown[] | undefined;
   readonly agents: AgentSelection | undefined;
   readonly skills: unknown[] | undefined;
@@ -119,6 +125,7 @@ const readPermissionSources = (values: Record<string, unknown>): PermissionSourc
   vectorStores: nonEmptyList(values.allowed_vector_store_ids),
   mcp: readMcpSelection(values.allowed_mcp_servers_and_groups),
   toolPermissions: readToolPermissions(values.mcp_tool_permissions),
+  toolOverrides: readToolOverrides(values.mcp_tool_overrides),
   extraMcpAccessGroups: nonEmptyList(values.allowed_mcp_access_groups),
   agents: readAgentSelection(values.allowed_agents_and_groups),
   skills: nonEmptyList(values.allowed_skills),
@@ -128,6 +135,7 @@ const buildObjectPermission = ({
   vectorStores,
   mcp,
   toolPermissions,
+  toolOverrides,
   extraMcpAccessGroups,
   agents,
   skills,
@@ -138,6 +146,7 @@ const buildObjectPermission = ({
     ...(mcp?.accessGroups && { mcp_access_groups: mcp.accessGroups }),
     ...(mcp?.toolsets && { mcp_toolsets: mcp.toolsets }),
     ...(toolPermissions !== undefined && { mcp_tool_permissions: toolPermissions }),
+    ...(toolOverrides !== undefined && { mcp_tool_overrides: toolOverrides }),
     ...(extraMcpAccessGroups && { mcp_access_groups: extraMcpAccessGroups }),
     ...(agents?.agents && { agents: agents.agents }),
     ...(agents?.accessGroups && { agent_access_groups: agents.accessGroups }),
@@ -152,6 +161,7 @@ const consumedSourceKeys = (
 ): ReadonlySet<string> =>
   new Set<string>([
     "mcp_tool_permissions",
+    "mcp_tool_overrides",
     "allowed_skills",
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
     ...(vectorStores ? ["allowed_vector_store_ids"] : []),
