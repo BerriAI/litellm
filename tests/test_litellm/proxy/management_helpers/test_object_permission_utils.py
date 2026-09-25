@@ -211,6 +211,7 @@ def _make_team_obj(
         mock_team.object_permission.mcp_servers = mcp_servers or []
         mock_team.object_permission.mcp_access_groups = mcp_access_groups or []
         mock_team.object_permission.mcp_tool_permissions = mcp_tool_permissions or {}
+        mock_team.object_permission.mcp_tool_overrides = None
     else:
         mock_team.object_permission = None
 
@@ -840,6 +841,7 @@ async def test_resolve_team_allowed_mcp_servers_string_tool_permissions(
     mock_perm.mcp_servers = ["server-1"]
     mock_perm.mcp_access_groups = []
     mock_perm.mcp_tool_permissions = json.dumps({"server-2": ["tool1"]})
+    mock_perm.mcp_tool_overrides = None
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-1", "server-2"}
@@ -859,6 +861,7 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
     mock_perm.mcp_servers = []
     mock_perm.mcp_access_groups = []
     mock_perm.mcp_tool_permissions = {"server-a": ["tool1"]}
+    mock_perm.mcp_tool_overrides = None
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
@@ -889,6 +892,7 @@ async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_
     team_perm.mcp_servers = [SpecialMCPServerName.all_proxy_servers.value]
     team_perm.mcp_access_groups = []
     team_perm.mcp_tool_permissions = {}
+    team_perm.mcp_tool_overrides = None
 
     with patch(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -1035,6 +1039,7 @@ def _make_team_obj_search(team_id="team-1", search_tools=None):
     if search_tools is not None:
         mock_team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
         mock_team.object_permission.search_tools = search_tools
+        mock_team.object_permission.mcp_tool_overrides = None
     else:
         mock_team.object_permission = None
     return mock_team
@@ -1511,3 +1516,92 @@ async def test_prepare_object_permission_upsert_rejects_ambiguous_mcp_tool_overr
 
     assert exc_info.value.status_code == 400
     assert "'wiki'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_upsert_converts_stored_v0_row_before_applying_update():
+    """Saving over a residual v0 row converts its legacy snapshot first, so the
+    previously granted server keeps its current deletes while the new update
+    lands on the converted row."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+
+    existing_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-id",
+        mcp_servers=["server-a"],
+        mcp_tool_permissions={"server-a": ["list_items"]},
+        mcp_permission_version=0,
+    )
+    mock_prisma = _make_ambiguity_prisma()
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
+
+    manager = MagicMock()
+    manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
+    manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+    manager.expand_tool_overrides = MagicMock(side_effect=lambda overrides: overrides or {})
+    manager.get_registry = MagicMock(return_value={})
+    manager.fetch_unfiltered_inventory = AsyncMock(
+        return_value={"list_items": "list", "delete_item": "remove one", "search_notes": "find"}
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        upsert = await prepare_object_permission_upsert(
+            new_object_permission={},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    assert upsert.record["mcp_permission_version"] == 1
+    assert json.loads(upsert.record["mcp_tool_overrides"]) == {"server-a": {"allow": [], "deny": ["search_notes"]}}
+    assert json.loads(upsert.record["mcp_tool_permissions"]) == {}
+    assert json.loads(upsert.record["mcp_tool_permissions_archive"]) == {"server-a": ["list_items"]}
+
+
+@pytest.mark.asyncio
+async def test_upsert_rejects_503_when_inventory_unavailable():
+    """A v0 row whose granted server cannot supply a tool catalog fails the save
+    with 503 naming the server instead of converting against nothing."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+
+    existing_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-id",
+        mcp_servers=["server-a"],
+        mcp_permission_version=0,
+    )
+    mock_prisma = _make_ambiguity_prisma()
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
+
+    manager = MagicMock()
+    manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
+    manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+    manager.expand_tool_overrides = MagicMock(side_effect=lambda overrides: overrides or {})
+    manager.get_registry = MagicMock(return_value={})
+    manager.fetch_unfiltered_inventory = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await prepare_object_permission_upsert(
+                new_object_permission={},
+                existing_object_permission_id="perm-id",
+                prisma_client=mock_prisma,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert "server-a" in str(exc_info.value.detail)

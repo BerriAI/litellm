@@ -5394,6 +5394,29 @@ class MCPServerManager:
         descriptions; empty when the server is unknown or never listed."""
         return self.discovered_tool_inventory.get(server_id, {})
 
+    async def fetch_unfiltered_inventory(self, server_id: str) -> Mapping[str, str | None] | None:
+        """List ``server_id``'s tools unfiltered by any caller's permissions.
+
+        Returns ``None`` when the server is unknown, when its auth mode needs a
+        per-user credential the proxy does not hold, or when discovery fails;
+        an empty mapping means the server answered tools/list with no tools."""
+        server: Final = self.get_mcp_server_by_id(server_id)
+        if server is None:
+            return None
+        if server.auth_type in {
+            MCPAuth.oauth2_token_exchange,
+            MCPAuth.oauth_delegate,
+            MCPAuth.oauth2_id_jag,
+            MCPAuth.true_passthrough,
+        }:
+            return None
+        try:
+            await self._get_tools_from_server(server)
+        except Exception as e:  # noqa: BLE001  # any discovery failure means "inventory unavailable", never a partial empty
+            verbose_logger.warning("Backfill inventory fetch failed for server %s: %s", server_id, e)
+            return None
+        return self.discovered_inventory(server_id)
+
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
     ) -> list[Prompt]:

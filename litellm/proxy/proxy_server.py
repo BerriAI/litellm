@@ -8592,6 +8592,24 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - %s", e)
 
+        async def _run_mcp_tool_permission_backfill() -> None:
+            from litellm.proxy._experimental.mcp_server.tool_permission_backfill import (
+                run_mcp_tool_permission_backfill,
+            )
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                get_prisma_client_or_throw,
+            )
+
+            try:
+                await run_mcp_tool_permission_backfill(
+                    prisma_client=get_prisma_client_or_throw("Database not connected"),
+                    manager=global_mcp_server_manager,
+                )
+            except Exception as e:  # noqa: BLE001  # startup backfill must never block boot; the next boot retries the residual
+                verbose_proxy_logger.warning("MCP tool permission backfill failed: %s", e)
+
+        asyncio.create_task(_run_mcp_tool_permission_backfill())
+
     async def init_mcp_servers_from_db(self) -> None:
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()

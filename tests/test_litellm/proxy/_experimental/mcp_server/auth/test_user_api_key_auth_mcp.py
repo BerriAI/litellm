@@ -10042,3 +10042,21 @@ class TestLevelAllowedToolsConvention:
         )
         result = await self._allowed(row)
         assert set(result) == {"list_items"}
+
+    async def test_toolset_grant_stays_closed_does_not_widen_to_convention(self):
+        row = _converted_row(
+            ["server-a"],
+            mcp_toolsets=["toolset-1"],
+            mcp_tool_overrides={"server-a": {"allow": ["delete_item"]}},
+        )
+        result = await self._allowed(row, toolset_perms={"server-a": ["list_items"]})
+        assert set(result) == {"list_items"}
+
+    async def test_toolset_grant_deny_narrows_to_empty(self):
+        row = _converted_row(
+            ["server-a"],
+            mcp_toolsets=["toolset-1"],
+            mcp_tool_overrides={"server-a": {"deny": ["list_items"]}},
+        )
+        result = await self._allowed(row, toolset_perms={"server-a": ["list_items"]})
+        assert set(result) == set()

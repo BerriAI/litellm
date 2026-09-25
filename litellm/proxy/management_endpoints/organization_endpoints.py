@@ -651,7 +651,7 @@ async def _set_object_permission(
             prisma_client=prisma_client,
         )
         await reject_ambiguous_mcp_tool_override_keys(
-            new_mcp_tool_overrides=getattr(data.object_permission, "mcp_tool_overrides", None),
+            new_mcp_tool_overrides=data.object_permission.mcp_tool_overrides,
             existing_mcp_tool_overrides=None,
             prisma_client=prisma_client,
         )

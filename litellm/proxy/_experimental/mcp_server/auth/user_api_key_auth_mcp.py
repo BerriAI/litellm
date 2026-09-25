@@ -109,15 +109,15 @@ def level_allowed_tools(
     legacy: Final = global_mcp_server_manager.expand_tool_permissions(row.mcp_tool_permissions).get(server_id)
     if legacy is not None:
         return frozenset(legacy) | toolset
-    if not getattr(row, "mcp_permission_version", None):
+    if not row.mcp_permission_version:
         return frozenset(toolset) if toolset_tools is not None else None
     if not grants_server:
         return None
-    overrides: Final = (
-        global_mcp_server_manager.expand_tool_overrides(getattr(row, "mcp_tool_overrides", None)).get(server_id) or {}
-    )
+    overrides: Final = global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).get(server_id) or {}
     allow: Final[frozenset[str]] = frozenset(overrides.get("allow") or ())
     deny: Final[frozenset[str]] = frozenset(overrides.get("deny") or ())
+    if toolset_tools is not None:
+        return toolset - deny
     from litellm.proxy._experimental.mcp_server.tool_classification import (
         classify_tool_op,
     )
@@ -127,7 +127,7 @@ def level_allowed_tools(
         for tool_name, description in inventory.items()
         if tool_name not in deny and classify_tool_op(tool_name, description) != "delete"
     )
-    return ((convention | allow) - deny) | toolset
+    return (convention | allow) - deny
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -2251,7 +2251,7 @@ class MCPRequestHandler:
             *global_mcp_server_manager.expand_permission_list(row.mcp_servers or []),
             *access_group_servers,
             *global_mcp_server_manager.expand_tool_permissions(row.mcp_tool_permissions).keys(),
-            *global_mcp_server_manager.expand_tool_overrides(getattr(row, "mcp_tool_overrides", None)).keys(),
+            *global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).keys(),
             *toolset_perms.keys(),
         }
         return level_allowed_tools(
@@ -2623,9 +2623,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
             )
             override_servers: Final = list(
-                global_mcp_server_manager.expand_tool_overrides(
-                    getattr(key_object_permission, "mcp_tool_overrides", None)
-                ).keys()
+                global_mcp_server_manager.expand_tool_overrides(key_object_permission.mcp_tool_overrides).keys()
             )
 
             # servers referenced by the key's toolset grants are part of the key's
@@ -2730,11 +2728,7 @@ class MCPRequestHandler:
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
             | set(legacy_access_group_servers)
             | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
-            | set(
-                global_mcp_server_manager.expand_tool_overrides(
-                    getattr(object_permissions, "mcp_tool_overrides", None)
-                ).keys()
-            )
+            | set(global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys())
             | (await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys()
             | set(team_access_group_servers)
         )
@@ -2927,9 +2921,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
             override_servers: Final = list(
-                global_mcp_server_manager.expand_tool_overrides(
-                    getattr(object_permissions, "mcp_tool_overrides", None)
-                ).keys()
+                global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys()
             )
 
             # servers referenced by the org's toolset grants are part of the org ceiling,
@@ -3034,9 +3026,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
             )
             override_servers: Final = list(
-                global_mcp_server_manager.expand_tool_overrides(
-                    getattr(object_permission, "mcp_tool_overrides", None)
-                ).keys()
+                global_mcp_server_manager.expand_tool_overrides(object_permission.mcp_tool_overrides).keys()
             )
 
             # Combine all lists
@@ -3157,9 +3147,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
             override_servers: Final = list(
-                global_mcp_server_manager.expand_tool_overrides(
-                    getattr(object_permissions, "mcp_tool_overrides", None)
-                ).keys()
+                global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys()
             )
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
             return tuple(
