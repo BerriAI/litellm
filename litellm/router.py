@@ -1007,6 +1007,9 @@ class Router:
         self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self.get_deployment_model_info
         )
+        self._cached_get_model_group_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self._cached_get_model_group_info
+        )
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -11120,7 +11123,6 @@ class Router:
 
         return total_itpm, total_otpm
 
-    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
     def _cached_get_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
         """
         Cached version of get_model_group_info, uses @lru_cache wrapper
