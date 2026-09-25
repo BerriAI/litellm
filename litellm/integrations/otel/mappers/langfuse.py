@@ -84,9 +84,7 @@ class LangfuseMapper:
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         LANGFUSE_OBSERVATION_METADATA: lambda d: (
-            safe_dumps(  # mutable-ok: safe_dumps only serializes real dicts
-                dict(d.request_metadata)
-            )
+            safe_dumps(dict(d.request_metadata))  # mutable-ok: safe_dumps only serializes real dicts
             if d.request_metadata
             else None
         ),
