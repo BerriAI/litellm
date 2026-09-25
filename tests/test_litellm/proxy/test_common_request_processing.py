@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional,
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
 import httpx
 import pytest
 from fastapi import HTTPException, Request, Response, status
@@ -55,6 +56,7 @@ from litellm.proxy.common_request_processing import (
     sse_error_payload,
 )
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -9952,3 +9954,114 @@ class TestAnthropicMessagesStreamErrorFrame:
         assert payload["type"] == "error"
         assert payload["error"]["type"] == expected_error_type
         assert "upstream stopped sending" in payload["error"]["message"]
+
+    _CONTENT_DELTA_FRAME: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1\\n2\\n3"}}\n\n'
+    )
+    _TORN_DATA_LINE: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"4'
+    )
+    _PING: Final = ANTHROPIC_PING_SSE_CHUNK.encode()
+
+    @staticmethod
+    def _upstream_failure(status_code: int) -> Exception:
+        class UpstreamFailure(Exception):
+            def __init__(self) -> None:
+                super().__init__("upstream stopped sending")
+                self.status_code: Final = status_code
+
+        return UpstreamFailure()
+
+    @staticmethod
+    def _sse_generator_cut_after(relayed: Sequence[bytes], failure: Exception) -> AsyncGenerator[str, None]:
+        class CutUpstream:
+            def __init__(self) -> None:
+                self._remaining: Final = iter(relayed)
+
+            def __aiter__(self) -> "CutUpstream":
+                return self
+
+            async def __anext__(self) -> object:
+                chunk: Final = next(self._remaining, None)
+                if chunk is None:
+                    raise failure
+                return chunk
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=CutUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "claude-sonnet-4-5"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+        )
+
+    @staticmethod
+    def _as_bytes(chunk: object) -> bytes:
+        if isinstance(chunk, bytes):
+            return chunk
+        assert isinstance(chunk, str)
+        return chunk.encode()
+
+    async def _wire_bytes(self, relayed: Sequence[bytes]) -> bytes:
+        stream: Final = self._sse_generator_cut_after(relayed, self._upstream_failure(500))
+        return b"".join([self._as_bytes(chunk) async for chunk in stream])
+
+    @staticmethod
+    def _error_frame_after(wire: bytes, relayed: bytes) -> bytes:
+        assert wire.startswith(relayed), f"the wire did not open with {relayed!r}: {wire!r}"
+        return wire.removeprefix(relayed)
+
+    @staticmethod
+    def _assert_error_frame(frame: bytes) -> None:
+        event_line, data_line, first_blank, second_blank = frame.split(b"\n")
+        assert event_line == b"event: error"
+        assert (first_blank, second_blank) == (b"", b"")
+        payload: Final = json.loads(data_line.removeprefix(b"data: "))
+        assert payload["type"] == "error"
+        assert "upstream stopped sending" in payload["error"]["message"]
+
+    @pytest.mark.parametrize(
+        "torn, seal",
+        [
+            (_TORN_DATA_LINE, b"\n" + _PING),
+            (b"event: content_bl", b"\n" + _PING),
+            (b"event: content_block_delta\n", _PING),
+            (b'event: content_block_delta\r\ndata: {"type":"content_block_delta"}\r\n', _PING),
+        ],
+        ids=["mid_data_line", "mid_event_line", "after_a_complete_line", "after_a_crlf_line"],
+    )
+    async def test_a_frame_the_upstream_tore_is_closed_as_a_ping_before_the_error_event(
+        self, torn: bytes, seal: bytes
+    ) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME, torn))
+
+        self._assert_error_frame(self._error_frame_after(wire, self._CONTENT_DELTA_FRAME + torn + seal))
+
+    async def test_a_cut_at_a_frame_boundary_gets_the_error_event_alone(self) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME,))
+
+        self._assert_error_frame(self._error_frame_after(wire, self._CONTENT_DELTA_FRAME))
+
+    async def test_a_torn_frame_still_raises_the_error_in_the_anthropic_sdk(self) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME, self._TORN_DATA_LINE))
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
+
+        client: Final = anthropic.Anthropic(
+            api_key="sk-test",
+            base_url="http://proxy.test",
+            http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+            max_retries=0,
+        )
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            for _ in client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
+            ):
+                pass
+        body: Final = raised.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert "upstream stopped sending" in body["error"]["message"]

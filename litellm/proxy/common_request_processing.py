@@ -103,8 +103,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
+    SSE_STREAM_START_TAIL,
+    advance_sse_tail,
     coerce_keepalive_interval,
     resolve_ttft_keepalive_interval,
+    seal_open_sse_frame,
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -3862,6 +3865,7 @@ class ProxyBaseLLMRequestProcessing:
         serialize_error: StreamErrorSerializer,
         request: Request | None = None,
         flush_tail: Callable[[], bytes] | None = None,
+        seal_open_frame: Callable[[bytes], str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -3871,6 +3875,12 @@ class ProxyBaseLLMRequestProcessing:
         ``flush_tail`` runs once after the upstream iterator completes cleanly and
         its non-empty result is yielded, so a serializer that buffers bytes across
         chunks can emit anything still held at end of stream.
+
+        ``seal_open_frame`` is given the tail of what has been yielded when the
+        error frame goes out, and what it returns is written first. A passthrough
+        relays raw upstream bytes, so an upstream that hangs up mid-frame leaves the
+        client inside an open frame, where an error frame would be swallowed or
+        misparsed instead of raised.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3887,6 +3897,7 @@ class ProxyBaseLLMRequestProcessing:
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
+        recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
         try:
             str_so_far = ""
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -3932,7 +3943,9 @@ class ProxyBaseLLMRequestProcessing:
                 # False and refunds. A keepalive ping carries no provider output,
                 # so it must not suppress that refund.
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
-                yield serialize_chunk(chunk)
+                serialized = serialize_chunk(chunk)
+                recent_tail = advance_sse_tail(recent_tail, serialized)
+                yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:
                 yield serialize_chunk(held_tail)
@@ -3980,7 +3993,8 @@ class ProxyBaseLLMRequestProcessing:
                 code=stream_error_status,
             )
             stream_completed = True
-            yield serialize_error(proxy_exception)
+            error_frame: Final = serialize_error(proxy_exception)
+            yield error_frame if seal_open_frame is None else seal_open_frame(recent_tail) + error_frame
         finally:
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,
@@ -4026,6 +4040,7 @@ class ProxyBaseLLMRequestProcessing:
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
+            seal_open_frame=seal_open_sse_frame,
         )
 
     @overload

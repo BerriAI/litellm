@@ -538,9 +538,20 @@ class ReplayEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class StreamCut:
+    """Where a live edge hangs up on a streamed upstream body: after ``after_chunks`` whole
+    transfer chunks, and with ``mid_chunk`` set, part way through a line of the next one, so
+    the client is left inside an SSE frame the way a dropped transport leaves it."""
+
+    after_chunks: int
+    mid_chunk: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class LiveEdge:
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None
     sign: RequestSigner | None = None
+    cut: StreamCut | None = None
 
 
 type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
@@ -786,11 +797,28 @@ def _handle_record(
             assert_never(head)
 
 
+def _torn_prefix(data: bytes) -> bytes:
+    return data[: len(data) // 2].rstrip(b"\r\n") or data[:1]
+
+
+def _cut_steps(steps: Generator[StreamStep, None, None], cut: StreamCut) -> Generator[StreamStep, None, None]:
+    with closing(steps) as source:
+        for relayed, step in enumerate(source):
+            if isinstance(step, StreamTruncation) or relayed < cut.after_chunks:
+                yield step
+                continue
+            if cut.mid_chunk:
+                yield StreamChunk(data=_torn_prefix(step.data))
+            yield StreamTruncation(reason=f"edge cut the upstream stream: {cut!r}")
+            return
+
+
 def _handle_live(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
     cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
     sign: RequestSigner | None = None,
+    cut: StreamCut | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
@@ -805,6 +833,8 @@ def _handle_live(
     match head:
         case NetworkError(message=message):
             return _recorded_outcome(_network_error_response(message))
+        case StreamHead() if cut is not None:
+            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), _cut_steps(head.steps, cut))
         case StreamHead() if _is_streamed(head.headers):
             return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
         case StreamHead():
@@ -875,10 +905,10 @@ def handle_edge_request(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
                 backend, mount, test_key,
             )
-        case LiveEdge(observe_request=observe_request, sign=sign):
+        case LiveEdge(observe_request=observe_request, sign=sign, cut=cut):
             return _handle_live(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                observe_request=observe_request, sign=sign,
+                observe_request=observe_request, sign=sign, cut=cut,
             )
         case RecordEdge():
             return _handle_record(
