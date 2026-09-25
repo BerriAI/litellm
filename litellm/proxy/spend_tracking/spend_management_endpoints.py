@@ -2515,6 +2515,15 @@ async def ui_view_spend_logs(
         default=None,
         description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
     ),
+    used_client_oauth_token: Annotated[
+        bool | None,
+        fastapi.Query(
+            description=(
+                "Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth "
+                "token, false for the deployment's configured key. Rows written before this flag existed match neither"
+            ),
+        ),
+    ] = None,
     span_type: str | None = fastapi.Query(
         default=None,
         description="Filter logs by span type: llm, agent, mcp, or batch",
@@ -2923,6 +2932,10 @@ async def ui_view_spend_logs(
         if error_message is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
             sql_params.append(f"%{error_message}%")
+            p += 1
+        if used_client_oauth_token is not None:
+            sql_conditions.append(f"metadata->>'used_client_oauth_token' = ${p}")
+            sql_params.append(json.dumps(used_client_oauth_token))
             p += 1
 
         if (

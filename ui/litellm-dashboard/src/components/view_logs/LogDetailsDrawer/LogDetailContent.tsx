@@ -23,6 +23,7 @@ import {
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
+import { CREDENTIAL_LABELS } from "../constants";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
@@ -161,6 +162,11 @@ export function LogDetailContent({
               </DescriptionItem>
               {logEntry.requester_ip_address && (
                 <DescriptionItem label="IP Address">{logEntry.requester_ip_address}</DescriptionItem>
+              )}
+              {typeof logEntry.metadata?.used_client_oauth_token === "boolean" && (
+                <DescriptionItem label="Credential">
+                  {CREDENTIAL_LABELS[String(logEntry.metadata.used_client_oauth_token)]}
+                </DescriptionItem>
               )}
               {hasGuardrailData && (
                 <DescriptionItem label="Guardrail">

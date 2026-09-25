@@ -3271,6 +3271,40 @@ def test_get_spend_logs_metadata_keeps_user_agent():
     assert _get_spend_logs_metadata(None)["user_agent"] is None
 
 
+@pytest.mark.parametrize(
+    "client_sent_oauth_token, custom_llm_provider, expected",
+    [
+        (True, "anthropic", True),
+        (True, "bedrock", False),
+        (True, "vertex_ai", False),
+        (False, "anthropic", False),
+        (None, "anthropic", None),
+    ],
+)
+def test_get_logging_payload_records_used_client_oauth_token_for_the_selected_provider(
+    client_sent_oauth_token: bool | None, custom_llm_provider: str, expected: bool | None
+):
+    """The client's OAuth bearer is only forwarded to an Anthropic deployment, so a request that
+    the router sent to Bedrock or Vertex paid with the configured key and must not read true."""
+    request_metadata = (
+        {"user_agent": "claude-cli/2.1.0"}
+        if client_sent_oauth_token is None
+        else {"user_agent": "claude-cli/2.1.0", "used_client_oauth_token": client_sent_oauth_token}
+    )
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": {"metadata": request_metadata},
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+    assert _get_spend_logs_metadata(None)["used_client_oauth_token"] is None
+
+
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
     assert _redact_logged_api_key("bearer ") is None

@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -154,6 +155,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings",
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
+        "used_client_oauth_token",
     )
 )
 
@@ -178,6 +180,7 @@ def _get_spend_logs_metadata(
     autorouter_baseline_observation: str | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
+    used_client_oauth_token: bool | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -222,6 +225,7 @@ def _get_spend_logs_metadata(
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
+            used_client_oauth_token=used_client_oauth_token,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -237,6 +241,7 @@ def _get_spend_logs_metadata(
         autorouter_baseline_observation=autorouter_baseline_observation,
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
+        used_client_oauth_token=used_client_oauth_token,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -713,6 +718,9 @@ def get_logging_payload(
             selected_model=model_name,
             selected_provider=custom_llm_provider,
             router_correlation_id=litellm_call_id,
+        ),
+        used_client_oauth_token=resolve_used_client_oauth_token(
+            metadata.get("used_client_oauth_token") if metadata is not None else None, custom_llm_provider
         ),
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")

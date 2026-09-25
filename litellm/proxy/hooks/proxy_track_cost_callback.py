@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -83,6 +84,12 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
         str(CallTypes.aretrieve_batch),
     )
 )
+
+
+def _proxy_stamped_used_client_oauth_token(request_data: Mapping[str, object]) -> bool | None:
+    proxy_metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
+    return stamped if isinstance(stamped, bool) else None
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -190,6 +197,8 @@ class _ProxyDBLogger(CustomLogger):
         _metadata = await _ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(
             metadata=_metadata, original_exception=original_exception
         )
+
+        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
