@@ -2,6 +2,7 @@ import asyncio
 from typing import Dict, Optional
 
 import pytest
+from mcp.types import CallToolResult, TextContent
 from unittest.mock import patch
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
@@ -46,7 +47,9 @@ def _make_server(server_id: str, max_concurrent_requests: Optional[int]) -> MCPS
 def _patch_client_with_tracker(manager: MCPServerManager, tracker: _ConcurrencyTracker):
     async def fake_create_mcp_client(server, **kwargs):
         class _ProbeClient:
-            async def call_tool(self, params, host_progress_callback=None, on_dispatch=None):
+            async def call_tool(
+                self, params, host_progress_callback=None, allow_input_required=False, on_dispatch=None
+            ):
                 tracker.enter(server.server_id)
                 try:
                     await asyncio.sleep(HOLD_SECONDS)
@@ -145,11 +148,11 @@ async def test_openapi_backed_server_also_respects_the_cap():
     server = _make_server("srv-openapi", max_concurrent_requests=2)
     server.spec_path = "/fake/openapi.json"
 
-    async def fake_openapi_handler(mcp_server, name, arguments):
+    async def fake_openapi_handler(mcp_server, name, arguments, wire_compat):
         tracker.enter(mcp_server.server_id)
         try:
             await asyncio.sleep(HOLD_SECONDS)
-            return "ok"
+            return CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
         finally:
             tracker.exit(mcp_server.server_id)
 
