@@ -50,6 +50,7 @@ RoutingStrategyName: TypeAlias = Literal[
 ]
 
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
+CONTROL_PARAMS_KEY: Final = "_litellm_control"
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
 

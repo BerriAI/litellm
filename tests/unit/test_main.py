@@ -4122,3 +4122,38 @@ def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
         )
     assert exc_info.value.status_code == 400
     assert f"tool_choice={tool_choice}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-4.1-mini", "bedrock/converse/anthropic.claude-sonnet-4-5"])
+def test_completion_rejects_a_non_int_stream_chunk_size_with_a_400_for_every_provider(model: str) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream_chunk_size="64",
+            mock_response="unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert "stream_chunk_size" in str(exc_info.value)
+
+
+def test_completion_carries_the_control_params_into_the_logged_litellm_params() -> None:
+    from litellm.types.litellm_params import CONTROL_PARAMS_KEY, LiteLLMControlParams
+
+    logging_obj: Final = LiteLLMLogging(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="control-params-call-id",
+        function_id="control-params-function-id",
+    )
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream_chunk_size=64,
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+    )
+    assert logging_obj.litellm_params[CONTROL_PARAMS_KEY] == LiteLLMControlParams(stream_chunk_size=64)

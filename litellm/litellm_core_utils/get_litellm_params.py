@@ -2,8 +2,11 @@ from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.litellm_params import CONTROL_PARAMS_KEY, LiteLLMControlParams
 from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -61,6 +64,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "otpm",
             "use_xai_oauth",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            CONTROL_PARAMS_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
@@ -69,6 +73,19 @@ OPTIONAL_KWARGS_KEYS: Final = (
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+_STREAM_CHUNK_SIZE: Final[TypeAdapter[int | None]] = TypeAdapter(
+    int | None, config=ConfigDict(strict=True, title="stream_chunk_size")
+)
+
+
+def control_params_from(kwargs: Mapping[str, object]) -> LiteLLMControlParams | ValidationError:
+    try:
+        return LiteLLMControlParams(
+            stream_chunk_size=_STREAM_CHUNK_SIZE.validate_python(kwargs.get("stream_chunk_size"))
+        )
+    except ValidationError as e:
+        return e
 
 
 def _get_base_model_from_litellm_call_metadata(

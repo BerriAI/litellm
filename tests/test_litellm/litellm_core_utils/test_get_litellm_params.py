@@ -7,12 +7,15 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
     _get_base_model_from_litellm_call_metadata,
+    control_params_from,
     get_litellm_params,
 )
+from litellm.types.litellm_params import CONTROL_PARAMS_KEY, LiteLLMControlParams
 
 NAMED_PRICE_PARAMS: Final = frozenset(
     {"input_cost_per_token", "output_cost_per_token", "input_cost_per_second", "output_cost_per_second"}
@@ -94,6 +97,11 @@ class TestGetLitellmParamsKwargsExtraction:
         assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
         assert get_litellm_params()["stream_chunk_size"] is None
 
+    def test_control_params_are_carried_as_given(self) -> None:
+        control: Final = LiteLLMControlParams(stream_chunk_size=64)
+        assert get_litellm_params(**{CONTROL_PARAMS_KEY: control})[CONTROL_PARAMS_KEY] is control
+        assert CONTROL_PARAMS_KEY not in get_litellm_params()
+
     def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
         result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
         assert result["s3_access_key_id"] == "s3-key"
@@ -120,6 +128,24 @@ class TestGetLitellmParamsKwargsExtraction:
         result = get_litellm_params(**kwargs)
         for key in _OPTIONAL_KWARGS_KEYS:
             assert result[key] == f"val_{key}"
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"stream_chunk_size": 64, "temperature": 0.2}, LiteLLMControlParams(stream_chunk_size=64)),
+        ({"temperature": 0.2}, LiteLLMControlParams()),
+    ],
+)
+def test_control_params_are_read_from_the_request_kwargs(
+    kwargs: dict[str, object], expected: LiteLLMControlParams
+) -> None:
+    assert control_params_from(kwargs) == expected
+
+
+@pytest.mark.parametrize("raw", ["64", 64.0, True])
+def test_control_params_reject_a_stream_chunk_size_that_is_not_an_int(raw: object) -> None:
+    assert isinstance(control_params_from({"stream_chunk_size": raw}), ValidationError)
 
 
 class TestGetLitellmParamsBaseModel:

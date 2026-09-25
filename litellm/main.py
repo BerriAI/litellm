@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -83,6 +83,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+    control_params_from,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -127,7 +128,7 @@ from litellm.types.completion import (
     _CompletionDispatchContext,
     _CompletionDispatchResult,
 )
-from litellm.types.litellm_params import RetryStrategy
+from litellm.types.litellm_params import CONTROL_PARAMS_KEY, RetryStrategy
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -5621,6 +5622,13 @@ def completion(
             functions_unsupported_model: Final = optional_params.pop("functions_unsupported_model")
             messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
+        control_params: Final = control_params_from(kwargs)
+        if isinstance(control_params, ValidationError):
+            raise litellm.BadRequestError(
+                message=f"Invalid LiteLLM control params: {control_params}",
+                model=model,
+                llm_provider=custom_llm_provider,
+            ) from control_params
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
             acompletion=acompletion,
@@ -5670,7 +5678,8 @@ def completion(
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
-            stream_chunk_size=kwargs.get("stream_chunk_size"),
+            stream_chunk_size=control_params.stream_chunk_size,
+            **{CONTROL_PARAMS_KEY: control_params},
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
