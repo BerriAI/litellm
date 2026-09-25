@@ -216,9 +216,7 @@ describe("MCPToolPermissions", () => {
       );
 
       expect(await screen.findByText("Wildcard Server")).toBeInTheDocument();
-      expect(
-        screen.getByText("All tools allowed, including tools added to this server later"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("All tools allowed, including tools added to this server later")).toBeInTheDocument();
 
       await userEvent.click(screen.getByText("Flat List"));
       for (const checkbox of screen.getAllByRole("checkbox")) {

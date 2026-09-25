@@ -226,7 +226,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const serverName = server.server_name || server.alias || serverId;
         const tools = serverTools[serverId] || [];
         const grantsAll = mcpGrantsAllTools(entry.keyedTools);
-        const selectedTools = grantsAll ? tools.map((t) => t.name) : (entry.allowedTools ?? tools.map((t) => t.name));
+        const selectedTools = grantsAll ? tools.map((t) => t.name) : entry.allowedTools ?? tools.map((t) => t.name);
         const isLoading = loadingTools[serverId];
         const error = toolErrors[serverId];
         const viewMode = viewModes[serverId] ?? "crud";
