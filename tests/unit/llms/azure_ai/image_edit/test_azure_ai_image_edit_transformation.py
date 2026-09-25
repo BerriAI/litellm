@@ -185,7 +185,7 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     generated_rate, reference_rate = _flex_rates()
 
     assert response._hidden_params["response_cost"] == pytest.approx(
-        generated_rate * 2048 * 1024 * 2 + reference_rate * 512 * 512
+        generated_rate * 2048 * 1024 * 2 + reference_rate * 1024 * 1024
     )
 
 
@@ -232,7 +232,7 @@ def _edit_ok(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]})
 
 
-def test_flux2_image_edit_bills_every_reference_by_its_header_dimensions():
+def test_flux2_image_edit_measures_every_reference_but_bills_each_of_several_as_one_megapixel():
     sent: Final[dict[str, object]] = {}
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -250,13 +250,12 @@ def test_flux2_image_edit_bills_every_reference_by_its_header_dimensions():
         size="1024x1024",
     )
     generated_rate, reference_rate = _flex_rates()
-    reference_pixels: Final = 1024 * 1024 + 800 * 600 + 640 * 480
 
     assert sent["input_image"] == base64.b64encode(references[0]).decode()
     assert sent["input_image_3"] == base64.b64encode(references[2]).decode()
-    assert response._hidden_params["reference_image_pixels"] == reference_pixels
+    assert response._hidden_params["reference_image_pixels"] == (1024 * 1024, 800 * 600, 640 * 480)
     assert response._hidden_params["response_cost"] == pytest.approx(
-        generated_rate * 1024 * 1024 + reference_rate * reference_pixels
+        generated_rate * 1024 * 1024 + reference_rate * 3 * 1024 * 1024
     )
 
 
@@ -273,28 +272,77 @@ def test_flux2_image_edit_reads_streams_once_and_still_measures_them():
     )
     generated_rate, reference_rate = _flex_rates()
 
-    assert response._hidden_params["reference_image_pixels"] == 2048 * 2048
+    assert response._hidden_params["reference_image_pixels"] == (2048 * 2048,)
     assert response._hidden_params["response_cost"] == pytest.approx(
         generated_rate * 1024 * 1024 + reference_rate * 2048 * 2048
     )
 
 
-def test_flux2_image_edit_bills_unmeasurable_references_as_one_megapixel_each():
+@pytest.mark.parametrize(
+    ("reference", "billed_megapixels"),
+    (
+        pytest.param(_png(640, 640), 1, id="small-reference-rounds-up"),
+        pytest.param(_png(1024, 1280), 2, id="fractional-reference-rounds-up"),
+        pytest.param(_jpeg(4032, 3024), 4, id="photo-reference-caps-at-four-megapixels"),
+    ),
+)
+def test_flux2_image_edit_bills_a_lone_reference_in_whole_megapixels(reference: bytes, billed_megapixels: int):
     response: Final = litellm.image_edit(
         model="azure_ai/FLUX.2-flex",
-        image=[_png(640, 640), b"BM not a parseable header", b"\x89PNG\r\n\x1a\n\x00\x00"],
-        prompt="Blend every reference",
+        image=reference,
+        prompt="Make it a watercolor",
         api_key="test-key",
         api_base="https://example.services.ai.azure.com",
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
         size="1024x1024",
     )
     generated_rate, reference_rate = _flex_rates()
-    reference_pixels: Final = 640 * 640 + 2 * UNMEASURED_REFERENCE_IMAGE_PIXELS
 
-    assert response._hidden_params["reference_image_pixels"] == reference_pixels
     assert response._hidden_params["response_cost"] == pytest.approx(
-        generated_rate * 1024 * 1024 + reference_rate * reference_pixels
+        generated_rate * 1024 * 1024 + reference_rate * billed_megapixels * 1024 * 1024
+    )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    (
+        pytest.param(b"BM not a parseable header", id="unsupported-format"),
+        pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00", id="truncated-header"),
+        pytest.param(_png(0, 640), id="zero-width-header"),
+    ),
+)
+def test_flux2_image_edit_bills_a_lone_unmeasurable_reference_as_one_megapixel(reference: bytes):
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[reference],
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+    generated_rate, reference_rate = _flex_rates()
+
+    assert response._hidden_params["reference_image_pixels"] == (UNMEASURED_REFERENCE_IMAGE_PIXELS,)
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        generated_rate * 1024 * 1024 + reference_rate * 1024 * 1024
+    )
+
+
+def test_flux2_image_edit_still_bills_every_reference_when_one_header_reports_zero_pixels():
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[_png(1024, 1024), _jpeg(640, 0)],
+        prompt="Blend both references",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+    generated_rate, reference_rate = _flex_rates()
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        generated_rate * 1024 * 1024 + reference_rate * 2 * 1024 * 1024
     )
 
 
@@ -324,7 +372,7 @@ def test_flux2_image_edit_resends_and_rebills_a_reused_stream(stream_position: s
     )
 
     assert sent_images == [base64.b64encode(reference).decode()] * 2
-    assert [response._hidden_params["reference_image_pixels"] for response in responses] == [2048 * 1024] * 2
+    assert [response._hidden_params["reference_image_pixels"] for response in responses] == [(2048 * 1024,)] * 2
 
 
 def test_flux2_pro_image_edit_bills_references_on_the_pro_reference_rate():
@@ -338,11 +386,10 @@ def test_flux2_pro_image_edit_bills_references_on_the_pro_reference_rate():
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
         size="1024x1024",
     )
-    reference_pixels: Final = 1024 * 1024 + 4032 * 3024
 
     assert pro_row["input_cost_per_reference_pixel"] > 0
     assert response._hidden_params["response_cost"] == pytest.approx(
-        pro_row["output_cost_per_image"] + pro_row["input_cost_per_reference_pixel"] * reference_pixels
+        pro_row["output_cost_per_image"] + pro_row["input_cost_per_reference_pixel"] * 2 * 1024 * 1024
     )
 
 
@@ -401,7 +448,7 @@ async def test_flux2_aimage_edit_bills_references_like_image_edit():
     )
     generated_rate, reference_rate = _flex_rates()
 
-    assert response._hidden_params["reference_image_pixels"] == 2 * 1024 * 1024
+    assert response._hidden_params["reference_image_pixels"] == (1024 * 1024, 1024 * 1024)
     assert response._hidden_params["response_cost"] == pytest.approx(
         generated_rate * 1024 * 1024 + reference_rate * 2 * 1024 * 1024
     )

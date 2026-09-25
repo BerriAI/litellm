@@ -43,7 +43,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 
     def __init__(self) -> None:
         super().__init__()
-        self.reference_image_pixels: int = 0
+        self.reference_image_pixels: tuple[int, ...] = ()
 
     def get_supported_openai_params(self, model: str) -> list:
         return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
@@ -123,7 +123,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(f"{model} supports at most {max_reference_images} reference images.")
 
         reference_bytes: Final = tuple(self._read_image_bytes(reference_image) for reference_image in images)
-        self.reference_image_pixels = sum(_pixel_count(image_bytes) for image_bytes in reference_bytes)
+        self.reference_image_pixels = tuple(_pixel_count(image_bytes) for image_bytes in reference_bytes)
         reference_images: Final[Mapping[str, str]] = MappingProxyType(
             {
                 "input_image" if index == 1 else f"input_image_{index}": base64.b64encode(image_bytes).decode("utf-8")
@@ -198,8 +198,8 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 
 def _pixel_count(image_bytes: bytes) -> int:
     dimensions: Final = image_dimensions_from_bytes(image_bytes)
-    if dimensions is None:
-        verbose_logger.warning("Could not read the dimensions of a FLUX.2 reference image, billing it as one megapixel")
-        return UNMEASURED_REFERENCE_IMAGE_PIXELS
-    width, height = dimensions
-    return width * height
+    pixels: Final = dimensions[0] * dimensions[1] if dimensions is not None else 0
+    if pixels > 0:
+        return pixels
+    verbose_logger.warning("Could not read the dimensions of a FLUX.2 reference image, billing it as one megapixel")
+    return UNMEASURED_REFERENCE_IMAGE_PIXELS
