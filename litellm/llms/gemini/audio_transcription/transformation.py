@@ -4,8 +4,11 @@ from typing import Final
 
 from httpx import Headers, Response
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
+    normalize_transcription_keywords,
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
@@ -47,7 +50,12 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: BaseAudioTranscriptionConfig signature
-        return ["language", "response_format", "timestamp_granularities"]  # mutable-ok: base contract returns a list
+        return [  # mutable-ok: BaseAudioTranscriptionConfig requires a list
+            "language",
+            "keywords",
+            "response_format",
+            "timestamp_granularities",
+        ]
 
     @property
     def supports_subtitle_synthesis(self) -> bool:
@@ -123,7 +131,10 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         request: Final = _build_interaction_request(
             model=model,
             audio_input=audio_input,
-            transcription_config=_build_transcription_config(optional_params),
+            transcription_config=_build_transcription_config(
+                optional_params,
+                drop_params=litellm_params.get("drop_params") is True or bool(litellm.drop_params),
+            ),
         )
         return AudioTranscriptionRequestData(data=dict(request))  # mutable-ok: AudioTranscriptionRequestData wants dict
 
@@ -227,10 +238,32 @@ def _timestamp_config(timestamp_granularities: object, response_format: object) 
     return _WORD_TIMESTAMP_CONFIG if wants_word_timestamps else _EMPTY_TRANSCRIPTION_CONFIG
 
 
-def _build_transcription_config(optional_params: Mapping[str, object]) -> GeminiTranscriptionConfig:
+def _custom_vocabulary_config(keywords: object) -> GeminiTranscriptionConfig:
+    vocabulary: Final = normalize_transcription_keywords(keywords)
+    vocabulary_config: Final[GeminiTranscriptionConfig] = {"custom_vocabulary": vocabulary}
+    return vocabulary_config if vocabulary else _EMPTY_TRANSCRIPTION_CONFIG
+
+
+def _build_transcription_config(
+    optional_params: Mapping[str, object],
+    drop_params: bool = False,
+) -> GeminiTranscriptionConfig:
+    vocabulary_config: Final = _custom_vocabulary_config(optional_params.get("keywords"))
+    timestamp_config: Final = _timestamp_config(
+        optional_params.get("timestamp_granularities"),
+        optional_params.get("response_format"),
+    )
+    has_conflicting_params: Final = bool(vocabulary_config and timestamp_config)
+    if has_conflicting_params and not drop_params:
+        raise UnsupportedParamsError(
+            status_code=400,
+            message="Gemini transcription does not support custom vocabulary with word timestamps.",
+        )
+    resolved_vocabulary_config: Final = _EMPTY_TRANSCRIPTION_CONFIG if has_conflicting_params else vocabulary_config
     transcription_config: Final[GeminiTranscriptionConfig] = {
         **_language_config(optional_params.get("language")),
-        **_timestamp_config(optional_params.get("timestamp_granularities"), optional_params.get("response_format")),
+        **resolved_vocabulary_config,
+        **timestamp_config,
     }
     return transcription_config
 

@@ -3487,6 +3487,7 @@ def get_optional_params_transcription(
     temperature: int | None = None,
     timestamp_granularities: list[Literal["word", "segment"]] | None = None,
     drop_params: bool | None = None,
+    keywords: list[str] | None = None,
     **kwargs,
 ):
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
@@ -3503,6 +3504,7 @@ def get_optional_params_transcription(
 
     default_params: Final = {
         "language": None,
+        "keywords": None,
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
@@ -6333,8 +6335,6 @@ def _build_model_info(
     api_base: str | None = None,
     api_key: str | None = None,
 ) -> ModelInfo:
-    supported_openai_params = litellm.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
-
     _model_info: Final = _get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -6347,6 +6347,18 @@ def _build_model_info(
         for key, value in provider_info.items():
             if value is not None:
                 _model_info[key] = value
+
+    request_type_by_mode: Final = MappingProxyType(
+        {
+            "embedding": "embeddings",
+            "audio_transcription": "transcription",
+        }
+    )
+    supported_openai_params = litellm.get_supported_openai_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        request_type=request_type_by_mode.get(_model_info.get("mode"), "chat_completion"),
+    )
 
     # if verbose_logger.isEnabledFor(logging.DEBUG):
     # verbose_logger.debug(f"model_info: {_model_info}")
@@ -9022,7 +9034,19 @@ class ProviderConfigManager:
             )
 
             return VertexAIAudioTranscriptionConfig()
-        elif litellm.LlmProviders.GEMINI == provider:
+        elif (
+            litellm.LlmProviders.GEMINI == provider
+            and model_cost_entry.get("audio_transcription_config") == "gemini_realtime_transcribe"
+        ):
+            from litellm.llms.gemini.audio_transcription.realtime_transformation import (
+                GeminiRealtimeAudioTranscriptionConfig,
+            )
+
+            return GeminiRealtimeAudioTranscriptionConfig()
+        elif (
+            litellm.LlmProviders.GEMINI == provider
+            and model_cost_entry.get("audio_transcription_config") == "gemini_transcribe"
+        ):
             from litellm.llms.gemini.audio_transcription.transformation import (
                 GeminiAudioTranscriptionConfig,
             )

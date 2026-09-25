@@ -839,6 +839,63 @@ def test_gemini_realtime_multi_tool_calls_have_unique_item_ids():
     assert responses[1]["output_index"] == 1
 
 
+def test_gemini_session_update_maps_input_audio_transcription_settings():
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "input_audio_transcription": {
+                "language": "pl",
+                "keywords": ["alpha", "beta"],
+            },
+        },
+    }
+
+    result = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.5-transcribe-live",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(result[0])
+    assert setup["setup"]["inputAudioTranscription"] == {
+        "languageCodes": ["pl-PL"],
+        "customVocabulary": ["alpha", "beta"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("transcription", "expected"),
+    [
+        ("invalid", {}),
+        ({}, {}),
+        ({"language": "", "keywords": ["", 42]}, {}),
+        (
+            {"language": "pl", "keywords": ["", 42, "term"]},
+            {
+                "languageCodes": ["pl-PL"],
+                "customVocabulary": ["term"],
+            },
+        ),
+    ],
+)
+def test_gemini_session_update_handles_input_audio_transcription_values(transcription, expected):
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"input_audio_transcription": transcription},
+    }
+
+    result = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.5-transcribe-live",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(result[0])
+    assert setup["setup"]["inputAudioTranscription"] == expected
+
+
 def test_gemini_session_update_includes_input_audio_transcription_default():
     """Verify _handle_session_update includes inputAudioTranscription default."""
     config = GeminiRealtimeConfig()

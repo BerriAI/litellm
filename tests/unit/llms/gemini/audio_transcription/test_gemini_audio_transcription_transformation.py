@@ -5,12 +5,13 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.gemini.audio_transcription.transformation import (
-    GeminiAudioTranscriptionConfig,
+from litellm.llms.gemini.audio_transcription.realtime_transformation import (
+    GeminiRealtimeAudioTranscriptionConfig,
 )
+from litellm.llms.gemini.audio_transcription.transformation import GeminiAudioTranscriptionConfig
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_optional_params_transcription
 
 AUDIO_BYTES = b"RIFF....WAVEfmt fake-wav-bytes"
 
@@ -70,6 +71,24 @@ def test_provider_config_manager_returns_gemini_config():
         model="gemini-3.5-transcribe", provider=LlmProviders.GEMINI
     )
     assert isinstance(provider_config, GeminiAudioTranscriptionConfig)
+
+
+def test_provider_config_manager_uses_realtime_config_for_gemini_live():
+    provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
+        model="gemini-3.5-transcribe-live", provider=LlmProviders.GEMINI
+    )
+    assert isinstance(provider_config, GeminiRealtimeAudioTranscriptionConfig)
+    assert provider_config.get_supported_openai_params("gemini-3.5-transcribe-live") == ["language", "keywords"]
+
+
+class TestSupportedParams:
+    def test_keywords_are_advertised(self, config):
+        assert config.get_supported_openai_params("gemini-3.5-transcribe") == [
+            "language",
+            "keywords",
+            "response_format",
+            "timestamp_granularities",
+        ]
 
 
 class TestValidateEnvironment:
@@ -152,6 +171,73 @@ class TestTransformRequest:
         transcription_config = request_data.data["generation_config"]["transcription_config"]
         assert json.loads(json.dumps(transcription_config)) == {"language_codes": ["en-US"]}
 
+    def test_keywords_map_to_custom_vocabulary(self, config):
+        optional_params = get_optional_params_transcription(
+            model="gemini-3.5-transcribe",
+            custom_llm_provider="gemini",
+            keywords=["alpha", "beta"],
+        )
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        transcription_config = request_data.data["generation_config"]["transcription_config"]
+        assert json.loads(json.dumps(transcription_config)) == {
+            "custom_vocabulary": ["alpha", "beta"]
+        }
+
+    def test_keywords_with_word_timestamps_raise(self, config, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="custom vocabulary with word timestamps"):
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe",
+                audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+                optional_params={
+                    "keywords": ["alpha"],
+                    "timestamp_granularities": ["word"],
+                },
+                litellm_params={},
+            )
+
+    def test_drop_params_removes_keywords_with_word_timestamps(self, config, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={
+                "keywords": ["alpha"],
+                "timestamp_granularities": ["word"],
+            },
+            litellm_params={"drop_params": True},
+        )
+        transcription_config = request_data.data["generation_config"]["transcription_config"]
+        assert "custom_vocabulary" not in transcription_config
+        assert json.loads(json.dumps(transcription_config["mode"])) == {
+            "type": "verbatim",
+            "timestamp_granularities": ["word"],
+            "diarization_mode": "speaker",
+        }
+
+    def test_global_drop_params_removes_keywords_with_word_timestamps(self, config, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={
+                "keywords": ["alpha"],
+                "timestamp_granularities": ["word"],
+            },
+            litellm_params={},
+        )
+        transcription_config = request_data.data["generation_config"]["transcription_config"]
+        assert "custom_vocabulary" not in transcription_config
+        assert transcription_config["mode"]["timestamp_granularities"] == ("word",)
+
     def test_word_timestamp_granularity_maps_to_verbatim_diarization_mode(self, config):
         request_data = config.transform_audio_transcription_request(
             model="gemini-3.5-transcribe",
@@ -184,6 +270,18 @@ class TestTransformRequest:
                 "diarization_mode": "speaker",
             }
         }
+
+    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
+    def test_keywords_with_subtitle_response_format_raise(self, config, response_format, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="custom vocabulary with word timestamps"):
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe",
+                audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+                optional_params={"keywords": ["alpha"], "response_format": response_format},
+                litellm_params={},
+            )
 
     @pytest.mark.parametrize("response_format", ["json", "text", "verbose_json"])
     def test_non_subtitle_response_format_sends_no_mode(self, config, response_format):

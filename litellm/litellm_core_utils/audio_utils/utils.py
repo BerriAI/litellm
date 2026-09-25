@@ -4,6 +4,7 @@ Utils used for litellm.transcription() and litellm.atranscription()
 
 import hashlib
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -142,6 +143,7 @@ BARE_ISO_639_1_TO_BCP47: Final = {
     "ru": "ru-RU",
     "hi": "hi-IN",
     "ar": "ar-SA",
+    "pl": "pl-PL",
 }
 
 
@@ -155,6 +157,12 @@ def normalize_transcription_language_to_bcp47(language: str) -> str:
     if "-" in language:
         return language
     return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
+
+
+def normalize_transcription_keywords(keywords: object) -> tuple[str, ...]:
+    if not isinstance(keywords, Sequence) or isinstance(keywords, (str, bytes)):
+        return ()
+    return tuple(keyword for keyword in keywords if isinstance(keyword, str) and keyword)
 
 
 def get_audio_file_name(file_obj: FileTypes) -> str:

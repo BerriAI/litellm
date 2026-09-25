@@ -17,6 +17,7 @@ class GeminiTranscriptionVerbatimMode(TypedDict, total=False):
 
 
 class GeminiTranscriptionConfig(TypedDict, total=False):
+    custom_vocabulary: ReadOnly[tuple[str, ...]]
     language_codes: ReadOnly[tuple[str, ...]]
     mode: ReadOnly[GeminiTranscriptionVerbatimMode]
 

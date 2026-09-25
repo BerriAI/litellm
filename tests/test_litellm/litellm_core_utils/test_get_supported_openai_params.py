@@ -1,11 +1,50 @@
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 
 BEDROCK_REAL_MODEL = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_LABEL = "claude-haiku-4-5"
+
+
+def test_gemini_transcription_dispatch_returns_batch_params(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini/gemini-3.5-transcribe",
+        {"audio_transcription_config": "gemini_transcribe"},
+    )
+
+    params = get_supported_openai_params(
+        model="gemini-3.5-transcribe",
+        custom_llm_provider="gemini",
+        request_type="transcription",
+    )
+
+    assert params is not None
+    assert "keywords" in params
+    assert "timestamp_granularities" in params
+
+
+def test_gemini_live_transcription_dispatch_returns_realtime_params(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini/gemini-3.5-transcribe-live",
+        {
+            "audio_transcription_config": "gemini_realtime_transcribe",
+            "mode": "audio_transcription",
+            "supported_endpoints": ["/v1/realtime"],
+        },
+    )
+
+    params = get_supported_openai_params(
+        model="gemini-3.5-transcribe-live",
+        custom_llm_provider="gemini",
+        request_type="transcription",
+    )
+
+    assert params == ["language", "keywords"]
 
 
 def test_base_model_label_does_not_strip_bedrock_tools():
