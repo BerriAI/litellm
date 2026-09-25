@@ -17,7 +17,7 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    CallbackHooks, LegacyCallbacks, PublicCall, PythonLogger,
+    DeploymentHooks, LegacyCallbacks, MessagesHandler, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
     python::Streaming,
@@ -51,8 +51,8 @@ struct DeliveredStream {
 enum Pending {
     PreRequest(Box<PublicRequest>),
     DeploymentPreCall,
-    DeploymentPostCall,
-    DeploymentFailure,
+    DeploymentPostCallSuccess,
+    DeploymentPostCallFailure,
     AsyncFailure,
 }
 
@@ -300,7 +300,7 @@ impl PythonLifecycle for LegacyLogging {
             .set_item("litellm_logging_obj", self.logger()?.object(py))?;
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(LifecycleStep::Await(CallbackHooks::before_call(
+            return Ok(LifecycleStep::Await(DeploymentHooks::pre_call(
                 py,
                 self.logger()?,
                 self.call.kwargs(),
@@ -329,7 +329,8 @@ impl PythonLifecycle for LegacyLogging {
             Some(messages) => messages,
             None => to_py(py, &request.messages)?.into_bound(py),
         };
-        let awaitable = CallbackHooks::pre_request(py, &request.model, &messages, &kwargs)?;
+        let awaitable =
+            MessagesHandler::execute_pre_request_hooks(py, &request.model, &messages, &kwargs)?;
         self.pending = Some(Pending::PreRequest(Box::new(request)));
         Ok(LifecycleStep::Await(awaitable))
     }
@@ -387,8 +388,8 @@ impl PythonLifecycle for LegacyLogging {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
         if self.runs_deployment_hooks() {
-            self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(LifecycleStep::Await(CallbackHooks::after_success(
+            self.pending = Some(Pending::DeploymentPostCallSuccess);
+            return Ok(LifecycleStep::Await(DeploymentHooks::post_call_success(
                 py,
                 self.call.kwargs(),
                 &self.response,
@@ -440,8 +441,8 @@ impl PythonLifecycle for LegacyLogging {
                     && self.runs_deployment_hooks()
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
-                    self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(LifecycleStep::Await(CallbackHooks::after_failure(
+                    self.pending = Some(Pending::DeploymentPostCallFailure);
+                    return Ok(LifecycleStep::Await(DeploymentHooks::post_call_failure(
                         py,
                         self.call.kwargs(),
                         error,
@@ -494,11 +495,11 @@ impl PythonLifecycle for LegacyLogging {
                     .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());
                 self.prepare(py)
             }
-            Pending::DeploymentPostCall => {
+            Pending::DeploymentPostCallSuccess => {
                 self.response = Some(result?);
                 self.finalize(py)
             }
-            Pending::DeploymentFailure => self.dispatch_failure(py),
+            Pending::DeploymentPostCallFailure => self.dispatch_failure(py),
             Pending::AsyncFailure => match result {
                 Err(failure) if is_cancellation(py, &failure) => Err(failure),
                 _ => Ok(LifecycleStep::Done),

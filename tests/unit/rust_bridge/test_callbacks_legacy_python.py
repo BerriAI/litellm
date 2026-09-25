@@ -154,7 +154,7 @@ async def test_deployment_hook_replacement_updates_the_logger_stream_flag(monkey
             return {**kwargs, "stream": False}
 
     monkeypatch.setattr(litellm, "callbacks", [Convert()])
-    result: Final = await legacy.before_deployment_call(
+    result: Final = await legacy.async_pre_call_deployment_hook(
         logger, {"litellm_logging_obj": logger, "stream": True}, "anthropic_messages"
     )
     assert isinstance(result, dict) and result["stream"] is False

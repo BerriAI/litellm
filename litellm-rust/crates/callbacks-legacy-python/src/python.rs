@@ -15,7 +15,8 @@ const MODULE: &str = "litellm.rust_bridge.callbacks_legacy_python";
 pub(crate) enum LegacyPython {
     Wrapper(Wrapper),
     Logging(Logging),
-    CallbackHooks(CallbackHooks),
+    DeploymentHooks(DeploymentHooks),
+    MessagesHandler(MessagesHandler),
     Streaming(Streaming),
 }
 
@@ -60,18 +61,24 @@ pub(crate) enum Logging {
     FailureHandler,
 }
 
-/// The fan-outs that run one hook of every registered callback: the pre-request hook and
-/// the deployment hooks.
+/// The `litellm.utils` fan-outs of every `CustomLogger`'s deployment hooks, named as
+/// Python names them.
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
-pub(crate) enum CallbackHooks {
-    #[strum(serialize = "pre_request_hooks")]
-    PreRequest,
-    #[strum(serialize = "before_deployment_call")]
-    BeforeDeploymentCall,
-    #[strum(serialize = "after_deployment_success")]
-    AfterDeploymentSuccess,
-    #[strum(serialize = "after_deployment_failure")]
-    AfterDeploymentFailure,
+pub(crate) enum DeploymentHooks {
+    #[strum(serialize = "async_pre_call_deployment_hook")]
+    PreCall,
+    #[strum(serialize = "async_post_call_success_deployment_hook")]
+    PostCallSuccess,
+    #[strum(serialize = "async_post_call_failure_deployment_hook")]
+    PostCallFailure,
+}
+
+/// What the Messages handler (`litellm/llms/anthropic/experimental_pass_through/messages/
+/// handler.py`) runs around the provider call: the `async_pre_request_hook` fan-out.
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
+pub(crate) enum MessagesHandler {
+    #[strum(serialize = "execute_pre_request_hooks")]
+    ExecutePreRequestHooks,
 }
 
 /// The Messages stream iterator's logging: the stream flag, the end-of-stream billing
@@ -91,7 +98,8 @@ impl LegacyPython {
         match self {
             Self::Wrapper(function) => function.into(),
             Self::Logging(function) => function.into(),
-            Self::CallbackHooks(function) => function.into(),
+            Self::DeploymentHooks(function) => function.into(),
+            Self::MessagesHandler(function) => function.into(),
             Self::Streaming(function) => function.into(),
         }
     }
@@ -131,12 +139,21 @@ impl Streaming {
     }
 }
 
-impl CallbackHooks {
+impl DeploymentHooks {
     pub(crate) fn call<'py, A>(self, py: Python<'py>, args: A) -> PyResult<Bound<'py, PyAny>>
     where
         A: pyo3::call::PyCallArgs<'py>,
     {
-        LegacyPython::CallbackHooks(self).call(py, args)
+        LegacyPython::DeploymentHooks(self).call(py, args)
+    }
+}
+
+impl MessagesHandler {
+    pub(crate) fn call<'py, A>(self, py: Python<'py>, args: A) -> PyResult<Bound<'py, PyAny>>
+    where
+        A: pyo3::call::PyCallArgs<'py>,
+    {
+        LegacyPython::MessagesHandler(self).call(py, args)
     }
 }
 
@@ -146,7 +163,7 @@ mod tests {
 
     use strum::VariantArray;
 
-    use super::{CallbackHooks, LegacyPython, Logging, Streaming, Wrapper};
+    use super::{DeploymentHooks, LegacyPython, Logging, MessagesHandler, Streaming, Wrapper};
     use crate::test_support::PYTHON_CONTRACT;
 
     #[test]
@@ -163,9 +180,14 @@ mod tests {
                     .map(|&function| LegacyPython::Logging(function)),
             )
             .chain(
-                CallbackHooks::VARIANTS
+                DeploymentHooks::VARIANTS
                     .iter()
-                    .map(|&function| LegacyPython::CallbackHooks(function)),
+                    .map(|&function| LegacyPython::DeploymentHooks(function)),
+            )
+            .chain(
+                MessagesHandler::VARIANTS
+                    .iter()
+                    .map(|&function| LegacyPython::MessagesHandler(function)),
             )
             .chain(
                 Streaming::VARIANTS

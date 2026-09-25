@@ -73,22 +73,22 @@
   ],
   "custom_pricing_fields": [],
   "is_internal_call": [],
-  "pre_request_hooks": [
+  "execute_pre_request_hooks": [
     "model",
     "messages",
     "kwargs"
   ],
-  "before_deployment_call": [
+  "async_pre_call_deployment_hook": [
     "logger",
     "kwargs",
     "call_type"
   ],
-  "after_deployment_success": [
+  "async_post_call_success_deployment_hook": [
     "kwargs",
     "response",
     "call_type"
   ],
-  "after_deployment_failure": [
+  "async_post_call_failure_deployment_hook": [
     "kwargs",
     "error",
     "call_type"
