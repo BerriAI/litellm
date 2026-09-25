@@ -1320,12 +1320,13 @@ describe("Teams - the exact bytes the create call sends", () => {
       metadata: undefined,
       mcp_tool_overrides: {},
     });
-    expect(wireBody(payload)).toStrictEqual({
+    const expectedWireBody = {
       team_alias: "Byte Contract Team",
       organization_id: null,
       models: ["no-default-models"],
       mcp_tool_overrides: {},
-    });
+    };
+    expect(wireBody(payload)).toStrictEqual(expectedWireBody);
   });
 
   it("keeps every newly mounted but untouched field out of the request body", async () => {
