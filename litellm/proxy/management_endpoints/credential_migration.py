@@ -2,9 +2,9 @@
 At-rest credential re-encryption migration.
 
 Switches every encrypted-at-rest value from the legacy XSalsa20-Poly1305 (nacl)
-format to the versioned AES-256-GCM (``v2:gcm:``) format produced by
-``encrypt_decrypt_utils`` when ``general_settings.encryption_algorithm`` is set to
-``aes-256-gcm``.
+format to the versioned AES-256-GCM (``v3:gcm:``) format produced by
+``encrypt_decrypt_utils`` by default (``general_settings.encryption_algorithm``
+not set to the legacy ``xsalsa20-poly1305``).
 
 Design properties (see case 2026-06-24 fix plan):
 
@@ -12,7 +12,7 @@ Design properties (see case 2026-06-24 fix plan):
   it re-encrypts existing ciphertext under the same derived key but in the new
   AES format. This is achieved by decrypting with the format-detecting reader and
   re-encrypting through ``encrypt_value_helper`` with the AES gate enabled.
-* **Idempotent.** A value already carrying the ``v2:gcm:`` prefix is recognised
+* **Idempotent.** A value already carrying a ``v3:gcm:`` or ``v2:gcm:`` prefix is recognised
   and left untouched, so re-running the migration is a no-op on migrated rows.
 * **Resumable.** Walkers commit per row (or per small table), so an interrupted
   run leaves a clean mixed state that a re-run completes.
@@ -31,6 +31,7 @@ config rows, and the SSO config table.
 """
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
 
@@ -42,12 +43,14 @@ if TYPE_CHECKING:
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _ALGO_AES_GCM,
     _ENCRYPTION_ALGORITHM_SETTING,
-    _V2_GCM_PREFIX,
     SecretMapDecodeError,
+    _get_encryption_algorithm,
     _get_salt_key,
     decode_secret_map,
     decrypt_value_helper,
     encrypt_value_helper,
+    is_versioned_gcm,
+    require_legacy_reader_for,
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
@@ -59,7 +62,7 @@ class LocationReport:
 
     location: str
     scanned: int = 0
-    migrated: int = 0  # values rewritten to v2 this run
+    migrated: int = 0  # values rewritten to versioned AES this run
     already_v2: int = 0  # values already migrated (skipped)
     plaintext: int = 0  # legacy-plaintext values (no ciphertext to migrate)
     undecryptable: int = 0  # could not decrypt — preserved, not overwritten
@@ -124,15 +127,15 @@ class MigrationReport:
 
 
 def is_migrated(value: object) -> bool:
-    """True if ``value`` is already an AES-256-GCM (``v2:gcm:``) ciphertext."""
-    return isinstance(value, str) and value.startswith(_V2_GCM_PREFIX)
+    """True if ``value`` is already a versioned AES-256-GCM (``v3:gcm:`` or ``v2:gcm:``) ciphertext."""
+    return isinstance(value, str) and is_versioned_gcm(value)
 
 
 def classify_value(value: object, key: str = "scan") -> ValueClass:
     """Classify a stored value for the residual scanner.
 
     * ``not-a-string`` — not a string (numbers/bools/None left as-is on disk).
-    * ``migrated`` — carries the ``v2:gcm:`` prefix.
+    * ``migrated`` — carries a versioned ``gcm`` prefix.
     * ``legacy`` — decrypts under the legacy nacl reader (still needs migrating).
     * ``plaintext`` — a non-empty string that does not decrypt and is not v2;
       treated as legacy plaintext (nothing to migrate).
@@ -144,8 +147,9 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
         return "not-a-string"
     if value == "":
         return "plaintext"
-    if value.startswith(_V2_GCM_PREFIX):
+    if is_versioned_gcm(value):
         return "migrated"
+    require_legacy_reader_for((value,), "scan stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
         # Did not decrypt under nacl and has no v2 marker: legacy plaintext.
@@ -156,15 +160,16 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
 def reencrypt_value(value: object, key: str = "migrate") -> object:
     """Re-encrypt a single stored string into the configured (AES) format.
 
-    Returns the value unchanged if it is not a string, is already ``v2:``, or
+    Returns the value unchanged if it is not a string, is already versioned AES, or
     cannot be decrypted (skip-on-undecryptable). Otherwise decrypts under the
     format-detecting reader and re-encrypts through ``encrypt_value_helper``
     (which writes AES when the gate is on).
     """
     if not isinstance(value, str) or value == "":
         return value
-    if value.startswith(_V2_GCM_PREFIX):
+    if is_versioned_gcm(value):
         return value  # idempotent: already migrated
+    require_legacy_reader_for((value,), "migrate stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
         # Either legacy plaintext (no ciphertext to migrate) or corrupt. Either
@@ -194,13 +199,11 @@ def _assert_aes_gate_enabled() -> None:
     Running the migration with the gate off would decrypt then re-encrypt right
     back into the legacy format — a no-op that silently fails the migration.
     """
-    from litellm.proxy.proxy_server import general_settings
-
-    algo: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING)
-    if not (isinstance(algo, str) and algo.lower() == _ALGO_AES_GCM):
+    algo: Final = _get_encryption_algorithm()
+    if algo != _ALGO_AES_GCM:
         raise RuntimeError(
-            "Encryption migration requires general_settings.encryption_algorithm: "
-            f"'{_ALGO_AES_GCM}'. Current value: {algo!r}. Set it before migrating "
+            f"Encryption migration requires general_settings.{_ENCRYPTION_ALGORITHM_SETTING}: "
+            f"'{_ALGO_AES_GCM}' (the default). Current value: {algo!r}. Remove the legacy opt-in before migrating "
             "so re-encrypted values are written in the AES-256-GCM format."
         )
 
@@ -427,7 +430,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 
     Encrypted callback vars carry the ``litellm_enc::`` marker in front of the
     ciphertext; strip it, then classify the inner value the same way the
-    covered-table scanner does (``v2:gcm:`` prefix -> migrated, nacl-decryptable
+    covered-table scanner does (versioned ``gcm`` prefix -> migrated, nacl-decryptable
     -> legacy, otherwise plaintext). Detecting legacy by decrypt rather than by a
     re-encrypt delta is what makes the ``check_encryption`` attestation correct
     even when run with the AES write gate off.
@@ -460,7 +463,10 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
+    ("mcp_oauth_client", "litellm_mcpserveroauthclient", ("credentials",), ()),
+    ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
 ]
+_MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
 
 
 def _iter_encrypted_strings(obj: object):
@@ -481,6 +487,31 @@ def _iter_encrypted_strings(obj: object):
             stack.extend(cur)
 
 
+def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
+    """Only the strings an MCP column encrypts at rest: a credentials blob keeps auth_type, scopes and urls in
+    plaintext and env_vars keeps every name and every per user placeholder, so without PyNaCl those must not be
+    mistaken for legacy ciphertext and refuse the scan"""
+    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS, _is_global_env_var_scope
+
+    if col == "credentials":
+        if not isinstance(raw, dict):
+            return iter(())
+        return (v for k, v in raw.items() if k in MCP_CREDENTIAL_SECRET_FIELDS and isinstance(v, str))
+    if not isinstance(raw, list):
+        return iter(())
+    return (
+        e["value"]
+        for e in raw
+        if isinstance(e, dict) and _is_global_env_var_scope(e.get("scope")) and isinstance(e.get("value"), str)
+    )
+
+
+def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[str]:
+    if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
+        return _mcp_encrypted_leaves(col, raw)
+    return _iter_encrypted_strings(raw)
+
+
 def _classify_into_report(report: LocationReport, value: str) -> None:
     """Classify one stored string and bump the matching read-only counter.
 
@@ -491,14 +522,27 @@ def _classify_into_report(report: LocationReport, value: str) -> None:
     report.count(classify_value(value, key="scan"))
 
 
+def _secret_map_ciphertext(value: object) -> object:
+    """The stored ciphertext behind an MCP secret map: the JSON quoted string is unwrapped, a plain map or
+    anything that is not JSON is returned as is for ``decode_secret_map`` to judge."""
+    if not isinstance(value, str) or not value.lstrip().startswith('"'):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
 def _classify_secret_map(value: object, key: str) -> ValueClass | None:
+    ciphertext: Final = _secret_map_ciphertext(value)
+    if isinstance(ciphertext, str) and not ciphertext.lstrip().startswith("{"):
+        require_legacy_reader_for((ciphertext,), "scan stored encryption")
     try:
         decoded: Final = decode_secret_map(value, key=key)
     except SecretMapDecodeError:
         return "undecryptable"
     if not decoded:
         return None
-    ciphertext: Final = json.loads(value) if isinstance(value, str) and value.lstrip().startswith('"') else value
     return "migrated" if is_migrated(ciphertext) else "legacy"
 
 
@@ -531,7 +575,7 @@ async def _scan_one_table(
                     raw = json.loads(raw)
                 except (ValueError, TypeError):
                     pass
-            for s in _iter_encrypted_strings(raw):
+            for s in _encrypted_leaves(db_attr, col, raw):
                 _classify_into_report(report, s)
         for col in scalar_columns:
             v = getattr(row, col, None)
@@ -625,8 +669,8 @@ async def migrate_encryption(
 ) -> MigrationReport:
     """Run the full at-rest re-encryption migration.
 
-    Requires ``general_settings.encryption_algorithm == 'aes-256-gcm'`` so writes
-    are produced in the AES format. Idempotent and resumable: re-running skips
+    Requires the proxy to write ``aes-256-gcm`` (the default) so re-encrypted
+    values are produced in the AES format. Idempotent and resumable: re-running skips
     already-migrated values and finishes any partial run.
 
     A ``dry_run`` performs no writes: the covered tables are scanned read-only

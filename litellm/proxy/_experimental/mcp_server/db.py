@@ -714,20 +714,22 @@ async def _db_find_user_env_var_rows(
     return await _user_env_var_actions(prisma_client).find_many(where=where)
 
 
+MCP_CREDENTIAL_SECRET_FIELDS: Final = (
+    "auth_value",
+    "client_id",
+    "client_secret",
+    "client_private_key",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+)
+
+
 def decrypt_credentials(
     credentials: MCPCredentials,
 ) -> MCPCredentials:
     """Decrypt all secret fields in an MCPCredentials dict using the global salt key."""
-    secret_fields: Final = [
-        "auth_value",
-        "client_id",
-        "client_secret",
-        "client_private_key",
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "aws_session_token",
-    ]
-    for field in secret_fields:
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
         value = credentials.get(field)
         if value is not None and isinstance(value, str):
             credentials[field] = decrypt_value_helper(
@@ -1418,7 +1420,7 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
 def _decode_user_credential(stored: str) -> str | None:
     """Read back a value persisted in ``LiteLLM_MCPUserCredentials.credential_b64``.
 
-    Tries nacl decryption first (current write format).  Falls back to a
+    Tries the at-rest decryptor first (current write format).  Falls back to a
     plain ``urlsafe_b64decode`` for rows persisted by older code that wrote
     the credential without encryption.  Returns ``None`` when neither path
     yields a valid string.

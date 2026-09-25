@@ -4,7 +4,7 @@ Tests for the encrypted-at-rest persistence of MCP user credentials.
 The ``LiteLLM_MCPUserCredentials.credential_b64`` column previously stored
 both BYOK API keys and OAuth2 access tokens as plain ``urlsafe_b64encode``
 of the raw value, leaving credentials readable from any DB read. The fix
-runs every write through ``encrypt_value_helper`` (nacl SecretBox) and
+runs every write through ``encrypt_value_helper`` (AES-256-GCM by default) and
 keeps a plain-base64 fallback on read so existing rows continue to work.
 """
 
@@ -472,7 +472,7 @@ async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: s
     created: Final = await create_mcp_server(prisma, create, touched_by="test")
     first: Final = table.rows["srv-map"][field]
     assert isinstance(first, str) and isinstance(json.loads(first), str)
-    assert json.loads(first).startswith("v2:gcm:") is (map_algorithm == "aes-256-gcm")
+    assert json.loads(first).startswith("v3:gcm:") is (map_algorithm == "aes-256-gcm")
     assert "sensitive-secret" not in first and "TEMPLATE" not in first
     assert getattr(created, field) == original == getattr(create, field)
     assert decode_secret_map(first, key=field) == original

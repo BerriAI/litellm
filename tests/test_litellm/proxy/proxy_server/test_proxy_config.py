@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,10 +23,15 @@ from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    LegacyEncryptionUnavailableError,
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -33,14 +39,13 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_auto_router_capability_limits,
     validate_deployment_access_windows,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
-    validate_auto_router_capability_limits,
 )
 
 from .conftest import normalize
-from pydantic import JsonValue, TypeAdapter, ValidationError
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url
@@ -3497,6 +3502,22 @@ def test_ProxyConfig__encrypt_env_variables_for_db_idempotent(monkeypatch):
     pc = ProxyConfig()
     out = pc._encrypt_env_variables_for_db({"A": "1", "B": "2", "C": "3"})
     assert out == {"A": "ENC[1]", "B": "ENC[2]", "C": "ENC[3]"}
+
+
+def test_ProxyConfig__encrypt_env_variables_for_db_refuses_without_pynacl_instead_of_dropping_legacy_values(
+    monkeypatch,
+):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    v3 = encrypt_value_helper("already-migrated")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    pc = ProxyConfig()
+
+    saved = pc._encrypt_env_variables_for_db({"A": v3})
+    assert decrypt_value_helper(saved["A"], key="A") == "already-migrated"
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"config save.*legacy-encryption"):
+        pc._encrypt_env_variables_for_db({"A": v3, "B": "plain-or-legacy"})
 
 
 def test_ProxyConfig__encrypt_env_variables_for_db_invalid_raises():

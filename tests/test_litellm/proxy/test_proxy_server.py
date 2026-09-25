@@ -1681,6 +1681,108 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
 
 
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_fips_mode_when_this_python_does_not_enforce_fips(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: False)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+    with pytest.raises(FipsModeError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert len(announced) == 1
+    assert "does not enforce FIPS" in announced[0]
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_fips_mode_when_the_config_disables_tls_verification(monkeypatch, tmp_path):
+    import yaml
+    from fastapi import FastAPI
+
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    config_path.write_text(
+        yaml.dump({"general_settings": {"master_key": "sk-a-safe-master-key"}, "litellm_settings": {"ssl_verify": False}})
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+    with pytest.raises(FipsModeError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert "TLS certificate verification is disabled by litellm_settings.ssl_verify" in announced[0]
+
+
+class _PrismaClientWhoseUserTableCannotHash:
+    class _Table:
+        async def find_many(self, where):
+            raise ValueError("[digital envelope routines] unsupported")
+
+    class _Db:
+        litellm_usertable = None
+
+    def __init__(self, database_url, proxy_logging_obj):
+        self.db = self._Db()
+        self.db.litellm_usertable = self._Table()
+        self.writer_db = self.db
+
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
+
+    def start_view_setup_task(self):
+        pass
+
+    async def check_view_exists(self):
+        pass
+
+    async def health_check(self):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fips_mode", ["true", "false"])
+async def test_proxy_startup_surfaces_a_password_migration_crypto_failure(monkeypatch, tmp_path, caplog, fips_mode):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", _PrismaClientWhoseUserTableCannotHash)
+    monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        if fips_mode == "true":
+            with pytest.raises(ValueError, match="digital envelope routines"):
+                async with proxy_startup_event(FastAPI()):
+                    pass
+        else:
+            async with proxy_startup_event(FastAPI()):
+                await asyncio.sleep(0)
+
+    failures = [r.getMessage() for r in caplog.records if "Password migration failed" in r.getMessage()]
+    assert len(failures) == 1
+    assert "plaintext passwords stay unhashed" in failures[0]
+    assert "digital envelope routines" in failures[0]
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
