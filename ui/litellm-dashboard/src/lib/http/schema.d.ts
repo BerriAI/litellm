@@ -69336,7 +69336,6 @@ export interface operations {
             query: {
                 /** @description Model or model group to rank keys by spend for */
                 model: string;
-                /** @description Match `model` on the raw model column or `model_group` on the public model name */
                 group_by?: "model" | "model_group";
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
