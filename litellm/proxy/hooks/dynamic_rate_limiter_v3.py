@@ -7,6 +7,7 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -1046,14 +1047,14 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         default_share: Final = _get_priority_settings().default_priority
         depths: Final = self.fair_queue.depths(model)
         stats: Final = await self.fairness_stats.read(model, class_names)
+        counter_pools: Final = (
+            ("model_saturation_check", model),
+            *(("priority_model", f"{model}:{name}") for name in reserved_names),
+            ("priority_model", f"{model}:default_pool"),
+        )
         counter_keys: Final = tuple(
             self.v3_limiter.create_rate_limit_keys(key=key, value=value, rate_limit_type=rate_limit_type)
-            for key, value in (
-                ("model_saturation_check", model),
-                *(("priority_model", f"{model}:{name}") for name in reserved_names),
-                ("priority_model", f"{model}:default_pool"),
-            )
-            for rate_limit_type in ("requests", "tokens")
+            for (key, value), rate_limit_type in product(counter_pools, ("requests", "tokens"))
         )
         raw_counters: Final = _RAW_VALUES_ADAPTER.validate_python(
             await self.internal_usage_cache.async_batch_get_cache(keys=counter_keys) or ()

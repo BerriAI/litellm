@@ -36,7 +36,6 @@ import {
   KeyMetadataField,
   KeyRateLimitFields,
   KeyTypeSelect,
-  KeyWorkloadClassField,
   labelWithHint,
   moveMetadataTagsToTagsField,
 } from "./KeyEditViewControls";
@@ -853,8 +852,6 @@ export function KeyEditView({
               />
             )}
           </FormField>
-
-          <KeyWorkloadClassField control={form.control} />
 
           <KeyMetadataField form={form} />
 

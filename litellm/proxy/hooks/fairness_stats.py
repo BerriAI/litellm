@@ -3,6 +3,7 @@
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import product
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -91,9 +92,7 @@ class FairnessStats:
         buckets: Final = self._window_buckets()
         keys: Final = tuple(
             _bucket_key(model, class_name, metric, bucket)
-            for class_name in class_names
-            for metric in FAIRNESS_METRICS
-            for bucket in buckets
+            for class_name, metric, bucket in product(class_names, FAIRNESS_METRICS, buckets)
         )
         raw_values: Final = _RAW_VALUES_ADAPTER.validate_python(
             await self._cache.async_batch_get_cache(keys=keys) or ()

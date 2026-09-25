@@ -150,28 +150,7 @@ export const moveMetadataTagsToTagsField = (form: KeyEditForm): void => {
   }
 };
 
-export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => (
-  <FormField
-    control={form.control}
-    name="metadata"
-    label="Metadata"
-    description="Tags are managed by the Tags field above. A tags array typed here is moved to that field."
-  >
-    {(field) => (
-      <Textarea
-        {...field}
-        value={(field.value as string | undefined) ?? ""}
-        rows={10}
-        onBlur={() => {
-          field.onBlur();
-          moveMetadataTagsToTagsField(form);
-        }}
-      />
-    )}
-  </FormField>
-);
-
-export const KeyWorkloadClassField = ({ control }: { control: Control<KeyEditFormValues> }) => {
+const KeyWorkloadClassField = ({ control }: { control: Control<KeyEditFormValues> }) => {
   const current = useWatch({ control, name: "workload_class" });
   const show = useShowWorkloadClass(current);
   if (!show) return null;
@@ -181,6 +160,30 @@ export const KeyWorkloadClassField = ({ control }: { control: Control<KeyEditFor
     </FormField>
   );
 };
+
+export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => (
+  <>
+    <KeyWorkloadClassField control={form.control} />
+    <FormField
+      control={form.control}
+      name="metadata"
+      label="Metadata"
+      description="Tags are managed by the Tags field above. A tags array typed here is moved to that field."
+    >
+      {(field) => (
+        <Textarea
+          {...field}
+          value={(field.value as string | undefined) ?? ""}
+          rows={10}
+          onBlur={() => {
+            field.onBlur();
+            moveMetadataTagsToTagsField(form);
+          }}
+        />
+      )}
+    </FormField>
+  </>
+);
 
 export const KeyBudgetNumberField = ({
   control,
