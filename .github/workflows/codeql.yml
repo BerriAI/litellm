@@ -62,23 +62,27 @@ jobs:
       # a content-integrity hash, not a password or secret hash. SHA-256 is mandated
       # by Oracle for this header; see
       # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-      # The `usedforsecurity=False` flag on the hashlib.sha256 call already declares
-      # non-security intent, but CodeQL's taint flow still re-fires when callers
-      # further up the stack are modified. The suppression is scoped to this one
-      # file/rule pair via SARIF post-filtering so every other callsite of
+      # The sha256 call carries no usedforsecurity=False hint (kept out for FIPS review), so
+      # CodeQL's taint flow fires whenever callers further up the stack are modified. The
+      # suppression is scoped to this one file/rule pair via SARIF post-filtering so every other callsite of
       # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
       # The same query fires on the HIBP k-anonymity lookup in
       # litellm/proxy/auth/password_policy.py, where the password's SHA-1 is only
       # a lookup key into the haveibeenpwned range API (the protocol mandates
       # SHA-1) and the digest itself never leaves the proxy beyond its first 5
       # characters.
-      - name: Filter SARIF (OCI sha256, HIBP sha1)
+      # It also fires on the MCP advisory-lock derivations in
+      # litellm/proxy/_experimental/mcp_server/db.py, which hash identifier
+      # strings (user_id, server_id, server names) into Postgres advisory lock
+      # keys, so neither a password nor a secret is hashed.
+      - name: Filter SARIF (OCI sha256, HIBP sha1, MCP lock ids)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
             -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/_experimental/mcp_server/db.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 

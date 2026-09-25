@@ -6,6 +6,9 @@ connection. The DB-backed per-user flow is exercised in higher-level
 tests in tests/mcp_tests.
 """
 
+import hashlib
+from typing import Final
+
 import pytest
 
 # Look up these names lazily on every access. Tests in this directory call
@@ -16,6 +19,7 @@ import pytest
 # stop matching the new class. Accessing the attribute through the module
 # always picks up the current version.
 import litellm.proxy._experimental.mcp_server.utils as _mcp_utils
+from litellm.proxy._experimental.mcp_server.db import _mcp_identifier_lock_keys, merge_user_env_vars
 
 
 def _u(name: str):
@@ -1721,3 +1725,18 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
     assert "CorporateDB" in text
     assert "CORP_USERNAME" in text
     assert "fill_env_vars=srv-99" in text
+
+
+@pytest.mark.asyncio
+async def test_merge_user_env_vars_locks_the_sha256_key_for_user_and_server(env_vars_salt_key):
+    prisma: Final = _transactional_env_vars_prisma()
+    await merge_user_env_vars(prisma, "alice", "srv-1", {"TOKEN": "x"}, allowed_names=["TOKEN"])
+
+    expected: Final = int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True)
+    assert list(prisma.db._store.locks) == [expected]
+
+
+def test_mcp_identifier_lock_keys_use_sha256_of_the_lowercased_identifier():
+    keys: Final = _mcp_identifier_lock_keys("Name", "name", None)
+
+    assert keys == (int.from_bytes(hashlib.sha256(b"mcp_identifier:name").digest()[:8], "big", signed=True),)
