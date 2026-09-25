@@ -47,6 +47,7 @@ EXCLUDED: Final = {
     "unified_guardrail": "delegates to other guardrails, makes no HTTP call of its own",
     "conduct": "requires the optional conduct-litellm-guard package, which is not installed",
     "grayswan": "honors its own guardrail_timeout param, not litellm_params.timeout",
+    "akto": "honors its own guardrail_timeout param, not litellm_params.timeout",
 }
 
 
@@ -134,18 +135,6 @@ PROVIDERS: Final = (
     pytest.param("vigil", "vigil_guard", {}, "pre_call", False, id="vigil-guard"),
     pytest.param("singulr", "singulr", {}, "pre_call", False, id="singulr"),
     pytest.param("headroom", "headroom", {}, "pre_call", True, id="headroom"),
-    pytest.param(
-        "akto",
-        "akto",
-        {
-            "akto_api_key": "synthetic-akto-key",
-            "akto_account_id": "synthetic-account",
-            "akto_vxlan_id": "synthetic-vxlan",
-        },
-        "pre_call",
-        False,
-        id="akto",
-    ),
     pytest.param("onyx", "onyx", {}, "post_call", False, id="onyx"),
     pytest.param("panw", "panw_prisma_airs", {}, "pre_call", False, id="panw-prisma-airs"),
 )
