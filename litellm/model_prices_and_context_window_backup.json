@@ -3301,14 +3301,14 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "azure/ada": {
-        "deprecation_date": "2024-06-14",
+        "deprecation_date": "2028-02-09",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/legacy-models"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure/codex-mini": {
         "cache_read_input_token_cost": 3.75e-07,
