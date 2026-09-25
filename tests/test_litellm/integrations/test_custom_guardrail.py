@@ -646,6 +646,36 @@ class TestCustomGuardrailStreamScope:
             is False
         )
 
+    def test_path_defined_streaming_flag_runs_streaming_only_guardrail(self):
+        generate_content_body: Final = {"contents": [{"parts": [{"text": "hi"}]}]}
+        streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope="streaming",
+        )
+        assert streaming_only.should_run_guardrail(generate_content_body, GuardrailEventHooks.pre_call) is False
+        assert (
+            streaming_only.should_run_guardrail(
+                {**generate_content_body, "is_streaming_request": True},
+                GuardrailEventHooks.pre_call,
+            )
+            is True
+        )
+        non_streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope="non_streaming",
+        )
+        assert (
+            non_streaming_only.should_run_guardrail(
+                {**generate_content_body, "is_streaming_request": True},
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+
 
 class TestApplyGuardrailCheck:
     def test_apply_guardrail_check_only_on_direct_implementation(self):

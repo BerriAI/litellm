@@ -584,6 +584,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         Filter out litellm params from the request body
         """
         _parsed_body = _parsed_body or {}
+        _parsed_body.pop("is_streaming_request", None)
 
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
@@ -1174,6 +1175,7 @@ async def pass_through_request(
         if _parsed_body is None:
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
+        _parsed_body["is_streaming_request"] = stream is True
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
@@ -2429,7 +2431,7 @@ async def websocket_passthrough_request(
     )
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_data: dict[str, object] = {}
+    websocket_data: dict[str, object] = {"is_streaming_request": True}
     websocket_data = await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         data=websocket_data,

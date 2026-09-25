@@ -149,7 +149,7 @@ def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None =
         return True
     if not isinstance(data, Mapping):
         return False
-    return data.get("stream") is True
+    return data.get("stream") is True or data.get("is_streaming_request") is True
 
 
 class CustomGuardrail(CustomLogger):
