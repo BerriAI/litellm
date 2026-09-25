@@ -2679,6 +2679,25 @@ def _llm_response(content: str, response_cost: float | None = None):
     return response
 
 
+_REPLY_SHAPES: Final = ("fenced", "fenced-with-language", "prose-before", "prose-after", "fenced-then-prose")
+
+
+def _wrapped_reply(shape: str, verdict: str) -> str:
+    match shape:
+        case "fenced":
+            return f"  ```\n{verdict}\n```  "
+        case "fenced-with-language":
+            return f"```json\n{verdict}\n```"
+        case "prose-before":
+            return f"Sure {{here}} is the verdict you asked for:\n\n{verdict}"
+        case "prose-after":
+            return f"{verdict}\n\nThe efficient solver should handle this {{well}}."
+        case "fenced-then-prose":
+            return f"```json\n{verdict}\n```\n\n## Reasoning\n\nThe task is coupled, so the forecasts differ."
+        case _:
+            raise AssertionError(shape)
+
+
 @pytest.fixture
 def llm_classifier_config() -> Dict:
     """Config with an LLM-based classifier wired to a 'haiku-classifier' model."""
@@ -3132,12 +3151,40 @@ class TestCapabilityClassifier:
         assert outcome.capability_forecast.threshold == pytest.approx(expected_threshold)
 
     @pytest.mark.asyncio
-    async def test_fenced_json_verdict_is_accepted(self, mock_router_instance):
-        reply = _capability_reply(p_solve=0.8)
-        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(f"```json\n{reply}\n```"))
+    @pytest.mark.parametrize("shape", _REPLY_SHAPES)
+    async def test_verdict_wrapped_in_fence_or_prose_is_accepted(self, mock_router_instance, shape: str):
+        reply = _wrapped_reply(shape, _capability_reply(p_solve=0.8))
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(reply))
         outcome = await self._router(mock_router_instance).aclassify("do the task")
         assert outcome.tier == ComplexityTier.SIMPLE
         assert outcome.cause == "capability_classifier"
+        assert outcome.capability_forecast is not None
+        assert outcome.capability_forecast.p_solve == 0.8
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message_logging_off", (False, True))
+    async def test_unparseable_reply_is_logged_with_its_text_unless_message_logging_is_off(
+        self, mock_router_instance, caplog: pytest.LogCaptureFixture, message_logging_off: bool
+    ):
+        reply = "The task text is too {vague} for a forecast, sorry."
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(reply))
+        outcome = await self._router(mock_router_instance).aclassify(
+            "do the task", request_kwargs={"turn_off_message_logging": message_logging_off}
+        )
+        assert outcome.cause == "capability_classifier_fallback"
+        assert "capability classifier failed (ValidationError)" in caplog.text
+        assert "classifier verdict rejected (" in caplog.text
+        assert ("raw reply withheld" in caplog.text) is message_logging_off
+        assert (reply in caplog.text) is not message_logging_off
+
+    @pytest.mark.asyncio
+    async def test_call_failure_reason_names_the_exception_type(
+        self, mock_router_instance, caplog: pytest.LogCaptureFixture
+    ):
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError())
+        outcome = await self._router(mock_router_instance).aclassify("do the task")
+        assert outcome.cause == "capability_classifier_fallback"
+        assert "capability classifier failed (TimeoutError)" in caplog.text
 
     @pytest.mark.asyncio
     async def test_decimal_rounding_does_not_break_inclusive_threshold(self, mock_router_instance):
@@ -3953,6 +4000,34 @@ class TestLLMClassifier:
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["model"] == "haiku-classifier"
         assert call_kwargs["timeout"] == 0.4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", _REPLY_SHAPES)
+    async def test_aclassify_llm_verdict_wrapped_in_fence_or_prose_still_decides_the_tier(
+        self, llm_complexity_router, mock_router_instance, shape: str
+    ):
+        reply = _wrapped_reply(shape, '{"tier": "COMPLEX"}')
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(reply))
+        outcome = await llm_complexity_router.aclassify("hi")
+        assert outcome.tier == ComplexityTier.COMPLEX
+        assert outcome.cause == "llm_classifier"
+        assert "llm-classifier:COMPLEX" in outcome.signals
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message_logging_off", (False, True))
+    async def test_aclassify_llm_unparseable_reply_is_logged_with_its_text_unless_message_logging_is_off(
+        self, llm_complexity_router, mock_router_instance, caplog: pytest.LogCaptureFixture, message_logging_off: bool
+    ):
+        reply = "I would call this COMPLEX, the {tier} field is implied."
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(reply))
+        outcome = await llm_complexity_router.aclassify(
+            "hi", request_kwargs={"turn_off_message_logging": message_logging_off}
+        )
+        assert outcome.cause != "llm_classifier"
+        assert "LLM classifier failed (ValidationError)" in caplog.text
+        assert "classifier verdict rejected (" in caplog.text
+        assert ("raw reply withheld" in caplog.text) is message_logging_off
+        assert (reply in caplog.text) is not message_logging_off
 
     @pytest.mark.asyncio
     async def test_aclassify_llm_success_captures_classifier_cost(self, llm_complexity_router, mock_router_instance):
