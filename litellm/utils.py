@@ -3597,16 +3597,18 @@ def get_optional_params_image_gen(
     additional_drop_params: list | None = None,
     provider_config: BaseImageGenerationConfig | None = None,
     drop_params: bool | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
-    model = passed_params.pop("model", None)
-    custom_llm_provider = passed_params.pop("custom_llm_provider")
-    provider_config = passed_params.pop("provider_config", None)
-    drop_params = normalize_drop_params(passed_params.pop("drop_params", None))
-    additional_drop_params = passed_params.pop("additional_drop_params", None)
-    special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
+    passed_params.pop("model", None)
+    passed_params.pop("custom_llm_provider")
+    passed_params.pop("provider_config", None)
+    passed_params.pop("drop_params", None)
+    drop_params = normalize_drop_params(drop_params)
+    passed_params.pop("additional_drop_params", None)
+    passed_params.pop("kwargs")
+    special_params: Final = kwargs
     for k, v in special_params.items():
         if (
             k.startswith("aws_")

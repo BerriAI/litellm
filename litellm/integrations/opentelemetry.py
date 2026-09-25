@@ -2360,7 +2360,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             keys = Function.__annotations__.keys()
             for key in keys:
-                _value = _function.get(key)
+                _value = dict(_function).get(key)
                 if _value:
                     kv_pairs[f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.function_call.{key}"] = _value
 
