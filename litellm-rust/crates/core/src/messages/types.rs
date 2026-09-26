@@ -1,12 +1,45 @@
 use std::time::Duration;
 
-use litellm_llms::{
-    anthropic::common_utils::AnthropicModelCapabilities, base_llm::auth::ValidatedEnvironment,
+use bytes::Bytes;
+use futures_util::stream::BoxStream;
+use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
+use litellm_types::{
+    llms::anthropic_messages::{
+        anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
+    },
+    utils::ProviderSpecificHeaders,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use super::common_utils::MessagesProvider;
+use super::Error;
+
+pub struct MessagesCall {
+    pub body: AnthropicMessagesRequest,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub provider_specific_header: Option<ProviderSpecificHeaders>,
+    pub timeout: Option<Duration>,
+    pub shaping: MessagesShaping,
+}
+
+pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesRequest, Error> {
+    serde_json::from_value(Value::Object(body)).map_err(invalid_request)
+}
+
+pub(super) fn invalid_request(err: serde_json::Error) -> Error {
+    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+}
+
+pub enum MessagesResponse {
+    Message(Box<AnthropicMessagesResponse>),
+    Stream {
+        headers: Vec<(String, String)>,
+        chunks: BoxStream<'static, Result<Bytes, Error>>,
+    },
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
@@ -18,16 +51,6 @@ pub struct MessagesShaping {
     pub reasoning_auto_summary: bool,
     #[serde(default)]
     pub additional_drop_params: Vec<String>,
-}
-
-pub(crate) struct ProviderMessagesRequest {
-    pub(crate) provider: MessagesProvider,
-    pub(crate) url: String,
-    pub(crate) body: AnthropicMessagesRequest,
-    /// The forwarded, default and feature headers plus how the call authenticates; the
-    /// credential itself is applied when the request is sent.
-    pub(crate) environment: ValidatedEnvironment,
-    pub(crate) timeout: Option<Duration>,
 }
 
 #[cfg(test)]

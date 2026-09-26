@@ -17,6 +17,7 @@ litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-tracing.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
 rand.workspace = true

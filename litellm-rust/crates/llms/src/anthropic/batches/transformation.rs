@@ -4,7 +4,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::{Error, anthropic::messages::transformation::resolve_anthropic_api_base};
+use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
 
 const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 

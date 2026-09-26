@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_config::Config;
-use litellm_core::messages::types::MessagesShaping;
+use litellm_core::messages::MessagesShaping;
 use litellm_router::{Deployment, Router};
 use rstest::rstest;
 

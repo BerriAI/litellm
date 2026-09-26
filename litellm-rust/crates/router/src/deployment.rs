@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_core::messages::types::MessagesShaping;
+use litellm_core::messages::MessagesShaping;
 
 #[derive(Clone, Debug, Default)]
 pub struct Deployment {

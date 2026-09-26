@@ -7,7 +7,7 @@ pub enum CredentialPlacement {
 }
 
 impl CredentialPlacement {
-    pub fn header_name(self) -> &'static str {
+    pub const fn header_name(self) -> &'static str {
         match self {
             Self::Bearer => "Authorization",
             Self::Header(name) => name,

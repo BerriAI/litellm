@@ -12,7 +12,6 @@ bytes.workspace = true
 futures-util.workspace = true
 litellm-auth.workspace = true
 litellm-core.workspace = true
-litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-router.workspace = true
@@ -20,10 +19,10 @@ litellm-secrets.workspace = true
 litellm-types.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 futures-util.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 wiremock = "0.6.5"

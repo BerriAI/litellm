@@ -1,4 +1,4 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::SecretValue;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_types::llms::anthropic_messages::{
     anthropic_request::{
@@ -10,8 +10,9 @@ use litellm_types::llms::anthropic_messages::{
 
 use crate::{
     Error,
-    anthropic::messages::transformation::{
-        ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
+    anthropic::{
+        common_utils::{API_KEY_PLACEMENT, MESSAGES_PATH_SUFFIX, non_empty},
+        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig},
     },
     base_llm::{
         anthropic_messages::transformation::{
@@ -24,9 +25,7 @@ use crate::{
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
-const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 const SYSTEM_ROLE: &str = "system";
-const API_KEY_HEADER: &str = "x-api-key";
 
 pub struct AzureAnthropicMessagesConfig {
     anthropic: AnthropicMessagesConfig,
@@ -86,14 +85,14 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, API_KEY_HEADER) || has_bearer_auth(&headers) {
+        if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
             });
         }
         let auth = AuthScheme::Credential {
-            placement: CredentialPlacement::Header(API_KEY_HEADER),
+            placement: API_KEY_PLACEMENT,
             secret: SecretValue::new(resolve_azure_api_key(api_key, env_lookup)?),
         };
         Ok(ValidatedEnvironment { headers, auth })
@@ -215,6 +214,8 @@ fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMess
 mod tests {
     use rstest::rstest;
     use serde_json::json;
+
+    use litellm_auth::CredentialPlacement;
 
     use super::*;
     use crate::anthropic::common_utils::AnthropicModelCapabilities;

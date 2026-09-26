@@ -1,6 +1,6 @@
 use litellm_core::{
     Phase,
-    messages::{messages, route::messages_body},
+    messages::{MessagesResponse, messages, messages_body},
 };
 use litellm_http::transport::Error as TransportError;
 use rstest::rstest;
@@ -188,9 +188,10 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
         ..HttpSettings::default()
     };
 
-    let message = messages(
+    let response = messages(
         &support::resources(),
         &Resolution::from(&settings).config,
+        &RecordingSecrets::empty(),
         MessagesCall {
             api_key: Some("sk-ant".into()),
             api_base: Some(base),
@@ -200,6 +201,9 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     .await
     .expect("messages request succeeds");
 
+    let MessagesResponse::Message(message) = response else {
+        panic!("a non-streaming request returns a message");
+    };
     assert_eq!(message.id, "msg_1");
     let sent = only_request(&upstream).await;
     assert_eq!(sent.header("x-api-key"), Some("sk-ant"));
