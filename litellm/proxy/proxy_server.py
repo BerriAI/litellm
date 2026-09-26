@@ -12423,6 +12423,12 @@ async def audio_transcriptions(
                 call_type="transcription",
             )
 
+            if data.get("stream") is True and ProxyLogging.has_post_call_guardrails(data, llm_router):
+                raise HTTPException(
+                    detail="Streaming transcription does not support output guardrails. Use stream=false.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
             ## ROUTE TO CORRECT ENDPOINT ##
             llm_call: Final = await route_request(
                 data=data,

@@ -2875,6 +2875,17 @@ class ProxyLogging:
         return ProxyLogging._callback_capabilities().has_post_call_response_headers
 
     @staticmethod
+    def has_post_call_guardrails(request_data: Mapping[str, object], llm_router: Router | None) -> bool:
+        guardrail_data: Final = _check_and_merge_model_level_guardrails(
+            data=dict(request_data), llm_router=llm_router, trust_client_model_info=False
+        )
+        guardrails, _ = _partition_post_call_callbacks()
+        return bool(pipeline_managed_guardrail_names(guardrail_data, "post_call")) or any(
+            guardrail.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call)
+            for guardrail in guardrails
+        )
+
+    @staticmethod
     def has_streaming_callbacks() -> bool:
         caps: Final = ProxyLogging._callback_capabilities()
         return caps.has_iterator_override or caps.has_streaming_chunk_override or caps.has_guardrail
