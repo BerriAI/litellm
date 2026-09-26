@@ -10113,3 +10113,25 @@ async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
     with pytest.raises(HTTPException) as denied:
         await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
     assert denied.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["servers", "tools"])
+async def test_managed_agent_permission_resolution_outage_is_not_an_unrestricted_grant(monkeypatch, operation):
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.types.agents import AgentResponse
+
+    auth = UserAPIKeyAuth(agent_id="managed")
+    auth.managed_agent_policy = AgentResponse(agent_id="managed", agent_name="Managed", agent_card_params={})
+    permission = LiteLLM_ObjectPermissionTable(object_permission_id="policy", mcp_toolsets=["unavailable"])
+    manager = MagicMock()
+    manager.expand_permission_list.return_value = []
+    manager.resolve_toolset_tool_permissions = AsyncMock(side_effect=RuntimeError("policy unavailable"))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    resolution = (
+        MCPRequestHandler.get_allowed_mcp_servers_for_agent(auth, permission)
+        if operation == "servers"
+        else MCPRequestHandler.get_agent_tool_permissions_for_server("slack", auth, permission)
+    )
+    with pytest.raises(RuntimeError, match="policy unavailable"):
+        await resolution
