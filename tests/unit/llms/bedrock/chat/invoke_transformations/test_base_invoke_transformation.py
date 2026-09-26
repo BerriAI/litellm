@@ -13,7 +13,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, keys_at_every_depth
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
 
 @pytest.mark.parametrize(
@@ -332,15 +332,7 @@ INVOKE_DEPLOYMENT: Final = MappingProxyType(
 )
 
 
-@pytest.mark.parametrize(
-    "deployment_extras,expected_chunk_size",
-    [
-        pytest.param(MappingProxyType({"stream_chunk_size": 64}), 64, id="int"),
-        pytest.param(MappingProxyType({"stream_chunk_size": "64"}), 64, id="digit_string"),
-        pytest.param(MappingProxyType({}), None, id="unset"),
-        pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": True}), None, id="dropped"),
-    ],
-)
+@pytest.mark.parametrize("deployment_extras,expected_chunk_size", ROUTER_CHUNK_SIZE_CASES)
 def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     deployment_extras: Mapping[str, object], expected_chunk_size: int | None
 ) -> None:

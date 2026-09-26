@@ -2,6 +2,8 @@
 Test filter_out_litellm_params helper function.
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -49,14 +51,14 @@ def test_filter_out_litellm_params_also_drops_the_excluded_names():
 def test_filter_out_litellm_params_sees_a_name_appended_to_the_public_list_after_import():
     litellm.all_litellm_params.append("registered_later")
     try:
-        filtered = filter_out_litellm_params({"registered_later": 1, "top_k": 2})
+        filtered: Final = filter_out_litellm_params({"registered_later": 1, "top_k": 2})
     finally:
         litellm.all_litellm_params.remove("registered_later")
 
     assert filtered == {"top_k": 2}
 
 
-def test_filter_out_litellm_params_sees_the_public_list_rebound_after_import(monkeypatch: pytest.MonkeyPatch):
+def test_filter_out_litellm_params_sees_the_defining_module_list_rebound_after_import(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(types_utils, "all_litellm_params", (*types_utils.all_litellm_params, "registered_later"))
 
     assert filter_out_litellm_params({"registered_later": 1, "top_k": 2}) == {"top_k": 2}

@@ -14,6 +14,13 @@ DEFAULT_CHUNKING_REQUESTS: Final = (
     pytest.param(MappingProxyType({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}}), id="forged_mapping"),
 )
 
+ROUTER_CHUNK_SIZE_CASES: Final = (
+    pytest.param(MappingProxyType({"stream_chunk_size": 64}), 64, id="int"),
+    pytest.param(MappingProxyType({"stream_chunk_size": "64"}), 64, id="digit_string"),
+    pytest.param(MappingProxyType({}), None, id="unset"),
+    pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": True}), None, id="dropped"),
+)
+
 
 def keys_at_every_depth(value: object) -> frozenset[str]:
     if isinstance(value, Mapping):

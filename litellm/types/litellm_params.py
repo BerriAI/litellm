@@ -240,12 +240,13 @@ class ResponseOptions:
     allow_client_keepalive_override: bool | None = None
 
 
-MAX_DECIMAL_STRING_DIGITS: Final = 18
+MAX_CONTROL_INT_DIGITS: Final = 18
 
 
 def _int_from_decimal_string(value: object) -> object:
-    is_digits: Final = isinstance(value, str) and value.isascii() and value.isdecimal()
-    return int(value) if is_digits and len(value) <= MAX_DECIMAL_STRING_DIGITS else value
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
+    return value
 
 
 @pydantic_dataclass(frozen=True, slots=True, kw_only=True)
@@ -254,7 +255,7 @@ class ControlOptions:
         Annotated[
             int,
             BeforeValidator(_int_from_decimal_string),
-            Field(strict=True, gt=0, lt=10**MAX_DECIMAL_STRING_DIGITS),
+            Field(strict=True, gt=0, lt=10**MAX_CONTROL_INT_DIGITS),
         ]
         | None
     ) = None

@@ -347,14 +347,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             return control
         case InvalidControlOption(param=param, message=message):
             if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
-                return control.valid
+                return ControlOptions()
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
-
-
-def _reject_invalid_control_options(kwargs: Mapping[str, object], model: str) -> None:
-    _ = _resolve_control_options(kwargs, model)
 
 
 ####### COMPLETION ENDPOINTS ################
@@ -523,7 +519,7 @@ async def acompletion(
 
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
-    _reject_invalid_control_options(kwargs, model)
+    _ = _resolve_control_options(kwargs, model)
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
