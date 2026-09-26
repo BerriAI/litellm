@@ -104,7 +104,9 @@ def _bedrock_base_key(key: str, entries: Entries) -> str | None:
     return base_key if base_key in entries and base_key != key else None
 
 
-def _capability_gaps(key: str, entry: Mapping[str, object], base_key: str, base_entry: Mapping[str, object]) -> Iterator[str]:
+def _capability_gaps(
+    key: str, entry: Mapping[str, object], base_key: str, base_entry: Mapping[str, object]
+) -> Iterator[str]:
     for capability, base_value in base_entry.items():
         if not capability.startswith("supports_"):
             continue
