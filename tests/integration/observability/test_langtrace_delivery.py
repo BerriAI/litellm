@@ -456,15 +456,14 @@ def test_langtrace_api_host_variants_append_api_trace_exactly_once(
 
 def test_langtrace_logs_repeated_identical_requests_once_each(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = _marker()
-    body: Final = {
-        "model": "",
-        "messages": [{"role": "user", "content": marker}],
-        "cache": {"no-cache": True},
-    }
     with _langtrace_rig(gateway, tmp_path) as rig:
-        for _ in range(2):
-            response = rig.proxy.request("POST", "/v1/chat/completions", {**body, "model": rig.model})
-            assert response.status_code == 200, response.text
+        body: Final = {
+            "model": rig.model,
+            "messages": [{"role": "user", "content": marker}],
+            "cache": {"no-cache": True},
+        }
+        responses: Final = tuple(rig.proxy.request("POST", "/v1/chat/completions", body) for _ in range(2))
+        assert [response.status_code for response in responses] == [200, 200], [r.text for r in responses]
         assert rig.provider_hits(marker) == 2
         batches: Final = eventually(
             rig.sink.collect, lambda value: len(_spans_carrying(value, marker)) >= 2, seconds=20
