@@ -3757,6 +3757,9 @@ async def _read_cached_entities(cache_keys: Sequence[str]) -> Mapping[str, objec
     return MappingProxyType({**{key: fetched.get(key) for key in missing}, **in_memory})
 
 
+_CACHED_ENTITY_VALUES: Final = TypeAdapter(dict[str, object])
+
+
 async def _redis_cached_entities(user_api_key_cache: UserApiKeyCache, missing: Sequence[str]) -> Mapping[str, object]:
     redis_cache: Final = user_api_key_cache.redis_cache
     if redis_cache is None:
@@ -3765,12 +3768,10 @@ async def _redis_cached_entities(user_api_key_cache: UserApiKeyCache, missing: S
         fetched: Final = await redis_cache.async_batch_get_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportUnknownVariableType]  # untyped cache API
             key_list=sorted(missing)
         )
+        result: Final[Mapping[str, object]] = _CACHED_ENTITY_VALUES.validate_python(fetched)
     except Exception as e:  # noqa: BLE001  # a failed batch degrades to "not cached", same as a per-key miss
         verbose_proxy_logger.debug("update_cache: batched entity read failed, treating keys as uncached: %s", e)
         return {}
-    result: Final = cast(
-        Mapping[str, object], fetched
-    )  # cast-ok: async_batch_get_cache is untyped; it returns key->cached-value pairs
     backfill_kwargs: Final = (
         {} if user_api_key_cache.default_in_memory_ttl is None else {"ttl": user_api_key_cache.default_in_memory_ttl}
     )
@@ -3925,9 +3926,7 @@ async def update_cache(
                 # do nothing if not in cache
                 return
             elif response_cost is not None:
-                increment: Final = (
-                    cast(float, global_proxy_spend) + response_cost
-                )  # cast-ok: GLOBAL_PROXY_SPEND_CACHE_KEY holds a float written by this same spend update path
+                increment: Final = cast(float, global_proxy_spend) + response_cost  # cast-ok: this key stores a float
                 values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
