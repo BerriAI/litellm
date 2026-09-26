@@ -1713,6 +1713,101 @@ def check_team_key_rpm_tpm_limits(
     )
 
 
+_KEY_TEAM_LIMIT_WARNING_FIELDS: Final[tuple[str, ...]] = (
+    "rpm_limit",
+    "tpm_limit",
+    "max_parallel_requests",
+    "max_budget",
+)
+
+
+def _update_request_with_retained_team_limits(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> UpdateKeyRequest:
+    """Fill omitted limit fields from the existing key for team-cap warnings.
+
+    /key/update often changes only team_id (or a subset of limits). Retained
+    rpm/tpm/concurrency/budget must still be compared against the effective
+    team caps so reassignment cannot silently keep an over-cap value.
+    """
+    retained: Final = MappingProxyType(
+        {
+            field_name: getattr(existing_key_row, field_name, None)
+            for field_name in _KEY_TEAM_LIMIT_WARNING_FIELDS
+            if field_name not in data.model_fields_set
+        }
+    )
+    if not retained:
+        return data
+    return data.model_copy(update=retained)
+
+
+def _collect_key_team_limit_warnings(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    team_table: LiteLLM_TeamTable | LiteLLM_TeamTableCachedObj,
+) -> tuple[KeyTeamLimitWarning, ...]:
+    """
+    Compare key rpm/tpm/max_parallel_requests/max_budget against the team's caps.
+
+    Returns warnings when the key requests a higher value than the team allows.
+    Does not reject; runtime still applies the stricter team limit.
+    """
+    comparisons: Final[tuple[tuple[KeyTeamLimitField, float | int | None, float | int | None], ...]] = (
+        ("rpm_limit", data.rpm_limit, team_table.rpm_limit),
+        ("tpm_limit", data.tpm_limit, team_table.tpm_limit),
+        ("max_parallel_requests", data.max_parallel_requests, team_table.max_parallel_requests),
+        ("max_budget", data.max_budget, team_table.max_budget),
+    )
+    return tuple(
+        KeyTeamLimitWarning(
+            field=field_name,
+            requested=requested,
+            effective_team_cap=team_cap,
+        )
+        for field_name, requested, team_cap in comparisons
+        if requested is not None and team_cap is not None and requested > team_cap
+    )
+
+
+def _maybe_add_key_team_limit_warnings(
+    payload: Mapping[str, object],
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    team_table: LiteLLM_TeamTable | LiteLLM_TeamTableCachedObj | None,
+) -> Mapping[str, object]:
+    """Attach team-limit warnings to a key update payload when caps are exceeded."""
+    if team_table is None:
+        return payload
+    warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
+    if not warnings:
+        return payload
+    return MappingProxyType(
+        {**payload, "warnings": list(warnings)}
+    )  # mutable-ok: GenerateKeyResponse/tests expect list warnings
+
+
+async def _soft_resolve_existing_key_team_for_warnings(
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> LiteLLM_TeamTableCachedObj | None:
+    """Resolve the existing key's team for warning payloads only; ignore missing teams."""
+    team_id = getattr(existing_key_row, "team_id", None)
+    if team_id is None or prisma_client is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+    except HTTPException as e:
+        if e.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        return None
+
+
 async def _check_team_key_limits(
     team_table: LiteLLM_TeamTableCachedObj,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -2138,12 +2233,18 @@ async def generate_key_fn(
                 user_api_key_cache=user_api_key_cache,
             )
 
-        return await _common_key_generation_helper(
+        team_limit_warnings: Final = (
+            _collect_key_team_limit_warnings(data=data, team_table=team_table) if team_table is not None else ()
+        )
+        response: Final = await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
+        if team_limit_warnings:
+            response.warnings = list(team_limit_warnings)  # mutable-ok: GenerateKeyResponse/tests expect list warnings
+        return response
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.generate_key_fn(): Exception occured - %s", e)
@@ -2314,12 +2415,18 @@ async def generate_service_account_key_fn(
 
     data.user_id = None  # do not allow user_id to be set for service account keys
 
-    return await _common_key_generation_helper(
+    team_limit_warnings: Final = (
+        _collect_key_team_limit_warnings(data=data, team_table=team_table) if team_table is not None else ()
+    )
+    response: Final = await _common_key_generation_helper(
         data=data,
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
         team_table=team_table,
     )
+    if team_limit_warnings:
+        response.warnings = list(team_limit_warnings)  # mutable-ok: GenerateKeyResponse/tests expect list warnings
+    return response
 
 
 def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_metadata: dict) -> dict:
@@ -2780,7 +2887,9 @@ async def _process_single_key_update(
     # Enforce upperbound key params on update (don't fill defaults)
     _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
 
-    # Get team object and check team limits if team_id is provided
+    # Get team object and check team limits if team_id is provided on the request.
+    # Existing-key team is soft-resolved for warnings only — a missing team must not
+    # block an otherwise valid update (custom key policy runs later).
     team_obj: LiteLLM_TeamTableCachedObj | None = None
     if update_key_request.team_id is not None:
         team_obj = await get_team_object(
@@ -2796,6 +2905,12 @@ async def _process_single_key_update(
                 data=update_key_request,
                 prisma_client=prisma_client,
             )
+    else:
+        team_obj = await _soft_resolve_existing_key_team_for_warnings(
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     # Validate team change if team is being changed
     if is_different_team(data=update_key_request, existing_key_row=existing_key_row):
@@ -2906,7 +3021,11 @@ async def _process_single_key_update(
 
     updated_key_info.pop("token", None)
 
-    return updated_key_info
+    return _maybe_add_key_team_limit_warnings(
+        updated_key_info,
+        update_key_request,
+        team_obj,
+    )
 
 
 async def _with_validated_object_permission(
@@ -3071,7 +3190,7 @@ async def _validate_update_key_data(
     premium_user: bool,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
-) -> None:
+) -> tuple[KeyTeamLimitWarning, ...]:
     """Validate permissions and constraints for key update."""
     checked_prisma_client: Final = _require_prisma_client(prisma_client)
 
@@ -3353,6 +3472,13 @@ async def _validate_update_key_data(
         if normalized_object_permission is not None:
             data.object_permission = LiteLLM_ObjectPermissionBase(**normalized_object_permission)
 
+    if team_obj is None:
+        return ()
+    return _collect_key_team_limit_warnings(
+        data=_update_request_with_retained_team_limits(data=data, existing_key_row=existing_key_row),
+        team_table=team_obj,
+    )
+
 
 @router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
@@ -3476,7 +3602,7 @@ async def update_key_fn(
         key: Final = _resolve_token_to_update(data=data, existing_key_row=existing_key_row)
         data.key = key
 
-        await _validate_update_key_data(
+        team_limit_warnings: Final = await _validate_update_key_data(
             data=data,
             existing_key_row=existing_key_row,
             user_api_key_dict=user_api_key_dict,
@@ -3598,7 +3724,12 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        updated_key_info: Final[Mapping[str, object]] = MappingProxyType({"key": key, **response["data"]})
+        if team_limit_warnings:
+            return MappingProxyType(
+                {**updated_key_info, "warnings": list(team_limit_warnings)}
+            )  # mutable-ok: key/update response tests expect list warnings
+        return updated_key_info
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)

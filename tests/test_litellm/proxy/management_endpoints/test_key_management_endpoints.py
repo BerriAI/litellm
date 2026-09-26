@@ -48,6 +48,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
+    _collect_key_team_limit_warnings,
+    _maybe_add_key_team_limit_warnings,
     _common_key_generation_helper,
     _effective_key_after_update,
     _effective_key_for_generate,
@@ -70,6 +72,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     check_team_key_model_specific_limits,
     delete_verification_tokens,
     generate_key_fn,
+    generate_service_account_key_fn,
     generate_key_helper_fn,
     key_aliases,
     key_generation_check,
@@ -3575,6 +3578,420 @@ async def test_update_key_fn_auto_rotate_disable():
 
     # Verify auto_rotate is set to False
     assert result["auto_rotate"] is False
+
+
+def test_collect_key_team_limit_warnings_above_team_caps():
+    """Key limits above team caps produce field-level warnings without rejection."""
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="capped-team",
+        team_alias="capped-team",
+        rpm_limit=60,
+        tpm_limit=1000,
+        max_parallel_requests=5,
+        max_budget=10.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    data = GenerateKeyRequest(
+        team_id="capped-team",
+        rpm_limit=600,
+        tpm_limit=5000,
+        max_parallel_requests=20,
+        max_budget=100.0,
+    )
+
+    warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
+
+    assert warnings == (
+        {
+            "field": "rpm_limit",
+            "requested": 600,
+            "effective_team_cap": 60,
+        },
+        {
+            "field": "tpm_limit",
+            "requested": 5000,
+            "effective_team_cap": 1000,
+        },
+        {
+            "field": "max_parallel_requests",
+            "requested": 20,
+            "effective_team_cap": 5,
+        },
+        {
+            "field": "max_budget",
+            "requested": 100.0,
+            "effective_team_cap": 10.0,
+        },
+    )
+
+
+def test_collect_key_team_limit_warnings_within_or_unset_caps():
+    """No warning when key is within team caps, team has no cap, or key omits the field."""
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="partial-caps",
+        team_alias="partial-caps",
+        rpm_limit=60,
+        tpm_limit=None,
+        max_parallel_requests=5,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    data = UpdateKeyRequest(
+        key="sk-test-key-123456",
+        rpm_limit=60,
+        tpm_limit=999999,
+        max_parallel_requests=3,
+        max_budget=50.0,
+    )
+
+    warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
+
+    assert warnings == ()
+
+
+@pytest.mark.asyncio
+async def test_generate_key_fn_attaches_team_limit_warnings(monkeypatch):
+    """/key/generate succeeds and returns warnings when key rpm exceeds team rpm."""
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="warn-team",
+        team_alias="warn-team",
+        rpm_limit=60,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    data = GenerateKeyRequest(team_id="warn-team", rpm_limit=600, key_alias="over-cap")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-1234",
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=team_table),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.key_generation_check",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.check_org_admin_can_generate_keys",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        MagicMock(),
+    )
+
+    from litellm.proxy._types import GenerateKeyResponse
+
+    generated = GenerateKeyResponse(
+        key="sk-generated-key-123456",
+        token_id="hashed",
+        team_id="warn-team",
+        rpm_limit=600,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+        AsyncMock(return_value=generated),
+    )
+
+    result = await generate_key_fn(data=data, user_api_key_dict=user_api_key_dict)
+
+    assert result.key == "sk-generated-key-123456"
+    assert result.rpm_limit == 600
+    assert result.warnings == [
+        {
+            "field": "rpm_limit",
+            "requested": 600,
+            "effective_team_cap": 60,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_validate_update_key_data_returns_team_limit_warnings(monkeypatch):
+    """/key/update validation returns warnings when updated limits exceed team caps."""
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed-token",
+        team_id="warn-team",
+        user_id="user-1",
+        models=[],
+    )
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="warn-team",
+        team_alias="warn-team",
+        rpm_limit=60,
+        max_budget=10.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    data = UpdateKeyRequest(key="sk-test-key-123456", rpm_limit=600, max_budget=100.0)
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-1234",
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=team_table),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.common_key_access_checks",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.enforce_member_can_assign_access_groups",
+        MagicMock(),
+    )
+
+    warnings = await _validate_update_key_data(
+        data=data,
+        existing_key_row=existing_key,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=None,
+        premium_user=True,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    assert warnings == (
+        {
+            "field": "rpm_limit",
+            "requested": 600,
+            "effective_team_cap": 60,
+        },
+        {
+            "field": "max_budget",
+            "requested": 100.0,
+            "effective_team_cap": 10.0,
+        },
+    )
+
+
+async def test_validate_update_key_data_warns_on_retained_limits_team_change(monkeypatch):
+    """Team reassignment without limit fields still warns on retained over-cap values."""
+    existing = LiteLLM_VerificationToken(
+        token="hashed-token",
+        team_id="team-old",
+        user_id="user-1",
+        models=[],
+        max_budget=100.0,
+        max_parallel_requests=50,
+    )
+    new_team = LiteLLM_TeamTableCachedObj(
+        team_id="team-new",
+        team_alias="team-new",
+        max_budget=10.0,
+        max_parallel_requests=5,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    data = UpdateKeyRequest(key="sk-test-key-123456", team_id="team-new")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-1234",
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=new_team),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.common_key_access_checks",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.enforce_member_can_assign_access_groups",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_team_change",
+        AsyncMock(),
+    )
+
+    warnings = await _validate_update_key_data(
+        data=data,
+        existing_key_row=existing,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=MagicMock(),
+        premium_user=True,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    assert warnings == (
+        {
+            "field": "max_parallel_requests",
+            "requested": 50,
+            "effective_team_cap": 5,
+        },
+        {
+            "field": "max_budget",
+            "requested": 100.0,
+            "effective_team_cap": 10.0,
+        },
+    )
+
+
+
+def test_maybe_add_key_team_limit_warnings_passthrough_and_attach():
+    """Attach warnings to update payloads only when caps are exceeded."""
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="warn-team",
+        team_alias="warn-team",
+        rpm_limit=60,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    payload = {"key": "sk-test-key-123456", "rpm_limit": 600}
+
+    assert (
+        _maybe_add_key_team_limit_warnings(
+            payload,
+            UpdateKeyRequest(key="sk-test-key-123456", rpm_limit=600),
+            None,
+        )
+        is payload
+    )
+    assert (
+        _maybe_add_key_team_limit_warnings(
+            payload,
+            UpdateKeyRequest(key="sk-test-key-123456", rpm_limit=30),
+            team_table,
+        )
+        is payload
+    )
+
+    with_warnings = _maybe_add_key_team_limit_warnings(
+        payload,
+        UpdateKeyRequest(key="sk-test-key-123456", rpm_limit=600),
+        team_table,
+    )
+    assert with_warnings is not payload
+    assert with_warnings["key"] == "sk-test-key-123456"
+    assert with_warnings["warnings"] == [
+        {
+            "field": "rpm_limit",
+            "requested": 600,
+            "effective_team_cap": 60,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_service_account_key_fn_attaches_team_limit_warnings(monkeypatch):
+    """Service-account generate also surfaces team-limit warnings."""
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="warn-team",
+        team_alias="warn-team",
+        rpm_limit=60,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+    data = GenerateKeyRequest(team_id="warn-team", rpm_limit=600, key_alias="sa-over-cap")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-1234",
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.check_org_admin_can_generate_keys",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.validate_team_id_used_in_service_account_request",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=team_table),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.key_generation_check",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        MagicMock(),
+    )
+
+    from litellm.proxy._types import GenerateKeyResponse
+
+    generated = GenerateKeyResponse(
+        key="sk-service-account-123456",
+        token_id="hashed",
+        team_id="warn-team",
+        rpm_limit=600,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+        AsyncMock(return_value=generated),
+    )
+
+    result = await generate_service_account_key_fn(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+
+    assert result.key == "sk-service-account-123456"
+    assert result.warnings == [
+        {
+            "field": "rpm_limit",
+            "requested": 600,
+            "effective_team_cap": 60,
+        }
+    ]
 
 
 @pytest.mark.asyncio
