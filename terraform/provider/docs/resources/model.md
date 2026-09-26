@@ -159,7 +159,7 @@ The following arguments are supported:
 
 * `input_cost_per_pixel` - (Optional) float. Cost applied per input pixel for models that charge by image size.
 
-* `input_cost_per_reference_pixel` - (Optional) float. Cost applied per billable pixel of the reference images sent with an image edit, for models that meter reference images separately. Azure AI FLUX.2 counts reference images in whole 1024x1024 megapixels. Changing it to 0 or removing it on an existing model sets the rate to 0, so reference images are then free.
+* `input_cost_per_reference_pixel` - (Optional) float. Cost applied per reference image pixel for image-edit models.
 
 * `output_cost_per_pixel` - (Optional) float. Cost applied per output pixel for image-generation models.
 
