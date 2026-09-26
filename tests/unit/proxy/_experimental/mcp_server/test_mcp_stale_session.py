@@ -370,13 +370,12 @@ async def test_delete_stale_mcp_session_returns_success():
 
 
 @pytest.mark.asyncio
-async def test_failed_delete_preserves_stateful_session_tracking():
-    """
-    When the SDK fails to terminate an existing stateful session, keep the
-    owner/auth tracking so the session cannot be hijacked or hidden from cleanup.
-    """
+@pytest.mark.parametrize("outcome", ("deleted", "rejected", "exception"))
+async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome):
     try:
         from litellm.proxy._experimental.mcp_server.server import (
+            _handle_stale_mcp_session,
+            _terminated_session_ids,
             _owner_fingerprint_for,
             _stateful_session_auth_context_last_seen,
             _stateful_session_auth_contexts,
@@ -389,10 +388,12 @@ async def test_failed_delete_preserves_stateful_session_tracking():
         pytest.skip("MCP server not available")
 
     session_id = "delete-failure-session"
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import MCPAuthenticatedUser
+
     user_auth = UserAPIKeyAuth()
     user_auth.api_key = "sk-test"
     user_auth.user_id = "test-user"
-    auth_context = MagicMock()
+    auth_context = MCPAuthenticatedUser(user_api_key_auth=user_auth)
     session_lock = asyncio.Lock()
     mock_instances = {session_id: MagicMock()}
 
@@ -414,6 +415,14 @@ async def test_failed_delete_preserves_stateful_session_tracking():
     _stateful_session_owners[session_id] = _owner_fingerprint_for(user_auth)
     _stateful_session_locks[session_id] = session_lock
 
+    async def dispatch(scope, receive, send):
+        if outcome == "exception":
+            raise RuntimeError("delete failed")
+        if outcome == "deleted":
+            mock_instances.pop(session_id)
+        await send({"type": "http.response.start", "status": 200 if outcome == "deleted" else 403, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
     try:
         with (
             patch(
@@ -429,7 +438,7 @@ async def test_failed_delete_preserves_stateful_session_tracking():
                 session_manager_stateful,
                 "handle_request",
                 new_callable=AsyncMock,
-                side_effect=RuntimeError("delete failed"),
+                side_effect=dispatch,
             ) as mock_handle_request,
             patch.object(
                 session_manager_stateful,
@@ -438,6 +447,20 @@ async def test_failed_delete_preserves_stateful_session_tracking():
             ),
         ):
             await handle_streamable_http_mcp(scope, receive, send)
+            if outcome == "deleted":
+                assert session_id not in _stateful_session_auth_contexts
+                assert session_id not in _stateful_session_owners
+                assert session_id not in _stateful_session_locks
+                replay_send = AsyncMock()
+                handled = await _handle_stale_mcp_session(
+                    {**scope, "method": "POST"}, receive, replay_send, session_manager_stateful
+                )
+                assert handled is True
+                assert replay_send.await_args_list[0].args[0]["status"] == 404
+                repeated_delete = AsyncMock()
+                assert await _handle_stale_mcp_session(scope, receive, repeated_delete, session_manager_stateful)
+                assert repeated_delete.await_args_list[0].args[0]["status"] == 200
+                return
 
         assert mock_handle_request.await_count == 1
         assert _stateful_session_auth_contexts[session_id] is auth_context
@@ -446,6 +469,7 @@ async def test_failed_delete_preserves_stateful_session_tracking():
         assert _stateful_session_locks[session_id] is session_lock
         assert session_id in mock_instances
     finally:
+        _terminated_session_ids.pop(session_id, None)
         _stateful_session_auth_contexts.pop(session_id, None)
         _stateful_session_auth_context_last_seen.pop(session_id, None)
         _stateful_session_owners.pop(session_id, None)

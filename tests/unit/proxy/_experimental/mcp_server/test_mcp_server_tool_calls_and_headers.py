@@ -3267,7 +3267,7 @@ async def test_admin_terminated_session_id_gets_404_instead_of_a_fresh_stateless
             )
             assert [k for k, _ in unknown_scope["headers"]] == [b"content-type"]
     finally:
-        mcp_server._admin_terminated_session_ids.clear()
+        mcp_server._terminated_session_ids.clear()
 
 
 @pytest.mark.asyncio
@@ -3332,13 +3332,13 @@ async def test_admin_terminated_session_id_stays_refused_while_replayed_and_is_f
                 assert await replay(retrying_id, 1000.0 + elapsed) == (True, [b"content-type", b"mcp-session-id"])
 
             await mcp_server._purge_expired_stateful_session_auth_contexts(now=1000.0 + idle_timeout)
-            assert set(mcp_server._admin_terminated_session_ids) == {retrying_id}
+            assert set(mcp_server._terminated_session_ids) == {retrying_id}
 
             assert await replay(silent_id, 1000.0 + idle_timeout) == (False, [b"content-type"])
             assert await replay(retrying_id, 1000.0 + 4 * idle_timeout) == (False, [b"content-type"])
-            assert mcp_server._admin_terminated_session_ids == {}
+            assert mcp_server._terminated_session_ids == {}
     finally:
-        mcp_server._admin_terminated_session_ids.clear()
+        mcp_server._terminated_session_ids.clear()
 
 
 @pytest.mark.asyncio
