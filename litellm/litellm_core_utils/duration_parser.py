@@ -12,8 +12,6 @@ from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from litellm._logging import verbose_logger
-
 _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "hourly": "1h",
     "daily": "24h",
@@ -131,6 +129,9 @@ def get_next_standardized_reset_time(
 
     Returns:
     - Next reset time at a standardized interval in the specified timezone
+
+    Raises:
+    - ValueError: If the duration string is empty or cannot be parsed.
     """
     # Set up timezone and normalize current time
     current_time, _ = _setup_timezone(current_time, timezone_str)
@@ -138,12 +139,10 @@ def get_next_standardized_reset_time(
     # Parse duration
     value, unit = _parse_duration(_normalize_duration(duration))
     if value is None:
-        verbose_logger.warning(
-            "Unrecognized budget_duration %r; falling back to a next-midnight reset. "
-            "Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo').",
-            duration,
+        raise ValueError(
+            f"Invalid budget_duration {duration!r}. "
+            "Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo')."
         )
-        return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
     # Midnight of the current day in the specified timezone
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
