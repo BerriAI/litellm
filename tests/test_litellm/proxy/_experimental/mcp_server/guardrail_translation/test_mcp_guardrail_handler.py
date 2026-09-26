@@ -799,3 +799,89 @@ async def test_clean_structured_content_keys_do_not_block():
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
     assert returned.structured_content == {"record_id": "C-1001", "balance": 42.0, "count": 3}
+
+
+@pytest.mark.asyncio
+async def test_description_and_schema_descriptions_are_scanned_ahead_of_arguments():
+    """A discovery scan hands the guardrail the tool description, then the schema descriptions, then arguments."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = MockGuardrail()
+
+    data = {
+        "mcp_tool_name": "weather",
+        "mcp_tool_description": "Get weather for a city",
+        "mcp_input_schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string", "description": "City name"}, "days": {"type": "integer"}},
+        },
+        "mcp_arguments": {"city": "tokyo"},
+    }
+
+    await handler.process_input_messages(data, guardrail)
+
+    assert guardrail.last_inputs is not None
+    assert guardrail.last_inputs.get("texts") == ["Get weather for a city", "City name", "tokyo"]
+
+
+@pytest.mark.asyncio
+async def test_masked_description_and_schema_are_written_back_without_touching_arguments():
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    data = {
+        "mcp_tool_name": "send_email",
+        "mcp_tool_description": "Email jane.doe@example.com for help",
+        "mcp_input_schema": {
+            "type": "object",
+            "properties": {"to": {"type": "string", "description": "Defaults to jane.doe@example.com"}},
+        },
+        "mcp_arguments": {},
+    }
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert result["mcp_tool_description"] == "Email <EMAIL_ADDRESS> for help"
+    assert result["mcp_input_schema"] == {
+        "type": "object",
+        "properties": {"to": {"type": "string", "description": "Defaults to <EMAIL_ADDRESS>"}},
+    }
+    assert "modified_arguments" not in result
+
+
+@pytest.mark.asyncio
+async def test_argument_mask_lands_on_the_argument_when_a_description_is_scanned_too():
+    """The positional write-back must offset past the description and schema texts."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_tool_description": "Search notes",
+        "mcp_input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "Query"}}},
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert result["mcp_tool_description"] == "Search notes"
+    assert result["mcp_input_schema"]["properties"]["query"]["description"] == "Query"
+    assert result["modified_arguments"] == {"query": "contact <EMAIL_ADDRESS> about the invoice"}
+
+
+@pytest.mark.asyncio
+async def test_wrong_text_count_with_a_description_blocks_instead_of_misplacing_a_mask():
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail(texts_override=["only one"])
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_tool_description": "Search notes",
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
+
+    assert exc_info.value.status_code == 400
+    assert data["mcp_tool_description"] == "Search notes"
+    assert "modified_arguments" not in data

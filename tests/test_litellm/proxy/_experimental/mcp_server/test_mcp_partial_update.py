@@ -1091,3 +1091,17 @@ async def test_clearing_alias_with_free_server_name_returns_the_row():
     )
 
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_partial_update_writes_pinned_tools_as_json_and_null_clears_the_pin():
+    pinned = await _run_update(
+        UpdateMCPServerRequest(server_id="my-test-server", pinned_tools={"list_notes": "List notes"})
+    )
+    assert json.loads(pinned["pinned_tools"]) == {"list_notes": "List notes"}
+
+    cleared = await _run_update(UpdateMCPServerRequest(server_id="my-test-server", pinned_tools=None))
+    assert cleared["pinned_tools"] == "{}"
+
+    unrelated = await _run_update(UpdateMCPServerRequest(server_id="my-test-server", allowed_tools=["foo"]))
+    assert "pinned_tools" not in unrelated

@@ -19627,6 +19627,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/{server_id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin Mcp Server Tools
+         * @description Pin the server's current upstream tool list and descriptions (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.
+         */
+        post: operations["pin_mcp_server_tools_v1_mcp_server__server_id__pin_post"];
+        /**
+         * Unpin Mcp Server Tools
+         * @description Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.
+         */
+        delete: operations["unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/{server_id}/reject": {
         parameters: {
             query?: never;
@@ -24541,7 +24565,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -32474,6 +32498,10 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /** Pinned Tools */
+            pinned_tools?: {
+                [key: string]: string;
+            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -36268,6 +36296,10 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /** Pinned Tools */
+            pinned_tools?: {
+                [key: string]: string;
+            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -44759,6 +44791,10 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /** Pinned Tools */
+            pinned_tools?: {
+                [key: string]: string;
+            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -72521,6 +72557,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPOAuthUserCredentialStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pin_mcp_server_tools_v1_mcp_server__server_id__pin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -690,6 +690,10 @@ CallTypesLiteral = Literal[
     "acreate_realtime_transcription_session",
 ]
 
+MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {CallTypes.call_mcp_tool.value, CallTypes.list_mcp_tools.value}
+)
+
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Chat Completions

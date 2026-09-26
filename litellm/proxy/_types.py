@@ -1533,6 +1533,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     allowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, str] | None = None
     extra_headers: list[str] | None = None
     static_headers: dict[str, str] | None = None
     env_vars: list[MCPEnvVar] | None = None
@@ -1646,6 +1647,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     allowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, str] | None = None
     extra_headers: list[str] | None = None
     static_headers: dict[str, str] | None = None
     env_vars: list[MCPEnvVar] | None = None

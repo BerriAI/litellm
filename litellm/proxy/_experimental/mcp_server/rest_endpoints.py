@@ -684,6 +684,8 @@ if MCP_AVAILABLE:
         permissions. This is the admin-only configuration view; every runtime
         path keeps the default True so callable tools stay filtered.
         """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
@@ -692,6 +694,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             client_ip=client_ip,
             user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
         if not apply_tool_filters:

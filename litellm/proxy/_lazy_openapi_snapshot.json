@@ -30263,6 +30263,20 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -32078,6 +32092,20 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -32963,6 +32991,20 @@
               "default": false,
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
+            },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
             },
             "registration_url": {
               "anyOf": [
@@ -35134,6 +35176,20 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -36864,6 +36920,20 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -37388,6 +37458,20 @@
               "default": false,
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
+            },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
             },
             "registration_url": {
               "anyOf": [
@@ -38636,6 +38720,108 @@
             }
           ],
           "summary": "Get Mcp Oauth User Credential Status",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/{server_id}/pin": {
+        "delete": {
+          "description": "Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.",
+          "operationId": "unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Unpin Mcp Server Tools V1 Mcp Server  Server Id  Pin Delete",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Unpin Mcp Server Tools",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "post": {
+          "description": "Pin the server's current upstream tool list and descriptions (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.",
+          "operationId": "pin_mcp_server_tools_v1_mcp_server__server_id__pin_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Pin Mcp Server Tools V1 Mcp Server  Server Id  Pin Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Pin Mcp Server Tools",
           "tags": [
             "mcp_management"
           ]
@@ -40086,6 +40272,20 @@
               "default": false,
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
+            },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
             },
             "registration_url": {
               "anyOf": [
