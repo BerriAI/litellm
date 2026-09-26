@@ -8707,6 +8707,26 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
 
 
 @pytest.mark.asyncio
+async def test_ttft_keepalive_relays_a_late_dict_payload_as_an_sse_frame():
+    """Plain dict late payloads must not AttributeError on `.body` (issue #42408)."""
+
+    async def slow_dict():
+        await asyncio.sleep(0.2)
+        return {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+
+    response = await open_sse_before_first_byte(slow_dict(), ping_interval_seconds=0.05)
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert json.loads(collected[-2].decode().removeprefix("data: ").strip()) == {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+    }
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
 async def test_ttft_keepalive_closes_the_upstream_stream_it_relayed():
     """Starlette never calls the produced response, so its own cleanup never runs
     and the upstream LLM connection would leak."""
