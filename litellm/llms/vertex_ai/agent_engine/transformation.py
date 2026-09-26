@@ -10,6 +10,7 @@ API Reference:
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
@@ -365,6 +366,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -423,6 +426,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for asynchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
