@@ -469,6 +469,7 @@ impl PythonLifecycle for LegacyLogging {
             error.write_unraisable(py, None);
         }
         self.body = None;
+        self.headers = None;
         self.context = None;
         self.stream = None;
     }
@@ -486,7 +487,8 @@ impl PythonLifecycle for LegacyLogging {
             visit.call(&stream.chunks)?;
             visit.call(&stream.first_chunk)?;
         }
-        visit.call(&self.body)
+        visit.call(&self.body)?;
+        visit.call(&self.headers)
     }
 }
 
@@ -743,6 +745,7 @@ mod payload_tests {
     use litellm_host::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
     use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle, to_py};
     use proptest::prelude::*;
+    use pyo3::gc::{PyTraverseError, PyVisit};
     use pyo3::prelude::*;
     use rstest::rstest;
     use serde_json::{Map, Value, json};
@@ -832,22 +835,141 @@ check = lambda: None
                 headers: vec![("x-route".into(), "route".into())],
                 body,
             };
-            let step = logging.before_send(py, Box::new(wire), &context).unwrap();
-            let raw = MachineEvent::ResponseReceived {
-                raw: RawResponse {
-                    body: "raw response".into(),
-                },
-            };
-            assert!(matches!(
-                logging.emit(py, LifecycleEvent::Machine(&raw)).unwrap(),
-                LifecycleStep::Done
-            ));
+            let (_, step) = send_and_receive(py, &mut logging, wire, &context);
             run(py, &locals, c"check()");
             let LifecycleStep::Wire(wire) = step else {
                 panic!("before_send did not hand back the wire request");
             };
             *wire
         })
+    }
+
+    /// `before_send` over `wire`, then the provider's raw response the way the driver
+    /// delivers it, so `pre_call` and `post_call` have both seen the retained payload.
+    fn send_and_receive<'a>(
+        py: Python<'_>,
+        logging: &'a mut LegacyLogging,
+        wire: WireRequest,
+        context: &RequestContext,
+    ) -> (&'a mut LegacyLogging, LifecycleStep) {
+        let step = logging.before_send(py, Box::new(wire), context).unwrap();
+        let raw = MachineEvent::ResponseReceived {
+            raw: RawResponse {
+                body: "raw response".into(),
+            },
+        };
+        assert!(matches!(
+            logging.emit(py, LifecycleEvent::Machine(&raw)).unwrap(),
+            LifecycleStep::Done
+        ));
+        (logging, step)
+    }
+
+    fn route_context() -> RequestContext {
+        RequestContext {
+            model: "model".into(),
+            custom_llm_provider: "provider".into(),
+            optional_params: json!({}),
+            secret_fields: vec![],
+            api_key: Some(SecretValue::new("route-key")),
+        }
+    }
+
+    fn route_wire() -> WireRequest {
+        WireRequest {
+            url: "https://provider.invalid/ocr".into(),
+            headers: vec![("x-route".into(), "route".into())],
+            body: json!({}),
+        }
+    }
+
+    /// A Python object owning one `LegacyLogging`, so the interpreter's collector sees the
+    /// edges the adapter reports and clears them the way the driver's `Execution` does.
+    #[pyclass(weakref)]
+    struct Retained {
+        logging: Option<LegacyLogging>,
+    }
+
+    #[pymethods]
+    impl Retained {
+        fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+            match &self.logging {
+                Some(logging) => logging.traverse(&visit),
+                None => Ok(()),
+            }
+        }
+
+        fn __clear__(slf: &Bound<'_, Self>) {
+            drop(slf.borrow_mut().logging.take());
+        }
+    }
+
+    #[test]
+    fn a_cycle_through_the_retained_headers_is_collected() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            send_and_receive(py, &mut logging, route_wire(), &route_context());
+            let retained = Py::new(
+                py,
+                Retained {
+                    logging: Some(logging),
+                },
+            )
+            .unwrap();
+            locals.set_item("retained", retained).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+import gc
+import weakref
+
+logger.post[2]['headers']['owner'] = retained
+logger.pre = logger.post = None
+reference = weakref.ref(retained)
+del retained
+gc.collect()
+assert reference() is None
+",
+            );
+        });
+    }
+
+    #[test]
+    fn close_releases_the_retained_headers() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            send_and_receive(py, &mut logging, route_wire(), &route_context());
+            run(
+                py,
+                &locals,
+                c"
+import weakref
+
+class Sentinel:
+    pass
+
+sentinel = Sentinel()
+logger.post[2]['headers']['sentinel'] = sentinel
+logger.pre = logger.post = None
+reference = weakref.ref(sentinel)
+del sentinel
+assert reference() is not None
+",
+            );
+            logging.close(py);
+            run(py, &locals, c"assert reference() is None");
+        });
     }
 
     #[rstest]
