@@ -2563,7 +2563,7 @@ async def test_post_call_failure_hook_refunds_reservation_taken_at_admission(mon
 
 
 @pytest.mark.asyncio
-async def test_success_event_never_bills_an_already_settled_reservation(monkeypatch):
+async def test_success_after_post_call_rejection_bills_actual_usage_without_the_reservation(monkeypatch):
     from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
     from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
     from litellm.types.utils import ModelResponse, Usage
@@ -2576,13 +2576,17 @@ async def test_success_event_never_bills_an_already_settled_reservation(monkeypa
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
     handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    reservation_aware = AsyncMock()
     legacy_increment = AsyncMock()
+    monkeypatch.setattr(handler.v3_limiter, "async_increment_reservation_aware_tokens", reservation_aware)
     monkeypatch.setattr(handler.v3_limiter, "async_increment_tokens_with_ttl_preservation", legacy_increment)
 
-    async def already_settled_then_success() -> None:
+    async def refunded_then_success() -> None:
         stash = get_or_create_request_stash()
         stash.dynamic_reserved_tokens = 40
-        stash.dynamic_token_scopes = frozenset({("model_saturation_check", model)})
+        stash.dynamic_token_scopes = frozenset(
+            {("model_saturation_check", model), ("priority_model", f"{model}:prod")}
+        )
         stash.dynamic_reservation_settled = True
         await handler.async_log_success_event(
             kwargs=_success_kwargs(model, "double-bill", "prod"),
@@ -2593,5 +2597,52 @@ async def test_success_event_never_bills_an_already_settled_reservation(monkeypa
             end_time=None,
         )
 
-    await asyncio.create_task(already_settled_then_success())
+    await asyncio.create_task(refunded_then_success())
+    reservation_aware.assert_awaited_once()
+    operations = reservation_aware.await_args.kwargs["pipeline_operations"]
+    assert len(operations) == 2
+    for op in operations:
+        assert op["increment_value"] == 10
+        assert "window_key" not in op
     legacy_increment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_after_success_settlement_is_a_no_op(monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-settle-then-fail-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    reservation_aware = AsyncMock()
+    monkeypatch.setattr(handler.v3_limiter, "async_increment_reservation_aware_tokens", reservation_aware)
+    monkeypatch.setattr(handler.v3_limiter, "recovered_partial_usage_tokens", lambda *args, **kwargs: (0, 0, 0))
+    data = {"model": model, "litellm_call_id": "settle-then-fail"}
+
+    async def succeed_then_fail() -> None:
+        stash = get_or_create_request_stash()
+        stash.dynamic_reserved_tokens = 40
+        stash.dynamic_token_scopes = frozenset({("model_saturation_check", model)})
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, "settle-then-fail", "prod"),
+            response_obj=ModelResponse(
+                model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+            ),
+            start_time=None,
+            end_time=None,
+        )
+        await handler.async_post_call_failure_hook(
+            request_data=data,
+            original_exception=Exception("post-call guardrail rejected"),
+            user_api_key_dict=_prod_user(),
+        )
+
+    await asyncio.create_task(succeed_then_fail())
+    reservation_aware.assert_awaited_once()

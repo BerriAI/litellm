@@ -648,6 +648,25 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             raise
         return True
 
+    async def _bill_settled_reservation_usage(
+        self,
+        stash: RequestRateLimiterStash,
+        actual_tokens: int,
+        parent_otel_span: "Span | None",
+    ) -> None:
+        if actual_tokens <= 0:
+            return
+        await self.v3_limiter.async_increment_reservation_aware_tokens(
+            pipeline_operations=self.v3_limiter.build_project_reservation_ops(
+                targets=sorted(stash.dynamic_token_scopes),
+                reserved_scopes=frozenset(),
+                actual_tokens=actual_tokens,
+                reserved_tokens=0,
+                reservation_window_identities=stash.dynamic_reservation_windows,
+            ),
+            parent_otel_span=parent_otel_span,
+        )
+
     def _queue_weights(self, model_group_info: ModelGroupInfo, fairness: FairnessSettings) -> Mapping[str, float]:
         normalized: Final = self._normalize_priority_weights(model_group_info)
         return MappingProxyType(
@@ -988,7 +1007,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
             if stash is not None and stash.dynamic_reserved_tokens > 0:
-                await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span)
+                if not await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span):
+                    await self._bill_settled_reservation_usage(stash, total_tokens, litellm_parent_otel_span)
                 return
 
             bypassed: Final = stash.dynamic_admission_bypassed if stash is not None else not self.enforcing
