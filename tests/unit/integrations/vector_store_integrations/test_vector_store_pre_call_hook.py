@@ -589,8 +589,9 @@ class ScanningGuardrail(CustomGuardrail):
         verdict: ScanVerdict = "http_400",
         default_on: bool = True,
         event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+        guardrail_name: str = "scanning-guardrail",
     ) -> None:
-        super().__init__(guardrail_name="scanning-guardrail", event_hook=event_hook, default_on=default_on)
+        super().__init__(guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on)
         self.verdict = verdict
         self.seen_messages: list[list[AllMessageValues]] = []
         self.seen_team_ids: list[str | None] = []
@@ -954,6 +955,37 @@ async def test_chunks_are_scanned_against_the_clients_request_when_the_proxy_kep
     (scan_request,) = guardrail.seen_requests
     assert (scan_request["model"], scan_request["user"], scan_request["temperature"]) == ("kb-model", "cav:grex", 0)
     assert scan_request["messages"] == [{"role": "user", "content": "Context:\n\ncontext from vs-clean\n\n"}]
+
+
+@pytest.mark.asyncio
+async def test_a_team_guardrail_merged_into_the_metadata_scans_the_chunks_even_when_the_client_named_its_own(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_with("vs-poisoned")
+    team_guardrail = ScanningGuardrail(default_on=False, guardrail_name="team-guardrail")
+    monkeypatch.setattr(litellm, "callbacks", [team_guardrail])
+    client_body = {
+        "model": "kb-model",
+        "guardrails": ["client-guardrail"],
+        "messages": [{"role": "user", "content": "what is litellm?"}],
+    }
+
+    with pytest.raises(HTTPException) as raised:
+        await _run_hook(
+            VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=_poisoned_router("vs-poisoned"))),
+            ["vs-poisoned"],
+            FakeLoggingObj({}),
+            request_params={
+                "metadata": {"guardrails": ["client-guardrail", "team-guardrail"]},
+                "proxy_server_request": {"url": "http://proxy/v1/chat/completions", "body": client_body},
+            },
+        )
+
+    assert raised.value.status_code == 400
+    (scan_request,) = team_guardrail.seen_requests
+    assert "guardrails" not in scan_request
+    assert scan_request["metadata"]["guardrails"] == ["client-guardrail", "team-guardrail"]
 
 
 @pytest.mark.asyncio
