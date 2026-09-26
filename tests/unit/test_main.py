@@ -60,10 +60,6 @@ def add_api_keys_to_env(monkeypatch):
 WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
 
 
-async def _async_fake_bedrock_image_details(image_url):
-    return "ZmFrZS1pbWFnZQ==", "image/png"
-
-
 @pytest.fixture
 def openai_api_response():
     mock_response_data = {
@@ -235,31 +231,16 @@ async def test_url_with_format_param_openai(model, sync_mode):
 async def test_url_with_format_param(model, sync_mode, monkeypatch):
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory
 
     if sync_mode:
         client = HTTPHandler()
     else:
         client = AsyncHTTPHandler()
 
-    # This test is about request shaping, not live image downloads. Stub the
-    # URL->image conversion helpers so suite-level network/client state from
-    # earlier tests cannot prevent the mocked provider client from being hit.
-    fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
-    monkeypatch.setattr(
-        prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image
+    image_url: Final = (
+        "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
+        f"?case={sync_mode}-{model}"
     )
-    monkeypatch.setattr(
-        prompt_factory.BedrockImageProcessor,
-        "get_image_details",
-        staticmethod(lambda image_url: ("ZmFrZS1pbWFnZQ==", "image/png")),
-    )
-    monkeypatch.setattr(
-        prompt_factory.BedrockImageProcessor,
-        "get_image_details_async",
-        staticmethod(_async_fake_bedrock_image_details),
-    )
-
     args = {
         "model": model,
         "messages": [
@@ -269,7 +250,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
+                            "url": image_url,
                             "format": "image/png",
                         },
                     },
@@ -281,12 +262,13 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
     if model.startswith("gemini/"):
         args["api_key"] = "test-api-key"
     monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
     with (
         respx.mock(assert_all_called=False) as image_host,
         patch.object(client, "post", new=MagicMock()) as mock_client,
     ):
-        image_host.get(args["messages"][0]["content"][0]["image_url"]["url"]).mock(
+        image_route = image_host.get(image_url).mock(
             return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"})
         )
         try:
@@ -339,6 +321,9 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             assert "png" in json_str
             assert "jpeg" not in json_str
 
+        fetches_image: Final = not model.startswith("anthropic/")
+        assert image_route.called is fetches_image
+        assert (base64.b64encode(WHITE_PNG).decode() in json_str) is fetches_image
 
 
 def test_bedrock_latency_optimized_inference():
