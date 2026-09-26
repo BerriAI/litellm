@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, field
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.proxy.agent_identity import AgentExecutionMode, AgentIdentityBinding
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageResponse
@@ -301,6 +302,11 @@ class AgentKeySummary(BaseModel):
 
 
 class AgentResponse(BaseModel):
+    identity: AgentIdentityBinding | None = None
+    identity_managed: bool = False
+    enabled: bool = True
+    execution_mode: AgentExecutionMode = "autonomous"
+    jwt_auth_configured: bool = False
     agent_id: str
     agent_name: str
     litellm_params: dict[str, object] | None = None
