@@ -9134,7 +9134,7 @@ class TestMCPServerResolutionCharacterization:
         server_id: str,
     ) -> tuple[MagicMock, MCPServerManager, UserAPIKeyAuth]:
         team_id: Final = UI_SESSION_TOKEN_TEAM_ID if grant_route == "direct user object_permission" else "lit3974_team"
-        user_id: Final = "lit3974_direct_user"
+        user_id: Final = f"{server_id}:{grant_route}:user"
         key_permission: Final = LiteLLM_ObjectPermissionTable(
             object_permission_id=f"lit3974_{grant_route}_key_permission",
             mcp_servers=None,
