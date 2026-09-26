@@ -419,12 +419,13 @@ def test_flux2_image_edit_measures_a_stream_reference():
     assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 + rate * 2048 * 2048)
 
 
-# Billable megapixels for a lone reference as Azure's FLUX.2-pro request_meta reported them on 2026-09-25
+# Billable megapixels for a lone reference follow Azure's FLUX.2-pro request_meta as reported on 2026-09-25
 @pytest.mark.parametrize(
     ("reference", "billed_megapixels"),
     (
         pytest.param(_png(640, 640), 1, id="small-reference-rounds-up"),
         pytest.param(_png(1024, 1280), 2, id="fractional-reference-rounds-up"),
+        pytest.param(_png(2048, 1024), 2, id="landscape-reference-is-measured-by-area"),
         pytest.param(_jpeg(4032, 3024), 4, id="photo-reference-caps-at-four-megapixels"),
     ),
 )
@@ -453,7 +454,9 @@ def test_flux2_image_edit_bills_a_lone_reference_in_whole_megapixels(reference: 
         pytest.param(_png(0, 640), id="zero-width-header"),
     ),
 )
-def test_flux2_image_edit_bills_a_lone_unmeasurable_reference_as_one_megapixel(reference: bytes):
+def test_flux2_image_edit_bills_a_lone_unmeasurable_reference_as_one_megapixel(
+    reference: bytes, litellm_warnings: pytest.LogCaptureFixture
+):
     response: Final = litellm.image_edit(
         model="azure_ai/FLUX.2-flex",
         image=[reference],
@@ -467,6 +470,7 @@ def test_flux2_image_edit_bills_a_lone_unmeasurable_reference_as_one_megapixel(r
 
     assert response._hidden_params["reference_image_pixels"] == (UNMEASURED_REFERENCE_IMAGE_PIXELS,)
     assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 + rate * 1024 * 1024)
+    assert "billing it as one megapixel" in litellm_warnings.text
 
 
 def test_flux2_image_edit_still_bills_every_reference_when_one_header_reports_zero_pixels():

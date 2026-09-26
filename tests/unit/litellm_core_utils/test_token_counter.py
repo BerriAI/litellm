@@ -24,6 +24,8 @@ import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    MAX_JPEG_FILL_BYTES,
+    MAX_JPEG_HEADER_SEGMENTS,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -1517,26 +1519,77 @@ def test_image_dimensions_from_bytes_returns_none_for_unreadable_headers(image: 
     assert image_dimensions_from_bytes(image) is None
 
 
-def _jpeg_sof(width: int, height: int) -> bytes:
-    return b"\xff\xc0" + struct.pack(">HBHHB", 17, 8, height, width, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+def _jpeg_sof(width: int, height: int, marker: bytes = b"\xc0") -> bytes:
+    return b"\xff" + marker + struct.pack(">HBHHB", 17, 8, height, width, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+
+
+def _jpeg_segment(marker: bytes, payload: bytes) -> bytes:
+    return b"\xff" + marker + struct.pack(">H", len(payload) + 2) + payload
+
+
+_EMPTY_JPEG_SEGMENT: Final = _jpeg_segment(b"\xe0", b"")
 
 
 @pytest.mark.parametrize(
-    "image",
+    "marker",
+    [pytest.param(bytes([marker]), id=hex(marker)) for marker in range(0xC0, 0xD0) if marker not in (0xC4, 0xC8, 0xCC)],
+)
+def test_image_dimensions_from_bytes_reads_every_start_of_frame_marker(marker: bytes) -> None:
+    assert image_dimensions_from_bytes(b"\xff\xd8" + _jpeg_sof(800, 600, marker)) == (800, 600)
+
+
+@pytest.mark.parametrize(
+    "marker", [pytest.param(b"\xc4", id="dht"), pytest.param(b"\xc8", id="jpg"), pytest.param(b"\xcc", id="dac")]
+)
+def test_image_dimensions_from_bytes_skips_the_non_frame_markers_in_the_start_of_frame_range(marker: bytes) -> None:
+    lookalike: Final = _jpeg_segment(marker, struct.pack(">BHH", 8, 1, 1) + b"\x00" * 8)
+
+    assert image_dimensions_from_bytes(b"\xff\xd8" + lookalike + _jpeg_sof(800, 600)) == (800, 600)
+
+
+def test_image_dimensions_from_bytes_skips_each_segment_by_its_own_length() -> None:
+    segments: Final = (
+        _jpeg_segment(b"\xe0", b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"),
+        _jpeg_segment(b"\xe1", b"Exif\x00\x00" + _jpeg_sof(1, 1) + b"\x00" * 7),
+        _jpeg_segment(b"\xfe", b"c"),
+        _jpeg_segment(b"\xdb", b"\x00" * 65),
+    )
+
+    assert image_dimensions_from_bytes(b"\xff\xd8" + b"".join(segments) + _jpeg_sof(800, 600)) == (800, 600)
+
+
+@pytest.mark.parametrize(
+    ("segments_before_frame", "expected"),
     [
-        pytest.param(b"\xff\xd8" + b"\xff\xe0\x00\x02" * 1025 + _jpeg_sof(800, 600), id="too-many-segments"),
-        pytest.param(b"\xff\xd8" + b"\xff" * 2000 + _jpeg_sof(800, 600)[1:], id="too-many-fill-bytes"),
-        pytest.param(b"\xff\xd8\xff\xe0\x00\x00\x02" + _jpeg_sof(800, 600), id="segment-length-below-two"),
+        pytest.param(MAX_JPEG_HEADER_SEGMENTS - 1, (800, 600), id="frame-is-the-last-segment-read"),
+        pytest.param(MAX_JPEG_HEADER_SEGMENTS, None, id="frame-is-past-the-segment-limit"),
     ],
 )
-def test_image_dimensions_from_bytes_gives_up_on_pathological_jpeg_headers(image: bytes) -> None:
-    assert image_dimensions_from_bytes(image) is None
+def test_image_dimensions_from_bytes_reads_at_most_the_segment_limit(
+    segments_before_frame: int, expected: tuple[int, int] | None
+) -> None:
+    image: Final = b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * segments_before_frame + _jpeg_sof(800, 600)
+
+    assert image_dimensions_from_bytes(image) == expected
 
 
-def test_image_dimensions_from_bytes_still_reads_a_jpeg_with_many_real_segments() -> None:
-    image: Final = b"\xff\xd8" + b"\xff\xe0\x00\x02" * 1000 + b"\xff" * 64 + _jpeg_sof(800, 600)[1:]
+@pytest.mark.parametrize(
+    ("fill_bytes", "expected"),
+    [
+        pytest.param(MAX_JPEG_FILL_BYTES - 1, (800, 600), id="marker-is-the-last-byte-read"),
+        pytest.param(MAX_JPEG_FILL_BYTES, None, id="marker-is-past-the-fill-byte-limit"),
+    ],
+)
+def test_image_dimensions_from_bytes_reads_at_most_the_fill_byte_limit(
+    fill_bytes: int, expected: tuple[int, int] | None
+) -> None:
+    image: Final = b"\xff\xd8" + b"\xff" * fill_bytes + _jpeg_sof(800, 600)[1:]
 
-    assert image_dimensions_from_bytes(image) == (800, 600)
+    assert image_dimensions_from_bytes(image) == expected
+
+
+def test_image_dimensions_from_bytes_gives_up_on_a_segment_length_below_two() -> None:
+    assert image_dimensions_from_bytes(b"\xff\xd8\xff\xe0\x00\x00\x02" + _jpeg_sof(800, 600)) is None
 
 
 @pytest.mark.parametrize(
@@ -1555,7 +1608,14 @@ def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes)
     "image",
     [
         pytest.param(b"BM" + b"\x00" * 30, id="unknown-format"),
-        pytest.param(b"\xff\xd8" + b"\xff\xe0\x00\x02" * 1025 + _jpeg_sof(800, 600), id="pathological-jpeg"),
+        pytest.param(
+            b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * MAX_JPEG_HEADER_SEGMENTS + _jpeg_sof(800, 600),
+            id="too-many-jpeg-segments",
+        ),
+        pytest.param(
+            b"\xff\xd8" + b"\xff" * MAX_JPEG_FILL_BYTES + _jpeg_sof(800, 600)[1:], id="too-many-jpeg-fill-bytes"
+        ),
+        pytest.param(b"\xff\xd8\xff\xe0\x00\x01\x02" + _jpeg_sof(800, 600), id="jpeg-segment-length-one"),
     ],
 )
 def test_get_image_dimensions_falls_back_to_the_default_size_for_a_header_it_cannot_read(image: bytes) -> None:
