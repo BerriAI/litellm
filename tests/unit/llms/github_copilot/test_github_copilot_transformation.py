@@ -370,9 +370,6 @@ def test_x_initiator_header_system_only_messages():
     assert headers["X-Initiator"] == "user"
 
 
-
-
-
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
     config = GithubCopilotConfig()
