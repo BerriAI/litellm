@@ -6922,6 +6922,181 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
     assert www_auth is None
 
 
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_merges_extra_headers_into_request():
+    """extra_headers must reach the outgoing probe request, so an upstream that
+    identifies the caller via a configured header (not Authorization) sees the
+    same request a real client would send."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await _probe_upstream_auth("http://upstream/mcp", "", extra_headers={"X-Platform-User": "alice"})
+
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["X-Platform-User"] == "alice"
+    assert "Authorization" not in kwargs["headers"]
+
+
+def test_extra_headers_for_probe_filters_to_configured_non_authorization_headers():
+    """Only forwards values for header names the admin listed in
+    server.extra_headers, matched case-insensitively, and always drops
+    Authorization (the probe sets that itself)."""
+    from litellm.proxy._experimental.mcp_server.server import _extra_headers_for_probe
+
+    server = MCPServer(
+        server_id="tp-1",
+        name="tp_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        extra_headers=["X-Platform-User", "Authorization"],
+    )
+    raw_headers = {
+        "x-platform-user": "alice",
+        "authorization": "Bearer caller-key",
+        "content-type": "application/json",
+    }
+
+    assert _extra_headers_for_probe(server, raw_headers) == {"X-Platform-User": "alice"}
+
+
+def test_extra_headers_for_probe_returns_none_when_nothing_to_forward():
+    from litellm.proxy._experimental.mcp_server.server import _extra_headers_for_probe
+
+    no_extra_headers_server = MCPServer(
+        server_id="tp-2",
+        name="tp_server_2",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        extra_headers=None,
+    )
+    assert _extra_headers_for_probe(no_extra_headers_server, {"x-platform-user": "alice"}) is None
+
+    unmatched_server = MCPServer(
+        server_id="tp-3",
+        name="tp_server_3",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        extra_headers=["X-Platform-User"],
+    )
+    assert _extra_headers_for_probe(unmatched_server, {"content-type": "application/json"}) is None
+
+
+class TestTruePassthroughProbeForwardsCallerHeaders:
+    """Regression test for the true_passthrough pre-session probe sending an
+    anonymous request to upstreams that identify callers via a header other
+    than Authorization (the header the admin already listed in
+    server.extra_headers). Before the fix, _probe_upstream_auth never received
+    that header, so the probe's answer described a caller that doesn't exist."""
+
+    ALIAS: Final = "tp_platform_header"
+
+    def _server(self, extra_headers: list[str] | None) -> MCPServer:
+        return MCPServer(
+            server_id="tp-platform-header",
+            name=self.ALIAS,
+            alias=self.ALIAS,
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+            extra_headers=extra_headers,
+        )
+
+    def _scope(self) -> dict[str, object]:
+        return {"type": "http", "method": "POST", "path": f"/mcp/{self.ALIAS}", "headers": []}
+
+    @pytest.mark.asyncio
+    async def test_probe_receives_caller_platform_header_and_does_not_challenge(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = self._server(["X-Platform-User"])
+
+        async def fake_upstream_probe(
+            url: str, auth_header: str, timeout: float = 5.0, extra_headers: dict[str, str] | None = None
+        ) -> tuple[int, str | None]:
+            # Simulates an upstream that answers 401 for anyone it cannot
+            # identify by the platform header -- exactly the case the issue
+            # describes, where Authorization alone is not the caller's identity.
+            if not extra_headers or extra_headers.get("X-Platform-User") != "alice":
+                return 401, 'Bearer realm="upstream"'
+            return 200, None
+
+        with (
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
+                side_effect=fake_upstream_probe,
+            ),
+        ):
+            # Must not raise: the caller's platform header reaches the probe,
+            # so the upstream recognizes them and the pre-session challenge is
+            # skipped, matching what a real session would get.
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=self._scope(),
+                mcp_servers=[self.ALIAS],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(),
+                client_ip=None,
+                raw_headers={"X-Platform-User": "alice"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_probe_never_forwards_authorization_via_extra_headers(self):
+        """Authorization listed in server.extra_headers must not be replayed a
+        second time through extra_headers; the probe call already sets its own
+        (empty) auth_header for true_passthrough."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = self._server(["Authorization", "X-Platform-User"])
+        captured: dict[str, dict[str, str] | None] = {}
+
+        async def fake_upstream_probe(
+            url: str, auth_header: str, timeout: float = 5.0, extra_headers: dict[str, str] | None = None
+        ) -> tuple[int, str | None]:
+            captured["extra_headers"] = extra_headers
+            return 200, None
+
+        with (
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
+                side_effect=fake_upstream_probe,
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=self._scope(),
+                mcp_servers=[self.ALIAS],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(),
+                client_ip=None,
+                raw_headers={"Authorization": "Bearer caller-key", "X-Platform-User": "alice"},
+            )
+
+        assert captured["extra_headers"] == {"X-Platform-User": "alice"}
+
+
 def test_get_forwarded_auth_from_scope_extracts_header():
     """Returns Authorization value when x-litellm-api-key is also present."""
     from litellm.proxy._experimental.mcp_server.server import (
