@@ -1,14 +1,20 @@
 use litellm_core_utils::settings::Lookup;
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
-use serde_json::{Map, Value, json};
-
-use crate::{
-    anthropic::common_utils::AnthropicModelCapabilities, base_llm::chat::transformation::Error,
+use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
+use litellm_types::{
+    llms::{
+        anthropic_messages::anthropic_request::{
+            AnthropicMessagesOptionalParams, AnthropicMessagesRequest, EffortLevel, OutputConfig,
+            ThinkingConfig, ThinkingDisplay,
+        },
+        openai::ReasoningEffort,
+    },
+    recognized::Recognized,
 };
+use serde_json::Value;
+
+use crate::{Error, anthropic::common_utils::AnthropicModelCapabilities};
 
 pub const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: u64 = 1024;
-
-const EFFORT_NAMES: &str = "'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none'";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThinkingBudgets {
@@ -50,15 +56,17 @@ impl ThinkingBudgets {
         }
     }
 
-    fn for_effort(&self, reasoning_effort: &str) -> Option<u64> {
-        match reasoning_effort {
-            "low" => Some(self.low),
-            "medium" => Some(self.medium),
-            "high" => Some(self.high),
-            "xhigh" => Some(self.xhigh),
-            "max" => Some(self.max),
-            "minimal" => Some(self.minimal.max(ANTHROPIC_MIN_THINKING_BUDGET_TOKENS)),
-            _ => None,
+    fn for_effort(&self, effort: ReasoningEffort) -> Option<u64> {
+        match effort {
+            ReasoningEffort::None => None,
+            ReasoningEffort::Minimal => {
+                Some(self.minimal.max(ANTHROPIC_MIN_THINKING_BUDGET_TOKENS))
+            }
+            ReasoningEffort::Low => Some(self.low),
+            ReasoningEffort::Medium => Some(self.medium),
+            ReasoningEffort::High => Some(self.high),
+            ReasoningEffort::Xhigh => Some(self.xhigh),
+            ReasoningEffort::Max => Some(self.max),
         }
     }
 
@@ -66,17 +74,17 @@ impl ThinkingBudgets {
         &self,
         budget_tokens: u64,
         capabilities: &AnthropicModelCapabilities,
-    ) -> &'static str {
+    ) -> EffortLevel {
         if budget_tokens >= self.xhigh && capabilities.effort_tiers.xhigh {
-            return "xhigh";
+            return EffortLevel::Xhigh;
         }
         if budget_tokens >= self.high {
-            return "high";
+            return EffortLevel::High;
         }
         if budget_tokens >= self.medium {
-            return "medium";
+            return EffortLevel::Medium;
         }
-        "low"
+        EffortLevel::Low
     }
 }
 
@@ -86,123 +94,163 @@ pub struct ThinkingContext {
     pub budgets: ThinkingBudgets,
 }
 
-fn bad_request(message: String) -> Error {
-    Error::InvalidRequest(message)
+fn unmapped_effort(effort: &Value) -> Error {
+    let choices = ReasoningEffort::ALL
+        .map(|effort| format!("'{}'", effort.as_str()))
+        .join(", ");
+    Error::InvalidRequest(format!(
+        "Unmapped reasoning effort: {}. Must be one of: {choices}.",
+        repr(&from_json(effort.clone()))
+    ))
 }
 
-fn thinking_type(thinking: Option<&Value>) -> Option<&str> {
-    thinking?.get("type")?.as_str()
+fn unsupported_effort(level: EffortLevel, model: &str) -> Error {
+    Error::InvalidRequest(format!(
+        "effort='{}' is not supported by this model. Got model: {model}",
+        level.as_str()
+    ))
 }
 
-fn output_config_effort(output_config: Option<&Value>) -> Option<&str> {
-    output_config?.get("effort")?.as_str()
-}
-
-fn enabled_thinking(budget_tokens: u64) -> Value {
-    json!({"type": "enabled", "budget_tokens": budget_tokens})
-}
-
-fn map_reasoning_effort(
-    reasoning_effort: &str,
-    context: &ThinkingContext,
-) -> Result<Option<Value>, Error> {
-    if reasoning_effort == "none" {
-        return Ok(None);
+fn output_effort(effort: ReasoningEffort) -> Option<EffortLevel> {
+    match effort {
+        ReasoningEffort::None => None,
+        ReasoningEffort::Minimal | ReasoningEffort::Low => Some(EffortLevel::Low),
+        ReasoningEffort::Medium => Some(EffortLevel::Medium),
+        ReasoningEffort::High => Some(EffortLevel::High),
+        ReasoningEffort::Xhigh => Some(EffortLevel::Xhigh),
+        ReasoningEffort::Max => Some(EffortLevel::Max),
     }
-    if context.capabilities.supports_adaptive_thinking {
-        return Ok(Some(json!({"type": "adaptive", "display": "summarized"})));
-    }
-    context
-        .budgets
-        .for_effort(reasoning_effort)
-        .map(|budget| Some(enabled_thinking(budget)))
-        .ok_or_else(|| {
-            bad_request(format!(
-                "Unmapped reasoning effort: '{reasoning_effort}'. Must be one of: {EFFORT_NAMES}."
-            ))
-        })
 }
 
-fn cap_thinking_budget_to_max_tokens(thinking: Value, max_tokens: Option<u64>) -> Option<Value> {
-    let (Some(max_tokens), Some(budget)) = (
-        max_tokens,
-        thinking.get("budget_tokens").and_then(Value::as_u64),
-    ) else {
-        return Some(thinking);
+fn fit_budget_to_max_tokens(budget_tokens: u64, max_tokens: Option<u64>) -> Option<u64> {
+    let Some(max_tokens) = max_tokens else {
+        return Some(budget_tokens);
     };
-    if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS {
-        return None;
-    }
-    if budget < max_tokens {
-        return Some(thinking);
-    }
-    Some(enabled_thinking(max_tokens - 1))
+    (max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS).then(|| budget_tokens.min(max_tokens - 1))
 }
 
-fn reasoning_effort_to_output_config_effort(reasoning_effort: &str) -> Option<&'static str> {
-    match reasoning_effort {
-        "low" | "minimal" => Some("low"),
-        "medium" => Some("medium"),
-        "high" => Some("high"),
-        "xhigh" => Some("xhigh"),
-        "max" => Some("max"),
-        _ => None,
-    }
+fn known_thinking(request: &AnthropicMessagesRequest) -> Option<&ThinkingConfig> {
+    request.params.thinking.as_ref().and_then(Recognized::known)
 }
 
-fn with_default_effort(output_config: Option<Value>, effort: &str) -> Value {
-    let mut config = match output_config {
-        Some(Value::Object(config)) => config,
-        _ => Map::new(),
+fn known_effort(request: &AnthropicMessagesRequest) -> Option<&Recognized<EffortLevel>> {
+    request
+        .params
+        .output_config
+        .as_ref()
+        .and_then(Recognized::known)
+        .and_then(|config| config.effort.as_ref())
+}
+
+fn with_default_effort(
+    output_config: Option<Recognized<OutputConfig>>,
+    level: EffortLevel,
+) -> Option<Recognized<OutputConfig>> {
+    let config = match output_config {
+        Some(Recognized::Known(config)) => config,
+        _ => OutputConfig::default(),
     };
-    if !config.contains_key("effort") {
-        config.insert("effort".to_string(), Value::String(effort.to_string()));
+    Some(Recognized::Known(OutputConfig {
+        effort: Some(config.effort.unwrap_or(Recognized::Known(level))),
+        ..config
+    }))
+}
+
+fn without_effort(
+    output_config: Option<Recognized<OutputConfig>>,
+) -> Option<Recognized<OutputConfig>> {
+    let Some(Recognized::Known(config)) = output_config else {
+        return output_config;
+    };
+    if config.effort.is_none() {
+        return Some(Recognized::Known(config));
     }
-    Value::Object(config)
+    let residual = OutputConfig {
+        effort: None,
+        ..config
+    };
+    (!residual.is_empty()).then_some(Recognized::Known(residual))
+}
+
+fn legacy_reasoning_effort(
+    effort: Option<&Recognized<EffortLevel>>,
+) -> Result<ReasoningEffort, Error> {
+    match effort {
+        Some(Recognized::Known(level)) => Ok((*level).into()),
+        Some(Recognized::Unrecognized(value)) if truthy(&from_json(value.clone())) => value
+            .as_str()
+            .and_then(ReasoningEffort::parse)
+            .ok_or_else(|| unmapped_effort(value)),
+        None | Some(Recognized::Unrecognized(_)) => Ok(ReasoningEffort::Medium),
+    }
 }
 
 fn translate_reasoning_effort(
     request: AnthropicMessagesRequest,
     context: &ThinkingContext,
 ) -> Result<AnthropicMessagesRequest, Error> {
-    let Some(reasoning_effort) = request.reasoning_effort.clone() else {
+    let Some(reasoning_effort) = request.params.reasoning_effort else {
         return Ok(request);
     };
     let request = AnthropicMessagesRequest {
-        reasoning_effort: None,
+        params: AnthropicMessagesOptionalParams {
+            reasoning_effort: None,
+            ..request.params
+        },
         ..request
     };
-    let Some(mapped) = map_reasoning_effort(&reasoning_effort, context)? else {
+    let effort = match reasoning_effort {
+        Recognized::Known(effort) => effort,
+        Recognized::Unrecognized(value @ Value::String(_)) => {
+            return Err(unmapped_effort(&value));
+        }
+        Recognized::Unrecognized(_) => return Ok(request),
+    };
+    let (Some(level), Some(budget)) = (output_effort(effort), context.budgets.for_effort(effort))
+    else {
         return Ok(AnthropicMessagesRequest {
-            thinking: None,
-            output_config: None,
+            params: AnthropicMessagesOptionalParams {
+                thinking: None,
+                output_config: None,
+                ..request.params
+            },
             ..request
         });
     };
-    let Some(fitted) = cap_thinking_budget_to_max_tokens(mapped, request.max_tokens) else {
+    let capabilities = &context.capabilities;
+    if capabilities.supports_adaptive_thinking {
+        if !capabilities.accepts_effort(level) {
+            return Err(unsupported_effort(level, &request.model));
+        }
+        let adaptive = ThinkingConfig::adaptive(Some(ThinkingDisplay::Summarized));
+        return Ok(AnthropicMessagesRequest {
+            params: AnthropicMessagesOptionalParams {
+                thinking: Some(
+                    request
+                        .params
+                        .thinking
+                        .unwrap_or(Recognized::Known(adaptive)),
+                ),
+                output_config: with_default_effort(request.params.output_config, level),
+                ..request.params
+            },
+            ..request
+        });
+    }
+    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens) else {
         return Ok(request);
     };
-    let thinking = Some(request.thinking.clone().unwrap_or(fitted));
-    if !context.capabilities.supports_adaptive_thinking {
-        return Ok(AnthropicMessagesRequest {
-            thinking,
-            ..request
-        });
-    }
-    let effort = reasoning_effort_to_output_config_effort(&reasoning_effort).ok_or_else(|| {
-        bad_request(format!(
-            "Invalid reasoning_effort: '{reasoning_effort}'. Must be one of: {EFFORT_NAMES}"
-        ))
-    })?;
-    if let Some(rejection) = context
-        .capabilities
-        .effort_level_rejection(effort, &request.model)
-    {
-        return Err(bad_request(rejection));
-    }
+    let enabled = ThinkingConfig::enabled(budget);
     Ok(AnthropicMessagesRequest {
-        thinking,
-        output_config: Some(with_default_effort(request.output_config.clone(), effort)),
+        params: AnthropicMessagesOptionalParams {
+            thinking: Some(
+                request
+                    .params
+                    .thinking
+                    .unwrap_or(Recognized::Known(enabled)),
+            ),
+            ..request.params
+        },
         ..request
     })
 }
@@ -212,12 +260,15 @@ fn drop_disabled_thinking(
     context: &ThinkingContext,
 ) -> AnthropicMessagesRequest {
     if !context.capabilities.thinking_always_on
-        || thinking_type(request.thinking.as_ref()) != Some("disabled")
+        || !matches!(known_thinking(&request), Some(ThinkingConfig::Disabled(_)))
     {
         return request;
     }
     AnthropicMessagesRequest {
-        thinking: None,
+        params: AnthropicMessagesOptionalParams {
+            thinking: None,
+            ..request.params
+        },
         ..request
     }
 }
@@ -227,38 +278,27 @@ fn translate_legacy_thinking_for_adaptive_model(
     context: &ThinkingContext,
 ) -> AnthropicMessagesRequest {
     let capabilities = &context.capabilities;
-    if !capabilities.supports_adaptive_thinking
-        || capabilities.supports_legacy_thinking
-        || thinking_type(request.thinking.as_ref()) != Some("enabled")
-    {
+    if !capabilities.supports_adaptive_thinking || capabilities.supports_legacy_thinking {
         return request;
     }
-    let budget = request
-        .thinking
+    let Some(ThinkingConfig::Enabled(enabled)) = known_thinking(&request) else {
+        return request;
+    };
+    let budget = enabled
+        .budget_tokens
         .as_ref()
-        .and_then(|thinking| thinking.get("budget_tokens"))
-        .and_then(Value::as_u64)
+        .and_then(Recognized::known)
+        .copied()
         .unwrap_or(0);
-    let effort = context.budgets.effort_for_budget(budget, capabilities);
+    let level = context.budgets.effort_for_budget(budget, capabilities);
     AnthropicMessagesRequest {
-        thinking: Some(json!({"type": "adaptive"})),
-        output_config: Some(with_default_effort(request.output_config.clone(), effort)),
+        params: AnthropicMessagesOptionalParams {
+            thinking: Some(Recognized::Known(ThinkingConfig::adaptive(None))),
+            output_config: with_default_effort(request.params.output_config, level),
+            ..request.params
+        },
         ..request
     }
-}
-
-fn output_config_without_effort(output_config: Option<Value>) -> Option<Value> {
-    let Some(Value::Object(config)) = output_config else {
-        return output_config;
-    };
-    if !config.contains_key("effort") {
-        return Some(Value::Object(config));
-    }
-    let residual: Map<String, Value> = config
-        .into_iter()
-        .filter(|(key, _)| key != "effort")
-        .collect();
-    (!residual.is_empty()).then_some(Value::Object(residual))
 }
 
 fn translate_adaptive_effort_for_non_adaptive_model(
@@ -269,42 +309,43 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     if capabilities.supports_adaptive_thinking {
         return Ok(request);
     }
-    let effort = output_config_effort(request.output_config.as_ref()).map(str::to_string);
-    let adaptive_thinking = thinking_type(request.thinking.as_ref()) == Some("adaptive");
+    let effort = known_effort(&request).cloned();
+    let adaptive_thinking = matches!(known_thinking(&request), Some(ThinkingConfig::Adaptive(_)));
     if effort.is_none() && !adaptive_thinking {
         return Ok(request);
     }
-    let level_supported = effort.as_deref().is_none_or(|effort| {
-        capabilities
-            .effort_level_rejection(effort, &request.model)
-            .is_none()
-    });
-    if capabilities.supports_effort_param() && (!adaptive_thinking || level_supported) {
+    let level_accepted = match &effort {
+        Some(Recognized::Known(level)) => capabilities.accepts_effort(*level),
+        _ => true,
+    };
+    if capabilities.supports_effort_param() && (!adaptive_thinking || level_accepted) {
         return Ok(AnthropicMessagesRequest {
-            thinking: if adaptive_thinking {
-                None
-            } else {
-                request.thinking.clone()
+            params: AnthropicMessagesOptionalParams {
+                thinking: if adaptive_thinking {
+                    None
+                } else {
+                    request.params.thinking
+                },
+                ..request.params
             },
             ..request
         });
     }
-    let legacy = if capabilities.supports_reasoning {
-        map_reasoning_effort(
-            effort
-                .as_deref()
-                .filter(|effort| !effort.is_empty())
-                .unwrap_or("medium"),
-            context,
-        )?
+    let budget = if capabilities.supports_reasoning {
+        context
+            .budgets
+            .for_effort(legacy_reasoning_effort(effort.as_ref())?)
     } else {
         None
     };
-    let capped =
-        legacy.and_then(|thinking| cap_thinking_budget_to_max_tokens(thinking, request.max_tokens));
     Ok(AnthropicMessagesRequest {
-        thinking: capped,
-        output_config: output_config_without_effort(request.output_config.clone()),
+        params: AnthropicMessagesOptionalParams {
+            thinking: budget
+                .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
+                .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget))),
+            output_config: without_effort(request.params.output_config),
+            ..request.params
+        },
         ..request
     })
 }
@@ -317,15 +358,19 @@ fn drop_incompatible_temperature_for_thinking(
         return request;
     }
     let pinned = request
+        .params
         .temperature
         .is_some_and(|temperature| temperature != 1.0);
-    let thinking_enabled = thinking_type(request.thinking.as_ref()) == Some("enabled");
-    let effort_enabled = output_config_effort(request.output_config.as_ref()).is_some();
+    let thinking_enabled = matches!(known_thinking(&request), Some(ThinkingConfig::Enabled(_)));
+    let effort_enabled = known_effort(&request).is_some();
     if !pinned || !(thinking_enabled || effort_enabled) {
         return request;
     }
     AnthropicMessagesRequest {
-        temperature: None,
+        params: AnthropicMessagesOptionalParams {
+            temperature: None,
+            ..request.params
+        },
         ..request
     }
 }
@@ -348,11 +393,10 @@ mod tests {
     use super::*;
     use crate::anthropic::common_utils::SupportedEffortTiers;
 
-    const EFFORT_CHOICES: &str = "'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none'";
+    const EFFORT_CHOICES: &str = "'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'";
 
     fn request(fields: Value) -> AnthropicMessagesRequest {
-        let mut body =
-            json!({"model": "claude", "messages": [{"role": "user", "content": "Hello"}]});
+        let mut body = serde_json::json!({"model": "claude", "messages": [{"role": "user", "content": "Hello"}]});
         body.as_object_mut()
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
@@ -386,7 +430,7 @@ mod tests {
     }
 
     fn claude_code_payload(effort: &str, max_tokens: u64) -> Value {
-        json!({"max_tokens": max_tokens, "thinking": {"type": "adaptive"}, "output_config": {"effort": effort}})
+        serde_json::json!({"max_tokens": max_tokens, "thinking": {"type": "adaptive"}, "output_config": {"effort": effort}})
     }
 
     fn with_temperature(fields: Value, temperature: f64) -> Value {
@@ -394,7 +438,7 @@ mod tests {
         fields
             .as_object_mut()
             .unwrap()
-            .insert("temperature".to_string(), json!(temperature));
+            .insert("temperature".to_string(), serde_json::json!(temperature));
         fields
     }
 
@@ -485,9 +529,9 @@ mod tests {
         assert_eq!(
             translate(
                 capabilities,
-                json!({"max_tokens": 1024, "reasoning_effort": reasoning_effort})
+                serde_json::json!({"max_tokens": 1024, "reasoning_effort": reasoning_effort})
             ),
-            Ok(request(json!({
+            Ok(request(serde_json::json!({
                 "max_tokens": 1024,
                 "thinking": {"type": "adaptive", "display": "summarized"},
                 "output_config": {"effort": expected_effort}
@@ -498,18 +542,18 @@ mod tests {
     #[rstest]
     #[case::adaptive_shape_is_not_dropped_for_small_max_tokens(
         opus_4_7(),
-        json!({"max_tokens": 64, "reasoning_effort": "high"}),
-        json!({"max_tokens": 64, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 64, "reasoning_effort": "high"}),
+        serde_json::json!({"max_tokens": 64, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "high"}})
     )]
     #[case::caller_output_config_effort_wins(
         opus_4_7(),
-        json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": "max"}}),
-        json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "max"}})
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": "max"}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "max"}})
     )]
     #[case::effort_merges_into_caller_output_config(
         opus_4_7(),
-        json!({"max_tokens": 1024, "reasoning_effort": "high", "output_config": {"format": {"type": "json_schema"}}}),
-        json!({
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "high", "output_config": {"format": {"type": "json_schema"}}}),
+        serde_json::json!({
             "max_tokens": 1024,
             "thinking": {"type": "adaptive", "display": "summarized"},
             "output_config": {"format": {"type": "json_schema"}, "effort": "high"}
@@ -517,18 +561,18 @@ mod tests {
     )]
     #[case::non_object_output_config_is_replaced(
         opus_4_7(),
-        json!({"max_tokens": 1024, "reasoning_effort": "high", "output_config": "bogus"}),
-        json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "high", "output_config": "bogus"}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "high"}})
     )]
     #[case::caller_thinking_and_output_config_win(
         sonnet_4_6(),
-        json!({
+        serde_json::json!({
             "max_tokens": 16000,
             "reasoning_effort": "low",
             "thinking": {"type": "enabled", "budget_tokens": 8000},
             "output_config": {"effort": "high"}
         }),
-        json!({
+        serde_json::json!({
             "max_tokens": 16000,
             "thinking": {"type": "enabled", "budget_tokens": 8000},
             "output_config": {"effort": "high"}
@@ -536,63 +580,86 @@ mod tests {
     )]
     #[case::caller_legacy_thinking_is_then_translated_while_reasoning_effort_level_stays(
         opus_4_7(),
-        json!({"max_tokens": 16000, "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 8000}}),
-        json!({"max_tokens": 16000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}})
+        serde_json::json!({"max_tokens": 16000, "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 8000}}),
+        serde_json::json!({"max_tokens": 16000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}})
     )]
     #[case::caller_disabled_thinking_is_kept_then_omitted_on_always_on_model(
         fable_5_1(),
-        json!({"max_tokens": 1024, "reasoning_effort": "high", "thinking": {"type": "disabled"}}),
-        json!({"max_tokens": 1024, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "high", "thinking": {"type": "disabled"}}),
+        serde_json::json!({"max_tokens": 1024, "output_config": {"effort": "high"}})
     )]
     #[case::non_adaptive_model_gets_no_output_config(
         opus_4_5(),
-        json!({"max_tokens": 8192, "reasoning_effort": "high"}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high"}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::caller_thinking_wins_on_non_adaptive_model(
         opus_4_5(),
-        json!({"max_tokens": 16000, "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 8000}}),
-        json!({"max_tokens": 16000, "thinking": {"type": "enabled", "budget_tokens": 8000}})
+        serde_json::json!({"max_tokens": 16000, "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 8000}}),
+        serde_json::json!({"max_tokens": 16000, "thinking": {"type": "enabled", "budget_tokens": 8000}})
     )]
     #[case::caller_thinking_survives_when_mapped_budget_cannot_fit(
         opus_4_5(),
-        json!({"max_tokens": 1024, "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 8000}}),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 8000}})
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 8000}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 8000}})
     )]
     #[case::missing_max_tokens_leaves_budget_uncapped(
         haiku_4_5(),
-        json!({"reasoning_effort": "high"}),
-        json!({"thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"reasoning_effort": "high"}),
+        serde_json::json!({"thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::budget_below_max_tokens_is_kept(
         haiku_4_5(),
-        json!({"max_tokens": 4097, "reasoning_effort": "high"}),
-        json!({"max_tokens": 4097, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 4097, "reasoning_effort": "high"}),
+        serde_json::json!({"max_tokens": 4097, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::budget_equal_to_max_tokens_is_capped(
         haiku_4_5(),
-        json!({"max_tokens": 4096, "reasoning_effort": "high"}),
-        json!({"max_tokens": 4096, "thinking": {"type": "enabled", "budget_tokens": 4095}})
+        serde_json::json!({"max_tokens": 4096, "reasoning_effort": "high"}),
+        serde_json::json!({"max_tokens": 4096, "thinking": {"type": "enabled", "budget_tokens": 4095}})
     )]
     #[case::budget_above_max_tokens_is_capped(
         haiku_4_5(),
-        json!({"max_tokens": 4000, "reasoning_effort": "xhigh"}),
-        json!({"max_tokens": 4000, "thinking": {"type": "enabled", "budget_tokens": 3999}})
+        serde_json::json!({"max_tokens": 4000, "reasoning_effort": "xhigh"}),
+        serde_json::json!({"max_tokens": 4000, "thinking": {"type": "enabled", "budget_tokens": 3999}})
     )]
     #[case::max_tokens_just_above_min_budget_caps_to_min_budget(
         haiku_4_5(),
-        json!({"max_tokens": 1025, "reasoning_effort": "xhigh"}),
-        json!({"max_tokens": 1025, "thinking": {"type": "enabled", "budget_tokens": 1024}})
+        serde_json::json!({"max_tokens": 1025, "reasoning_effort": "xhigh"}),
+        serde_json::json!({"max_tokens": 1025, "thinking": {"type": "enabled", "budget_tokens": 1024}})
     )]
     #[case::max_tokens_at_min_budget_drops_thinking(
         haiku_4_5(),
-        json!({"max_tokens": 1024, "reasoning_effort": "xhigh"}),
-        json!({"max_tokens": 1024})
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "xhigh"}),
+        serde_json::json!({"max_tokens": 1024})
     )]
     #[case::pinned_temperature_is_dropped_after_thinking_is_synthesized(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "reasoning_effort": "low", "temperature": 0}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 1024}})
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "low", "temperature": 0}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 1024}})
+    )]
+    #[case::non_string_reasoning_effort_is_ignored(
+        opus_4_7(),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": 3, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive"}})
+    )]
+    #[case::unrecognized_thinking_is_forwarded(
+        opus_4_5(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high", "thinking": {"type": "future"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "future"}})
+    )]
+    #[case::caller_display_and_block_binding_survive_on_adaptive_model(
+        opus_4_7(),
+        serde_json::json!({
+            "max_tokens": 1024,
+            "reasoning_effort": "high",
+            "thinking": {"type": "adaptive", "display": "omitted", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+        }),
+        serde_json::json!({
+            "max_tokens": 1024,
+            "thinking": {"type": "adaptive", "display": "omitted", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+            "output_config": {"effort": "high"}
+        })
     )]
     fn reasoning_effort_is_translated(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -617,9 +684,9 @@ mod tests {
         assert_eq!(
             translate(
                 haiku_4_5,
-                json!({"max_tokens": 32000, "reasoning_effort": reasoning_effort})
+                serde_json::json!({"max_tokens": 32000, "reasoning_effort": reasoning_effort})
             ),
-            Ok(request(json!({
+            Ok(request(serde_json::json!({
                 "max_tokens": 32000,
                 "thinking": {"type": "enabled", "budget_tokens": expected_budget}
             })))
@@ -636,62 +703,72 @@ mod tests {
         assert_eq!(
             translate(
                 capabilities,
-                json!({
+                serde_json::json!({
                     "max_tokens": 1024,
                     "reasoning_effort": "none",
                     "thinking": {"type": "adaptive"},
                     "output_config": {"effort": "high"}
                 })
             ),
-            Ok(request(json!({"max_tokens": 1024})))
+            Ok(request(serde_json::json!({"max_tokens": 1024})))
         );
     }
 
     #[rstest]
     #[case::bogus_on_budget_model(
         opus_4_5(),
-        json!({"max_tokens": 1024, "reasoning_effort": "bogus"}),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "bogus"}),
         format!("Unmapped reasoning effort: 'bogus'. Must be one of: {EFFORT_CHOICES}.")
     )]
     #[case::disabled_on_budget_model(
         haiku_4_5(),
-        json!({"max_tokens": 1024, "reasoning_effort": "disabled"}),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "disabled"}),
         format!("Unmapped reasoning effort: 'disabled'. Must be one of: {EFFORT_CHOICES}.")
     )]
     #[case::empty_on_budget_model(
         haiku_4_5(),
-        json!({"max_tokens": 1024, "reasoning_effort": ""}),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": ""}),
         format!("Unmapped reasoning effort: ''. Must be one of: {EFFORT_CHOICES}.")
     )]
     #[case::invalid_on_adaptive_model(
         opus_4_7(),
-        json!({"max_tokens": 1024, "reasoning_effort": "invalid"}),
-        format!("Invalid reasoning_effort: 'invalid'. Must be one of: {EFFORT_CHOICES}")
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "invalid"}),
+        format!("Unmapped reasoning effort: 'invalid'. Must be one of: {EFFORT_CHOICES}.")
     )]
     #[case::disabled_on_adaptive_model(
         opus_4_7(),
-        json!({"max_tokens": 1024, "reasoning_effort": "disabled"}),
-        format!("Invalid reasoning_effort: 'disabled'. Must be one of: {EFFORT_CHOICES}")
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "disabled"}),
+        format!("Unmapped reasoning effort: 'disabled'. Must be one of: {EFFORT_CHOICES}.")
     )]
     #[case::empty_on_adaptive_model(
         opus_4_7(),
-        json!({"max_tokens": 1024, "reasoning_effort": ""}),
-        format!("Invalid reasoning_effort: ''. Must be one of: {EFFORT_CHOICES}")
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": ""}),
+        format!("Unmapped reasoning effort: ''. Must be one of: {EFFORT_CHOICES}.")
     )]
     #[case::xhigh_without_xhigh_tier_on_4_6(
         sonnet_4_6(),
-        json!({"max_tokens": 1024, "reasoning_effort": "xhigh"}),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "xhigh"}),
         "effort='xhigh' is not supported by this model. Got model: claude".to_string()
     )]
     #[case::xhigh_without_xhigh_tier_on_unmapped_adaptive_model(
         newfamily_6(),
-        json!({"max_tokens": 1024, "reasoning_effort": "xhigh"}),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "xhigh"}),
         "effort='xhigh' is not supported by this model. Got model: claude".to_string()
     )]
     #[case::unrecognized_adaptive_effort_on_budget_model(
         haiku_4_5(),
         claude_code_payload("turbo", 8192),
         format!("Unmapped reasoning effort: 'turbo'. Must be one of: {EFFORT_CHOICES}.")
+    )]
+    #[case::unrecognized_output_config_effort_on_budget_model(
+        haiku_4_5(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}, "output_config": {"effort": 5}}),
+        format!("Unmapped reasoning effort: 5. Must be one of: {EFFORT_CHOICES}.")
+    )]
+    #[case::quote_in_effort_is_reprd_like_python(
+        haiku_4_5(),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "it's"}),
+        format!("Unmapped reasoning effort: \"it's\". Must be one of: {EFFORT_CHOICES}.")
     )]
     fn unsupported_effort_is_a_request_error(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -705,13 +782,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::omitted_on_always_on_model(fable_5_1(), json!({"type": "disabled"}), None)]
-    #[case::kept_on_adaptive_model(opus_4_7(), json!({"type": "disabled"}), Some(json!({"type": "disabled"})))]
-    #[case::kept_on_budget_model(haiku_4_5(), json!({"type": "disabled"}), Some(json!({"type": "disabled"})))]
+    #[case::omitted_on_always_on_model(fable_5_1(), serde_json::json!({"type": "disabled"}), None)]
+    #[case::kept_on_adaptive_model(opus_4_7(), serde_json::json!({"type": "disabled"}), Some(serde_json::json!({"type": "disabled"})))]
+    #[case::kept_on_budget_model(haiku_4_5(), serde_json::json!({"type": "disabled"}), Some(serde_json::json!({"type": "disabled"})))]
     #[case::adaptive_kept_on_always_on_model(
         fable_5_1(),
-        json!({"type": "adaptive"}),
-        Some(json!({"type": "adaptive"}))
+        serde_json::json!({"type": "adaptive"}),
+        Some(serde_json::json!({"type": "adaptive"}))
     )]
     fn disabled_thinking_is_omitted_only_for_always_on_models(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -719,46 +796,46 @@ mod tests {
         #[case] expected_thinking: Option<Value>,
     ) {
         let expected = match expected_thinking {
-            Some(thinking) => json!({"max_tokens": 64, "thinking": thinking}),
-            None => json!({"max_tokens": 64}),
+            Some(thinking) => serde_json::json!({"max_tokens": 64, "thinking": thinking}),
+            None => serde_json::json!({"max_tokens": 64}),
         };
         assert_eq!(
             translate(
                 capabilities,
-                json!({"max_tokens": 64, "thinking": thinking})
+                serde_json::json!({"max_tokens": 64, "thinking": thinking})
             ),
             Ok(request(expected))
         );
     }
 
     #[rstest]
-    #[case::far_above_xhigh_budget(opus_4_7(), json!(16384), "xhigh")]
-    #[case::at_xhigh_budget(opus_4_7(), json!(8192), "xhigh")]
-    #[case::below_xhigh_budget(opus_4_7(), json!(8191), "high")]
-    #[case::xhigh_budget_without_xhigh_tier(newfamily_6(), json!(8192), "high")]
-    #[case::large_budget_without_xhigh_tier(newfamily_6(), json!(31999), "high")]
-    #[case::at_high_budget(opus_4_7(), json!(4096), "high")]
-    #[case::below_high_budget(opus_4_7(), json!(4095), "medium")]
-    #[case::at_medium_budget(opus_4_7(), json!(2048), "medium")]
-    #[case::below_medium_budget(opus_4_7(), json!(2047), "low")]
-    #[case::tiny_budget(opus_4_7(), json!(1), "low")]
+    #[case::far_above_xhigh_budget(opus_4_7(), serde_json::json!(16384), "xhigh")]
+    #[case::at_xhigh_budget(opus_4_7(), serde_json::json!(8192), "xhigh")]
+    #[case::below_xhigh_budget(opus_4_7(), serde_json::json!(8191), "high")]
+    #[case::xhigh_budget_without_xhigh_tier(newfamily_6(), serde_json::json!(8192), "high")]
+    #[case::large_budget_without_xhigh_tier(newfamily_6(), serde_json::json!(31999), "high")]
+    #[case::at_high_budget(opus_4_7(), serde_json::json!(4096), "high")]
+    #[case::below_high_budget(opus_4_7(), serde_json::json!(4095), "medium")]
+    #[case::at_medium_budget(opus_4_7(), serde_json::json!(2048), "medium")]
+    #[case::below_medium_budget(opus_4_7(), serde_json::json!(2047), "low")]
+    #[case::tiny_budget(opus_4_7(), serde_json::json!(1), "low")]
     #[case::missing_budget(opus_4_7(), Value::Null, "low")]
-    #[case::always_on_model(fable_5_1(), json!(24000), "xhigh")]
+    #[case::always_on_model(fable_5_1(), serde_json::json!(24000), "xhigh")]
     fn legacy_thinking_is_bucketed_into_adaptive_effort_on_adaptive_only_models(
         #[case] capabilities: AnthropicModelCapabilities,
         #[case] budget_tokens: Value,
         #[case] expected_effort: &str,
     ) {
         let thinking = match budget_tokens {
-            Value::Null => json!({"type": "enabled"}),
-            budget_tokens => json!({"type": "enabled", "budget_tokens": budget_tokens}),
+            Value::Null => serde_json::json!({"type": "enabled"}),
+            budget_tokens => serde_json::json!({"type": "enabled", "budget_tokens": budget_tokens}),
         };
         assert_eq!(
             translate(
                 capabilities,
-                json!({"max_tokens": 1024, "thinking": thinking})
+                serde_json::json!({"max_tokens": 1024, "thinking": thinking})
             ),
-            Ok(request(json!({
+            Ok(request(serde_json::json!({
                 "max_tokens": 1024,
                 "thinking": {"type": "adaptive"},
                 "output_config": {"effort": expected_effort}
@@ -769,27 +846,27 @@ mod tests {
     #[rstest]
     #[case::verbatim_on_model_accepting_legacy_thinking(
         sonnet_4_6(),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}}),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}})
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}})
     )]
     #[case::verbatim_with_explicit_output_config_on_model_accepting_legacy_thinking(
         sonnet_4_6(),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}, "output_config": {"effort": "low"}}),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}, "output_config": {"effort": "low"}})
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}, "output_config": {"effort": "low"}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}, "output_config": {"effort": "low"}})
     )]
     #[case::verbatim_on_non_adaptive_model(
         opus_4_5(),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}}),
-        json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}})
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "enabled", "budget_tokens": 31999}})
     )]
     #[case::caller_output_config_effort_wins(
         opus_4_7(),
-        json!({
+        serde_json::json!({
             "max_tokens": 32000,
             "thinking": {"type": "enabled", "budget_tokens": 31999},
             "output_config": {"effort": "low", "format": {"type": "json_schema"}}
         }),
-        json!({
+        serde_json::json!({
             "max_tokens": 32000,
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": "low", "format": {"type": "json_schema"}}
@@ -797,12 +874,12 @@ mod tests {
     )]
     #[case::effort_merges_into_caller_output_config(
         opus_4_7(),
-        json!({
+        serde_json::json!({
             "max_tokens": 32000,
             "thinking": {"type": "enabled", "budget_tokens": 4096},
             "output_config": {"format": {"type": "json_schema"}}
         }),
-        json!({
+        serde_json::json!({
             "max_tokens": 32000,
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": "high", "format": {"type": "json_schema"}}
@@ -810,8 +887,8 @@ mod tests {
     )]
     #[case::adaptive_thinking_is_left_alone(
         opus_4_7(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive", "display": "summarized"}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive", "display": "summarized"}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive", "display": "summarized"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive", "display": "summarized"}})
     )]
     fn legacy_thinking_on_adaptive_capable_models(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -824,42 +901,42 @@ mod tests {
     #[rstest]
     #[case::bare_adaptive_becomes_medium_budget_on_budget_model(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::medium_effort_becomes_medium_budget_on_budget_model(
         haiku_4_5(),
         claude_code_payload("medium", 8192),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::empty_effort_becomes_medium_budget_on_budget_model(
         haiku_4_5(),
         claude_code_payload("", 8192),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::high_effort_becomes_high_budget_on_budget_model(
         haiku_4_5(),
         claude_code_payload("high", 8192),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::effort_only_becomes_budget_on_budget_model(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::effort_replaces_caller_legacy_budget_on_budget_model(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 3000}, "output_config": {"effort": "high"}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 3000}, "output_config": {"effort": "high"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::residual_output_config_survives_effort_translation(
         haiku_4_5(),
-        json!({
+        serde_json::json!({
             "max_tokens": 8192,
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": "medium", "format": {"type": "json_schema"}}
         }),
-        json!({
+        serde_json::json!({
             "max_tokens": 8192,
             "thinking": {"type": "enabled", "budget_tokens": 2048},
             "output_config": {"format": {"type": "json_schema"}}
@@ -867,8 +944,8 @@ mod tests {
     )]
     #[case::effortless_output_config_is_kept(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}, "output_config": {"format": {"type": "json_schema"}}}),
-        json!({
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}, "output_config": {"format": {"type": "json_schema"}}}),
+        serde_json::json!({
             "max_tokens": 8192,
             "thinking": {"type": "enabled", "budget_tokens": 2048},
             "output_config": {"format": {"type": "json_schema"}}
@@ -876,88 +953,88 @@ mod tests {
     )]
     #[case::empty_output_config_is_kept(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}, "output_config": {}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}, "output_config": {}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}, "output_config": {}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}, "output_config": {}})
     )]
     #[case::missing_max_tokens_leaves_budget_uncapped(
         haiku_4_5(),
-        json!({"thinking": {"type": "adaptive"}}),
-        json!({"thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"thinking": {"type": "adaptive"}}),
+        serde_json::json!({"thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::budget_is_capped_below_max_tokens(
         haiku_4_5(),
         claude_code_payload("high", 3000),
-        json!({"max_tokens": 3000, "thinking": {"type": "enabled", "budget_tokens": 2999}})
+        serde_json::json!({"max_tokens": 3000, "thinking": {"type": "enabled", "budget_tokens": 2999}})
     )]
     #[case::max_tokens_just_above_min_budget_caps_to_min_budget(
         haiku_4_5(),
         claude_code_payload("medium", 1025),
-        json!({"max_tokens": 1025, "thinking": {"type": "enabled", "budget_tokens": 1024}})
+        serde_json::json!({"max_tokens": 1025, "thinking": {"type": "enabled", "budget_tokens": 1024}})
     )]
     #[case::max_tokens_at_min_budget_drops_thinking_and_effort(
         haiku_4_5(),
         claude_code_payload("medium", 1024),
-        json!({"max_tokens": 1024})
+        serde_json::json!({"max_tokens": 1024})
     )]
     #[case::max_tokens_below_min_budget_drops_thinking_and_effort(
         haiku_4_5(),
         claude_code_payload("medium", 512),
-        json!({"max_tokens": 512})
+        serde_json::json!({"max_tokens": 512})
     )]
     #[case::bare_adaptive_is_dropped_on_non_reasoning_model(
         haiku_3_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
-        json!({"max_tokens": 8192})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 8192})
     )]
     #[case::adaptive_and_effort_are_dropped_on_non_reasoning_model(
         haiku_3_5(),
         claude_code_payload("medium", 8192),
-        json!({"max_tokens": 8192})
+        serde_json::json!({"max_tokens": 8192})
     )]
     #[case::effort_only_is_dropped_on_non_reasoning_model(
         haiku_3_5(),
-        json!({"max_tokens": 8192, "output_config": {"effort": "high", "format": {"type": "json_schema"}}}),
-        json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high", "format": {"type": "json_schema"}}}),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
     )]
     #[case::supported_effort_is_kept_and_adaptive_thinking_dropped_on_effort_model(
         opus_4_5(),
         claude_code_payload("medium", 8192),
-        json!({"max_tokens": 8192, "output_config": {"effort": "medium"}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "medium"}})
     )]
     #[case::bare_adaptive_is_dropped_on_effort_model(
         opus_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
-        json!({"max_tokens": 8192})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 8192})
     )]
     #[case::effort_only_is_left_alone_on_effort_model(
         opus_4_5(),
-        json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
-        json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
     )]
     #[case::unsupported_effort_only_is_left_for_provider_normalization(
         opus_4_5(),
-        json!({"max_tokens": 4096, "output_config": {"effort": "xhigh"}}),
-        json!({"max_tokens": 4096, "output_config": {"effort": "xhigh"}})
+        serde_json::json!({"max_tokens": 4096, "output_config": {"effort": "xhigh"}}),
+        serde_json::json!({"max_tokens": 4096, "output_config": {"effort": "xhigh"}})
     )]
     #[case::legacy_thinking_is_kept_beside_native_effort_on_effort_model(
         opus_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}, "output_config": {"effort": "high"}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}, "output_config": {"effort": "high"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}, "output_config": {"effort": "high"}})
     )]
     #[case::unsupported_xhigh_with_adaptive_thinking_falls_back_to_budget(
         opus_4_5(),
         claude_code_payload("xhigh", 64000),
-        json!({"max_tokens": 64000, "thinking": {"type": "enabled", "budget_tokens": 8192}})
+        serde_json::json!({"max_tokens": 64000, "thinking": {"type": "enabled", "budget_tokens": 8192}})
     )]
     #[case::unsupported_max_with_adaptive_thinking_falls_back_to_budget(
         opus_4_5(),
         claude_code_payload("max", 64000),
-        json!({"max_tokens": 64000, "thinking": {"type": "enabled", "budget_tokens": 16384}})
+        serde_json::json!({"max_tokens": 64000, "thinking": {"type": "enabled", "budget_tokens": 16384}})
     )]
     #[case::bare_adaptive_is_native_on_4_6(
         sonnet_4_6(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
     )]
     #[case::adaptive_payload_is_native_on_4_6(
         sonnet_4_6(),
@@ -966,8 +1043,41 @@ mod tests {
     )]
     #[case::request_without_adaptive_interface_is_left_alone(
         haiku_4_5(),
-        json!({"max_tokens": 1024}),
-        json!({"max_tokens": 1024})
+        serde_json::json!({"max_tokens": 1024}),
+        serde_json::json!({"max_tokens": 1024})
+    )]
+    #[case::falsy_non_string_effort_becomes_medium_budget_on_budget_model(
+        haiku_4_5(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}, "output_config": {"effort": 0}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+    )]
+    #[case::minimal_effort_becomes_floored_minimal_budget_on_budget_model(
+        haiku_4_5(),
+        claude_code_payload("minimal", 8192),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 1024}})
+    )]
+    #[case::none_effort_drops_thinking_on_budget_model(
+        haiku_4_5(),
+        claude_code_payload("none", 8192),
+        serde_json::json!({"max_tokens": 8192})
+    )]
+    #[case::unrecognized_effort_is_native_on_effort_model(
+        opus_4_5(),
+        claude_code_payload("turbo", 8192),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "turbo"}})
+    )]
+    #[case::task_budget_survives_effort_translation(
+        haiku_4_5(),
+        serde_json::json!({
+            "max_tokens": 8192,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high", "task_budget": {"type": "tokens", "total": 4096}}
+        }),
+        serde_json::json!({
+            "max_tokens": 8192,
+            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "output_config": {"task_budget": {"type": "tokens", "total": 4096}}
+        })
     )]
     fn adaptive_interface_is_reshaped_for_non_adaptive_models(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -982,37 +1092,37 @@ mod tests {
         haiku_4_5(),
         claude_code_payload("medium", 8192),
         0.0,
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::bare_adaptive_downgraded_to_enabled_thinking(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
         0.0,
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::reasoning_effort_synthesized_enabled_thinking(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "reasoning_effort": "high"}),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high"}),
         0.2,
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::above_one_with_enabled_thinking(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}}),
         1.5,
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::native_effort_kept_on_effort_model(
         opus_4_5(),
         claude_code_payload("medium", 8192),
         0.0,
-        json!({"max_tokens": 8192, "output_config": {"effort": "medium"}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "medium"}})
     )]
     #[case::effort_only_on_effort_model(
         opus_4_5(),
-        json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
         0.0,
-        json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
     )]
     fn pinned_temperature_is_dropped_when_thinking_or_effort_survives_on_non_adaptive_model(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -1031,32 +1141,32 @@ mod tests {
         haiku_4_5(),
         claude_code_payload("medium", 8192),
         1.0,
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 2048}})
     )]
     #[case::thinking_dropped_for_small_max_tokens(
         haiku_4_5(),
         claude_code_payload("medium", 512),
         0.0,
-        json!({"max_tokens": 512})
+        serde_json::json!({"max_tokens": 512})
     )]
     #[case::thinking_dropped_on_non_reasoning_model(
         haiku_3_5(),
         claude_code_payload("medium", 8192),
         0.0,
-        json!({"max_tokens": 8192})
+        serde_json::json!({"max_tokens": 8192})
     )]
     #[case::disabled_thinking(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "thinking": {"type": "disabled"}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "disabled"}}),
         0.0,
-        json!({"max_tokens": 8192, "thinking": {"type": "disabled"}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "disabled"}})
     )]
-    #[case::no_thinking(haiku_4_5(), json!({"max_tokens": 8192}), 0.0, json!({"max_tokens": 8192}))]
+    #[case::no_thinking(haiku_4_5(), serde_json::json!({"max_tokens": 8192}), 0.0, serde_json::json!({"max_tokens": 8192}))]
     #[case::output_config_without_effort(
         haiku_4_5(),
-        json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}}),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}}),
         0.0,
-        json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
+        serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
     )]
     #[case::adaptive_model(
         opus_4_7(),
@@ -1066,9 +1176,9 @@ mod tests {
     )]
     #[case::legacy_thinking_on_adaptive_model(
         sonnet_4_6(),
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
         0.0,
-        json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     fn temperature_is_kept(
         #[case] capabilities: AnthropicModelCapabilities,
@@ -1113,56 +1223,56 @@ mod tests {
     #[case::reasoning_effort_uses_overridden_budget(
         &[("HIGH", "6000")],
         haiku_4_5(),
-        json!({"max_tokens": 32000, "reasoning_effort": "high"}),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 6000}})
+        serde_json::json!({"max_tokens": 32000, "reasoning_effort": "high"}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 6000}})
     )]
     #[case::minimal_override_below_min_budget_is_floored(
         &[("MINIMAL", "512")],
         haiku_4_5(),
-        json!({"max_tokens": 32000, "reasoning_effort": "minimal"}),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 1024}})
+        serde_json::json!({"max_tokens": 32000, "reasoning_effort": "minimal"}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 1024}})
     )]
     #[case::minimal_override_above_min_budget_is_used(
         &[("MINIMAL", "2000")],
         haiku_4_5(),
-        json!({"max_tokens": 32000, "reasoning_effort": "minimal"}),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 2000}})
+        serde_json::json!({"max_tokens": 32000, "reasoning_effort": "minimal"}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 2000}})
     )]
     #[case::adaptive_fallback_uses_overridden_medium_budget(
         &[("MEDIUM", "3000")],
         haiku_4_5(),
-        json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}}),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 3000}})
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 3000}})
     )]
     #[case::legacy_bucket_below_overridden_high_budget(
         &[("HIGH", "6000")],
         opus_4_7(),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 5999}}),
-        json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}})
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 5999}}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}})
     )]
     #[case::legacy_bucket_at_overridden_high_budget(
         &[("HIGH", "6000")],
         opus_4_7(),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 6000}}),
-        json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 6000}}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
     )]
     #[case::legacy_bucket_below_overridden_xhigh_budget(
         &[("XHIGH", "20000")],
         opus_4_7(),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 19999}}),
-        json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 19999}}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
     )]
     #[case::legacy_bucket_at_overridden_medium_budget(
         &[("MEDIUM", "3000")],
         opus_4_7(),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 3000}}),
-        json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}})
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 3000}}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}})
     )]
     #[case::legacy_bucket_below_overridden_medium_budget(
         &[("MEDIUM", "3000")],
         opus_4_7(),
-        json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 2999}}),
-        json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}})
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "enabled", "budget_tokens": 2999}}),
+        serde_json::json!({"max_tokens": 32000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}})
     )]
     fn translation_honors_budget_overrides(
         #[case] overrides: &[(&str, &str)],

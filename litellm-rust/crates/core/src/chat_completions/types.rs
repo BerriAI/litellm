@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_llms::base_llm::chat::transformation::{BaseConfig, RequestAuth};
+use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -37,8 +37,8 @@ pub struct ProviderChatCompletionsRequest {
     pub config: &'static dyn BaseConfig,
     pub url: String,
     pub body: Value,
-    pub upstream_headers: Vec<(String, String)>,
-    pub auth: RequestAuth,
-    pub optional_params: Map<String, Value>,
+    /// The forwarded and default headers plus how the call authenticates; the credential
+    /// itself is applied when the request is sent.
+    pub environment: ValidatedEnvironment,
     pub timeout: Option<Duration>,
 }

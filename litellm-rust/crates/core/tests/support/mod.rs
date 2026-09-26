@@ -20,6 +20,10 @@ pub fn http_pool() -> HttpClientPool {
     HttpClientPool::new(Arc::new(PublicDnsResolver))
 }
 
+pub fn resources() -> litellm_core::resources::CoreResources {
+    litellm_core::resources::CoreResources::new(Arc::new(http_pool()))
+}
+
 pub fn http_config() -> HttpClientConfig {
     Resolution::from(&HttpSettings::default()).config
 }
