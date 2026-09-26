@@ -419,7 +419,9 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     folded_metadata: Final = {**metadata, **metadata_fields}  # mutable-ok: encrypt_callback_vars needs a dict
     columns: Final = handle_key_type(data, {**column_fields})  # mutable-ok: handle_key_type mutates in place
     expires: Final = (
-        now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
+        now + timedelta(seconds=duration_in_seconds(duration=data.duration))
+        if data.duration is not None
+        else data.expires
     )
     budget_reset_at: Final = (
         get_budget_reset_time(budget_duration=data.budget_duration) if data.budget_duration is not None else None
@@ -1107,6 +1109,20 @@ _BUDGET_NUMERIC_KEYS = frozenset(
 )
 
 
+def _key_expiration_exceeds_limit(
+    data: GenerateKeyRequest | UpdateKeyRequest, maximum_duration: str, fill_defaults: bool
+) -> bool:
+    if data.duration:
+        return False
+    if not fill_defaults and data.duration is None and "duration" in data.model_fields_set:
+        return True
+    if data.expires is None:
+        return not fill_defaults and "expires" in data.model_fields_set
+    expires: Final = data.expires if data.expires.tzinfo is not None else data.expires.replace(tzinfo=timezone.utc)
+    maximum_expiration: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(maximum_duration))
+    return expires > maximum_expiration
+
+
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
@@ -1133,40 +1149,41 @@ def _enforce_upperbound_key_params(
     if litellm.upperbound_key_generate_params is None:
         return
 
+    maximum_duration: Final = litellm.upperbound_key_generate_params.duration
+    if maximum_duration is not None and _key_expiration_exceeds_limit(data, maximum_duration, fill_defaults):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"expires is over max limit set in config - max_duration={maximum_duration}"},
+        )
+
     for elem in data:
         key, value = elem
-        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
-        if upperbound_value is not None:
-            if value is None:
-                if fill_defaults:
-                    setattr(data, key, upperbound_value)
-            else:
-                if key in [
-                    "max_budget",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                ]:
-                    if value > upperbound_value:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
-                elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
-                    if value == "-1":
-                        user_duration = float("inf")
-                    else:
-                        user_duration = duration_in_seconds(duration=value)
-                    if user_duration > upperbound_duration:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
+        if (upperbound_value := getattr(litellm.upperbound_key_generate_params, key, None)) is None:
+            continue
+        if value is None:
+            if fill_defaults and not (key == "duration" and data.expires is not None):
+                setattr(data, key, upperbound_value)
+            continue
+        if key in ["max_budget", "max_parallel_requests", "tpm_limit", "rpm_limit"]:
+            if value > upperbound_value:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                    },
+                )
+        elif key in ["budget_duration", "duration"]:
+            upperbound_duration, user_duration = (
+                duration_in_seconds(duration=upperbound_value),
+                float("inf") if value == "-1" else duration_in_seconds(duration=value),
+            )
+            if user_duration > upperbound_duration:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                    },
+                )
 
 
 async def _common_key_generation_helper(
@@ -1240,6 +1257,7 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (key != "duration" or data.expires is None)
                 and key
                 in [
                     "max_budget",
@@ -3408,6 +3426,7 @@ async def update_key_fn(
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+    - expires: Optional[datetime] - Absolute expiration timestamp. An explicitly supplied duration takes precedence
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -4616,6 +4635,7 @@ async def generate_key_helper_fn(
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
+    expires: datetime | None = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -4635,12 +4655,11 @@ async def generate_key_helper_fn(
         else:
             token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
 
-    if duration is None:  # allow tokens that never expire
-        expires = None
-    else:
-        # Add duration to current time for exact expiration (not standardized reset time)
-        duration_seconds: Final = duration_in_seconds(duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    resolved_expires: Final = (
+        datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+        if duration is not None
+        else expires
+    )
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -4717,7 +4736,7 @@ async def generate_key_helper_fn(
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
-            "expires": expires,
+            "expires": resolved_expires,
             "models": models,
             "aliases": aliases_json,
             "config": config_json,

@@ -85,6 +85,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
 client = TestClient(app)
 
@@ -12722,6 +12723,87 @@ def test_enforce_upperbound_duration_over_limit(monkeypatch):
     assert "duration" in str(exc_info.value.detail)
 
 
+@pytest.mark.parametrize(
+    ("request_type", "fill_defaults"),
+    ((GenerateKeyRequest, True), (UpdateKeyRequest, False), (RegenerateKeyRequest, False)),
+)
+@pytest.mark.parametrize("with_timezone", (False, True))
+def test_enforce_upperbound_rejects_expiration_beyond_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    fill_defaults: bool,
+    with_timezone: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
+    future: Final = datetime.now(timezone.utc) + timedelta(days=2)
+    expires: Final = future if with_timezone else future.replace(tzinfo=None)
+    data: Final = request_type(key="sk-expiration-test", expires=expires)
+
+    with pytest.raises(HTTPException) as error:
+        _enforce_upperbound_key_params(data, fill_defaults=fill_defaults)
+
+    assert error.value.status_code == 400
+    assert "expires" in str(error.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("request_type", "fill_defaults"),
+    ((GenerateKeyRequest, True), (UpdateKeyRequest, False), (RegenerateKeyRequest, False)),
+)
+def test_enforce_upperbound_preserves_bounded_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    fill_defaults: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
+    expires: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+    data: Final = request_type(key="sk-expiration-test", expires=expires)
+
+    _enforce_upperbound_key_params(data, fill_defaults=fill_defaults)
+
+    assert (data.duration, data.expires) == (None, expires)
+
+
+@pytest.mark.parametrize("request_type", (UpdateKeyRequest, RegenerateKeyRequest))
+@pytest.mark.parametrize("clear_duration", (False, True))
+def test_enforce_upperbound_rejects_clearing_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[UpdateKeyRequest] | type[RegenerateKeyRequest],
+    clear_duration: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
+    expires: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+    data: Final = request_type.model_validate(
+        {"key": "sk-expiration-test", "duration": None, "expires": expires}
+        if clear_duration
+        else {"key": "sk-expiration-test", "expires": None}
+    )
+
+    with pytest.raises(HTTPException) as error:
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+
+    assert error.value.status_code == 400
+    assert "expires" in str(error.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("request_type", "fill_defaults"),
+    ((GenerateKeyRequest, True), (UpdateKeyRequest, False), (RegenerateKeyRequest, False)),
+)
+def test_enforce_upperbound_uses_explicit_duration_over_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    fill_defaults: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
+    expires: Final = datetime.now(timezone.utc) + timedelta(days=2)
+    data: Final = request_type(key="sk-expiration-test", duration="1h", expires=expires)
+
+    _enforce_upperbound_key_params(data, fill_defaults=fill_defaults)
+
+    assert (data.duration, data.expires) == ("1h", expires)
+
+
 def test_enforce_upperbound_no_config_is_noop(monkeypatch):
     """Test that no enforcement happens when upperbound params are not configured."""
     import litellm
@@ -12783,7 +12865,10 @@ def _make_regenerate_existing_key():
 
 
 @pytest.mark.asyncio
-async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monkeypatch):
+@pytest.mark.parametrize("use_absolute_expiration", (False, True))
+async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(
+    monkeypatch: pytest.MonkeyPatch, use_absolute_expiration: bool
+) -> None:
     """Regenerate must reject durations exceeding upperbound_key_generate_params.duration."""
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -12801,7 +12886,11 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
                 ),
     )
     existing_key = _make_regenerate_existing_key()
-    data = RegenerateKeyRequest(duration="2h")
+    data: Final = (
+        RegenerateKeyRequest(expires=datetime.now(timezone.utc) + timedelta(hours=2))
+        if use_absolute_expiration
+        else RegenerateKeyRequest(duration="2h")
+    )
     user_api_key_dict = _make_regenerate_user_api_key_dict()
     mock_prisma_client = _make_regenerate_mock_prisma()
 
@@ -13905,6 +13994,40 @@ def test_effective_key_for_generate_without_duration_never_expires():
     assert effective_key.budget_reset_at is None
     assert effective_key.key_rotation_at is None
     assert effective_key.key_type == "default"
+
+
+@pytest.mark.parametrize("duration", (None, "1h"))
+def test_effective_key_for_generate_preserves_explicit_expiration(duration: str | None) -> None:
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    explicit: Final = now + timedelta(days=1)
+    request: Final = GenerateKeyRequest(expires=explicit, duration=duration)
+
+    effective: Final = _effective_key_for_generate(data=request, now=now)
+
+    assert effective.expires == (explicit if duration is None else now + timedelta(hours=1))
+    assert request.expires == explicit
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_preserves_explicit_expiration() -> None:
+    explicit: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    existing: Final = LiteLLM_VerificationToken(token="test-token", metadata={})
+    request: Final = UpdateKeyRequest(key="test-token", expires=explicit)
+
+    update: Final = await prepare_key_update_data(data=request, existing_key_row=existing)
+
+    assert update["expires"] == explicit
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_persists_explicit_expiration(monkeypatch: pytest.MonkeyPatch) -> None:
+    explicit: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    database: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", database)
+
+    await generate_key_helper_fn(request_type="key", expires=explicit, table_name="key", token="sk-expiration-test-token")
+
+    assert database.insert_data.call_args.kwargs["data"]["expires"] == explicit
 
 
 def _policy_request_for_generate() -> CustomKeyPolicyRequest:
@@ -19274,6 +19397,24 @@ async def test_key_generate_omitted_budget_duration_still_takes_default_key_gene
 
     assert key_row["budget_duration"] == "30d"
     assert key_row["budget_reset_at"] is not None
+
+
+@pytest.mark.parametrize("with_lifetime_limit", (False, True))
+async def test_key_generate_expiration_overrides_default_duration(
+    monkeypatch: pytest.MonkeyPatch, with_lifetime_limit: bool
+) -> None:
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"duration": "1d"})
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(duration="1d") if with_lifetime_limit else None,
+    )
+    insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+    expires: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(expires=expires), insert_data)
+
+    assert key_row["expires"] == expires
 
 
 @pytest.mark.asyncio
