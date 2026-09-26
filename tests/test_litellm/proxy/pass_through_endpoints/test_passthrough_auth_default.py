@@ -168,11 +168,17 @@ def _config_entry(path: str, auth: object) -> dict[str, object]:
         (False, PassThroughAuthMode.PUBLIC),
         ("false", PassThroughAuthMode.PUBLIC),
         ("False", PassThroughAuthMode.PUBLIC),
+        ("yes", PassThroughAuthMode.GRANTED_KEYS),
+        ("on", PassThroughAuthMode.GRANTED_KEYS),
+        (1, PassThroughAuthMode.GRANTED_KEYS),
+        ("no", PassThroughAuthMode.PUBLIC),
+        ("off", PassThroughAuthMode.PUBLIC),
+        ("0", PassThroughAuthMode.PUBLIC),
+        (0, PassThroughAuthMode.PUBLIC),
         (None, PassThroughAuthMode.ANY_KEY),
-        ("yes", PassThroughAuthMode.ANY_KEY),
-        (1, PassThroughAuthMode.ANY_KEY),
-        (0, PassThroughAuthMode.ANY_KEY),
         ("", PassThroughAuthMode.ANY_KEY),
+        ("maybe", PassThroughAuthMode.ANY_KEY),
+        (2, PassThroughAuthMode.ANY_KEY),
     ],
 )
 def test_pass_through_auth_mode_reads_every_config_spelling(auth: object, expected: PassThroughAuthMode) -> None:
@@ -185,11 +191,15 @@ def test_pass_through_auth_mode_reads_every_config_spelling(auth: object, expect
     [
         (_OMITTED, True, False),
         (None, True, False),
-        ("yes", True, False),
+        ("maybe", True, False),
         (True, True, True),
         ("true", True, True),
+        ("yes", True, True),
+        (1, True, True),
         (False, False, False),
         ("false", False, False),
+        ("no", False, False),
+        (0, False, False),
     ],
 )
 async def test_register_pass_through_endpoint_auth_tiers(auth: object, policy_checked: bool, grant_gated: bool) -> None:
@@ -212,7 +222,7 @@ async def test_register_pass_through_endpoint_auth_tiers(auth: object, policy_ch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth", [_OMITTED, "yes", "true", True])
+@pytest.mark.parametrize("auth", [_OMITTED, "maybe", "yes", 1, "true", True])
 async def test_runtime_check_requires_a_key_unless_auth_is_false(auth: object) -> None:
     request = MagicMock()
     request.headers = {}
@@ -226,13 +236,14 @@ async def test_runtime_check_requires_a_key_unless_auth_is_false(auth: object) -
 
 
 @pytest.mark.asyncio
-async def test_runtime_check_string_false_is_public() -> None:
+@pytest.mark.parametrize("auth", ["false", "no", "off", 0])
+async def test_runtime_check_every_false_spelling_is_public(auth: object) -> None:
     request = MagicMock()
     request.headers = {}
     result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
         request=request,
         route="/public-webhook",
-        pass_through_endpoints=[_config_entry("/public-webhook", "false")],
+        pass_through_endpoints=[_config_entry("/public-webhook", auth)],
         api_key="",
     )
     assert isinstance(result, UserAPIKeyAuth)
@@ -241,7 +252,7 @@ async def test_runtime_check_string_false_is_public() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("auth", "policy_enforced"),
-    [(_OMITTED, True), ("yes", True), (True, True), (False, False), ("false", False)],
+    [(_OMITTED, True), ("maybe", True), ("yes", True), (True, True), (False, False), ("false", False), ("no", False), (0, False)],
 )
 async def test_over_budget_team_is_blocked_on_every_authenticated_pass_through(
     auth: object, policy_enforced: bool
