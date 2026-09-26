@@ -230,6 +230,114 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
             assert len(policy.drain()) == 2
 
 
+def test_panw_latest_role_message_only_scans_only_latest_turn_on_responses_input(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    latest: Final = "latest turn " + uuid.uuid4().hex
+    history: Final = ({"role": "user", "content": "first turn"}, {"role": "assistant", "content": "first reply"})
+    shapes: Final = {
+        "plain": {"input": [*history, {"role": "user", "content": latest}]},
+        "instructions": {"instructions": "answer briefly", "input": [*history, {"role": "user", "content": latest}]},
+        "function_call_output": {
+            "input": [
+                *history,
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+                {"role": "user", "content": latest},
+            ]
+        },
+        "reasoning": {
+            "input": [
+                *history,
+                {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},
+                {"role": "user", "content": latest},
+            ]
+        },
+        "tool_loop_after_latest": {
+            "input": [
+                *history,
+                {"role": "user", "content": latest},
+                {"type": "reasoning", "id": "rs_2", "content": [{"type": "reasoning_text", "text": "thinking"}]},
+                {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_2", "output": "tool result"},
+            ]
+        },
+    }
+
+    def scanner(request: Request) -> Reply:
+        assert request.target == "/v1/scan/sync/request"
+        body: Final = json.loads(request.body)
+        return Reply(
+            body=json.dumps(
+                {
+                    "action": "allow",
+                    "category": "benign",
+                    "profile_name": "synthetic-profile",
+                    "report_id": "R" + body["tr_id"],
+                    "scan_id": "S" + body["tr_id"],
+                    "tr_id": body["tr_id"],
+                    "prompt_detected": {"injection": False, "url_cats": False, "dlp": False},
+                    "response_detected": {},
+                }
+            ).encode()
+        )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/responses"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_" + identity,
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-4.1-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_" + identity,
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(scanner) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-panw-key",
+                    "profile_name": "synthetic-profile",
+                    "experimental_use_latest_role_message_only": True,
+                },
+            }
+        ]
+        path: Final = tmp_path / "panw.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, shape in shapes.items():
+                response = candidate.request("POST", "/v1/responses", {"model": model, **shape})
+                assert response.status_code == 200, response.text
+                assert response.json()["output"][0]["content"][0]["text"] == "permitted response"
+                scanned = [json.loads(scan.body)["contents"][0]["prompt"] for scan in policy.drain()]
+                assert scanned == [latest], f"{name}: latest-only scanned {scanned}"
+                assert json.loads(upstream.drain()[0].body)["input"] == shape["input"]
+
+
 @pytest.mark.covers("other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content")
 def test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition(
     gateway: Gateway, tmp_path: Path
