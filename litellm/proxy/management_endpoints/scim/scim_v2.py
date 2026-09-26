@@ -22,6 +22,7 @@ from fastapi import (
     Request,
     Response,
 )
+from prisma.types import LiteLLM_SCIMResourceWhereInput
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -466,8 +467,9 @@ async def _source_owned_ids(
     if not local_ids:
         return frozenset()
     table: Final = SCIMResourceRepository(prisma_client, use_writer=True).table
-    by_scim_id: Final = await find_many_in(table, "id", local_ids, where={"kind": kind})
-    by_local_id: Final = await find_many_in(table, "local_id", local_ids, where={"kind": kind})
+    source_kind: Final = LiteLLM_SCIMResourceWhereInput(kind=kind)
+    by_scim_id: Final = await find_many_in(table, "id", local_ids, where=source_kind)
+    by_local_id: Final = await find_many_in(table, "local_id", local_ids, where=source_kind)
     resources: Final = chain(by_scim_id, by_local_id)
     return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
 
@@ -480,6 +482,46 @@ async def _assert_legacy_source_access(
     client: Final = await _get_prisma_client_or_raise_exception()
     if await _source_owned_ids(client, kind, (local_id,)):
         raise HTTPException(403, "This record is owned by a different provisioning source")
+
+
+async def _assert_legacy_members_unowned(auth: UserAPIKeyAuth | None, members: Sequence[SCIMMember]) -> None:
+    """Refuse a legacy (non-source) SCIM write that would put a directory-owned subject on its roster.
+
+    A member may name the subject by SCIM resource id, local id, SSO identity or email; every
+    spelling is resolved to the user ids it names and checked against the source-owned resources
+    before anything is provisioned or written. The in-process source sync calls these routes
+    without a key and is exempt, as it is for single-record access.
+    """
+    if auth is None or not members:
+        return
+    client: Final = await _get_prisma_client_or_raise_exception()
+    values: Final = tuple(dict.fromkeys(_member_value(member) for member in members))
+    named: Final = tuple([(value, await _accounts_named_by_member_value(value, client)) for value in values])
+    candidates: Final = tuple(dict.fromkeys(chain(values, chain.from_iterable(ids for _, ids in named))))
+    owned: Final = await _source_owned_ids(client, "Users", candidates)
+    offending: Final = next(
+        (value for value, ids in named if value in owned or not owned.isdisjoint(ids)),
+        None,
+    )
+    if offending is not None:
+        raise HTTPException(
+            403, f"Group member '{offending}' is owned by a different provisioning source and cannot be added here"
+        )
+
+
+def _patched_members(op: SCIMPatchOperation) -> tuple[SCIMMember, ...]:
+    """The members named by a ``members`` patch operation, from its value or its path filter."""
+    if op.value is not None:
+        return _parse_member_entries(op.value)
+    return tuple(SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members"))
+
+
+def _members_a_patch_admits(patch_ops: SCIMPatchOp) -> tuple[SCIMMember, ...]:
+    """The members an ``add`` or ``replace`` operation on ``members`` would put on the roster."""
+    roster_ops: Final = tuple(
+        op for op in patch_ops.Operations if op.op != "remove" and (op.path or "").lower().startswith("members")
+    )
+    return tuple(chain.from_iterable(_patched_members(op) for op in roster_ops))
 
 
 async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list[str]) -> list[SCIMUserGroup]:
@@ -2681,6 +2723,7 @@ async def create_group(
                 detail={"error": f"Group already exists with ID: {team_id}"},
             )
 
+        await _assert_legacy_members_unowned(auth, group.members or ())
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
         members_with_roles = [Member(user_id=member_id, role="user") for member_id in member_result.all_member_ids]
@@ -2730,6 +2773,7 @@ async def update_group(
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         existing_team: Final = await _check_team_exists(group_id)
+        await _assert_legacy_members_unowned(auth, group.members or ())
 
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
@@ -2879,13 +2923,7 @@ async def _process_group_patch_operations(
                 metadata["externalId"] = str(value)
         elif path.startswith("members"):
             # Handle member operations
-            patched_members = (
-                _parse_member_entries(value)
-                if value is not None
-                else tuple(
-                    SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
-                )
-            )
+            patched_members = _patched_members(op)
 
             if op_type == "remove":
                 final_members = final_members - await _member_ids_to_drop(
@@ -3013,6 +3051,7 @@ async def patch_group(
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         existing_team: Final = await _check_team_exists(group_id)
+        await _assert_legacy_members_unowned(auth, _members_a_patch_admits(patch_ops))
 
         # Process patch operations
         update_data, final_members, replace_target = await _process_group_patch_operations(
