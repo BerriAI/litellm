@@ -3522,8 +3522,10 @@ async def test_load_config_role_permissions_usable_by_jwt_auth(tmp_path):
 async def test_load_config_wires_the_configured_malware_scanner_into_uploads(tmp_path, monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
     from litellm.proxy.rag_endpoints.upload_security import EicarTestMalwareScanner, ScanVerdict
+    from litellm.types.proxy.rag_ingest import RagIngestSettings
 
     monkeypatch.setattr(proxy_server_module, "rag_upload_malware_scanner", EicarTestMalwareScanner())
+    monkeypatch.setattr(proxy_server_module, "rag_ingest_settings", RagIngestSettings(files_api_controls=False))
     (tmp_path / "boot_scanner.py").write_text(
         "from litellm.proxy.rag_endpoints.upload_security import ScanResult, ScanVerdict\n"
         "class FlagEverything:\n"
@@ -3539,10 +3541,26 @@ async def test_load_config_wires_the_configured_malware_scanner_into_uploads(tmp
     )
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
     assert proxy_server_module.rag_upload_malware_scanner.scan(b"plain text").verdict is ScanVerdict.INFECTED
+    assert proxy_server_module.rag_ingest_settings.files_api_controls is True
+
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "rag_ingest": {"malware_scanner": "boot_scanner.scanner", "files_api_controls": False}
+                },
+            }
+        )
+    )
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert proxy_server_module.rag_ingest_settings.files_api_controls is False
+    assert proxy_server_module.rag_upload_malware_scanner.scan(b"plain text").verdict is ScanVerdict.INFECTED
 
     config_file.write_text(yaml.dump({"model_list": []}))
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
     assert isinstance(proxy_server_module.rag_upload_malware_scanner, EicarTestMalwareScanner)
+    assert proxy_server_module.rag_ingest_settings.files_api_controls is True
 
     config_file.write_text(
         yaml.dump(

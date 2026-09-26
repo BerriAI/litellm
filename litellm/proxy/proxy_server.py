@@ -745,7 +745,8 @@ from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rag_endpoints.upload_security import (
     EicarTestMalwareScanner,
     MalwareScanner,
-    MalwareScannerConfigError,
+    RagIngestConfigError,
+    parse_rag_ingest_settings,
     resolve_malware_scanner,
 )
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
@@ -867,6 +868,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
+from litellm.types.proxy.rag_ingest import RagIngestSettings
 from litellm.types.proxy.spend_capture_rate import SpendCaptureProvider, SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
@@ -1042,6 +1044,7 @@ def cleanup_router_config_variables():
         otel_logging, \
         user_custom_auth, \
         rag_upload_malware_scanner, \
+        rag_ingest_settings, \
         user_custom_auth_path, \
         user_custom_key_generate, \
         user_custom_key_update, \
@@ -1061,6 +1064,7 @@ def cleanup_router_config_variables():
     otel_logging = None
     user_custom_auth = None
     rag_upload_malware_scanner = EicarTestMalwareScanner()
+    rag_ingest_settings = RagIngestSettings()
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_key_update = None
@@ -2573,6 +2577,7 @@ native_background_mode: list[str] = []  # Models that should use native provider
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 rag_upload_malware_scanner: MalwareScanner = EicarTestMalwareScanner()
+rag_ingest_settings: RagIngestSettings = RagIngestSettings()
 user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
@@ -5950,6 +5955,7 @@ class ProxyConfig:
             otel_logging, \
             user_custom_auth, \
             rag_upload_malware_scanner, \
+            rag_ingest_settings, \
             user_custom_auth_path, \
             user_custom_key_generate, \
             user_custom_key_update, \
@@ -6366,13 +6372,17 @@ class ProxyConfig:
 
             TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
 
+        parsed_rag_ingest_settings: Final = parse_rag_ingest_settings(general_settings.get("rag_ingest"))
+        if isinstance(parsed_rag_ingest_settings, RagIngestConfigError):
+            raise ValueError(parsed_rag_ingest_settings.message)
         resolved_malware_scanner: Final = resolve_malware_scanner(
-            general_settings.get("rag_ingest"),
+            parsed_rag_ingest_settings,
             config_file_path=config_file_path,
             load_instance=get_instance_fn,
         )
-        if isinstance(resolved_malware_scanner, MalwareScannerConfigError):
+        if isinstance(resolved_malware_scanner, RagIngestConfigError):
             raise ValueError(resolved_malware_scanner.message)
+        rag_ingest_settings = parsed_rag_ingest_settings
         rag_upload_malware_scanner = resolved_malware_scanner
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:

@@ -15,7 +15,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
     EICAR_TEST_SIGNATURE,
     DetectedFormat,
     EicarTestMalwareScanner,
-    MalwareScannerConfigError,
+    RagIngestConfigError,
     RejectedUpload,
     RejectionReason,
     ScanResult,
@@ -23,10 +23,12 @@ from litellm.proxy.rag_endpoints.upload_security import (
     SecuredUpload,
     generate_safe_filename,
     inspect_content,
+    parse_rag_ingest_settings,
     resolve_malware_scanner,
     safe_download_headers,
     validate_upload,
 )
+from litellm.types.proxy.rag_ingest import RagIngestSettings
 
 
 @dataclass(frozen=True)
@@ -196,20 +198,47 @@ def _loader_raising(error: Exception):
     return load_instance
 
 
+def test_parse_rag_ingest_settings_unset_block_runs_every_control_with_the_eicar_scanner():
+    for rag_ingest in (None, {}, {"malware_scanner": None}):
+        assert parse_rag_ingest_settings(rag_ingest) == RagIngestSettings(
+            malware_scanner=None, files_api_controls=True
+        ), rag_ingest
+
+
+def test_parse_rag_ingest_settings_reads_the_files_api_opt_out():
+    parsed = parse_rag_ingest_settings({"malware_scanner": "custom_scanner.scanner", "files_api_controls": False})
+    assert parsed == RagIngestSettings(malware_scanner="custom_scanner.scanner", files_api_controls=False)
+
+
+@pytest.mark.parametrize(
+    "rag_ingest",
+    [
+        {"malware_scaner": "custom_scanner.scanner"},
+        {"malware_scanner": 42},
+        {"files_api_controls": "sometimes"},
+        "custom_scanner.scanner",
+        ["x"],
+    ],
+)
+def test_parse_rag_ingest_settings_rejects_an_invalid_block(rag_ingest):
+    parsed = parse_rag_ingest_settings(rag_ingest)
+    assert isinstance(parsed, RagIngestConfigError)
+    assert "general_settings.rag_ingest" in parsed.message
+
+
 def test_resolve_malware_scanner_unset_runs_the_eicar_test_scanner():
     load_instance, calls = _loader_returning(_CLEAN_SCANNER)
-    for rag_ingest in (None, {}, {"malware_scanner": None}):
-        resolved = resolve_malware_scanner(
-            rag_ingest, config_file_path="/etc/litellm/config.yaml", load_instance=load_instance
-        )
-        assert isinstance(resolved, EicarTestMalwareScanner), rag_ingest
+    resolved = resolve_malware_scanner(
+        RagIngestSettings(), config_file_path="/etc/litellm/config.yaml", load_instance=load_instance
+    )
+    assert isinstance(resolved, EicarTestMalwareScanner)
     assert calls == []
 
 
 def test_resolve_malware_scanner_loads_the_configured_instance_next_to_the_config():
     load_instance, calls = _loader_returning(_INFECTED_SCANNER)
     resolved = resolve_malware_scanner(
-        {"malware_scanner": "custom_scanner.scanner"},
+        RagIngestSettings(malware_scanner="custom_scanner.scanner"),
         config_file_path="/etc/litellm/config.yaml",
         load_instance=load_instance,
     )
@@ -230,11 +259,11 @@ def test_resolve_malware_scanner_loads_the_configured_instance_next_to_the_confi
 def test_resolve_malware_scanner_rejects_an_object_that_is_not_a_scanner(loaded, expected_fragment):
     load_instance, _calls = _loader_returning(loaded)
     resolved = resolve_malware_scanner(
-        {"malware_scanner": "custom_scanner.scanner"},
+        RagIngestSettings(malware_scanner="custom_scanner.scanner"),
         config_file_path=None,
         load_instance=load_instance,
     )
-    assert isinstance(resolved, MalwareScannerConfigError)
+    assert isinstance(resolved, RagIngestConfigError)
     assert "general_settings.rag_ingest.malware_scanner" in resolved.message
     assert "custom_scanner.scanner" in resolved.message
     assert expected_fragment in resolved.message
@@ -251,22 +280,11 @@ def test_resolve_malware_scanner_rejects_an_object_that_is_not_a_scanner(loaded,
 )
 def test_resolve_malware_scanner_reports_a_failed_load_with_the_option_name(error):
     resolved = resolve_malware_scanner(
-        {"malware_scanner": "custom_scanner.scanner"},
+        RagIngestSettings(malware_scanner="custom_scanner.scanner"),
         config_file_path=None,
         load_instance=_loader_raising(error),
     )
-    assert isinstance(resolved, MalwareScannerConfigError)
+    assert isinstance(resolved, RagIngestConfigError)
     assert "general_settings.rag_ingest.malware_scanner" in resolved.message
     assert str(error) in resolved.message
 
-
-@pytest.mark.parametrize(
-    "rag_ingest",
-    [{"malware_scaner": "custom_scanner.scanner"}, {"malware_scanner": 42}, "custom_scanner.scanner", ["x"]],
-)
-def test_resolve_malware_scanner_rejects_an_invalid_rag_ingest_block(rag_ingest):
-    load_instance, calls = _loader_returning(_CLEAN_SCANNER)
-    resolved = resolve_malware_scanner(rag_ingest, config_file_path=None, load_instance=load_instance)
-    assert isinstance(resolved, MalwareScannerConfigError)
-    assert "general_settings.rag_ingest" in resolved.message
-    assert calls == []

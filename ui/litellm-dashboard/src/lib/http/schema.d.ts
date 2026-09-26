@@ -28451,7 +28451,7 @@ export interface components {
              * @default 30
              */
             proxy_config_reload_interval_seconds: number;
-            /** @description controls run on every upload that lands in a vector store (/v1/rag/ingest and /v1/files with purpose assistants or user_data); rag_ingest.malware_scanner names the scanner instance as <module>.<instance> the way custom_auth does, and unset runs the EICAR test scanner - https://docs.litellm.ai/docs/rag_ingest */
+            /** @description controls run on every upload that lands in a vector store (/v1/rag/ingest and /v1/files with purpose assistants or user_data); rag_ingest.malware_scanner names the scanner instance as <module>.<instance> the way custom_auth does, and unset runs the EICAR test scanner; rag_ingest.files_api_controls: false lets the /v1/files uploads through unchecked - https://docs.litellm.ai/docs/rag_ingest */
             rag_ingest?: components["schemas"]["RagIngestSettings"] | null;
             /**
              * Reject Clientside Metadata Tags
@@ -39055,6 +39055,12 @@ export interface components {
         };
         /** RagIngestSettings */
         RagIngestSettings: {
+            /**
+             * Files Api Controls
+             * @description Whether /v1/files uploads with purpose assistants or user_data run the upload controls (format, size and malware checks) before reaching the provider. false lets those uploads through unchecked, for a deployment that sends the provider a format the controls reject on that route, such as DOCX or images. /v1/rag/ingest runs the controls whatever this is set to
+             * @default true
+             */
+            files_api_controls: boolean;
             /**
              * Malware Scanner
              * @description The scanner every vector-store upload goes through, as <module>.<instance> where the module sits next to config.yaml or is importable, resolved the way custom_auth is. The instance must expose scan(content: bytes) -> ScanResult and be safe to call from several threads at once. Unset runs the EICAR test scanner, which flags only the EICAR test file

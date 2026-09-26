@@ -123,39 +123,42 @@ class EicarTestMalwareScanner:
 
 
 @dataclass(frozen=True, slots=True)
-class MalwareScannerConfigError:
+class RagIngestConfigError:
     message: str
 
 
 InstanceLoader: TypeAlias = Callable[[str, str | None], object]
 
 
+def parse_rag_ingest_settings(rag_ingest: object) -> RagIngestSettings | RagIngestConfigError:
+    if rag_ingest is None:
+        return RagIngestSettings()
+    try:
+        return RagIngestSettings.model_validate(rag_ingest)
+    except ValidationError as e:
+        return RagIngestConfigError(f"general_settings.rag_ingest is invalid: {e}")
+
+
 def resolve_malware_scanner(
-    rag_ingest: object,
+    settings: RagIngestSettings,
     *,
     config_file_path: str | None,
     load_instance: InstanceLoader,
-) -> MalwareScanner | MalwareScannerConfigError:
-    try:
-        settings: Final = RagIngestSettings() if rag_ingest is None else RagIngestSettings.model_validate(rag_ingest)
-    except ValidationError as e:
-        return MalwareScannerConfigError(f"general_settings.rag_ingest is invalid: {e}")
+) -> MalwareScanner | RagIngestConfigError:
     if settings.malware_scanner is None:
         return EicarTestMalwareScanner()
     try:
         loaded: Final = load_instance(settings.malware_scanner, config_file_path)
     except Exception as e:
-        return MalwareScannerConfigError(
-            f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} could not be loaded: {e}"
-        )
+        return RagIngestConfigError(f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} could not be loaded: {e}")
     if isinstance(loaded, type):
-        return MalwareScannerConfigError(
+        return RagIngestConfigError(
             f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} names the class {loaded.__qualname__}; "
             "name an instance of it instead"
         )
     if isinstance(loaded, MalwareScanner) and callable(loaded.scan):
         return loaded
-    return MalwareScannerConfigError(
+    return RagIngestConfigError(
         f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} resolved to a {type(loaded).__qualname__}, "
         "which has no scan(content: bytes) -> ScanResult method"
     )

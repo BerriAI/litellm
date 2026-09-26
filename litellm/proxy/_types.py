@@ -2767,7 +2767,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "controls run on every upload that lands in a vector store (/v1/rag/ingest and /v1/files with purpose "
             "assistants or user_data); rag_ingest.malware_scanner names the scanner instance as <module>.<instance> "
-            "the way custom_auth does, and unset runs the EICAR test scanner - https://docs.litellm.ai/docs/rag_ingest"
+            "the way custom_auth does, and unset runs the EICAR test scanner; rag_ingest.files_api_controls: false lets "
+            "the /v1/files uploads through unchecked - https://docs.litellm.ai/docs/rag_ingest"
         ),
     )
     max_parallel_requests: int | None = Field(
