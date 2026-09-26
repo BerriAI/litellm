@@ -1209,7 +1209,7 @@ def function_setup(
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils: Final = _get_cached_audio_utils()
             file_checksum: Final = audio_utils.get_audio_file_content_hash(file_obj=_file_obj)
-            if "metadata" in kwargs:
+            if kwargs.get("metadata") is not None:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
                 kwargs["metadata"] = {"file_checksum": file_checksum}
