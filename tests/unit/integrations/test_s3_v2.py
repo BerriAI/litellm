@@ -3972,7 +3972,7 @@ def test_bool_config_values_fall_back_to_the_default() -> None:
 
     assert resolve_s3_max_concurrent_uploads(True, 16) == 1
     assert resolve_s3_max_queue_size(True, 50000) == 50000
-    assert resolve_s3_max_retry_age_seconds(True) is None
+    assert resolve_s3_max_retry_age_seconds(True, 3600) == 3600
 
 
 def test_int_env_helper_falls_back_on_non_numeric(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4444,21 +4444,21 @@ async def test_an_unlisted_5xx_is_requeued_without_an_extra_attempt() -> None:
 def test_retry_age_resolution_disables_the_budget(configured: object) -> None:
     from litellm.integrations.s3 import resolve_s3_max_retry_age_seconds
 
-    assert resolve_s3_max_retry_age_seconds(configured) is None
+    assert resolve_s3_max_retry_age_seconds(configured, 3600) is None
 
 
-@pytest.mark.parametrize("configured", ["abc", -5])
-def test_invalid_retry_age_resolution_disables_with_a_warning(configured: object, caplog) -> None:
+@pytest.mark.parametrize("configured", ["abc", -5, True])
+def test_invalid_retry_age_resolution_falls_back_with_a_warning(configured: object, caplog) -> None:
     from litellm.integrations.s3 import resolve_s3_max_retry_age_seconds
 
-    assert resolve_s3_max_retry_age_seconds(configured) is None
+    assert resolve_s3_max_retry_age_seconds(configured, 3600) == 3600
     assert "s3_max_retry_age_seconds" in caplog.text
 
 
 def test_retry_age_resolution_accepts_a_positive_int() -> None:
     from litellm.integrations.s3 import resolve_s3_max_retry_age_seconds
 
-    assert resolve_s3_max_retry_age_seconds(30) == 30
+    assert resolve_s3_max_retry_age_seconds(30, 3600) == 30
 
 
 def test_default_logger_sets_a_one_hour_retry_age_budget() -> None:
@@ -4482,6 +4482,18 @@ def test_constructor_zero_disables_the_retry_age_budget() -> None:
     )
 
     assert logger.s3_max_retry_age_seconds is None
+
+
+def test_invalid_callback_params_retry_age_falls_back_to_the_default() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_callback_params_override={"s3_max_retry_age_seconds": "abc"},
+    )
+
+    assert logger.s3_max_retry_age_seconds == 3600
 
 
 def test_callback_params_retry_age_wins_over_constructor() -> None:

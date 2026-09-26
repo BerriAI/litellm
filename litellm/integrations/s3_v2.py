@@ -349,11 +349,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_max_queue_size = resolve_s3_max_queue_size(configured_queue_size, constructor_queue_size)
 
         configured_retry_age: Final = params.get("s3_max_retry_age_seconds")
-        constructor_retry_age: Final = resolve_s3_max_retry_age_seconds(s3_max_retry_age_seconds)
+        constructor_retry_age: Final = resolve_s3_max_retry_age_seconds(s3_max_retry_age_seconds, 3600)
         self.s3_max_retry_age_seconds = (
             constructor_retry_age
             if configured_retry_age is None or configured_retry_age == ""
-            else resolve_s3_max_retry_age_seconds(configured_retry_age)
+            else resolve_s3_max_retry_age_seconds(configured_retry_age, constructor_retry_age)
         )
 
         configured_drop: Final = params.get("s3_drop_on_terminal_error")
