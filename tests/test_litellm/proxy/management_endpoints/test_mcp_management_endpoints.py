@@ -8260,13 +8260,6 @@ def _lit3974_cache() -> MagicMock:
 
 class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(
-            HTTPException, check=lambda error: error.status_code == 403 and "permission" in str(error.detail)
-        ),
-        reason="LIT-3974 change A: detail authorization includes a server granted to the caller's team",
-    )
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
         server_id: Final = "lit3974-team-db"
         team_id: Final = "lit3974-team"
@@ -8324,11 +8317,6 @@ class TestLIT3974ResolutionRegressions:
             ("key-opt-out", ["no-mcp-servers", "lit3974-target"], ["lit3974-target"], None),
             ("org-ceiling", ["lit3974-target"], ["lit3974-target"], ["lit3974-other"]),
         ],
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(pytest.fail.Exception, match="DID NOT RAISE"),
-        reason="LIT-3974 change A: detail authorization enforces key, team, and organization ceilings",
     )
     async def test_database_server_detail_obeys_authz_intersection(
         self,
@@ -8513,13 +8501,6 @@ class TestLIT3974ResolutionRegressions:
         assert result.alias == "Target server"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(
-            HTTPException, check=lambda error: error.status_code == 403 and "permission" in str(error.detail)
-        ),
-        reason="LIT-3974 change A: dashboard detail authorization resolves team grants for config servers",
-    )
     async def test_ui_session_team_grant_resolves_config_server_detail(self) -> None:
         server_id: Final = "lit3974-config-server"
         team_id: Final = "lit3974-ui-team"
@@ -8586,11 +8567,6 @@ class TestLIT3974ResolutionRegressions:
         assert result.alias == "Config_server", "config detail must retain its display alias"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(pytest.fail.Exception, match="DID NOT RAISE"),
-        reason="LIT-3974 change B: creation rejects an identifier already owned by a config server",
-    )
     async def test_create_rejects_config_server_identifier_collision(self) -> None:
         server_id: Final = "lit3974-config-collision"
         prisma: Final = _lit3974_prisma_client(
@@ -8794,11 +8770,6 @@ class TestLIT3974ResolutionCharacterization:
                 "view_all",
                 False,
                 True,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="view_all detail denied"),
-                    reason="LIT-3974 A: view_all permits redacted catalog detail",
-                ),
             ),
             ("view_all", True, False),
             ("restricted", False, False),
@@ -8856,31 +8827,16 @@ class TestLIT3974ResolutionCharacterization:
                 "db_runtime",
                 "denied",
                 False,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="credential metadata visibility"),
-                    reason="LIT-3974 C: revoked grants hide DB metadata without removing credentials",
-                ),
             ),
             pytest.param(
                 "config",
                 "allowed",
                 True,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="credential metadata visibility"),
-                    reason="LIT-3974 C: authorized config credential metadata",
-                ),
             ),
             pytest.param(
                 "config",
                 "admin",
                 True,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="credential metadata visibility"),
-                    reason="LIT-3974 C: admin config credential metadata",
-                ),
             ),
             ("config", "denied", False),
             ("missing", "allowed", False),
@@ -10156,68 +10112,28 @@ class TestLIT3974ResolutionCharacterization:
                 "db_runtime",
                 "org object_permission",
                 id="db-runtime-org-object-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes org object_permission grants",
-                ),
             ),
             pytest.param("config", "org object_permission", id="config-org-object-permission"),
             pytest.param(
                 "db_runtime",
                 "direct user object_permission",
                 id="db-runtime-direct-user-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes direct user object_permission grants",
-                ),
             ),
             pytest.param(
                 "config",
                 "direct user object_permission",
                 id="config-direct-user-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes direct user object_permission grants",
-                ),
             ),
             pytest.param(
                 "db_runtime",
                 "allow_all_keys",
                 id="db-runtime-allow-all-keys",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes allow_all_keys grants",
-                ),
             ),
             pytest.param("config", "allow_all_keys", id="config-allow-all-keys"),
             pytest.param(
                 "db_runtime",
                 "access-group",
                 id="db-runtime-access-group",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes access-group grants",
-                ),
             ),
             pytest.param("config", "access-group", id="config-access-group"),
         ],

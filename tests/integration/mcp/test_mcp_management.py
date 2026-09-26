@@ -296,11 +296,6 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
             assert len(tool_calls(declared_peer.drain())) == 1 and tool_calls(database_peer.drain()) == ()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.RaisesExc(AssertionError, match="LIT-3974 detail access should succeed"),
-    reason="LIT-3974 A: team-granted detail access",
-)
 def test_team_granted_database_server_detail_is_available_to_team_key(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "lit3974_team_" + uuid.uuid4().hex[:8]
@@ -315,11 +310,6 @@ def test_team_granted_database_server_detail_is_available_to_team_key(gateway: G
         assert response.json()["alias"] == alias, response.text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.RaisesExc(AssertionError, match="LIT-3974 detail access should succeed"),
-    reason="LIT-3974 A: team-granted detail access",
-)
 def test_ui_session_lists_and_fetches_team_granted_config_server(
     gateway: Gateway,
     tmp_path: Path,
