@@ -157,10 +157,10 @@ class Agent365Guardrail(CustomGuardrail):
         api_base: str = AGENT_365_PROD_API_BASE,
         resource_app_id: str = AGENT_365_PROD_RESOURCE_APP_ID,
         agent_id: str | None = None,
-        authority_host: str = AGENT_365_DEFAULT_AUTHORITY_HOST,
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         async_handler: AsyncHTTPHandler | None = None,
+        authority_host: str = AGENT_365_DEFAULT_AUTHORITY_HOST,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail (event_hook, default_on)
     ) -> None:
         super().__init__(
