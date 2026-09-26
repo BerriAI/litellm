@@ -4190,6 +4190,49 @@ async def test_centralized_common_checks_runs_for_standard_auth():
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_token():
+    """A proxy_admin token (JWT admin scope, SSO) stays subject to the DB row's
+    max_budget when the row is forced to the admin role, otherwise the personal
+    budget check in common_checks silently no-ops for admins."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    db_user = LiteLLM_UserTable(user_id="admin-user", user_role="internal_user", spend=25.0, max_budget=10.0)
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    key_cache = UserApiKeyCache()
+    key_cache.set_cache(key=db_user.user_id, value=db_user)
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+    assert (exc_info.value.max_budget, exc_info.value.current_cost) == (10.0, 25.0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route",
     [
