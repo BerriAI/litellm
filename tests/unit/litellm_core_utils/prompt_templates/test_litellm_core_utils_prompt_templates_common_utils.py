@@ -271,25 +271,6 @@ def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     assert result == [{"a": 1}, {"b": 2}]
 
 
-@pytest.mark.parametrize(
-    "raw",
-    (
-        '{"a":1}{"b":',
-        '{"a":1} junk',
-        '0{"x":1}',
-        '{"x":1}0',
-        '[1]{"x":1}',
-        '{"a":1}{"b":2}}',
-    ),
-)
-def test_split_concatenated_json_strict_rejects_partial_or_non_object(raw: str) -> None:
-    assert split_concatenated_json_objects(raw, strict=True) == []
-
-
-def test_split_concatenated_json_strict_keeps_whitespace_separated_objects() -> None:
-    assert split_concatenated_json_objects('{"a":1}\n {"b":2}', strict=True) == [{"a": 1}, {"b": 2}]
-
-
 def test_parse_tool_call_arguments_rejects_concatenated_json() -> None:
     with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
         parse_tool_call_arguments('{"a":1}{"b":2}')
@@ -313,6 +294,11 @@ def _distinct_json_objects(count: int) -> str:
         ('{"a":1}' * 5000, ({"a": 1},)),
         ('{"a":1}' * 20, ({"a": 1},)),
         ('{"a":1}{"b":', ()),
+        ('0{"x":1}', ()),
+        ('{"x":1}0', ()),
+        ('[1]{"x":1}', ()),
+        ('{"a":1}{"b":2}}', ()),
+        ('{"a":1} junk', ()),
     ),
 )
 def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str, object], ...]) -> None:

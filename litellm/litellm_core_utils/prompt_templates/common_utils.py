@@ -2428,7 +2428,7 @@ def parse_tool_call_arguments(
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str, strict: bool = False) -> list[dict[str, object]]:
+def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -2450,10 +2450,6 @@ def split_concatenated_json_objects(raw: str, strict: bool = False) -> list[dict
     (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
     ``input={}`` so the conversation can continue instead of hard-failing.
 
-    When ``strict`` is true, the whole stripped string must be one or more
-    JSON objects separated only by whitespace. A decode error, trailing junk,
-    or a non-object value returns an empty list instead of a partial result.
-
     Returns
     -------
     list[dict]
@@ -2463,28 +2459,25 @@ def split_concatenated_json_objects(raw: str, strict: bool = False) -> list[dict
     """
     import json
 
-    stripped: Final = raw.strip()
-    if not stripped:
+    raw = raw.strip()
+    if not raw:
         return []
 
     decoder: Final = json.JSONDecoder()
-    results: Final = []
+    results: Final[list[dict[str, object]]] = []
     idx = 0
-    length: Final = len(stripped)
+    length: Final = len(raw)
 
     while idx < length:
         # Skip whitespace between objects
-        while idx < length and stripped[idx] in " \t\n\r":
+        while idx < length and raw[idx] in " \t\n\r":
             idx += 1
         if idx >= length:
             break
 
         try:
-            obj, end_idx = decoder.raw_decode(stripped, idx)
+            obj, end_idx = decoder.raw_decode(raw, idx)
         except json.JSONDecodeError as e:
-            if strict:
-                results.clear()
-                break
             verbose_logger.warning(
                 "split_concatenated_json_objects: discarding unparseable tool-call "
                 "arguments tail after %d complete object(s); decode_start=%d error=%s",
@@ -2495,9 +2488,6 @@ def split_concatenated_json_objects(raw: str, strict: bool = False) -> list[dict
             break
         if isinstance(obj, dict):
             results.append(obj)
-        elif strict:
-            results.clear()
-            break
         else:
             # Non-dict JSON value – wrap in empty dict (Bedrock requires
             # toolUse.input to be an object).
