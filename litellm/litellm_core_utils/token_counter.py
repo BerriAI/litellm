@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for token counting
 import base64
-import io
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
@@ -53,6 +53,9 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
+
+MAX_JPEG_HEADER_SEGMENTS: Final = 1024
+_JPEG_MARKER_BYTE: Final = re.compile(rb"[^\xff]")
 
 
 def get_modified_max_tokens(
@@ -248,50 +251,65 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
+    dimensions: Final = _header_dimensions(img_data)
+    if dimensions is None:
+        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+    return dimensions
+
+
+def image_dimensions_from_bytes(img_data: bytes) -> tuple[int, int] | None:
+    try:
+        return _header_dimensions(img_data)
+    except (struct.error, TypeError):
+        return None
+
+
+def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
     img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
         w, h = _unpack_ints(">LL", img_data[16:24])
         return w, h
-    elif img_type == "gif":
+    if img_type == "gif":
         w, h = _unpack_ints("<HH", img_data[6:10])
         return w, h
-    elif img_type == "jpeg":
-        with io.BytesIO(img_data) as fhandle:
-            fhandle.seek(0)
-            size = 2
-            ftype = 0
-            while not 0xC0 <= ftype <= 0xCF or ftype in (0xC4, 0xC8, 0xCC):
-                fhandle.seek(size, 1)
-                byte = fhandle.read(1)
-                while ord(byte) == 0xFF:
-                    byte = fhandle.read(1)
-                ftype = ord(byte)
-                size = _unpack_ints(">H", fhandle.read(2))[0] - 2
-            fhandle.seek(1, 1)
-            h, w = _unpack_ints(">HH", fhandle.read(4))
-        return w, h
-    elif img_type == "webp":
-        # For WebP, the dimensions are stored at different offsets depending on the format
-        # Check for VP8X (extended format)
+    if img_type == "jpeg":
+        return _jpeg_dimensions(img_data)
+    if img_type == "webp":
         if img_data[12:16] == b"VP8X":
             w = _unpack_ints("<I", img_data[24:27] + b"\x00")[0] + 1
             h = _unpack_ints("<I", img_data[27:30] + b"\x00")[0] + 1
             return w, h
-        # Check for VP8 (lossy format)
-        elif img_data[12:16] == b"VP8 ":
+        if img_data[12:16] == b"VP8 ":
             w = _unpack_ints("<H", img_data[26:28])[0] & 0x3FFF
             h = _unpack_ints("<H", img_data[28:30])[0] & 0x3FFF
             return w, h
-        # Check for VP8L (lossless format)
-        elif img_data[12:16] == b"VP8L":
+        if img_data[12:16] == b"VP8L":
             bits: Final = _unpack_ints("<I", img_data[21:25])[0]
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
+    return None
 
-    # return sensible default image dimensions if unable to get dimensions
-    return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+
+def _jpeg_dimensions(img_data: bytes) -> tuple[int, int] | None:
+    position = 2
+    for _ in range(MAX_JPEG_HEADER_SEGMENTS):
+        marker_offset = _next_jpeg_marker_offset(img_data, position)
+        marker = ord(img_data[marker_offset : marker_offset + 1])
+        segment_length = _unpack_ints(">H", img_data[marker_offset + 1 : marker_offset + 3])[0]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            h, w = _unpack_ints(">HH", img_data[marker_offset + 4 : marker_offset + 8])
+            return w, h
+        if segment_length < 2:
+            return None
+        position = marker_offset + 1 + segment_length
+    return None
+
+
+def _next_jpeg_marker_offset(img_data: bytes, position: int) -> int:
+    marker_byte: Final = _JPEG_MARKER_BYTE.search(img_data, position)
+    return len(img_data) if marker_byte is None else marker_byte.start()
 
 
 def calculate_img_tokens(
