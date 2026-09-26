@@ -624,7 +624,7 @@ if MCP_AVAILABLE:
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
     _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
-    _admin_terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: admin-closed id -> last replay
+    _terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: explicitly closed id -> last replay
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -687,7 +687,7 @@ if MCP_AVAILABLE:
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
                 _remove_stateful_session_tracking(session_id)
-        _forget_expired_admin_terminated_session_ids(now)
+        _forget_expired_terminated_session_ids(now)
 
     async def _enforce_stateful_session_cap_for_owner(owner: str) -> bool:
         """
@@ -1313,22 +1313,22 @@ if MCP_AVAILABLE:
         key_auth: Final = auth_user.user_api_key_auth
         return key_auth is not None and key_auth.user_id == user_id
 
-    def _forget_expired_admin_terminated_session_ids(now: float) -> None:
+    def _forget_expired_terminated_session_ids(now: float) -> None:
         for session_id in [
             session_id
-            for session_id, last_replayed in _admin_terminated_session_ids.items()
+            for session_id, last_replayed in _terminated_session_ids.items()
             if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
         ]:
-            del _admin_terminated_session_ids[session_id]
+            del _terminated_session_ids[session_id]
 
-    def _is_admin_terminated_session_id(session_id: str, now: float) -> bool:
-        last_replayed: Final = _admin_terminated_session_ids.get(session_id)
+    def _is_terminated_session_id(session_id: str, now: float) -> bool:
+        last_replayed: Final = _terminated_session_ids.get(session_id)
         if last_replayed is None:
             return False
         if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS:
-            del _admin_terminated_session_ids[session_id]
+            del _terminated_session_ids[session_id]
             return False
-        _admin_terminated_session_ids[session_id] = now
+        _terminated_session_ids[session_id] = now
         return True
 
     async def terminate_mcp_gateway_sessions(
@@ -1344,7 +1344,7 @@ if MCP_AVAILABLE:
         admission. Only sessions held by this worker process are affected.
         """
         now: Final = time.monotonic()
-        _forget_expired_admin_terminated_session_ids(now)
+        _forget_expired_terminated_session_ids(now)
         server_instances: Final = _stateful_server_instances()
         targets: Final = tuple(
             (session_id, auth_user)
@@ -1354,7 +1354,7 @@ if MCP_AVAILABLE:
         )
         terminated: Final = tuple(_gateway_session_for(session_id, auth_user, now) for session_id, auth_user in targets)
         for session_id, _ in targets:
-            _admin_terminated_session_ids[session_id] = now
+            _terminated_session_ids[session_id] = now
             transport = server_instances.pop(session_id, None)
             _remove_stateful_session_tracking(session_id)
             if transport is not None:
@@ -1490,12 +1490,12 @@ if MCP_AVAILABLE:
             await success_response(scope, receive, send)
             return True
 
-        if _is_admin_terminated_session_id(_session_id, time.monotonic()):
+        if _is_terminated_session_id(_session_id, time.monotonic()):
             terminated_response: Final = JSONResponse(
                 status_code=404,
                 content={  # mutable-ok: JSONResponse content must be a plain dict
                     "error": "Not Found",
-                    "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
+                    "details": "mcp-session-id was terminated. Send initialize to start a new session.",
                 },
             )
             await terminated_response(scope, receive, send)
@@ -2245,7 +2245,13 @@ if MCP_AVAILABLE:
                     is_initialize=is_initialize,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
-                    if use_stateful and session_id and scope.get("method") == "DELETE":
+                    if (
+                        use_stateful
+                        and session_id
+                        and scope.get("method") == "DELETE"
+                        and session_id not in _stateful_server_instances()
+                    ):
+                        _terminated_session_ids[session_id] = time.monotonic()
                         _remove_stateful_session_tracking(session_id)
 
             try:

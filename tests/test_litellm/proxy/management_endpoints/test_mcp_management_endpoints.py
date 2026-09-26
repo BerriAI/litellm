@@ -7762,7 +7762,7 @@ class TestDeleteMCPGatewaySessions:
         from litellm.proxy._experimental.mcp_server import server as mcp_server
 
         yield
-        mcp_server._admin_terminated_session_ids.clear()
+        mcp_server._terminated_session_ids.clear()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
