@@ -2391,13 +2391,10 @@ def parse_tool_call_arguments(
     Returns:
         Parsed arguments (usually a dict, but may be any JSON-deserializable
         type such as list, str, int, float, or None).  Returns empty dict if
-        arguments is None or empty.  Distinct JSON objects concatenated in one
-        string are returned as a list of dicts; identical repeats collapse to
-        the first dict.
+        arguments is None or empty.
 
     Raises:
-        ValueError: If the arguments string is not valid JSON and cannot be repaired
-        or salvaged as concatenated JSON objects.
+        ValueError: If the arguments string is not valid JSON and cannot be repaired.
     """
     import json
 
@@ -2419,10 +2416,6 @@ def parse_tool_call_arguments(
             )
             return repaired
 
-        recovered: Final = split_concatenated_json_objects(arguments)
-        if recovered:
-            return _salvaged_concatenated_tool_arguments(recovered, tool_name=tool_name, context=context)
-
         error_parts: Final = ["Failed to parse tool call arguments"]
 
         if tool_name:
@@ -2435,85 +2428,7 @@ def parse_tool_call_arguments(
         raise ValueError(error_message) from original_error
 
 
-def _salvaged_concatenated_tool_arguments(
-    recovered: list[dict[str, object]],
-    tool_name: str | None,
-    context: str | None,
-) -> dict[str, object] | list[dict[str, object]]:
-    """Collapse identical concatenated objects; otherwise return every object."""
-    count: Final = len(recovered)
-    tool_label: Final = tool_name or "<unknown>"
-    context_label: Final = context or "unknown context"
-    if count == 1:
-        verbose_logger.warning(
-            "Recovered 1 concatenated JSON object from tool call arguments for tool '%s' (%s).",
-            tool_label,
-            context_label,
-        )
-        return recovered[0]
-    if all(item == recovered[0] for item in recovered):
-        verbose_logger.warning(
-            "Collapsed %d identical concatenated JSON objects from tool call arguments for tool '%s' (%s).",
-            count,
-            tool_label,
-            context_label,
-        )
-        return recovered[0]
-    verbose_logger.warning(
-        "Recovered %d concatenated JSON objects from tool call arguments for tool '%s' (%s).",
-        count,
-        tool_label,
-        context_label,
-    )
-    return recovered
-
-
-def concatenated_tool_argument_objects(
-    parsed: object,
-    raw_arguments: str | None = None,
-) -> tuple[dict[str, object], ...] | None:
-    """Return distinct concatenated argument objects that callers should expand.
-
-    ``parse_tool_call_arguments`` returns a list of dicts for that salvage.
-    A successful ``json.loads`` of one JSON array is also a list; that stays
-    one value so callers do not split it into extra tool calls.
-    """
-    if not isinstance(parsed, list) or not parsed:
-        return None
-    if any(not isinstance(item, dict) for item in parsed):
-        return None
-    objects: Final = tuple(
-        cast("dict[str, object]", item) for item in parsed
-    )  # cast-ok: narrowed by isinstance check above
-    if raw_arguments is not None:
-        try:
-            json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            return objects
-        return None
-    return objects
-
-
-def allocate_concat_tool_call_id(
-    base_id: str,
-    index: int,
-    reserved: set[str],  # mutable-ok: batch-unique concat tool id allocator
-) -> str:
-    """Keep ``base_id`` on index 0; later use ``{base_id}__concat_{n}`` until free in ``reserved``."""
-    if index == 0:
-        if base_id:
-            reserved.add(base_id)
-        return base_id
-    n = index
-    while True:
-        candidate = f"{base_id}__concat_{n}"
-        if candidate not in reserved:
-            reserved.add(candidate)
-            return candidate
-        n += 1
-
-
-def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
+def split_concatenated_json_objects(raw: str, strict: bool = False) -> list[dict[str, object]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -2531,9 +2446,13 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     The walk degrades gracefully: if the string is malformed or truncated
     (e.g. a stream that ended mid-tool-call), whatever complete objects were
     parsed before the bad tail are returned and the remainder is discarded
-    with a warning, rather than raising.  Callers treat an empty result as
-    nothing salvaged: Bedrock falls back to ``input={}``, and
-    ``parse_tool_call_arguments`` re-raises.
+    with a warning, rather than raising.  The sole caller
+    (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
+    ``input={}`` so the conversation can continue instead of hard-failing.
+
+    When ``strict`` is true, the whole stripped string must be one or more
+    JSON objects separated only by whitespace. A decode error, trailing junk,
+    or a non-object value returns an empty list instead of a partial result.
 
     Returns
     -------
@@ -2544,25 +2463,28 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     """
     import json
 
-    raw = raw.strip()
-    if not raw:
+    stripped: Final = raw.strip()
+    if not stripped:
         return []
 
     decoder: Final = json.JSONDecoder()
-    results: Final[list[dict[str, object]]] = []
+    results: Final = []
     idx = 0
-    length: Final = len(raw)
+    length: Final = len(stripped)
 
     while idx < length:
         # Skip whitespace between objects
-        while idx < length and raw[idx] in " \t\n\r":
+        while idx < length and stripped[idx] in " \t\n\r":
             idx += 1
         if idx >= length:
             break
 
         try:
-            obj, end_idx = decoder.raw_decode(raw, idx)
+            obj, end_idx = decoder.raw_decode(stripped, idx)
         except json.JSONDecodeError as e:
+            if strict:
+                results.clear()
+                break
             verbose_logger.warning(
                 "split_concatenated_json_objects: discarding unparseable tool-call "
                 "arguments tail after %d complete object(s); decode_start=%d error=%s",
@@ -2573,9 +2495,37 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
             break
         if isinstance(obj, dict):
             results.append(obj)
+        elif strict:
+            results.clear()
+            break
+        else:
+            # Non-dict JSON value – wrap in empty dict (Bedrock requires
+            # toolUse.input to be an object).
+            results.append({})
         idx = end_idx
 
     return results
+
+
+MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS: Final = 8
+
+
+def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ...]:
+    """Return complete concatenated JSON objects that are safe to expand.
+
+    Identical objects collapse to the first one and are not capped. More than
+    ``MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS`` objects that are not all identical
+    returns an empty tuple. Anything that is not a full concatenation of JSON
+    objects returns an empty tuple.
+    """
+    objects: Final = split_concatenated_json_objects(raw, strict=True)
+    if not objects:
+        return ()
+    if all(item == objects[0] for item in objects):
+        return (objects[0],)
+    if len(objects) > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+        return ()
+    return tuple(objects)
 
 
 def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:

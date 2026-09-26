@@ -1,7 +1,6 @@
 import copy
 import functools
 import json
-import logging
 import os
 import sys
 from typing import Final
@@ -21,9 +20,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
-    allocate_concat_tool_call_id,
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
+    salvage_concatenated_tool_arguments,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
     system_messages_first,
@@ -239,9 +238,9 @@ def test_split_concatenated_json_empty_string():
 
 
 def test_split_concatenated_json_non_dict_value():
-    """Non-dict JSON values (e.g. arrays, strings) are skipped, not wrapped as {}."""
+    """Non-dict JSON values (e.g. arrays, strings) are replaced with {}."""
     result = split_concatenated_json_objects("[1, 2, 3]")
-    assert result == []
+    assert result == [{}]
 
 
 def test_split_concatenated_json_wholly_invalid_returns_empty():
@@ -263,26 +262,6 @@ def test_split_concatenated_json_malformed_object_returns_empty():
     assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
 
 
-def test_allocate_concat_tool_call_id_bumps_past_reserved():
-    """When ``{id}__concat_{n}`` is already taken, allocation advances until free."""
-    reserved: set[str] = {"call", "call__concat_1", "call_1"}
-    assert allocate_concat_tool_call_id("call", 0, reserved) == "call"
-    assert allocate_concat_tool_call_id("call", 1, reserved) == "call__concat_2"
-    assert "call__concat_2" in reserved
-
-
-def test_split_concatenated_json_skips_leading_non_object_before_dict():
-    """A leading non-object must not become an empty tool-call dict (e.g. ``0{"x":1}``)."""
-    result = split_concatenated_json_objects('0{"x": 1}')
-    assert result == [{"x": 1}]
-
-
-def test_parse_tool_call_arguments_skips_non_object_before_dict():
-    """Salvage used by parse_tool_call_arguments keeps only dict objects."""
-    result = parse_tool_call_arguments('0{"x": 1}', tool_name="move", context="chat completions")
-    assert result == {"x": 1}
-
-
 def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     """
     Complete objects parsed before an unparseable/truncated tail are kept;
@@ -292,87 +271,48 @@ def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     assert result == [{"a": 1}, {"b": 2}]
 
 
-def _tool_argument_object(payload: dict[str, object]) -> str:
-    """Issue #40582 shape: one JSON object whose ``args`` value is itself a JSON string."""
-    return json.dumps({"args": json.dumps(payload)})
+@pytest.mark.parametrize(
+    "raw",
+    (
+        '{"a":1}{"b":',
+        '{"a":1} junk',
+        '0{"x":1}',
+        '{"x":1}0',
+        '[1]{"x":1}',
+        '{"a":1}{"b":2}}',
+    ),
+)
+def test_split_concatenated_json_strict_rejects_partial_or_non_object(raw: str) -> None:
+    assert split_concatenated_json_objects(raw, strict=True) == []
 
 
-def test_parse_tool_call_arguments_returns_distinct_concatenated_objects(caplog):
-    """Distinct concatenated objects are returned as a list instead of raising."""
-    raw = _tool_argument_object({"flag": True}) + _tool_argument_object({"box": "A", "limit": 50})
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        result = parse_tool_call_arguments(raw, tool_name="move", context="chat completions")
-
-    assert result == [
-        {"args": json.dumps({"flag": True})},
-        {"args": json.dumps({"box": "A", "limit": 50})},
-    ]
-    assert "Recovered 2 concatenated JSON objects" in caplog.text
-    assert "move" in caplog.text
-    assert "chat completions" in caplog.text
-    assert "flag" not in caplog.text
+def test_split_concatenated_json_strict_keeps_whitespace_separated_objects() -> None:
+    assert split_concatenated_json_objects('{"a":1}\n {"b":2}', strict=True) == [{"a": 1}, {"b": 2}]
 
 
-def test_parse_tool_call_arguments_collapses_identical_concatenated_objects(caplog):
-    """Identical repeats collapse to the first object so a mutating tool is not fired N times."""
-    blob = _tool_argument_object({"flag": True})
-    raw = blob + blob + blob
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        result = parse_tool_call_arguments(raw, tool_name="move", context="responses API")
-
-    assert result == {"args": json.dumps({"flag": True})}
-    assert "Collapsed 3 identical concatenated JSON objects" in caplog.text
-    assert "move" in caplog.text
-    assert "responses API" in caplog.text
+def test_parse_tool_call_arguments_rejects_concatenated_json() -> None:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        parse_tool_call_arguments('{"a":1}{"b":2}')
 
 
-def test_parse_tool_call_arguments_keeps_partial_duplicates_when_any_object_differs():
-    """Collapse only when every object deep-equals the first."""
-    raw = (
-        _tool_argument_object({"flag": True})
-        + _tool_argument_object({"flag": True})
-        + _tool_argument_object({"box": "A", "limit": 50})
-    )
-
-    result = parse_tool_call_arguments(raw, tool_name="move", context="chat completions")
-
-    assert result == [
-        {"args": json.dumps({"flag": True})},
-        {"args": json.dumps({"flag": True})},
-        {"args": json.dumps({"box": "A", "limit": 50})},
-    ]
+def _distinct_json_objects(count: int) -> str:
+    return "".join(json.dumps({"n": index}, separators=(",", ":")) for index in range(count))
 
 
-def test_parse_tool_call_arguments_recovers_one_object_before_trailing_junk(caplog):
-    """A single complete object followed by a non-JSON tail is returned, with a count=1 warning."""
-    raw = _tool_argument_object({"flag": True}) + " trailing"
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        result = parse_tool_call_arguments(raw, tool_name="move", context="Anthropic tool invoke")
-
-    assert result == {"args": json.dumps({"flag": True})}
-    assert "Recovered 1 concatenated JSON object" in caplog.text
-    assert "move" in caplog.text
-    assert "Anthropic tool invoke" in caplog.text
-
-
-def test_parse_tool_call_arguments_leaves_single_valid_json_unchanged(caplog):
-    """One valid JSON object stays a dict and does not take the concatenation path."""
-    raw = _tool_argument_object({"flag": True})
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        result = parse_tool_call_arguments(raw, tool_name="move", context="chat completions")
-
-    assert result == {"args": json.dumps({"flag": True})}
-    assert "concatenated JSON" not in caplog.text
-
-
-def test_parse_tool_call_arguments_still_rejects_non_concatenated_malformed_json():
-    """Wholly malformed text is not turned into an empty success."""
-    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'Read'"):
-        parse_tool_call_arguments("not-json", tool_name="Read", context="chat completions")
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        ('{"a":1}{"b":2}', ({"a": 1}, {"b": 2})),
+        ('{"a":1}{"a":1}{"a":1}', ({"a": 1},)),
+        ('{"a":1}{"a":1}{"b":2}', ({"a": 1}, {"a": 1}, {"b": 2})),
+        (_distinct_json_objects(8), tuple({"n": index} for index in range(8))),
+        (_distinct_json_objects(9), ()),
+        ('{"a":1}' * 20, ({"a": 1},)),
+        ('{"a":1}{"b":', ()),
+    ),
+)
+def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str, object], ...]) -> None:
+    assert salvage_concatenated_tool_arguments(raw) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -2055,6 +1995,8 @@ class TestMergeConsecutiveSystemMessages:
         assert merged == [{"role": "system", "content": expected_content}, {"role": "user", "content": "Hello"}]
 
     def test_keeps_the_first_message_when_no_system_message_in_the_run_has_content(self):
-        merged = merge_consecutive_system_messages([{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}])
+        merged = merge_consecutive_system_messages(
+            [{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}]
+        )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]

@@ -1,12 +1,14 @@
 import base64
 import copy
 import hashlib
+import itertools
 import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -47,13 +49,12 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
-    allocate_concat_tool_call_id,
-    concatenated_tool_argument_objects,
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
     is_non_content_values_set,
     is_unsignable_thinking_block,
     parse_tool_call_arguments,
+    salvage_concatenated_tool_arguments,
 )
 from .image_handling import convert_url_to_base64
 
@@ -5383,119 +5384,167 @@ class NormalizedToolCall(TypedDict):
     arguments: dict[str, object]
 
 
-def _extend_normalized_tool_calls(
-    result: list[NormalizedToolCall],
-    tool_id: object,
-    name: str | None,
-    arguments: dict[str, object] | list[dict[str, object]] | tuple[dict[str, object], ...],
-    reserved_ids: set[str],  # mutable-ok: batch-unique concat tool id allocator
-) -> None:
-    parsed_arguments: Final = (
-        arguments if isinstance(arguments, (list, tuple)) else (arguments,)
+_ArgumentObjects: TypeAlias = tuple[dict[str, object], ...]
+_ParsedToolCall: TypeAlias = tuple[str | None, str | None, _ArgumentObjects]
+
+
+def _optional_call_id(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _optional_tool_name(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple[str | None, ...], ...]:
+    taken: Final = frozenset(_sanitize_anthropic_tool_use_id(call_id) for call_id, _ in calls if call_id)
+
+    def fresh(call_id: str) -> Iterator[str]:
+        return filter(
+            lambda candidate: _sanitize_anthropic_tool_use_id(candidate) not in taken,
+            (f"{call_id}__concat_{n}" for n in itertools.count(1)),
+        )
+
+    suffixes: Final = MappingProxyType(
+        {_sanitize_anthropic_tool_use_id(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
     )
-    base_id: Final = tool_id if isinstance(tool_id, str) else ""
-    for index, item in enumerate(parsed_arguments):
-        allocated: Final = (
-            allocate_concat_tool_call_id(base_id, index, reserved_ids) if base_id else None
+    return tuple(
+        (
+            call_id,
+            *(next(suffixes[_sanitize_anthropic_tool_use_id(call_id)]) for _ in range(count - 1)),
         )
-        result.append(
-            NormalizedToolCall(
-                id=allocated,
-                name=name,
-                arguments=item,
-            )
-        )
+        if call_id
+        else (None,) * count
+        for call_id, count in calls
+    )
 
 
-def _parse_tool_call_arguments(
-    raw: object, tool_name: str | None, context: str
-) -> dict[str, object] | list[dict[str, object]] | tuple[dict[str, object], ...]:
+def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str) -> _ArgumentObjects:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.
-    # A list is distinct concatenated objects and must not be coerced to {}.
     if isinstance(raw, dict):
-        return raw
+        return (raw,)
     if not isinstance(raw, str):
-        return {}
+        return ({},)
     normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
-
     try:
         parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
+        salvaged: Final = salvage_concatenated_tool_arguments(normalized_raw)
+        if salvaged:
+            verbose_logger.warning(
+                "Recovered %d tool call(s) from concatenated JSON arguments for tool '%s' (%s)",
+                len(salvaged),
+                tool_name or "<unknown>",
+                context,
+            )
+            return salvaged
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
-        return {}
-    expanded: Final = concatenated_tool_argument_objects(parsed, normalized_raw)
-    if expanded is not None:
-        return expanded
-    return parsed if isinstance(parsed, dict) else {}
+        return ({},)
+    return (parsed,) if isinstance(parsed, dict) else ({},)
+
+
+def _choice_tool_calls(choice: object) -> tuple[object, ...]:
+    message: Final = get_attribute_or_key(choice, "message", None)
+    tool_calls: Final = get_attribute_or_key(message, "tool_calls", None) if message is not None else None
+    if isinstance(tool_calls, list):
+        return tuple(tool_calls)
+    return ()
+
+
+def _selected_choices(response: object, include_all_choices: bool) -> tuple[object, ...]:
+    choices: Final = get_attribute_or_key(response, "choices", None)
+    if not isinstance(choices, list) or not choices:
+        return ()
+    if include_all_choices:
+        return tuple(choices)
+    return (choices[0],)
+
+
+def _parsed_chat_tool_call(tool_call: object) -> _ParsedToolCall | None:
+    function: Final = get_attribute_or_key(tool_call, "function", None)
+    if function is None:
+        return None
+    name: Final = _optional_tool_name(get_attribute_or_key(function, "name"))
+    return (
+        _optional_call_id(get_attribute_or_key(tool_call, "id")),
+        name,
+        _parse_tool_call_arguments(
+            get_attribute_or_key(function, "arguments", "{}"),
+            tool_name=name,
+            context="chat completions",
+        ),
+    )
+
+
+def _parsed_calls_in_choice(choice: object) -> tuple[_ParsedToolCall, ...]:
+    return tuple(
+        parsed for tool_call in _choice_tool_calls(choice) if (parsed := _parsed_chat_tool_call(tool_call)) is not None
+    )
+
+
+def _parsed_chat_tool_calls(response: object, include_all_choices: bool) -> tuple[_ParsedToolCall, ...]:
+    grouped: Final = tuple(
+        _parsed_calls_in_choice(choice) for choice in _selected_choices(response, include_all_choices)
+    )
+    return tuple(itertools.chain.from_iterable(grouped))
+
+
+def _normalized_tool_calls_for_parse(
+    name: str | None,
+    call_ids: tuple[str | None, ...],
+    arguments: _ArgumentObjects,
+) -> tuple[NormalizedToolCall, ...]:
+    return tuple(
+        NormalizedToolCall(id=call_id, name=name, arguments=argument)
+        for call_id, argument in zip(call_ids, arguments, strict=True)
+    )
+
+
+def _normalized_tool_calls_from_parses(parses: Sequence[_ParsedToolCall]) -> tuple[NormalizedToolCall, ...]:
+    id_groups: Final = _split_tool_call_ids(tuple((call_id, len(arguments)) for call_id, _, arguments in parses))
+    grouped: Final = tuple(
+        _normalized_tool_calls_for_parse(name, call_ids, arguments)
+        for (_, name, arguments), call_ids in zip(parses, id_groups, strict=True)
+    )
+    return tuple(itertools.chain.from_iterable(grouped))
 
 
 def _tool_calls_from_chat_completion_response(
     response: object, include_all_choices: bool = False
-) -> list[NormalizedToolCall]:
-    choices: Final = get_attribute_or_key(response, "choices", None)
-    if not (isinstance(choices, list) and choices):
-        return []
-    tool_calls: Final[list[object]] = []
-    for choice in choices if include_all_choices else choices[:1]:
-        message = get_attribute_or_key(choice, "message", None)
-        choice_tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
-        if isinstance(choice_tool_calls, list):
-            tool_calls.extend(choice_tool_calls)
-    reserved_ids: Final[set[str]] = {  # mutable-ok: batch-unique concat tool id allocator
-        tid
-        for tid in (get_attribute_or_key(tc, "id") for tc in tool_calls)
-        if isinstance(tid, str) and tid
-    }
-    result: Final[list[NormalizedToolCall]] = []
-    for tc in tool_calls:
-        fn = get_attribute_or_key(tc, "function", None)
-        if fn is None:
-            continue
-        name = get_attribute_or_key(fn, "name")
-        _extend_normalized_tool_calls(
-            result,
-            get_attribute_or_key(tc, "id"),
-            name,
-            _parse_tool_call_arguments(
-                get_attribute_or_key(fn, "arguments", "{}"),
-                tool_name=name,
-                context="chat completions",
-            ),
-            reserved_ids,
-        )
-    return result
+) -> tuple[NormalizedToolCall, ...]:
+    return _normalized_tool_calls_from_parses(_parsed_chat_tool_calls(response, include_all_choices))
 
 
-def _tool_calls_from_responses_api_response(response: object) -> list[NormalizedToolCall]:
+def _response_function_calls(response: object) -> tuple[object, ...]:
     output: Final = get_attribute_or_key(response, "output", None)
     if not isinstance(output, list):
-        return []
-    reserved_ids: Final[set[str]] = set()  # mutable-ok: batch-unique concat tool id allocator
-    for item in output:
-        if get_attribute_or_key(item, "type") != "function_call":
-            continue
-        tid = get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id")
-        if isinstance(tid, str) and tid:
-            reserved_ids.add(tid)
-    result: Final[list[NormalizedToolCall]] = []
-    for item in output:
-        if get_attribute_or_key(item, "type") != "function_call":
-            continue
-        name = get_attribute_or_key(item, "name")
-        _extend_normalized_tool_calls(
-            result,
-            get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
-            name,
-            _parse_tool_call_arguments(
-                get_attribute_or_key(item, "arguments", "{}"),
-                tool_name=name,
-                context="responses API",
-            ),
-            reserved_ids,
-        )
-    return result
+        return ()
+    return tuple(item for item in output if get_attribute_or_key(item, "type") == "function_call")
+
+
+def _parsed_response_tool_call(item: object) -> _ParsedToolCall:
+    name: Final = _optional_tool_name(get_attribute_or_key(item, "name"))
+    raw_id: Final = get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id")
+    return (
+        _optional_call_id(raw_id),
+        name,
+        _parse_tool_call_arguments(
+            get_attribute_or_key(item, "arguments", "{}"),
+            tool_name=name,
+            context="responses API",
+        ),
+    )
+
+
+def _tool_calls_from_responses_api_response(response: object) -> tuple[NormalizedToolCall, ...]:
+    parses: Final = tuple(_parsed_response_tool_call(item) for item in _response_function_calls(response))
+    return _normalized_tool_calls_from_parses(parses)
 
 
 def _tool_calls_from_anthropic_messages_response(response: object) -> list[NormalizedToolCall]:
@@ -5535,16 +5584,18 @@ def get_tool_calls_from_response(response: object, include_all_choices: bool = F
     Callers that only care about a specific tool should filter the result by
     ``name`` themselves -- this returns every tool call found.
     """
-    chat_tool_calls = _tool_calls_from_chat_completion_response(response, include_all_choices=include_all_choices)
+    chat_tool_calls: Final = _tool_calls_from_chat_completion_response(
+        response, include_all_choices=include_all_choices
+    )
     if chat_tool_calls:
-        return chat_tool_calls
+        return list(chat_tool_calls)
     for extractor in (
         _tool_calls_from_responses_api_response,
         _tool_calls_from_anthropic_messages_response,
     ):
         tool_calls = extractor(response)
         if tool_calls:
-            return tool_calls
+            return list(tool_calls)
     return []
 
 
