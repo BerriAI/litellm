@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+import psutil
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 
 if TYPE_CHECKING:
@@ -33,9 +34,15 @@ def read_checks(directory: Path, scenario: str) -> tuple[ConformanceCheck, ...]:
     assert len(reports) == 1, f"conformance {scenario}: expected one fresh report, found {len(reports)}"
     checks: Final = TypeAdapter(tuple[ConformanceCheck, ...]).validate_json(reports[0].read_bytes())
     assert len({check.id for check in checks}) == len(checks), f"conformance {scenario}: duplicate checks"
-    assert tuple(check.status for check in checks if check.id == scenario) == ("SUCCESS",), (
-        f"conformance {scenario}: required scenario did not pass: {checks}"
-    )
+    required: Final = {
+        "server-initialize": ("server-initialize", "server-session-id-visible-ascii", "wire-schema-valid"),
+        "tools-list": ("tools-list", "tools-name-format", "wire-schema-valid"),
+        "tools-call-image": ("tools-call-image", "wire-schema-valid"),
+    }.get(scenario, (scenario,))
+    for identity in required:
+        assert tuple(check.status for check in checks if check.id == identity) == ("SUCCESS",), (
+            f"conformance {scenario}: required check {identity} did not pass: {checks}"
+        )
     assert all(check.status != "FAILURE" for check in checks), f"conformance {scenario}: failed checks: {checks}"
     if scenario == "tools-call-simple-text":
         result: Final = next(check for check in checks if check.id == scenario).details.get("result")
@@ -82,7 +89,7 @@ def run_scenario(root: Path, url: str, scenario: str, directory: Path) -> tuple[
 def reference_server(root: Path, directory: Path, port: int) -> Iterator["McpPeer"]:
     from integration._support.client import eventually
     from integration._support.mcp import McpPeer
-    from integration._support.process import signal_group, stop_root_process
+    from integration._support.process import group_members, signal_group, stop_root_process
 
     directory.mkdir(parents=True, exist_ok=True)
     url: Final = f"http://127.0.0.1:{port}"
@@ -109,10 +116,17 @@ def reference_server(root: Path, directory: Path, port: int) -> Iterator["McpPee
             yield McpPeer(url + "/mcp", queue.Queue())
         finally:
             stopped: Final = stop_root_process(process)
-            if not stopped:
+            residual: Final = group_members(process.pid)
+            if residual:
+                signal_group(process.pid, signal.SIGTERM)
+                psutil.wait_procs(residual, timeout=5)
+            remaining: Final = group_members(process.pid)
+            if remaining:
                 signal_group(process.pid, signal.SIGKILL)
-                process.wait(timeout=3)
-            assert stopped, "Official reference required forced cleanup"
+                psutil.wait_procs(remaining, timeout=3)
+            process.wait(timeout=3)
+            assert not group_members(process.pid), "Official reference child survived cleanup"
+            assert stopped and not remaining, "Official reference required forced cleanup"
 
 
 @contextmanager

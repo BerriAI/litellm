@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -10,6 +11,9 @@ from integration._support.client import Gateway
 from integration._support.conformance import authenticated_endpoint, reference_server, run_scenario
 from integration._support.mcp import official_client_outcomes, register_mcp
 from integration._support.wire import Reply, wire_server
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import ImageContent
 
 
 @pytest.mark.parametrize("name", ("server-initialize", "tools-list", "tools-call-image"))
@@ -24,6 +28,24 @@ def test_official_scenario_through_gateway(gateway: Gateway, tmp_path: Path, unu
         endpoint: Final = str(gateway.client.base_url).rstrip("/") + f"/{alias}/mcp"
         with authenticated_endpoint(endpoint, key, alias) as authenticated:
             proxied: Final = run_scenario(root, authenticated, name, output / "gateway")
+        if name == "tools-call-image":
+
+            async def check_image(url: str, tool: str, token: str | None = None) -> None:
+                async with httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"} if token else {}) as http:
+                    async with streamable_http_client(url, http_client=http) as streams:
+                        async with ClientSession(streams[0], streams[1]) as session:
+                            await session.initialize()
+                            result: Final = await session.call_tool(tool, {})
+                            assert result.is_error is False and len(result.content) == 1, result
+                            content: Final = result.content[0]
+                            assert isinstance(content, ImageContent) and content.mime_type == "image/png", content
+                            assert content.data == (
+                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE"
+                                "QVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+                            ), content
+
+            asyncio.run(check_image(reference.url, "test_image_content"))
+            asyncio.run(check_image(endpoint, f"{alias}-test_image_content", key))
         assert tuple(check.status for check in direct if check.id == name) == ("SUCCESS",)
         assert tuple(check.status for check in proxied if check.id == name) == ("SUCCESS",)
         listed, called = official_client_outcomes(gateway, key, f"/{alias}/mcp", "test_simple_text", {})
@@ -92,3 +114,31 @@ def test_stalled_reference_is_killed_and_cannot_report_clean_teardown(tmp_path: 
         with pytest.raises(AssertionError, match="forced cleanup"):
             cleanup.close()
     assert not psutil.pid_exists(victim.pid), "Stopped official reference survived forced cleanup"
+
+
+def test_reference_children_are_stopped_after_the_root_exits(tmp_path: Path, unused_tcp_port: int) -> None:
+    import psutil
+
+    source: Final = tmp_path / "legacy-reference/examples/servers/typescript"
+    source.mkdir(parents=True)
+    (source / "node_modules").symlink_to(
+        Path(os.environ["MCP_CONFORMANCE_ROOT"]) / "legacy-reference/examples/servers/typescript/node_modules",
+        target_is_directory=True,
+    )
+    (source / "everything-server.ts").write_text(
+        "import http from 'node:http';\n"
+        "import { spawn } from 'node:child_process';\n"
+        "import { writeFileSync } from 'node:fs';\n"
+        "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});\n"
+        "writeFileSync('child.pid', String(child.pid));\n"
+        "http.createServer((req, res) => { res.writeHead(400); res.end(); }).listen(Number(process.env.PORT));\n"
+        "process.on('SIGTERM', () => process.exit(0));\n"
+    )
+    with reference_server(tmp_path, tmp_path / "logs", unused_tcp_port):
+        child: Final = psutil.Process(int((source / "child.pid").read_text()))
+    try:
+        assert not child.is_running(), "Reference child survived a clean root exit"
+    finally:
+        if child.is_running():
+            child.kill()
+            psutil.wait_procs((child,), timeout=3)
