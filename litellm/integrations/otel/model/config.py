@@ -1,6 +1,5 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
-import os
 from collections.abc import Mapping
 from enum import Enum
 from functools import lru_cache
@@ -9,6 +8,7 @@ from typing import Annotated, Any, Final
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
@@ -358,36 +358,22 @@ def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
 
     ``postgres`` and ``postgresql`` name the same system, as do every
     ``ServiceTypes`` member that ``db_system`` maps. Anything else means the
-    operator pointed the setting at a span family it cannot cover.
+    operator pointed the setting at a span family it cannot cover; those names
+    are logged and dropped so a typo cannot take the proxy down.
     """
-    return frozenset(_db_system_for_excluded_service(service) for service in services)
-
-
-def _db_system_for_excluded_service(service: str) -> str:
-    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
-    if resolved is None:
-        raise ValueError(f"excluded_services: {service!r} is not a datastore service; allowed: postgres, redis")
+    resolved: Final = frozenset(
+        system for service in services if (system := _db_system_for_excluded_service(service)) is not None
+    )
     return resolved
 
 
-def validate_otel_v2_excluded_services_env(settings: object) -> None:
-    """Validate ``LITELLM_OTEL_EXCLUDED_SERVICES`` at boot even with no ``otel`` callback.
-
-    Preset-only deployments build env-only configs through a path that swallows
-    init errors, so a bogus value would otherwise degrade to the legacy callback
-    silently. Splitting and normalizing here raises the same ``ValueError`` the
-    field raises. An explicit ``callback_settings.otel.excluded_services`` wins
-    over the env var, so the caller skips this check only when no V2 preset
-    callback that would still parse the env is configured.
-    """
-    if not is_otel_v2_enabled():
-        return
-    if isinstance(settings, Mapping) and "excluded_services" in settings:
-        return
-    raw: Final = os.environ.get("LITELLM_OTEL_EXCLUDED_SERVICES")
-    if not raw:
-        return
-    _normalize_excluded_services(frozenset(item.strip() for item in raw.split(",") if item.strip()))
+def _db_system_for_excluded_service(service: str) -> str | None:
+    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
+    if resolved is None:
+        verbose_logger.error(
+            "excluded_services: %r is not a datastore service; ignored. Allowed: postgres, redis", service
+        )
+    return resolved
 
 
 def validate_otel_v2_callback_settings(settings: object) -> None:

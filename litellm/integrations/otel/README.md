@@ -210,9 +210,10 @@ nothing here imports outside it:
   `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`
   (a YAML list) under `callback_settings.otel`, naming the datastore services
   to withhold (`redis`, `postgres`, `batch_write_to_db`, `redis_*`, or their
-  `db.system.name` spellings `redis` / `postgresql`). A span is withheld when
-  its `db.system.name` / `db.system` attribute is in the set, so request root,
-  auth, guardrail and model spans can never be excluded.
+  `db.system.name` spellings `redis` / `postgresql`). Unknown names are logged
+  as an error and ignored. A span is withheld when its `db.system.name` /
+  `db.system` attribute is in the set, so request root, auth, guardrail and
+  model spans can never be excluded.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.
