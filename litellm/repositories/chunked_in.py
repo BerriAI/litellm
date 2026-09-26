@@ -12,7 +12,7 @@ results. An empty list returns without querying.
 """
 
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping
-from itertools import accumulate, repeat, takewhile
+from itertools import accumulate, chain, repeat, takewhile
 from typing import Final, Literal, TypeAlias, TypeVar
 
 from litellm.repositories.prisma_protocols import CountTable, DeleteManyTable, FindManyTable, UpdateManyTable
@@ -45,7 +45,7 @@ def _as_clauses(value: object) -> tuple[object, ...]:
 def _logical_clauses(clause: object) -> tuple[object, ...]:
     match clause:
         case Mapping():
-            return tuple(nested for key in LOGICAL_KEYS if key in clause for nested in _as_clauses(clause[key]))  # pyright: ignore[reportUnknownArgumentType]  # filters nest arbitrary data
+            return tuple(chain.from_iterable(_as_clauses(clause[key]) for key in LOGICAL_KEYS if key in clause))  # pyright: ignore[reportUnknownArgumentType]  # filters nest arbitrary data
         case _:
             return ()
 
@@ -54,10 +54,12 @@ def _filters_field(where: Mapping[str, object], field: str) -> bool:
     """Whether `field` is filtered in `where` or in any AND / OR / NOT clause under it, walked level by level."""
     levels: Final = accumulate(
         repeat(None),
-        lambda level, _: tuple(nested for clause in level for nested in _logical_clauses(clause)),
+        lambda level, _: tuple(chain.from_iterable(map(_logical_clauses, level))),
         initial=(where,),
     )
-    return any(isinstance(clause, Mapping) and field in clause for level in takewhile(bool, levels) for clause in level)
+    return any(
+        isinstance(clause, Mapping) and field in clause for clause in chain.from_iterable(takewhile(bool, levels))
+    )
 
 
 def _chunk_filter(field: str, chunk: tuple[Hashable, ...], where: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -93,7 +95,7 @@ async def find_many_in(
 ) -> tuple[RowT, ...]:
     """Rows in chunk order. No take/skip/cursor/order/distinct: none of them survive a split."""
     pages: Final = await _each_chunk(field, values, where, lambda chunk: table.find_many(where=chunk), chunk_size)
-    return tuple(row for page in pages for row in page)
+    return tuple(chain.from_iterable(pages))
 
 
 async def count_in(
