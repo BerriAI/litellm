@@ -829,6 +829,34 @@ class TestVaultIsolation:
                 },
                 id="anthropic-schema-description",
             ),
+            pytest.param(
+                {
+                    "messages": [{"role": "user", "content": "U"}],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {"name": "n", "description": "S", "schema": {"type": "object"}},
+                    },
+                },
+                id="chat-response-format",
+            ),
+            pytest.param(
+                {
+                    "input": "U",
+                    "text": {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "n",
+                            "schema": {"properties": {"a": {"description": "S"}}},
+                        }
+                    },
+                },
+                id="responses-text-format",
+            ),
+            pytest.param({"prediction": {"type": "content", "content": "U"}, "instructions": "S"}, id="prediction"),
+            pytest.param(
+                {"prediction": {"type": "content", "content": [{"type": "text", "text": "U"}]}, "instructions": "S"},
+                id="prediction-parts",
+            ),
             pytest.param({"messages": [{"role": "user", "content": "U"}], "user": "S"}, id="end-user-id"),
             pytest.param({"input": "U", "safety_identifier": "S"}, id="safety-identifier"),
         ],

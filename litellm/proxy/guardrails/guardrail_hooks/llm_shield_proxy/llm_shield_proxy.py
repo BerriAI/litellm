@@ -332,6 +332,27 @@ def _collect_schema_descriptions(schema: object, privileged: _SlotSink) -> None:
             pending.extend((value, depth + 1) for value in node if isinstance(value, (dict, list)))
 
 
+def _collect_output_contracts(data: MutableRequest, slots: _SlotSink, privileged: _SlotSink) -> None:
+    """Text the caller sends to shape the reply rather than to prompt it.
+
+    A predicted output (`prediction.content`) is the caller's own draft of the answer, so
+    it goes with their text: the model largely repeats it, and it has to come back. A
+    structured-output schema -- Chat `response_format.json_schema`, Responses
+    `text.format` -- is application-authored like a tool schema, so its descriptions go
+    to the privileged sink, and its names and types stay as sent.
+    """
+    prediction: Final = data.get("prediction")
+    if isinstance(prediction, dict):
+        _collect(prediction, "content", slots)
+        _collect_text_parts(prediction, "content", slots)
+    response_format: Final = data.get("response_format")
+    if isinstance(response_format, dict):
+        _collect_schema_descriptions(response_format.get("json_schema"), privileged)
+    text_options: Final = data.get("text")
+    if isinstance(text_options, dict):
+        _collect_schema_descriptions(text_options.get("format"), privileged)
+
+
 def _collect_end_user_ids(data: MutableRequest, privileged: _SlotSink) -> None:
     """`user` and `safety_identifier` are forwarded to the provider and often hold an email.
 
@@ -857,7 +878,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         The split exists because the response is restored against one vault only.
         Server-authored spans -- system and developer turns, Anthropic's top-level
-        `system`, the Responses API `instructions`, tool definitions -- go into a
+        `system`, the Responses API `instructions`, tool and output schemas -- go into a
         vault nothing is ever restored against, so a caller who gets the model to
         echo one of their placeholders back receives the placeholder, not the value
         behind it. End-user identifiers go there too: nothing in a reply needs them.
@@ -880,6 +901,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         _collect_prompt(data, slots)
         _collect_system(data, privileged)
         _collect_tool_definitions(data, privileged)
+        _collect_output_contracts(data, slots, privileged)
         _collect_end_user_ids(data, privileged)
         return tuple(slots), tuple(privileged)
 
