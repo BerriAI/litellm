@@ -70,7 +70,9 @@ def make_sync_call(
         completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        completion_stream = decoder.iter_bytes(
+            response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+        )
 
     # LOGGING
     logging_obj.post_call(

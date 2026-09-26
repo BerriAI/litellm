@@ -14,7 +14,8 @@ use pyo3::types::PyDict;
 use tokio::sync::Mutex;
 
 use crate::adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, ProtocolHost, PythonLifecycle, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, Preflight, ProtocolHost, PythonLifecycle,
+    missing_state,
 };
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
@@ -83,6 +84,7 @@ where
 {
     host: H,
     adapter: Box<dyn PythonLifecycle>,
+    preflight: Preflight,
     machine: Option<Arc<Mutex<MachineState<M>>>>,
     arguments: Option<Py<PyDict>>,
     started_at: f64,
@@ -95,12 +97,14 @@ where
 }
 
 /// Runs one native call for Python: synchronously, or as a coroutine that awaits every
-/// host suspension inline in the caller's task.
+/// host suspension inline in the caller's task. `preflight` runs once, on the keyword view
+/// the adapter's `begin` returned, before the host projects from it.
 pub fn run_call<H, M>(
     py: Python<'_>,
     machine: M,
     host: H,
     adapter: Box<dyn PythonLifecycle>,
+    preflight: Preflight,
     arguments: Py<PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
@@ -111,6 +115,7 @@ where
     let mut driver = PythonDriver {
         host,
         adapter,
+        preflight,
         machine: Some(Arc::new(Mutex::new(MachineState {
             machine,
             result: None,
@@ -213,6 +218,9 @@ where
         match (expect, step) {
             (Expect::Started, LifecycleStep::Done) => self.begin(py),
             (Expect::Arguments, LifecycleStep::Arguments(arguments)) => {
+                if let Err(error) = (self.preflight)(py, arguments.bind(py)) {
+                    return self.adapter_failed(py, error);
+                }
                 self.arguments = Some(arguments);
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
@@ -870,6 +878,21 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         script: AdapterScript,
         asynchronous: bool,
     ) -> (PyResult<Py<PyAny>>, Vec<String>) {
+        run_preflighted(py, machine, host, script, no_preflight, asynchronous)
+    }
+
+    fn no_preflight(_: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {
+        Ok(())
+    }
+
+    fn run_preflighted(
+        py: Python<'_>,
+        machine: CallMachine<Synthetic>,
+        host: SyntheticHost,
+        script: AdapterScript,
+        preflight: Preflight,
+        asynchronous: bool,
+    ) -> (PyResult<Py<PyAny>>, Vec<String>) {
         let log = Log(host.log.0.clone());
         let adapter = SyntheticAdapter {
             log: Log(log.0.clone()),
@@ -882,6 +905,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             machine,
             host,
             Box::new(adapter),
+            preflight,
             arguments.unbind(),
             asynchronous,
         );
@@ -1088,6 +1112,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     streaming_machine(),
                     StreamingHost,
                     Box::new(adapter),
+                    no_preflight,
                     PyDict::new(py).unbind(),
                     asynchronous,
                 )
@@ -1291,6 +1316,87 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         });
     }
 
+    /// The rejection a preflight raised, kept so a test can check the caller receives that
+    /// exact object. A `Preflight` is a plain `fn`, so it cannot capture one itself.
+    static REJECTION: Mutex<Option<Py<PyBaseException>>> = Mutex::new(None);
+
+    fn rejecting_preflight(py: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {
+        let error = PyValueError::new_err("over budget");
+        *REJECTION.lock().unwrap() = Some(error.value(py).clone().unbind());
+        Err(error)
+    }
+
+    fn inheriting_preflight(_: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<()> {
+        arguments.set_item("api_key", "inherited")
+    }
+
+    #[test]
+    fn a_preflight_rejection_is_the_callers_error_and_the_machine_never_starts() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            for asynchronous in [false, true] {
+                let (result, log) = run_preflighted(
+                    py,
+                    success_machine(),
+                    SyntheticHost {
+                        log: Log::default(),
+                        op: OpScript::Answer,
+                        classifier_fails: false,
+                    },
+                    AdapterScript::Plain,
+                    rejecting_preflight,
+                    asynchronous,
+                );
+                let error = result.unwrap_err();
+                let raised = REJECTION.lock().unwrap().take().unwrap();
+                assert!(error.value(py).is(&raised));
+                assert_eq!(
+                    log,
+                    [
+                        "started",
+                        "begin",
+                        "failed:Host:over budget",
+                        "adapter.close",
+                        "host.close"
+                    ]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn the_host_projects_from_the_keyword_view_the_preflight_rewrote() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            for asynchronous in [false, true] {
+                let (result, _) = run_preflighted(
+                    py,
+                    success_machine(),
+                    SyntheticHost {
+                        log: Log::default(),
+                        op: OpScript::Answer,
+                        classifier_fails: false,
+                    },
+                    AdapterScript::Plain,
+                    inheriting_preflight,
+                    asynchronous,
+                );
+                assert_eq!(
+                    result.unwrap().extract::<String>(py).unwrap(),
+                    "project:2|sign|rewritten"
+                );
+            }
+        });
+    }
+
     #[test]
     fn the_adapters_finalized_response_is_what_the_call_returns_and_reports() {
         let _guard = PYTHON_GLOBALS
@@ -1412,6 +1518,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 success_machine(),
                 host,
                 Box::new(adapter),
+                no_preflight,
                 PyDict::new(py).unbind(),
                 false,
             )

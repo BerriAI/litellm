@@ -86,6 +86,7 @@ LlmCapability = Literal[
     "tool_search",
     "tool_search_history",
     "tool_use",
+    "upstream_stream_failure",
     "vision",
     "web_search",
     "web_search_server_tool",

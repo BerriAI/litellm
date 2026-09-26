@@ -124,11 +124,10 @@ async fn each_provider_posts_to_its_messages_endpoint(
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
-        model: model.into(),
         custom_llm_provider: provider.map(Into::into),
         api_key: Some("sk".into()),
         api_base: Some(format!("{}{base_suffix}", upstream.uri())),
-        ..call
+        ..with_model(call, model)
     })
     .await;
 
@@ -155,11 +154,10 @@ async fn unsupported_providers_are_rejected_before_sending(
     #[case] reported: &str,
 ) {
     let error = run(MessagesCall {
-        model: model.into(),
         custom_llm_provider: provider.map(Into::into),
         api_key: Some("sk".into()),
         api_base: Some(UNREACHABLE_BASE.into()),
-        ..call
+        ..with_model(call, model)
     })
     .await
     .err()
@@ -206,7 +204,7 @@ async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCa
         custom_llm_provider: Some("azure_ai".into()),
         api_key: Some("sk-azure".into()),
         api_base: Some(upstream.uri()),
-        body: object(json!({
+        body: body(json!({
             "model": MODEL,
             "max_tokens": 16,
             "messages": [{
@@ -232,30 +230,21 @@ async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCa
 #[tokio::test]
 async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
-    let mut body = call.body.clone();
-    body.insert("temperature".into(), json!(0.5));
-    body.insert("top_k".into(), json!(3));
 
     run_message(MessagesCall {
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
-        body,
         shaping: MessagesShaping {
             additional_drop_params: vec!["temperature".into()],
             ..MessagesShaping::default()
         },
-        ..call
+        ..with_fields(call, json!({"temperature": 0.5, "top_k": 3}))
     })
     .await;
 
     let sent = only_request(&upstream).await.json();
     assert_eq!(sent.get("temperature"), None);
     assert_eq!(sent["top_k"], 3);
-}
-
-fn with_fields(call: MessagesCall, fields: Value) -> MessagesCall {
-    let body: Map<String, Value> = call.body.into_iter().chain(object(fields)).collect();
-    MessagesCall { body, ..call }
 }
 
 fn sent_betas(request: &wiremock::Request) -> Vec<String> {
@@ -406,7 +395,6 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 custom_llm_provider: call.custom_llm_provider.clone(),
                 extra_headers: None,
                 provider_specific_header: None,
-                model: call.model.clone(),
                 timeout: call.timeout,
             },
             fields.clone(),
@@ -664,10 +652,9 @@ async fn the_provider_prefix_is_stripped_exactly_once(
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
-        model: model.into(),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
-        ..call
+        ..with_model(call, model)
     })
     .await;
 
