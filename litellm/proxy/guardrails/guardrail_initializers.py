@@ -41,6 +41,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         aws_bedrock_runtime_endpoint=litellm_params.aws_bedrock_runtime_endpoint,
         experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
         only_scan_new_messages=litellm_params.only_scan_new_messages or False,
+        skip_tool_message_in_guardrail=litellm_params.skip_tool_message_in_guardrail,
         streaming_buffer_until_moderated=streaming_params.streaming_buffer_until_moderated,
         streaming_sampling_rate=streaming_params.streaming_sampling_rate,
         streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,

@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import BedrockImageProc
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
@@ -283,13 +284,15 @@ def _function_call_output_parts(data: Mapping[str, object]) -> tuple[Mapping[str
     )
 
 
-def _content_leaf_parts(content: object) -> tuple[object, ...]:
+def _content_leaf_parts(content: object, *, skip_tool_results: bool = False) -> tuple[object, ...]:
     """Leaf content parts with Anthropic tool_result blocks flattened.
 
     A tool_result carrying nested blocks hands the model their contents, so a nested
     document or image must be counted, scanned, or refused exactly like a top-level
-    part. Its string content becomes a text leaf. Iterative (no recursion): the
-    code-quality check bans new recursive functions.
+    part. Its string content becomes a text leaf. skip_tool_results=True drops the
+    whole tool_result part; the refusal walk stays unfiltered so attachments inside
+    a skipped tool_result are still refused fail-closed. Iterative (no recursion):
+    the code-quality check bans new recursive functions.
     """
     if not isinstance(content, list):
         return ()
@@ -298,6 +301,8 @@ def _content_leaf_parts(content: object) -> tuple[object, ...]:
     while stack:
         part = stack.pop()
         if isinstance(part, dict) and part.get("type") == "tool_result":
+            if skip_tool_results:
+                continue
             inner = part.get("content")
             if isinstance(inner, str):
                 leaves.append(inner)
@@ -359,6 +364,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.chunk_budget_chars = chunk_budget_chars
         self.contextual_grounding_from_messages = contextual_grounding_from_messages
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
+        self.skip_tool_message_in_guardrail: bool | None = kwargs.get("skip_tool_message_in_guardrail")
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
@@ -506,7 +512,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return (BedrockContentItem(text=BedrockTextContent(text=content)),)
         if not isinstance(content, list):
             return ()
-        parts: Final = _content_leaf_parts(content)
+        parts: Final = _content_leaf_parts(content, skip_tool_results=effective_skip_tool_message_for_guardrail(self))
         items: Final = await asyncio.gather(*(self._build_input_content_item(item=item) for item in parts))
         return tuple(item for item in items if item is not None)
 
@@ -3318,6 +3324,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         updated_messages: Final = []
         masking_index = 0
+        skip_tool_results: Final = effective_skip_tool_message_for_guardrail(self)
 
         for message in messages:
             new_message = message.copy()
@@ -3339,6 +3346,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     content_list=content,
                     masked_texts=masked_texts,
                     masking_index=masking_index,
+                    skip_tool_results=skip_tool_results,
                 )
 
             updated_messages.append(new_message)
@@ -3363,8 +3371,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _mask_tool_result(
-        item: Mapping[str, object], masked_texts: Sequence[str], masking_index: int
+        item: Mapping[str, object],
+        masked_texts: Sequence[str],
+        masking_index: int,
+        skip_tool_results: bool,
     ) -> tuple[Mapping[str, object], int]:
+        if skip_tool_results:
+            return item, masking_index
         inner: Final = item.get("content")
         if isinstance(inner, str):
             masked, masking_index = BedrockGuardrail._mask_leaf(
@@ -3386,7 +3399,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return item, masking_index
 
     def _mask_content_list(
-        self, content_list: Sequence[object], masked_texts: list[str], masking_index: int
+        self, content_list: Sequence[object], masked_texts: list[str], masking_index: int, skip_tool_results: bool
     ) -> tuple[list[Any], int]:
         """
         Apply masking to a list of content items, walking the same leaves
@@ -3405,7 +3418,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         for item in content_list:
             if isinstance(item, dict) and item.get("type") == "tool_result":
                 new_item, masking_index = self._mask_tool_result(
-                    item=item, masked_texts=masked_texts, masking_index=masking_index
+                    item=item,
+                    masked_texts=masked_texts,
+                    masking_index=masking_index,
+                    skip_tool_results=skip_tool_results,
                 )
                 new_content.append(new_item)
             else:
