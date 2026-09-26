@@ -13,13 +13,24 @@ import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
 HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
-    ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "VIRTUAL_ENV")
+    (
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "VIRTUAL_ENV",
+        "LITELLM_LOCAL_MODEL_COST_MAP",
+    )
 )
 HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
 
-for _name in tuple(os.environ):
-    if _name not in HOST_ENVIRONMENT_ALLOWLIST and not _name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES):
-        del os.environ[_name]
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
@@ -179,6 +190,9 @@ def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple
 def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> Iterator[None]:
     credentials, config = isolated_aws_config_files
     with pytest.MonkeyPatch.context() as environment:
+        for name in tuple(os.environ):
+            if name not in HOST_ENVIRONMENT_ALLOWLIST and not name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES):
+                environment.delenv(name)
         environment.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
         environment.setenv("AWS_CONFIG_FILE", str(config))
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")
