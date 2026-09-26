@@ -705,7 +705,7 @@ class _BrotliDecoder:
                 produced += len(piece)
                 pending = b""
                 yield piece
-                if self._inflate.can_accept_more_data():
+                if not piece or self._inflate.is_finished():
                     return
 
         return b"".join(drained())
