@@ -8308,7 +8308,7 @@ class TestUserSubjectTeamUnion:
         ) == ["t1"]
         # An admitted subject never fans out HERE: it resolves one source per team first, and each of
         # those pins a team_id, so this helper only ever answers the single-team question. The fan-out
-        # itself is _admitted_subject_sources' job, asserted below.
+        # itself is admitted_subject_sources' job, asserted below.
         with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
             assert await MCPRequestHandler._team_ids_for_mcp_grant(_make_admitted_subject("u")) == []
         # keyless, no user_id -> nothing
@@ -8871,7 +8871,7 @@ class TestUserSubjectTeamUnion:
         teams["t-member"].organization_id = "org-a"
         auth = _make_admitted_subject("sso-user")
         with self._patch(teams_by_id=teams, user_teams=["t-member", "t-stale"]):
-            sources = await MCPRequestHandler._admitted_subject_sources(auth)
+            sources = await MCPRequestHandler.admitted_subject_sources(auth)
 
         assert [(s.team_id, s.org_id) for s in sources] == [(None, None), ("t-member", "org-a")]
         # The user's own source carries their grants; a team source must NOT, or the team would be
