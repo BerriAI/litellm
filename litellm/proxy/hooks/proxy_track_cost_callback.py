@@ -474,7 +474,9 @@ class _ProxyDBLogger(CustomLogger):
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
 
     @staticmethod
-    async def _enrich_failure_metadata_unless_db_stalled(metadata: dict, original_exception: Exception) -> dict:
+    async def _enrich_failure_metadata_unless_db_stalled(
+        metadata: dict[str, object], original_exception: Exception
+    ) -> dict[str, object]:
         if isinstance(original_exception, DBLookupDeadlineExceeded):
             return metadata
         return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)

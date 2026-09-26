@@ -684,7 +684,7 @@ class LangfuseSpanExporter(SpanExporter):
     def _round(self, halving: _Halving) -> _Halving:
         sent: Final = tuple((batch, self._send_batch(batch)) for batch in halving.pending)
         return _Halving(
-            pending=tuple(part for batch, outcome in sent if outcome == "too_large" for part in _smaller(batch)),
+            pending=tuple(chain.from_iterable(_smaller(batch) for batch, outcome in sent if outcome == "too_large")),
             settled=halving.settled
             + tuple(
                 SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE

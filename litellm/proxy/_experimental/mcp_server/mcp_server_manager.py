@@ -6855,12 +6855,13 @@ class MCPServerManager:
         if not tool_permissions:
             return {}
         expanded: Final = tuple(
-            (server_id, tuple(tools or ()))
-            for key, tools in tool_permissions.items()
-            for server_id in self.expand_permission_list([key])
+            chain.from_iterable(
+                ((server_id, tuple(tools or ())) for server_id in self.expand_permission_list([key]))
+                for key, tools in tool_permissions.items()
+            )
         )
         return {
-            server_id: list(dict.fromkeys(tool for _, tools in group for tool in tools))
+            server_id: list(dict.fromkeys(chain.from_iterable(tools for _, tools in group)))
             for server_id, group in groupby(sorted(expanded, key=itemgetter(0)), key=itemgetter(0))
         }
 
