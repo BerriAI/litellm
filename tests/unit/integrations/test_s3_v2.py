@@ -3899,6 +3899,7 @@ def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
 
     assert mock_sync_client.put.call_count == 2
+    assert "test-x.json" in mock_sync_client.put.call_args[0][0]
 
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(404, None))
     with (
@@ -3908,6 +3909,7 @@ def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
         logger.upload_data_to_s3(_element({"id": "y"}, "y"))
 
     assert mock_sync_client.put.call_count == 1
+    assert "test-y.json" in mock_sync_client.put.call_args[0][0]
 
 
 @pytest.mark.asyncio
