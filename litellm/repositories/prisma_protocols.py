@@ -118,6 +118,22 @@ class SpendLinkedTable(Protocol[RowT_co]):
     async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
 
+class FindManyTable(Protocol[RowT_co]):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[RowT_co]: ...
+
+
+class CountTable(Protocol):
+    async def count(self, *, where: Mapping[str, object]) -> int: ...
+
+
+class UpdateManyTable(Protocol):
+    async def update_many(self, *, data: Mapping[str, object], where: Mapping[str, object]) -> int: ...
+
+
+class DeleteManyTable(Protocol):
+    async def delete_many(self, *, where: Mapping[str, object]) -> int: ...
+
+
 class BatchTable(Protocol):
     def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
