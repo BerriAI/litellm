@@ -491,6 +491,7 @@ class ReservationAwareIncrementOperation(RedisPipelineIncrementOperation):
     window_key: NotRequired[str]
     expected_window_start: NotRequired[str]
     reservation_backend: NotRequired[Literal["redis", "local"]]
+    seed_window_if_absent: NotRequired[bool]
 
 
 class RateLimitResponseWithDescriptors(TypedDict):
@@ -4144,18 +4145,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> None:
         for operation in pipeline_operations:
-            if operation.get("window_key") is None or operation.get("expected_window_start") is None:
-                await self.internal_usage_cache.async_increment_cache(
-                    key=operation["key"],
-                    value=operation["increment_value"],
-                    litellm_parent_otel_span=parent_otel_span,
-                    ttl=operation["ttl"],
-                )
+            await self._apply_one_reservation_aware_token_increment(
+                operation=operation,
+                parent_otel_span=parent_otel_span,
+            )
         local_guarded_operations: Final = tuple(
             operation
             for operation in pipeline_operations
             if operation.get("window_key") is not None
             and operation.get("expected_window_start") is not None
+            and not operation.get("seed_window_if_absent")
             and operation.get("reservation_backend") == "local"
         )
         redis_guarded_operations: Final = tuple(
@@ -4163,6 +4162,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for operation in pipeline_operations
             if operation.get("window_key") is not None
             and operation.get("expected_window_start") is not None
+            and not operation.get("seed_window_if_absent")
             and operation.get("reservation_backend") != "local"
         )
         if local_guarded_operations:
@@ -4175,6 +4175,57 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 operations=redis_guarded_operations,
                 parent_otel_span=parent_otel_span,
             )
+
+    async def _apply_one_reservation_aware_token_increment(
+        self,
+        *,
+        operation: ReservationAwareIncrementOperation,
+        parent_otel_span: Span | None,
+    ) -> None:
+        if operation.get("seed_window_if_absent"):
+            window_key: Final = operation.get("window_key")
+            if window_key is not None:
+                await self._seed_rate_limit_window_if_absent(
+                    window_key=window_key,
+                    ttl=operation["ttl"],
+                    parent_otel_span=parent_otel_span,
+                )
+            await self.internal_usage_cache.async_increment_cache(
+                key=operation["key"],
+                value=operation["increment_value"],
+                litellm_parent_otel_span=parent_otel_span,
+                ttl=operation["ttl"],
+            )
+            return
+        if operation.get("window_key") is None or operation.get("expected_window_start") is None:
+            await self.internal_usage_cache.async_increment_cache(
+                key=operation["key"],
+                value=operation["increment_value"],
+                litellm_parent_otel_span=parent_otel_span,
+                ttl=operation["ttl"],
+            )
+
+    async def _seed_rate_limit_window_if_absent(
+        self,
+        *,
+        window_key: str,
+        ttl: int | None,
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """Open a TPM window around an unreserved charge so a later reservation does not wipe it."""
+        active_window: Final = await self.internal_usage_cache.async_get_cache(
+            key=window_key,
+            litellm_parent_otel_span=parent_otel_span,
+        )
+        if active_window is not None:
+            return
+        window_ttl: Final = ttl if ttl is not None else self.window_size
+        await self.internal_usage_cache.async_set_cache(
+            key=window_key,
+            value=str(int(self._get_current_time().timestamp())),
+            ttl=window_ttl,
+            litellm_parent_otel_span=parent_otel_span,
+        )
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
         from litellm.proxy.proxy_server import general_settings
@@ -4281,6 +4332,108 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return 0, 0, False
 
+    def _collect_project_io_scope_targets(
+        self,
+        standard_logging_metadata: Mapping[str, object],
+        model_group: str | None,
+    ) -> Sequence[tuple[str, str]]:
+        """Rebuild project ITPM/OTPM scopes from logging metadata.
+
+        Combined TPM already charges ``model_per_project`` from metadata when
+        no reservation owns the call. Summary/compaction subrequests carry a
+        distinct ``litellm_call_id`` and never own the parent stash, so their
+        IO quotas must use the same metadata rebuild.
+        """
+        user_api_key_project_id: Final = standard_logging_metadata.get("user_api_key_project_id")
+        if not user_api_key_project_id or not model_group:
+            return ()
+        descriptor_value: Final = f"{user_api_key_project_id}:{model_group}"
+        return (
+            (PROJECT_ITPM_DESCRIPTOR_KEY, descriptor_value),
+            (PROJECT_OTPM_DESCRIPTOR_KEY, descriptor_value),
+        )
+
+    def _build_unreserved_scoped_token_ops(
+        self,
+        targets: Sequence[tuple[str, str]],
+        actual_tokens: int,
+    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        if actual_tokens == 0:
+            return ()
+        return tuple(
+            ReservationAwareIncrementOperation(
+                key=self.create_rate_limit_keys(scope_key, scope_value, "tokens"),
+                increment_value=actual_tokens,
+                ttl=self.window_size,
+                window_key=f"{{{scope_key}:{scope_value}}}:window",
+                seed_window_if_absent=True,
+            )
+            for scope_key, scope_value in targets
+        )
+
+    def _build_unreserved_project_io_token_ops(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        """Charge full actual ITPM/OTPM when no pre-call reservation owns this call.
+
+        Summary subrequests never claim the parent stash (``owner_litellm_call_id``
+        pins it), so without this path their input/output tokens never hit the
+        project IO counters even though combined TPM still charges them.
+
+        Unreserved charges also seed the TPM window key. A plain counter increment
+        without a window is wiped when the next ordinary reservation treats a
+        missing window as expired and resets sibling counters.
+        """
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
+
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not isinstance(standard_logging_object, dict):
+            return ()
+        standard_logging_metadata: Final = standard_logging_object.get("metadata")
+        if not isinstance(standard_logging_metadata, Mapping):
+            return ()
+
+        model_group: Final = get_model_group_from_litellm_kwargs(kwargs) or (
+            standard_logging_object.get("model_group")
+            if isinstance(standard_logging_object.get("model_group"), str)
+            else None
+        )
+        targets: Final = self._collect_project_io_scope_targets(
+            standard_logging_metadata=standard_logging_metadata,
+            model_group=model_group if isinstance(model_group, str) else None,
+        )
+        if not targets:
+            return ()
+
+        response_usage: Final = self._resolve_io_token_reconcile_usage(response_obj)
+        combined_usage: Final = self._resolve_io_token_reconcile_usage(kwargs.get("combined_usage_object"))
+        aggregate_total: Final = self._aggregate_only_total_tokens(
+            self._response_usage(response_obj)
+        ) or self._aggregate_only_total_tokens(self._response_usage(kwargs.get("combined_usage_object")))
+        if not response_usage[2] and not combined_usage[2] and aggregate_total <= 0:
+            return ()
+        resolved_usage: Final = (
+            response_usage
+            if response_usage[2]
+            else combined_usage
+            if combined_usage[2]
+            else (aggregate_total, aggregate_total, True)
+        )
+        billable_input, completion_tokens, _ = resolved_usage
+        itpm_targets: Final = tuple(t for t in targets if t[0] == PROJECT_ITPM_DESCRIPTOR_KEY)
+        otpm_targets: Final = tuple(t for t in targets if t[0] == PROJECT_OTPM_DESCRIPTOR_KEY)
+        return self._build_unreserved_scoped_token_ops(
+            targets=itpm_targets,
+            actual_tokens=billable_input,
+        ) + self._build_unreserved_scoped_token_ops(
+            targets=otpm_targets,
+            actual_tokens=completion_tokens,
+        )
+
     def _build_io_token_reservation_ops(
         self,
         kwargs: object,
@@ -4293,12 +4446,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         are stored in the same ":tokens" cache bucket as combined TPM, just
         under distinct scope keys, so the reservation-aware increment math is
         identical; only the usage fields being reconciled against differ.
+
+        When this call id does not own the request stash (summary/compaction
+        subrequest), falls through to the unreserved metadata rebuild so
+        project IO quotas still receive the summary's actual usage.
         """
         if not isinstance(kwargs, dict):
             return ()
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
         if stash is None:
-            return ()
+            return self._build_unreserved_project_io_token_ops(kwargs, response_obj)
 
         itpm_reserved: Final = stash.itpm_reserved_tokens
         otpm_reserved: Final = stash.otpm_reserved_tokens

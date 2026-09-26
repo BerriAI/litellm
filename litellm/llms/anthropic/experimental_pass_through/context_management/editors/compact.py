@@ -495,6 +495,9 @@ async def _check_summary_model_budget(
 async def _check_summary_model_rate_limit(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
+    *,
+    estimated_input_tokens: int = 1,
+    estimated_output_tokens: int = 1,
 ) -> bool:
     """Return True when the caller is within their configured RPM/TPM limits
     for ``summary_model``.
@@ -504,10 +507,18 @@ async def _check_summary_model_rate_limit(
     user RPM or TPM could still drive an extra summary-model completion per
     allowed ``/v1/messages`` request. This mirrors the read side of
     ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for the
-    summary model: it builds the same descriptor set and runs the check in
-    ``read_only`` mode so no counter is reserved or incremented — the summary
-    call's actual usage is still charged exactly once by the limiter's
-    post-call success hook (via the propagated ``litellm_metadata``).
+    summary model: it builds the same descriptor set (including project
+    ITPM/OTPM) and runs the check in ``read_only`` mode so no counter is
+    reserved or incremented — the summary call's actual usage is still
+    charged exactly once by the limiter's post-call success hook (via the
+    propagated ``litellm_metadata``).
+
+    Project ITPM/OTPM are reservation-style quotas (pre-call reserves an
+    estimate). A read-only ``OVER_LIMIT`` only fires once the counter is
+    already at the cap, so this gate also compares ``limit_remaining`` to
+    ``estimated_input_tokens`` / ``estimated_output_tokens`` for those
+    descriptors — matching how an ordinary request would be refused when the
+    next reservation cannot fit.
 
     Returns True (allow) outside the proxy, when the active limiter does not
     expose the read-only descriptor check (legacy limiter), or when the
@@ -532,6 +543,9 @@ async def _check_summary_model_rate_limit(
     )
     add_project_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
         limiter, "_add_project_model_rate_limit_descriptor_from_metadata", None
+    )
+    add_project_io_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
+        limiter, "add_project_io_token_rate_limit_descriptors_from_metadata", None
     )
     create_org_descriptors: Final[_CreateOrgRateLimitDescriptors | None] = getattr(
         limiter, "create_organization_rate_limit_descriptor", None
@@ -566,6 +580,15 @@ async def _check_summary_model_rate_limit(
             requested_model=summary_model,
             descriptors=base_descriptors,
         )
+        # Project ITPM/OTPM are reserved (not merely read) on the main pre-call
+        # path, so the summary gate must add those descriptors explicitly —
+        # otherwise an exhausted project IO quota still allows compaction.
+        if add_project_io_descriptor is not None:
+            add_project_io_descriptor(
+                user_api_key_dict=user_api_key_auth,
+                requested_model=summary_model,
+                descriptors=base_descriptors,
+            )
         descriptors: Final = (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
         if not descriptors:
             return True
@@ -582,7 +605,25 @@ async def _check_summary_model_rate_limit(
             e,
         )
         return True
-    return response.get("overall_code") != "OVER_LIMIT"
+    if response.get("overall_code") == "OVER_LIMIT":
+        return False
+
+    # Reservation-style project IO quotas: deny when the estimated summary
+    # cannot fit in remaining headroom (ordinary traffic fails the same way).
+    input_estimate: Final = max(1, estimated_input_tokens)
+    output_estimate: Final = max(1, estimated_output_tokens)
+    for status in response.get("statuses") or ():
+        if not isinstance(status, Mapping):
+            continue
+        descriptor_key = status.get("descriptor_key")
+        remaining = status.get("limit_remaining")
+        if not isinstance(remaining, int):
+            continue
+        if descriptor_key == "model_per_project_itpm" and remaining < input_estimate:
+            return False
+        if descriptor_key == "model_per_project_otpm" and remaining < output_estimate:
+            return False
+    return True
 
 
 def _find_latest_compaction_index(
@@ -954,6 +995,25 @@ def _build_summary_messages(
     return summary_messages
 
 
+async def _estimate_summary_input_tokens(
+    *,
+    summary_model: str,
+    summary_messages: Sequence[Mapping[str, object]],
+    fallback_tokens: int,
+) -> int:
+    try:
+        return await asyncify(litellm.token_counter)(
+            model=summary_model,
+            messages=list(summary_messages),
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            "compact_20260112: summary token estimate failed; falling back to parent current_tokens: %s",
+            e,
+        )
+        return fallback_tokens
+
+
 def _is_user_message(msg: object) -> bool:
     return isinstance(msg, dict) and msg.get("role") == "user"
 
@@ -1248,9 +1308,19 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
+    prompt: Final = _build_summary_prompt(edit_spec, tools)
+    summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
+    estimated_summary_input: Final = await _estimate_summary_input_tokens(
+        summary_model=summary_model,
+        summary_messages=summary_messages,
+        fallback_tokens=current_tokens,
+    )
+
     if not await _check_summary_model_rate_limit(
         user_api_key_auth=user_api_key_auth,
         summary_model=summary_model,
+        estimated_input_tokens=estimated_summary_input,
+        estimated_output_tokens=_read_summary_max_tokens_setting(),
     ):
         verbose_logger.warning(
             "compact_20260112: caller over rate limit for summary_model=%s; skipping summary call",
@@ -1263,8 +1333,6 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    prompt: Final = _build_summary_prompt(edit_spec, tools)
-    summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
     propagated_metadata: Final = _propagate_metadata(litellm_metadata)
     allowed_model_region: Final = getattr(user_api_key_auth, "allowed_model_region", None)
 
