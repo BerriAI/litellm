@@ -23,6 +23,7 @@ from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 
 _real_sleep: Final = asyncio.sleep
+_NOW: Final = 1_000_000.0
 
 
 class TestS3V2UnitTests:
@@ -3196,7 +3197,7 @@ async def test_retrying_past_the_opted_in_budget_is_dropped_only_next_to_deliver
         s3_max_retry_age_seconds=60,
     )
 
-    aged = _element({"id": "aged"}, "aged").model_copy(update={"retrying_since": time.monotonic() - 120})
+    aged = _element({"id": "aged"}, "aged").model_copy(update={"retrying_since": _NOW - 120})
     fresh = _element({"id": "fresh"}, "fresh")
     put = _FailOnSuffixCodedPut(("test-aged.json",), 503, "SlowDown")
 
@@ -3204,7 +3205,10 @@ async def test_retrying_past_the_opted_in_budget_is_dropped_only_next_to_deliver
     logger.async_httpx_client.put = put
     logger.log_queue = [aged, fresh]
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
         await logger.flush_queue()
 
     assert logger.log_queue == []
@@ -3221,14 +3225,17 @@ async def test_retrying_past_the_budget_stays_queued_when_the_whole_flush_fails(
         s3_max_retry_age_seconds=60,
     )
 
-    aged = _element({"id": "aged"}, "aged").model_copy(update={"retrying_since": time.monotonic() - 120})
+    aged = _element({"id": "aged"}, "aged").model_copy(update={"retrying_since": _NOW - 120})
     put = _FailUntilClearedPut(status=503, code="SlowDown")
 
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = put
     logger.log_queue = [aged]
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
         await logger.flush_queue()
 
     assert len(logger.log_queue) == 1
@@ -3275,8 +3282,7 @@ async def test_default_logger_ages_out_elements_retrying_longer_than_an_hour(cap
     )
 
     elements = [
-        _element({"i": index}, f"{index}").model_copy(update={"retrying_since": time.monotonic() - 7200})
-        for index in range(3)
+        _element({"i": index}, f"{index}").model_copy(update={"retrying_since": _NOW - 7200}) for index in range(3)
     ]
     put = _FailOnSuffixPut(("test-1.json", "test-2.json"))
 
@@ -3284,7 +3290,10 @@ async def test_default_logger_ages_out_elements_retrying_longer_than_an_hour(cap
     logger.async_httpx_client.put = put
     logger.log_queue = list(elements)
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
         await logger.flush_queue()
 
     assert logger.log_queue == []
@@ -3302,8 +3311,7 @@ async def test_opted_out_logger_never_ages_out_long_retrying_elements(caplog) ->
     )
 
     elements = [
-        _element({"i": index}, f"{index}").model_copy(update={"retrying_since": time.monotonic() - 7200})
-        for index in range(3)
+        _element({"i": index}, f"{index}").model_copy(update={"retrying_since": _NOW - 7200}) for index in range(3)
     ]
     put = _FailOnSuffixPut(("test-1.json", "test-2.json"))
 
@@ -3311,7 +3319,10 @@ async def test_opted_out_logger_never_ages_out_long_retrying_elements(caplog) ->
     logger.async_httpx_client.put = put
     logger.log_queue = list(elements)
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
         await logger.flush_queue()
 
     assert [element.s3_object_key for element in logger.log_queue] == [
@@ -4267,7 +4278,7 @@ async def test_retry_age_budget_drops_after_the_clock_set_by_a_partial_failure(c
     logger.async_httpx_client.put = put
     logger.log_queue = [_element({"id": "poison"}, "poison"), _element({"id": "good"}, "good")]
 
-    t0: Final = time.monotonic()
+    t0: Final = _NOW
     with patch.object(logger, "handle_callback_failure") as mock_failure:
         with (
             patch("asyncio.sleep", new_callable=AsyncMock),
@@ -4309,7 +4320,7 @@ async def test_the_retry_clock_starts_at_the_first_partial_failure_not_first_see
     logger.async_httpx_client.put = put
     logger.log_queue = [_element({"id": "poison"}, "poison")]
 
-    t0: Final = time.monotonic()
+    t0: Final = _NOW
     with (
         patch("asyncio.sleep", new_callable=AsyncMock),
         patch("time.monotonic", return_value=t0),
@@ -4405,12 +4416,15 @@ async def test_requeued_batch_file_keeps_the_earliest_member_retrying_since() ->
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = put
 
-    stale: Final = time.monotonic() - 30
+    stale: Final = _NOW - 30
     retried = _element({"id": "retried"}, "retried").model_copy(update={"retrying_since": stale})
     fresh = _element({"id": "fresh"}, "fresh")
     logger.log_queue = [retried, fresh]
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
         await logger.flush_queue()
 
     assert len(logger.log_queue) == 1
