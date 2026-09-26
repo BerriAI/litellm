@@ -198,7 +198,56 @@ def test_invalid_identity_configuration_returns_a_public_validation_failure(inco
     result: Final = managed_write_fields(incoming, None, "admin")
     assert isinstance(result, AgentIdentityFailure)
     assert result.code == "identity_denied"
-    assert result.message.startswith("Invalid agent identity configuration:")
+    assert result.message.startswith("Invalid agent identity or budget configuration:")
+
+
+@pytest.mark.parametrize("budget", [{"max_budget": -1}, {"max_budget": float("inf")}, {"max_budget": 1, "budget_duration": "0d"}, {"max_budget": 1, "budget_duration": "0s"}, {"max_budget": 1, "budget_duration": "-1d"}, {"max_budget": 1, "budget_duration": ""}])
+def test_invalid_budget_changes_are_rejected(budget: dict[str, object]) -> None:
+    result: Final = managed_write_fields({"budget": budget}, managed_agent(), "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Invalid agent identity or budget configuration" in result.message
+
+
+def test_budget_updates_preserve_current_window_until_duration_changes() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.types.proxy.agent_identity import AgentBudgetState
+
+    reset: Final = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    agent: Final = managed_agent().model_copy(
+        update={
+            "budget_id": "budget",
+            "litellm_budget_table": AgentBudgetState(
+                budget_id="budget", max_budget=1, budget_duration="1d", budget_reset_at=reset
+            ),
+        }
+    )
+    same: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1d"}}, agent, "admin")
+    assert not isinstance(same, AgentIdentityFailure)
+    assert same["litellm_budget_table"]["update"]["budget_reset_at"] == reset
+    assert same["litellm_budget_table"]["update"]["max_budget"] == 2
+    assert same["spend_window"] == reset
+    assert "spend" not in same
+    changed: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1h"}}, agent, "admin")
+    assert not isinstance(changed, AgentIdentityFailure)
+    assert changed["litellm_budget_table"]["update"]["budget_reset_at"] != reset
+    assert changed["spend_window"] == changed["litellm_budget_table"]["update"]["budget_reset_at"]
+    assert changed["spend"] == 0.0
+    removed: Final = managed_write_fields({"budget": None}, agent, "admin")
+    assert removed == {"litellm_budget_table": {"disconnect": True}, "spend_window": None}
+    assert managed_write_fields({"budget": None}, managed_agent(), "admin") == {}
+
+
+def test_new_agent_budget_is_created_with_administrator_attribution() -> None:
+    result: Final = managed_write_fields({"budget": {"max_budget": 0}}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["litellm_budget_table"]["create"] == {
+        "max_budget": 0,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "created_by": "admin",
+        "updated_by": "admin",
+    }
 
 
 @pytest.mark.parametrize("roles", ["Agent.Invoke", [42], None])
@@ -220,3 +269,10 @@ def test_entra_binding_normalizes_identifiers_and_rejects_invalid_configuration(
     assert config.issuer == f"https://login.microsoftonline.com/{config.tenant_id}/v2.0"
     with pytest.raises(ValidationError):
         EntraIdentityConfig(provider="microsoft_entra", tenant_id="invalid", client_id=identifier)
+
+
+def test_budget_write_stamps_the_same_window_on_the_agent_row() -> None:
+    result: Final = managed_write_fields({"budget": {"max_budget": 1.0, "budget_duration": "1d"}}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["spend_window"] == result["litellm_budget_table"]["create"]["budget_reset_at"]
+    assert result["spend"] == 0.0

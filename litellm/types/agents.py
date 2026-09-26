@@ -8,6 +8,8 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.agent_identity import (
+    AgentBudgetConfig,
+    AgentBudgetState,
     AgentExecutionMode,
     AgentIdentityBinding,
     EntraIdentityConfig,
@@ -254,6 +256,7 @@ class AgentKillSwitchResult(BaseModel):
 
 
 class AgentConfig(TypedDict, total=False):
+    budget: ReadOnly[AgentBudgetConfig | None]
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
@@ -272,6 +275,7 @@ class AgentConfig(TypedDict, total=False):
 
 
 class PatchAgentRequest(TypedDict, total=False):
+    budget: ReadOnly[AgentBudgetConfig | None]
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
@@ -334,6 +338,8 @@ def agent_spend_filter(counter_key: str) -> "LiteLLM_AgentsTableWhereInput":
 
 
 class AgentResponse(BaseModel):
+    budget_id: str | None = None
+    litellm_budget_table: AgentBudgetState | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
@@ -359,6 +365,12 @@ class AgentResponse(BaseModel):
     updated_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
+
+    @property
+    def budget_counter_key(self) -> str:
+        return agent_budget_counter_key(
+            self.agent_id, self.litellm_budget_table.budget_reset_at if self.litellm_budget_table else None
+        )
 
 
 class ListAgentsResponse(BaseModel):

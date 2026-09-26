@@ -7,8 +7,10 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
+from litellm.proxy.common_utils.timezone_utils import budget_duration_error, get_budget_reset_time
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import (
+    AgentBudgetConfig,
     AgentExecutionMode,
     AgentIdentityBinding,
     AgentIdentityFailure,
@@ -66,12 +68,29 @@ class IdentityHistoryWrite(TypedDict):
     connectOrCreate: ReadOnly[IdentityHistoryConnect]
 
 
+class BudgetFields(TypedDict, total=False):
+    max_budget: ReadOnly[float]
+    budget_duration: ReadOnly[str | None]
+    budget_reset_at: ReadOnly[datetime | None]
+    updated_by: ReadOnly[str]
+    created_by: ReadOnly[str]
+
+
+class BudgetRelationWrite(TypedDict, total=False):
+    create: ReadOnly[BudgetFields]
+    update: ReadOnly[BudgetFields]
+    disconnect: ReadOnly[bool]
+
+
 class ManagedWriteFields(TypedDict, total=False):
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
     identity_managed: ReadOnly[bool]
     identity: ReadOnly[IdentityRelationWrite]
     retired_identities: ReadOnly[IdentityHistoryWrite]
+    litellm_budget_table: ReadOnly[BudgetRelationWrite]
+    spend_window: ReadOnly[datetime | None]
+    spend: ReadOnly[float]
 
 
 def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403) -> NoReturn:
@@ -120,14 +139,18 @@ def managed_write_fields(
             return failure
         empty: Final[ManagedWriteFields] = {}
         identity_fields: Final = _identity_write(identity, existing) if "identity" in incoming else empty
+        budget_fields: Final = (
+            _budget_write(incoming["budget"], existing, updated_by) if "budget" in incoming else empty
+        )
         result: Final[ManagedWriteFields] = {
             **({"enabled": incoming["enabled"] is True} if "enabled" in incoming else {}),
             **({"execution_mode": mode} if "execution_mode" in incoming else {}),
+            **budget_fields,
             **identity_fields,
         }
         return result
     except (ValidationError, ValueError) as exc:
-        return AgentIdentityFailure(message=f"Invalid agent identity configuration: {exc}")
+        return AgentIdentityFailure(message=f"Invalid agent identity or budget configuration: {exc}")
 
 
 def _identity_write(identity: EntraIdentityConfig | None, existing: AgentResponse | None) -> ManagedWriteFields:
@@ -181,6 +204,53 @@ def _identity_write(identity: EntraIdentityConfig | None, existing: AgentRespons
         },
         "identity_managed": True,
         "identity": {"upsert": {"create": binding, "update": binding}} if existing else {"create": binding},
+    }
+    return result
+
+
+def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) -> ManagedWriteFields:
+    if raw is None:
+        if existing and existing.budget_id:
+            disconnected: Final[ManagedWriteFields] = {
+                "litellm_budget_table": {"disconnect": True},
+                "spend_window": None,
+            }
+            return disconnected
+        empty: Final[ManagedWriteFields] = {}
+        return empty
+    budget: Final = AgentBudgetConfig.model_validate(raw)
+    duration_error: Final = budget_duration_error(budget.budget_duration)
+    if duration_error is not None:
+        raise ValueError(duration_error)
+    fields: Final[BudgetFields] = {
+        "max_budget": budget.max_budget,
+        "budget_duration": budget.budget_duration,
+        "updated_by": updated_by,
+        "budget_reset_at": (
+            existing.litellm_budget_table.budget_reset_at
+            if existing
+            and existing.litellm_budget_table
+            and existing.litellm_budget_table.budget_duration == budget.budget_duration
+            else get_budget_reset_time(budget.budget_duration)
+            if budget.budget_duration
+            else None
+        ),
+    }
+    result: Final[ManagedWriteFields] = {
+        "spend_window": fields["budget_reset_at"],
+        **(
+            {"spend": 0.0}
+            if fields["budget_reset_at"] is not None
+            and (
+                existing is None
+                or existing.litellm_budget_table is None
+                or existing.litellm_budget_table.budget_reset_at != fields["budget_reset_at"]
+            )
+            else {}
+        ),
+        "litellm_budget_table": (
+            {"update": fields} if existing and existing.budget_id else {"create": {**fields, "created_by": updated_by}}
+        ),
     }
     return result
 
