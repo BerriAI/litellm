@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import reduce, wraps
 from itertools import chain
+from types import SimpleNamespace
 from typing import Concatenate, Final, Literal, ParamSpec, TypeVar
 from uuid import UUID, uuid4
 
@@ -24,7 +25,8 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
-from litellm.repositories.table_repositories import SCIMSourceRepository
+from litellm.repositories.chunked_in import count_in, find_many_in
+from litellm.repositories.table_repositories import SCIMResourceRepository, SCIMSourceRepository
 from litellm.types.proxy.management_endpoints.scim_agent_provisioning import (
     SCIM_AGENT_USER_SCHEMA,
     canonical_directory_id,
@@ -526,10 +528,13 @@ class AgentProvisioningService:
     async def _validate_members(self, tx: Prisma, members: tuple[str, ...]) -> None:
         if not members:
             return
-        rows: Final = await tx.litellm_scimresource.find_many(
-            where={"id": {"in": list(members)}, "source_id": self.source.source_id, "kind": "Users", "deleted": False}
+        count: Final = await count_in(
+            SCIMResourceRepository(SimpleNamespace(db=tx)).table,
+            "id",
+            members,
+            where={"source_id": self.source.source_id, "kind": "Users", "deleted": False},
         )
-        if frozenset(row.id for row in rows) != frozenset(members):
+        if count != len(frozenset(members)):
             raise HTTPException(400, "Group members must exist in this provisioning source")
 
     @serialized_source
@@ -565,15 +570,16 @@ class AgentProvisioningService:
     async def _sync_human_members(self, group: LiteLLM_SCIMResource) -> None:
         from litellm.proxy.management_endpoints.scim import scim_v2
 
-        async with self.client.tx() as tx:
-            users: Final = await tx.litellm_scimresource.find_many(
-                where={
-                    "id": {"in": group.member_ids},
-                    "source_id": self.source.source_id,
-                    "kind": "Users",
-                    "deleted": False,
-                }
-            )
+        users: Final = await find_many_in(
+            SCIMResourceRepository(self.client, use_writer=True).table,
+            "id",
+            group.member_ids,
+            where={
+                "source_id": self.source.source_id,
+                "kind": "Users",
+                "deleted": False,
+            },
+        )
         humans: Final = [
             SCIMMember(value=row.local_id)
             for row in users
