@@ -1,5 +1,7 @@
 import json
 import os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -951,15 +953,15 @@ if __name__ == "__main__":
 
 
 class _RecordingSpan:
-    def __init__(self):
-        self.attributes = {}
+    def __init__(self) -> None:
+        self.attributes: dict[str, object] = {}
 
-    def set_attribute(self, key, value):
+    def set_attribute(self, key: str, value: object) -> None:
         self.attributes[key] = value
 
 
-def _emitted(kwargs, response_obj=None):
-    span = _RecordingSpan()
+def _emitted(kwargs: Mapping[str, object], response_obj: object = None) -> Mapping[str, object]:
+    span: Final = _RecordingSpan()
     LangfuseOtelLogger._set_langfuse_specific_attributes(span, kwargs, response_obj)
     return span.attributes
 
