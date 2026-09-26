@@ -638,8 +638,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self._own_session_id: str = session_id_var.get()
 
         self.function_id = function_id
-        self.streaming_chunks: list[Any] = []  # for generating complete stream response
-        self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
+        self.streaming_chunks: list[object] = []  # for generating complete stream response
+        self.sync_streaming_chunks: list[object] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
 
@@ -691,7 +691,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
 
         # Passthrough endpoint guardrails config for field targeting
-        self.passthrough_guardrails_config: dict[str, Any] | None = None
+        self.passthrough_guardrails_config: dict[str, object] | None = None
 
         self.model_call_details: dict[str, Any] = {
             "litellm_trace_id": self.litellm_trace_id,
@@ -4475,7 +4475,7 @@ def set_callbacks(callback_list, function_id=None):
 def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: DualCache | None,
-    llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
+    llm_router: object,  # expect litellm.Router, but typing errors due to circular import
     custom_logger_init_args: dict | None = {},
 ) -> CustomLogger | None:
     """
@@ -6403,7 +6403,7 @@ def _autorouter_savings_for_payload(
 
 def get_standard_logging_object_payload(
     kwargs: dict | None,
-    init_response_obj: Any | BaseModel | dict,
+    init_response_obj: object,
     start_time: dt_object,
     end_time: dt_object,
     logging_obj: Logging,

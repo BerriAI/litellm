@@ -1469,7 +1469,7 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
 
 async def async_post_call_success_deployment_hook(
     request_data: dict, response: object, call_type: CallTypes | None
-) -> Any | None:
+) -> object:
     """
     Allow modifying / reviewing the response just after it's received from the deployment.
     """
