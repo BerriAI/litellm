@@ -146,6 +146,8 @@ class CustomGuardrail(CustomLogger):
     # If True, every proxy lifecycle event runs this guardrail's own hooks, not apply_guardrail.
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
+    scans_attachments: ClassVar[bool] = False
+
     records_own_guardrail_information: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks

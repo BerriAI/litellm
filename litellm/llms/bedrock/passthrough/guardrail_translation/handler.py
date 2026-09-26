@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
@@ -9,6 +10,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
+from litellm.types.llms.bedrock import RequestObject
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -141,6 +143,93 @@ def _extract_converse_texts(
 
     texts: Final = [container[key] for container, key in holders]
     return texts, holders
+
+
+def _converse_media_ref(media: Mapping[str, object], media_kind: str, fallback: str) -> str:
+    source: Final = media.get("source")
+    if isinstance(source, dict):
+        data: Final = source.get("bytes")
+        if isinstance(data, str) and data:
+            media_format: Final = media.get("format")
+            if isinstance(media_format, str) and media_format:
+                return f"data:{media_kind}/{media_format};base64,{data}"
+            return f"data:{media_kind};base64,{data}"
+        s3_location: Final = source.get("s3Location")
+        if isinstance(s3_location, dict):
+            uri: Final = s3_location.get("uri")
+            if isinstance(uri, str) and uri:
+                return uri
+    return fallback
+
+
+def _converse_block_attachments(block: Mapping[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    image: Final = block.get("image")
+    document: Final = block.get("document")
+    video: Final = block.get("video")
+    return (
+        (_converse_media_ref(image, media_kind="image", fallback="image"),) if isinstance(image, dict) else (),
+        tuple(
+            _converse_media_ref(media, media_kind=kind, fallback=fallback)
+            for media, kind, fallback in (
+                (document, "application", "document"),
+                (video, "video", "video"),
+            )
+            if isinstance(media, dict)
+        ),
+    )
+
+
+def _converse_input_blocks(
+    body: RequestObject, skip_tool: bool
+) -> tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
+    top_level: Final = tuple(
+        block
+        for block in chain.from_iterable(
+            message.get("content") or ()
+            for message in body.get("messages") or ()
+            if isinstance(message, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
+        )
+        if isinstance(block, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
+    )
+    tool_blocks: Final = tuple(block for block in top_level if "toolUse" in block or "toolResult" in block)
+    nested: Final = tuple(
+        inner
+        for inner in chain.from_iterable(
+            tool_result.get("content") or ()
+            for tool_result in (block.get("toolResult") for block in tool_blocks)
+            if isinstance(tool_result, dict)
+        )
+        if isinstance(inner, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
+    )
+    if not skip_tool:
+        return top_level + nested, ()
+    return tuple(block for block in top_level if "toolUse" not in block and "toolResult" not in block), (
+        tool_blocks + nested
+    )
+
+
+def _converse_body_has_attachments(body: RequestObject, skip_tool: bool) -> bool:
+    in_scope, scoped_out = _converse_input_blocks(body, skip_tool)
+    return any(
+        attachments != ((), ())
+        for attachments in (_converse_block_attachments(block) for block in (*in_scope, *scoped_out))
+    )
+
+
+def _converse_scoped_out_refs(image_refs: tuple[str, ...], file_refs: tuple[str, ...]) -> tuple[str, ...]:
+    return (*file_refs, *(ref for ref in image_refs if not ref.startswith("data:")))
+
+
+def _extract_converse_attachments(body: RequestObject, skip_tool: bool) -> tuple[list[str], list[str]]:
+    in_scope, scoped_out = _converse_input_blocks(body, skip_tool)
+    attachments: Final = tuple(_converse_block_attachments(block) for block in in_scope)
+    images: Final = [*chain.from_iterable(pair[0] for pair in attachments)]  # mutable-ok: inputs takes list[str]
+    scoped_refs: Final = tuple(_converse_block_attachments(block) for block in scoped_out)
+    files: Final = [  # mutable-ok: inputs takes list[str]
+        *chain.from_iterable(pair[1] for pair in attachments),
+        *chain.from_iterable(_converse_scoped_out_refs(pair[0], pair[1]) for pair in scoped_refs),
+    ]
+    return images, files
 
 
 def _extract_converse_output_texts(
@@ -442,12 +531,24 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
+        scan_attachments: Final = getattr(
+            guardrail_to_apply, "scans_attachments", False
+        ) is True and _converse_body_has_attachments(body, skip_tool)
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
+        images, files = (
+            _extract_converse_attachments(body, skip_tool)
+            if scan_attachments
+            else ([], [])  # mutable-ok: attachment lists feed the guardrail request payload
+        )
 
-        if not texts:
+        if not texts and not (scan_attachments and (images or files)):
             return data
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        if images:
+            inputs["images"] = images
+        if files:
+            inputs["files"] = files
         model: Final = data.get("model")
         if model:
             inputs["model"] = model

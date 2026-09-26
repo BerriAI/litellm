@@ -227,7 +227,28 @@ class ImageContentPart(BaseModel):
     image_url: ImageUrl
 
 
-ContentPart = TextContentPart | ImageContentPart
+class FileContentBody(BaseModel):
+    filename: str | None = None
+    file_data: str | None = None
+
+
+class FileContentPart(BaseModel):
+    type: str = "file"
+    file: FileContentBody
+
+
+class AnthropicDocumentSource(BaseModel):
+    type: str = "base64"
+    media_type: str
+    data: str
+
+
+class AnthropicDocumentBlock(BaseModel):
+    type: str = "document"
+    source: AnthropicDocumentSource
+
+
+ContentPart = TextContentPart | ImageContentPart | FileContentPart | AnthropicDocumentBlock
 
 
 class ChatMessage(BaseModel):
@@ -778,6 +799,51 @@ class RerankResponse(BaseModel):
     results: list[RerankItem] = []
 
 
+# ---------- responses ----------
+
+
+class ResponsesInputTextPart(BaseModel):
+    type: str = "input_text"
+    text: str
+
+
+class ResponsesInputImagePart(BaseModel):
+    type: str = "input_image"
+    image_url: str
+
+
+class ResponsesInputFilePart(BaseModel):
+    type: str = "input_file"
+    filename: str | None = None
+    file_data: str | None = None
+
+
+ResponsesContentPart = ResponsesInputTextPart | ResponsesInputImagePart | ResponsesInputFilePart
+
+
+class ResponsesInputMessage(BaseModel):
+    role: str
+    content: list[ResponsesContentPart]
+
+
+class ResponsesApiBody(BaseModel):
+    model: str
+    input: list[ResponsesInputMessage]
+    guardrails: list[str] | None = None
+
+
+# ---------- bedrock converse passthrough ----------
+
+
+class ConverseMessage(BaseModel):
+    role: str
+    content: list[dict[str, JsonValue]]
+
+
+class ConverseBody(BaseModel):
+    messages: list[ConverseMessage]
+
+
 # ---------- ocr ----------
 
 
@@ -943,6 +1009,8 @@ class GuardrailRunRecord(BaseModel):
     guardrail_mode: str | None = None
     guardrail_status: str | None = None
     guardrail_provider: str | None = None
+    guardrail_action: str | None = None
+    guardrail_usage: dict[str, JsonValue] | None = None
     masked_entity_count: dict[str, int] | None = None
     guardrail_response: object | None = None
 

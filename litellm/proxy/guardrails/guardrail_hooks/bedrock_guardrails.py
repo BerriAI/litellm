@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
+import binascii
 import copy
 import json
 import re
@@ -17,9 +18,9 @@ import sys
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
-from itertools import accumulate, groupby
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, cast
 
 import httpx
 from fastapi import HTTPException
@@ -40,6 +41,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost_by_unit,
     guardrail_cost_total,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import BedrockImageProcessor
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -65,16 +67,24 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+    ChatCompletionUserMessage,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
     BedrockChecksViolation,
     BedrockContentItem,
     BedrockGuardrailChecksResponse,
+    BedrockGuardrailImageFormat,
+    BedrockGuardrailImageSource,
     BedrockGuardrailOutput,
     BedrockGuardrailQualifier,
     BedrockGuardrailResponse,
     BedrockGuardrailUsage,
+    BedrockImageContent,
     BedrockRequest,
     BedrockTextContent,
 )
@@ -112,6 +122,16 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS: Final = (
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES: Final = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS: Final = 0.5
 _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
+_UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "file": "file",
+        "input_file": "file_data",
+        "document": "source",
+        "input_image": "image_url",
+        "video_url": "video_url",
+        "input_audio": "input_audio",
+    }
+)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -145,6 +165,20 @@ _CONTENT_TYPE_TO_QUALIFIER: Final[dict[str, BedrockGuardrailQualifier]] = {
 # results and ``user`` content can carry caller- or externally-influenced text, which
 # must not be graded against as if it were the application's own source material.
 _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
+
+# AWS image-filter limits, none of which litellm checked before. Anything other than
+# png/jpeg has no representation in the payload and cannot be scanned at all.
+# https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-mmfilter.html
+_MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
+_MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL: Final = 20
+
+_APPLY_GUARDRAIL_IMAGE_FORMATS: Final[Mapping[str, BedrockGuardrailImageFormat]] = MappingProxyType(
+    {
+        "png": "png",
+        "jpeg": "jpeg",
+        "jpg": "jpeg",
+    }
+)
 
 
 class QualifiedTextBlock(NamedTuple):
@@ -220,6 +254,64 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+_RESPONSES_API_CALL_TYPE_VALUES: Final[frozenset[str]] = frozenset(
+    call_type.value for call_type in _RESPONSES_API_CALL_TYPES
+)
+
+
+def _decoded_base64_length(encoded: str) -> int:
+    """Decoded byte length of a base64 payload without materializing it."""
+    return len(encoded) * 3 // 4 - encoded[-2:].count("=")
+
+
+def _function_call_output_parts(data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Mapping members of every ``function_call_output`` item's list-typed output."""
+    request_input: Final = data.get("input")
+    if not isinstance(request_input, list):
+        return ()
+    outputs: Final = tuple(
+        item["output"]
+        for item in request_input
+        if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and isinstance(item.get("output"), list)
+    )
+    return tuple(
+        cast(Mapping[str, object], part)  # cast-ok: narrowed to dict in the generator's condition
+        for part in chain.from_iterable(outputs)
+        if isinstance(part, dict)
+    )
+
+
+_TOOL_RESULT_SCANNABLE_PART_TYPES: Final[frozenset[str]] = frozenset({"image", "image_url"})
+
+
+def _content_leaf_parts(
+    content: object, *, tool_result_leaves: Literal["images", "all"] = "images"
+) -> tuple[object, ...]:
+    if not isinstance(content, list):
+        return ()
+    stack: Final[list[tuple[object, bool]]] = [  # mutable-ok: LIFO walk keeps leaf order
+        (part, False) for part in reversed(content)
+    ]
+    leaves: Final[list[object]] = []  # mutable-ok: accumulated in source order, returned as a tuple
+    while stack:
+        part, inside_tool_result = stack.pop()
+        if isinstance(part, dict) and part.get("type") == "tool_result":
+            inner = part.get("content")
+            if isinstance(inner, str):
+                if tool_result_leaves == "all":
+                    leaves.append(inner)
+            elif isinstance(inner, list):
+                stack.extend((item, True) for item in reversed(inner))
+            continue
+        if (
+            not inside_tool_result
+            or tool_result_leaves == "all"
+            or (isinstance(part, dict) and str(part.get("type")) in _TOOL_RESULT_SCANNABLE_PART_TYPES)
+        ):
+            leaves.append(part)
+    return tuple(leaves)
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -233,6 +325,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # During-call must use async_moderation_hook (not unified apply_guardrail), otherwise
     # OpenAI translation always passes input_type="request" and spend/UI show PRE-CALL.
     use_native_during_call_hook: ClassVar[bool] = True
+
+    # Bedrock scans attachment content, so translation handlers collect images/files for it.
+    scans_attachments: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -270,6 +365,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.chunk_budget_chars = chunk_budget_chars
         self.contextual_grounding_from_messages = contextual_grounding_from_messages
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
+        self.skip_tool_message_in_guardrail: bool | None = kwargs.get("skip_tool_message_in_guardrail")
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
@@ -374,27 +470,275 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return cleaned or None
 
-    def _create_bedrock_input_content_request(self, messages: list[AllMessageValues] | None) -> BedrockRequest:
-        """
-        Create a bedrock request for the input content - the LLM request.
-        """
+    def _create_bedrock_input_content_request(self, messages: "Sequence[AllMessageValues] | None") -> BedrockRequest:
+        """Create a bedrock request for the input content - the LLM request."""
         bedrock_request: Final[BedrockRequest] = BedrockRequest(source="INPUT")
-        bedrock_request_content: Final[list[BedrockContentItem]] = []
         if messages is None:
             return bedrock_request
-        for message in messages:
-            blocks = self.get_content_items_for_message(message=message)
-            if blocks is None:
-                continue
-            for block in blocks:
-                # INPUT scans send plain text only. Grounding qualifiers are attached
-                # exclusively when assembling the OUTPUT request, so a caller cannot use
-                # a grounding_source/query tag to change how input-safety policies treat
-                # their content (which would be an input-guardrail bypass).
-                bedrock_request_content.append(BedrockContentItem(text=BedrockTextContent(text=block.text)))
 
-        bedrock_request["content"] = bedrock_request_content
+        self._refuse_unscannable_leaf_parts(messages=messages)
+
+        image_count: Final = self._image_count_in(messages)
+        if image_count > _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL:
+            raise HTTPException(
+                status_code=400,
+                detail={  # mutable-ok: HTTPException detail payload, serialized immediately
+                    "error": "Violated guardrail policy",
+                    "bedrock_guardrail_response": (
+                        f"Request contains {image_count} images; Bedrock ApplyGuardrail accepts at most "
+                        f"{_MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL} images per request"
+                    ),
+                    "guardrail_name": self.guardrail_name,
+                },
+            )
+
+        per_message: Final = tuple(self._build_input_content_items(message=message) for message in messages)
+        bedrock_request["content"] = [  # mutable-ok: BedrockRequest["content"] is a list in the AWS wire format
+            *chain.from_iterable(per_message)
+        ]
         return bedrock_request
+
+    def _build_input_content_items(self, message: AllMessageValues) -> tuple[BedrockContentItem, ...]:
+        """Flatten one request message into ApplyGuardrail INPUT content items.
+
+        Grounding qualifiers are attached only when assembling the OUTPUT request, so a
+        grounding_source/query tag cannot change how input-safety policies treat content
+        """
+        content: Final = message.get("content")
+        text_items: Final = tuple(
+            BedrockContentItem(text=BedrockTextContent(text=block.text))
+            for block in self.get_content_items_for_message(message=message) or ()
+        )
+        if not isinstance(content, list):
+            return text_items
+        image_items: Final = (self._build_input_image_item(part=part) for part in _content_leaf_parts(content))
+        return text_items + tuple(item for item in image_items if item is not None)
+
+    def _build_input_image_item(self, part: object) -> BedrockContentItem | None:
+        if not isinstance(part, dict):
+            return None
+        part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
+        if part_map.get("type") == "image_url":
+            image_url: Final = self._get_image_url(item=part_map)
+            if image_url is None:
+                self._handle_unscannable_attachment(reason="image part carries no inline url")
+            return self._build_image_content_item(image_url=image_url)
+        if part_map.get("type") == "image":
+            return self._build_anthropic_image_content_item(part=part_map)
+        return None
+
+    def _build_anthropic_image_content_item(self, part: Mapping[str, object]) -> BedrockContentItem:
+        """Only inline base64 is scannable; url and file sources are refused."""
+        source: Final = part.get("source")
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            self._handle_unscannable_attachment(reason="an image source without inline base64 data cannot be scanned")
+        data: Final = source.get("data")
+        if not isinstance(data, str) or not data:
+            self._handle_unscannable_attachment(reason="an image source without inline base64 data cannot be scanned")
+        media_type: Final = source.get("media_type")
+        image_ref: Final = (
+            f"data:{media_type};base64,{data}"
+            if isinstance(media_type, str) and media_type
+            else self._normalize_image_input(data)
+        )
+        return self._build_image_content_item(image_url=image_ref)
+
+    @classmethod
+    def _anthropic_base64_image_ref(cls, part: Mapping[str, object]) -> str | None:
+        """Normalized ref for a raw Anthropic base64 image block, matching what the
+        messages handler puts in ``inputs["images"]`` for the same block."""
+        source: Final = part.get("source")
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            return None
+        data: Final = source.get("data")
+        if not isinstance(data, str) or not data:
+            return None
+        media_type: Final = source.get("media_type")
+        if isinstance(media_type, str) and media_type:
+            return f"data:{media_type};base64,{data}"
+        return data
+
+    @staticmethod
+    def _get_image_url(item: Mapping[str, object]) -> str | None:
+        """Pull the url out of an image_url part. The caller owns the type dispatch."""
+        image_url: Final = item.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        if isinstance(image_url, dict):
+            mapping: Final = cast(Mapping[str, object], image_url)  # cast-ok: narrowed to dict on the line above
+            url: Final = mapping.get("url")
+            if isinstance(url, str) and url:
+                return url
+            file_id: Final = mapping.get("file_id")
+            return file_id if isinstance(file_id, str) and file_id else None
+        return None
+
+    @classmethod
+    def _image_urls_in(cls, messages: "Sequence[AllMessageValues] | None") -> frozenset[str]:
+        """Normalized image urls already carried by these messages."""
+        parts: Final = chain.from_iterable(_content_leaf_parts(message.get("content")) for message in messages or ())
+        refs: Final = (
+            cls._get_image_url(item=part) if part.get("type") == "image_url" else cls._anthropic_base64_image_ref(part)
+            for part in parts
+            if isinstance(part, dict)
+        )
+        return frozenset(cls._normalize_image_input(ref) for ref in refs if ref is not None)
+
+    @classmethod
+    def _image_count_in(cls, messages: "Sequence[AllMessageValues] | None") -> int:
+        """Count image occurrences in the exact messages sent to ApplyGuardrail."""
+        count = 0  # rebind-ok: running count over request content
+        for message in messages or ():
+            count += sum(
+                1
+                for part in _content_leaf_parts(message.get("content"))
+                if isinstance(part, dict)
+                and (
+                    (part.get("type") == "image_url" and cls._get_image_url(part) is not None)
+                    or cls._anthropic_base64_image_ref(part) is not None
+                )
+            )
+        return count
+
+    def _handle_unscannable_attachment(self, reason: str) -> NoReturn:
+        """Block an attachment part ApplyGuardrail cannot scan.
+
+        The attachment reaches the model either way, so skipping it silently would let a
+        caller defeat an IMAGE-modality guardrail by picking a format the API rejects
+        """
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail payload, serialized immediately
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": (
+                    f"Request contains an attachment the guardrail cannot scan: {reason}. "
+                    "Bedrock ApplyGuardrail accepts inline png/jpeg images only"
+                ),
+                "guardrail_name": self.guardrail_name,
+            },
+        )
+
+    #: base64 magic-byte prefixes for the formats ApplyGuardrail accepts.
+    _BASE64_IMAGE_PREFIXES: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("iVBORw0KGgo", "image/png"),
+        ("/9j/", "image/jpeg"),
+    )
+
+    @staticmethod
+    def _image_content_part(url: str) -> ChatCompletionImageObject:
+        """One OpenAI-format image content part, so the payload builder handles it."""
+        return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=url))
+
+    @classmethod
+    def _normalize_image_input(cls, value: str) -> str:
+        """Return a data URI or URL that `_build_image_content_item` can consume.
+
+        `GenericGuardrailAPIInputs["images"]` is not a single shape. The OpenAI chat
+        translation appends the caller's `image_url` verbatim, so entries are already a
+        `data:` URI or an `https://` URL. The Anthropic translation's `_image_sources`
+        returns `source["data"]` only, which is bare base64 with the `media_type`
+        dropped. Sniff the format back from the base64 prefix so both shapes reach the
+        same decoder instead of the bare-base64 one failing as unreadable.
+        """
+        if value.startswith(("data:", "http://", "https://")):
+            return value
+        for prefix, media_type in cls._BASE64_IMAGE_PREFIXES:
+            if value.startswith(prefix):
+                return f"data:{media_type};base64,{value}"
+        # Unrecognized inputs reach the decoder so the guardrail fails closed.
+        return value
+
+    def _refuse_non_string_image_refs(self, image_urls: tuple[object, ...]) -> None:
+        for image_ref in image_urls:
+            if not isinstance(image_ref, str):
+                self._handle_unscannable_attachment(reason="a non-string image reference cannot be scanned")
+
+    def _refuse_unscannable_image_ref(self, image_url: str) -> None:
+        """Refuse an image ref that is cheaply known to be unscannable.
+
+        Remote urls fail on the same substring test `BedrockImageProcessor.process_image_async`
+        uses to decide to fetch; malformed refs and non png/jpeg data URIs fail without paying
+        the base64 decode. Callers that can scan run the full builder after this returns
+        """
+        if "http://" in image_url or "https://" in image_url:
+            self._handle_unscannable_attachment(reason="remote image URLs are not supported")
+        normalized: Final = self._normalize_image_input(image_url)
+        if not normalized.startswith("data:"):
+            self._handle_unscannable_attachment(reason="image content could not be read")
+        header, _, payload = normalized.partition(",")
+        if ";base64" not in header or not payload:
+            self._handle_unscannable_attachment(reason="image content could not be read: malformed data uri")
+        if header.removeprefix("data:").split(";")[0] not in ("image/png", "image/jpeg"):
+            self._handle_unscannable_attachment(reason="attachment is not a png/jpeg image")
+        self._refuse_oversized_image(decoded_size=_decoded_base64_length(payload))
+
+    def _refuse_oversized_image(self, decoded_size: int) -> None:
+        if decoded_size > _MAX_IMAGE_BYTES:
+            self._handle_unscannable_attachment(
+                reason=f"image is {decoded_size / 1024 / 1024:.1f} MB, over ApplyGuardrail's 4 MB limit"
+            )
+
+    def _refuse_unscannable_part(self, part: object) -> None:
+        """The refusal half of `_build_input_content_item`, without any image decode."""
+        if not isinstance(part, dict):
+            return
+        part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
+        part_type: Final = part_map.get("type")
+        payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part_type))
+        if payload_key is not None and (part_map.get(payload_key) or part_map.get("file_id")):
+            self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
+        if part_type == "image_url":
+            image_url: Final = self._get_image_url(item=part_map)
+            if image_url is None:
+                self._handle_unscannable_attachment(reason="image part carries no inline url")
+            self._refuse_unscannable_image_ref(image_url=image_url)
+        if part_type == "image":
+            image_ref: Final = self._anthropic_base64_image_ref(part_map)
+            if image_ref is None:
+                self._handle_unscannable_attachment(
+                    reason="an image source without inline base64 data cannot be scanned"
+                )
+            self._refuse_unscannable_image_ref(image_url=image_ref)
+
+    def _refuse_unscannable_leaf_parts(self, messages: "Sequence[AllMessageValues]") -> None:
+        """Raise the attachment refusal for any leaf part the guardrail cannot scan.
+
+        Runs on the unscoped message list so an attachment hiding in a message role
+        scoping drops is still refused; the ApplyGuardrail scan itself stays scoped.
+        Refusals only, so image parts get the cheap checks, never the base64 decode
+        """
+        for message in messages:
+            for leaf in _content_leaf_parts(message.get("content"), tool_result_leaves="all"):
+                self._refuse_unscannable_part(part=leaf)
+
+    def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
+        """Refuse remote urls with the same substring test
+        `BedrockImageProcessor.process_image_sync` uses to decide to fetch, so nothing
+        it would download slips past."""
+        self._refuse_unscannable_image_ref(image_url=image_url)
+
+        try:
+            block: Final = BedrockImageProcessor.process_image_sync(image_url=image_url, format=None)
+        except (ValueError, TypeError, KeyError, IndexError, binascii.Error) as e:
+            self._handle_unscannable_attachment(reason=f"image content could not be read: {e}")
+
+        image_block: Final = block.get("image")
+        image_format: Final = (
+            _APPLY_GUARDRAIL_IMAGE_FORMATS.get(str(image_block.get("format"))) if image_block else None
+        )
+        image_source: Final = image_block.get("source") if image_block else None
+        image_bytes: Final = image_source.get("bytes") if image_source else None
+        if image_format is None or not image_bytes:
+            self._handle_unscannable_attachment(reason="attachment is not a png/jpeg image")
+
+        self._refuse_oversized_image(decoded_size=_decoded_base64_length(image_bytes))
+
+        return BedrockContentItem(
+            image=BedrockImageContent(
+                format=image_format,
+                source=BedrockGuardrailImageSource(bytes=image_bytes),
+            )
+        )
 
     def _create_bedrock_output_content_request(
         self,
@@ -457,12 +801,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             BedrockRequest: The bedrock request object.
         """
-        bedrock_request: BedrockRequest = BedrockRequest(source=source)
         if source == "INPUT":
-            bedrock_request = self._create_bedrock_input_content_request(messages=messages)
-        elif source == "OUTPUT":
-            bedrock_request = self._create_bedrock_output_content_request(response=response, messages=messages)
-        return bedrock_request
+            return self._create_bedrock_input_content_request(messages=messages)
+        if source == "OUTPUT":
+            return self._create_bedrock_output_content_request(response=response, messages=messages)
+        return BedrockRequest(source=source)
 
     def get_content_items_for_message(self, message: AllMessageValues) -> list[QualifiedTextBlock] | None:
         """
@@ -2596,6 +2939,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.warning("Bedrock AI: not running guardrail. No messages in data")
             return
 
+        # A file or unscannable image is refused even when role scoping below drops
+        # its message from the scan set; the ApplyGuardrail call itself stays scoped
+        self._refuse_unscannable_leaf_parts(messages=new_messages)
+        if call_type in _RESPONSES_API_CALL_TYPE_VALUES:
+            for part in _function_call_output_parts(data=data):
+                self._refuse_unscannable_part(part=part)
+
         filter_result: Final = self._prepare_guardrail_messages_for_role(messages=new_messages)
         filtered_messages: Final = filter_result.payload_messages
         if not filtered_messages:
@@ -3183,7 +3533,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             logging_obj: Optional logging object
 
         Returns:
-            GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
+            GenericGuardrailAPIInputs - processed_texts may be masked, images are
+            scanned but returned unchanged (ApplyGuardrail does not rewrite images)
 
         Raises:
             Exception: If content is blocked by Bedrock guardrail
@@ -3191,10 +3542,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # NOTE: Use `or []` to handle case where inputs["texts"] is explicitly None.
         # dict.get("texts", []) would return None if the key exists with a None value.
         texts: Final = inputs.get("texts") or []
+        # Images only exist on the request side; ApplyGuardrail's OUTPUT source takes
+        # model-generated text. The endpoint translations already extract them:
+        # OpenAIChatCompletionsHandler from `image_url` parts, AnthropicMessagesHandler
+        # from `image`/`source` blocks. Five other guardrails already consume this
+        # field; Bedrock was the one that dropped it on the floor.
+        image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
+        self._refuse_non_string_image_refs(image_urls=image_urls)
+        # Refused before the shortcuts: ApplyGuardrail has no content type for a document/file attachment.
+        files: Final = tuple(inputs.get("files") or ()) if input_type == "request" else ()
+        if files:
+            self._handle_unscannable_attachment(reason=f"{len(files)} document/file attachment(s) cannot be scanned")
         try:
-            verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail to %s text(s)", len(texts))
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
+            )
 
-            if input_type == "request":
+            # Both of the optimizations below decide what to scan by looking at
+            # `texts` alone, so an image rides along unscanned and the proxy still
+            # reports the guardrail as run. Neither tracks images in its session
+            # cache either, so "already seen" cannot be established for them.
+            # Presence of an image therefore forces the full image-aware path:
+            # correctness over the optimization, and it fails closed.
+            if input_type == "request" and not image_urls:
                 incremental_result: Final = await self._apply_incremental_request_scan(
                     texts=texts,
                     inputs=inputs,
@@ -3211,14 +3581,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
                 input_type=input_type,
             )
-            if selection.skip_scan:
+            # `experimental_use_latest_role_message_only` marks a latest message with
+            # no text as skip_scan; an image-only message is exactly that shape.
+            if selection.skip_scan and not image_urls:
                 return inputs
             filtered_messages: Final = selection.filtered_messages
             scanned_slice: Final = selection.scanned_slice
             scanned_role_subset: Final = selection.scanned_role_subset
 
-            # Bedrock will throw an error if there is no text to process
-            if filtered_messages:
+            # Bedrock rejects an empty content list, so only skip when there is
+            # neither text nor an image to scan.
+            if filtered_messages or image_urls:
                 _log_hook = GuardrailEventHooks.pre_call if input_type == "request" else GuardrailEventHooks.post_call
                 # Map the abstract input_type to the Bedrock source parameter.
                 # "request"  -> INPUT  (scan user-supplied content)
@@ -3241,7 +3614,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                                 ),
                                 finish_reason="stop",
                             )
-                            for _idx, _msg in enumerate(filtered_messages)
+                            # `or ()`: skip_scan is now bypassed when an image is present,
+                            # and images exist on the request side only, so a response scan
+                            # still always has messages here. Spelled out rather than left
+                            # leaning on that indirection.
+                            for _idx, _msg in enumerate(filtered_messages or ())
                         ]
                     )
                     bedrock_response = await self.make_bedrock_api_request(
@@ -3252,9 +3629,33 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         logging_event_type=_log_hook,
                     )
                 else:
+                    # Append the images as one extra user message. Reusing the normal
+                    # message path means `_create_bedrock_input_content_request` does the
+                    # decoding and fail-closed format checks, so the
+                    # unified and native lifecycle paths cannot drift apart.
+                    # `experimental_use_latest_role_message_only` puts the selected
+                    # message itself into filtered_messages, image parts included, and
+                    # those go through the same builder below. Appending them again
+                    # would scan and bill each one twice.
+                    already_scanned: Final = self._image_urls_in(filtered_messages)
+                    image_parts: Final = [  # mutable-ok: OpenAI message content is a list in the wire format
+                        self._image_content_part(normalized)
+                        for normalized in (self._normalize_image_input(url) for url in image_urls)
+                        if normalized not in already_scanned
+                    ]
+                    image_message: Final = (
+                        (ChatCompletionUserMessage(role="user", content=image_parts),) if image_parts else ()
+                    )
+                    # `filtered_messages` is Optional; the guard above only proves one of
+                    # it and `image_urls` is truthy, so it can still be None here when the
+                    # request carries an image and no text.
+                    scan_messages: Final = [  # mutable-ok: make_bedrock_api_request takes a list of messages
+                        *(filtered_messages or ()),
+                        *image_message,
+                    ]
                     bedrock_response = await self.make_bedrock_api_request(
                         source="INPUT",
-                        messages=filtered_messages,
+                        messages=scan_messages,
                         request_data=request_data,
                         logging_event_type=_log_hook,
                     )

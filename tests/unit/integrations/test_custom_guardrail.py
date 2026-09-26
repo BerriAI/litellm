@@ -3163,3 +3163,10 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "allow"
+
+
+def test_custom_guardrail_scans_attachments_defaults_off() -> None:
+    """Guardrails that did not opt in get pre-change extraction behavior for attachments."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    assert CustomGuardrail.scans_attachments is False

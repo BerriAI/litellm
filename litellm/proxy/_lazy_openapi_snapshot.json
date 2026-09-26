@@ -41561,6 +41561,13 @@
         },
         "GenericGuardrailAPIInputs": {
           "properties": {
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Files",
+              "type": "array"
+            },
             "images": {
               "items": {
                 "type": "string"

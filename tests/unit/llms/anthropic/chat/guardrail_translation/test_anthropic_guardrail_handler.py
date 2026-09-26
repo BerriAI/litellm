@@ -1763,6 +1763,8 @@ class TestAnthropicMessagesImageSources:
         handler = AnthropicMessagesHandler()
 
         class ImageRecordingGuardrail(MockCanaryMaskingGuardrail):
+            scans_attachments = True
+
             def __init__(self):
                 super().__init__()
                 self.seen_images: list[str] = []  # mutable-ok: accumulator for the assertion
@@ -1811,15 +1813,12 @@ class TestAnthropicMessagesImageSources:
         assert seen == ["AAAA"]
 
     @pytest.mark.asyncio
-    async def test_file_source_yields_nothing(self):
-        """The bytes live behind the Files API and this extractor has no client.
-
-        Documented as a known gap rather than silently handed on as a file_id string,
-        which a consumer would try to decode as an image.
-        """
+    async def test_file_source_yields_its_file_id(self):
+        """The bytes live behind the Files API, so the file_id goes through as a ref
+        the guardrail can refuse rather than drop silently."""
         seen = await self._images_seen([{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}])
 
-        assert seen == []
+        assert seen == ["file_abc"]
 
     @pytest.mark.asyncio
     async def test_a_malformed_source_is_dropped_rather_than_passed_on(self):
@@ -2648,3 +2647,603 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+class InputRecordingGuardrail(CustomGuardrail):
+    """Records the inputs each apply_guardrail call was handed."""
+
+    def __init__(self, guardrail_name: str = "recording"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.calls = 0
+        self.inputs: GenericGuardrailAPIInputs | None = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls += 1
+        self.inputs = inputs.copy()
+        return inputs
+
+
+class ScanningInputRecordingGuardrail(InputRecordingGuardrail):
+    """A guardrail that opted into attachment scanning, like Bedrock."""
+
+    scans_attachments = True
+
+
+class TestAnthropicMessagesHandlerAttachments:
+    _PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+    _PNG_DATA_URI = f"data:image/png;base64,{_PNG_B64}"
+
+    @pytest.mark.asyncio
+    async def test_image_only_message_invokes_guardrail_with_images(self):
+        """An image-only turn used to skip apply_guardrail entirely."""
+        guardrail = ScanningInputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": self._PNG_B64},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1, "image-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == [self._PNG_DATA_URI]
+
+    @pytest.mark.asyncio
+    async def test_url_and_file_image_sources_reach_the_guardrail(self):
+        """Non-inline image sources surface as refs so the guardrail can refuse them."""
+        guardrail = ScanningInputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what does this say?"},
+                        {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == ["https://example.com/a.png", "file_abc"]
+
+    @pytest.mark.asyncio
+    async def test_document_block_reaches_guardrail_as_files(self):
+        guardrail = ScanningInputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        },
+                        {"type": "text", "text": "summarize this"},
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_document_inside_tool_result_reaches_guardrail_as_files(self):
+        guardrail = ScanningInputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "use this"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {"type": "base64", "media_type": "application/pdf", "data": "BBBB"},
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,BBBB"]
+
+    @pytest.mark.asyncio
+    async def test_document_only_message_invokes_guardrail(self):
+        """A turn carrying only a document block still must reach the guardrail."""
+        guardrail = ScanningInputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1, "document-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
+
+
+class TestAnthropicMessagesHandlerAttachmentsDefaultScope:
+    """Guardrails that did not opt into attachment scanning see base behavior."""
+
+    _PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+
+    @pytest.mark.asyncio
+    async def test_image_only_turn_never_calls_apply_guardrail(self):
+        guardrail = InputRecordingGuardrail()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": self._PNG_B64},
+                    }
+                ],
+            }
+        ]
+        data = {"model": "claude-sonnet-4-5", "messages": messages}
+
+        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 0, "non-scanning guardrail fired on an image-only turn"
+        assert result["messages"] == messages
+
+    @pytest.mark.asyncio
+    async def test_file_source_image_yields_no_images_entry(self):
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe it"},
+                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["describe it"]
+        assert "images" not in guardrail.inputs
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_text_plus_document_sends_texts_only(self):
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "summarize this"},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["summarize this"]
+        assert "files" not in guardrail.inputs
+
+
+class _BaseSignatureExtractHandler(AnthropicMessagesHandler):
+    """A subclass written against the pre-attachment-scanning hook signature."""
+
+    @classmethod
+    def _extract_input_text_and_images(
+        cls, message, msg_idx, skip_system_message=False, skip_tool_message=False, scan_only_tool_results=False
+    ):
+        return AnthropicMessagesHandler._extract_input_text_and_images(
+            message=message,
+            msg_idx=msg_idx,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+
+
+class _HeadSignatureRecordingHandler(AnthropicMessagesHandler):
+    seen_scan_attachments: bool | None = None
+
+    @classmethod
+    def _extract_input_text_and_images(
+        cls,
+        message,
+        msg_idx,
+        skip_system_message=False,
+        skip_tool_message=False,
+        scan_only_tool_results=False,
+        scan_attachments=False,
+    ):
+        cls.seen_scan_attachments = scan_attachments
+        return AnthropicMessagesHandler._extract_input_text_and_images(
+            message=message,
+            msg_idx=msg_idx,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+            scan_attachments=scan_attachments,
+        )
+
+
+class TestExtractHookBaseSignatureCompatibility:
+    @pytest.mark.asyncio
+    async def test_legacy_signature_subclass_runs_for_plain_guardrail(self):
+        """A non-attachment guardrail must not force the new kwargs onto old subclasses."""
+        guardrail = MockMaskingGuardrail()
+        data = {"model": "claude-3", "messages": [{"role": "user", "content": "hello"}]}
+
+        await _BaseSignatureExtractHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_attachment_guardrail_still_passes_scan_attachments(self):
+        """With scans_attachments on, the head signature receives the flag and files."""
+        _HeadSignatureRecordingHandler.seen_scan_attachments = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "summarize this"},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await _HeadSignatureRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _HeadSignatureRecordingHandler.seen_scan_attachments is True
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"]
+
+
+class _LegacyNestedHooksHandler(AnthropicMessagesHandler):
+    """Base-shape overrides of every nested extraction hook (merge-base signatures)."""
+
+    seen_tool_result: Optional[bool] = None
+    seen_image_sources: Optional[bool] = None
+
+    @classmethod
+    def _extract_content_block(
+        cls, content_item, msg_idx, content_idx, skip_tool_message, scan_only_tool_results=False
+    ):
+        return super()._extract_content_block(
+            content_item=content_item,
+            msg_idx=msg_idx,
+            content_idx=content_idx,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+
+    @classmethod
+    def _extract_tool_result(cls, content_item, msg_idx, content_idx):
+        cls.seen_tool_result = True
+        return super()._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
+
+    @staticmethod
+    def _image_sources(block):
+        _LegacyNestedHooksHandler.seen_image_sources = True
+        return AnthropicMessagesHandler._image_sources(block, False)
+
+
+class _HeadNestedRecordingHandler(AnthropicMessagesHandler):
+    seen_scan_attachments: bool | None = None
+
+    @classmethod
+    def _extract_tool_result(cls, content_item, msg_idx, content_idx, scan_attachments=False):
+        cls.seen_scan_attachments = scan_attachments
+        return super()._extract_tool_result(
+            content_item=content_item,
+            msg_idx=msg_idx,
+            content_idx=content_idx,
+            scan_attachments=scan_attachments,
+        )
+
+
+class TestNestedHookBaseSignatureCompatibility:
+    @pytest.mark.asyncio
+    async def test_legacy_signature_subclasses_run_for_plain_guardrail(self):
+        """A plain guardrail must not force the attachment kwarg onto old nested hooks."""
+        _LegacyNestedHooksHandler.seen_tool_result = None
+        _LegacyNestedHooksHandler.seen_image_sources = None
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": "iVBOR"},
+                        },
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "from tool"},
+                    ],
+                }
+            ],
+        }
+
+        await _LegacyNestedHooksHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _LegacyNestedHooksHandler.seen_tool_result is True
+        assert _LegacyNestedHooksHandler.seen_image_sources is True
+        assert guardrail.inputs is not None
+        assert "from tool" in guardrail.inputs["texts"]
+
+    @pytest.mark.asyncio
+    async def test_attachment_guardrail_still_passes_scan_attachments_to_nested_hooks(self):
+        """With scans_attachments on, the new kwarg reaches nested extraction hooks."""
+        _HeadNestedRecordingHandler.seen_scan_attachments = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await _HeadNestedRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _HeadNestedRecordingHandler.seen_scan_attachments is True
+
+
+class ScopedOutRecordingGuardrail(MockCanaryMaskingGuardrail):
+    """Records apply_guardrail call count and any files refs the handler contributed."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.seen_files: list[str] = []
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.calls += 1
+        self.seen_files.extend(inputs.get("files") or [])
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class TestScopedOutToolResultAttachments:
+    """A tool_result scoped out by skip_tool_message_in_guardrail still
+    contributes its unscannable attachment refs so the guardrail can refuse
+    them; its text and inline images are never scanned."""
+
+    def _data(self, messages):
+        return {"model": "claude-sonnet-4-5", "messages": messages}
+
+    _PDF_TOOL_RESULT = {
+        "type": "tool_result",
+        "tool_use_id": "t1",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": "QUFBQQ=="},
+            }
+        ],
+    }
+
+    @pytest.mark.asyncio
+    async def test_skipped_tool_result_document_reaches_files_not_texts(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ScopedOutRecordingGuardrail()
+        guardrail.scans_attachments = True
+        guardrail.skip_tool_message_in_guardrail = True
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+            {"role": "user", "content": [dict(self._PDF_TOOL_RESULT)]},
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.seen_texts == ["hello"]
+        assert guardrail.seen_files == ["data:application/pdf;base64,QUFBQQ=="]
+
+    @pytest.mark.asyncio
+    async def test_skipped_tool_result_with_only_text_and_inline_png_never_calls_guardrail(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ScopedOutRecordingGuardrail()
+        guardrail.scans_attachments = True
+        guardrail.skip_tool_message_in_guardrail = True
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "text": "tool said hi"},
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBOR"}},
+                        ],
+                    }
+                ],
+            },
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_non_attachment_guardrail_keeps_base_shape_on_skipped_pdf_tool_result(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ScopedOutRecordingGuardrail()
+        guardrail.skip_tool_message_in_guardrail = True
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "user", "content": [dict(self._PDF_TOOL_RESULT)]},
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.seen_texts == ["hello"]
+        assert guardrail.seen_files == []
+
+
+class TestScansAttachmentsWithBaseSignatureOnTextOnly:
+    """A scans_attachments guardrail must still give base-signature subclasses the
+    base call shape when the request carries no attachment blocks."""
+
+    @pytest.mark.asyncio
+    async def test_extract_hook_base_signature_on_text_only(self):
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {"model": "claude-3", "messages": [{"role": "user", "content": "hello"}]}
+
+        await _BaseSignatureExtractHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["hello"]
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_nested_hooks_base_signature_on_text_only(self):
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "from tool"},
+                    ],
+                }
+            ],
+        }
+
+        await _LegacyNestedHooksHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert "files" not in guardrail.inputs
+
+
+class TestSystemListAttachmentPredicate:
+    """A list-typed system field is not itself an attachment; only attachment
+    blocks inside it turn the new kwargs on."""
+
+    @pytest.mark.asyncio
+    async def test_text_only_system_list_keeps_base_call_shape(self):
+        _LegacyNestedHooksHandler.seen_tool_result = None
+        _LegacyNestedHooksHandler.seen_image_sources = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "system": [{"type": "text", "text": "you are terse"}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+        }
+
+        await _LegacyNestedHooksHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_document_block_in_system_list_enables_scan_attachments(self):
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "system": [
+                {
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                }
+            ],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        _HeadSignatureRecordingHandler.seen_scan_attachments = None
+        await _HeadSignatureRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _HeadSignatureRecordingHandler.seen_scan_attachments is True

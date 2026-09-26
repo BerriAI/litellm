@@ -30913,6 +30913,8 @@ export interface components {
         };
         /** GenericGuardrailAPIInputs */
         GenericGuardrailAPIInputs: {
+            /** Files */
+            files?: string[];
             /** Images */
             images?: string[];
             /** Model */

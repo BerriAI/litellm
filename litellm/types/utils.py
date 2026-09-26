@@ -4489,6 +4489,7 @@ class PriorityReservationSettings(BaseModel):
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: list[str]  # extracted text from the LLM response - for basic text guardrails
     images: list[str]  # extracted images from the LLM response - for image guardrails
+    files: list[str]  # extracted non-image attachments sent to the LLM (data URI, url or provider file id)
     tools: list[ChatCompletionToolParam]  # tools sent to the LLM
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]  # tool calls sent from the LLM
     structured_messages: list[
