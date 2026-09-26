@@ -1,9 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip } from "./activity_metrics";
+import {
+  ActivityMetrics,
+  formatKeyLabel,
+  processActivityData,
+  ResponseTimeTooltip,
+  toTopApiKeyData,
+} from "./activity_metrics";
 import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
+import type { ModelTopApiKeysResponse } from "./networking";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
 
 beforeAll(() => {
@@ -1625,5 +1632,81 @@ describe("formatKeyLabel", () => {
 
     const result = formatKeyLabel(modelData, "my-key", []);
     expect(result).toBe("my-key (team_id: team1)");
+  });
+});
+
+describe("toTopApiKeyData", () => {
+  it("maps the server response to TopApiKeyData in order", () => {
+    const response: ModelTopApiKeysResponse = {
+      model: "claude-sonnet-4-5",
+      group_by: "model",
+      limit: 5,
+      api_keys: [
+        { api_key: "hash-c", key_alias: "key-c", team_id: "team-8618", spend: 50, api_requests: 5, total_tokens: 750 },
+        { api_key: "hash-a", key_alias: null, team_id: null, spend: 0.1, api_requests: 1, total_tokens: 2 },
+      ],
+    };
+    const result = toTopApiKeyData(response);
+
+    expect(result).toEqual([
+      { api_key: "hash-c", key_alias: "key-c", team_id: "team-8618", spend: 50, requests: 5, tokens: 750 },
+      { api_key: "hash-a", key_alias: null, team_id: null, spend: 0.1, requests: 1, tokens: 2 },
+    ]);
+  });
+});
+
+describe("ActivityMetrics fetchTopApiKeys", () => {
+  const modelMetrics: Record<string, ModelActivityData> = {
+    "claude-sonnet-4-5": createMockModelActivityData("claude-sonnet-4-5", {
+      top_api_keys: [
+        {
+          api_key: "hash-a",
+          key_alias: "fallback-key-alias",
+          team_id: "team-8618",
+          spend: 0.1,
+          requests: 1,
+          tokens: 2,
+        },
+      ],
+    }),
+  };
+
+  it("shows the server-ranked key that the client-side top_api_keys missed", async () => {
+    const fetchTopApiKeys = vi.fn().mockResolvedValue([
+      {
+        api_key: "hash-c",
+        key_alias: "key-c",
+        team_id: "team-8618",
+        spend: 50,
+        requests: 5,
+        tokens: 750,
+      },
+    ]);
+
+    render(<ActivityMetrics modelMetrics={modelMetrics} fetchTopApiKeys={fetchTopApiKeys} />);
+
+    expect(await screen.findByText("key-c")).toBeInTheDocument();
+    expect(screen.queryByText("fallback-key-alias")).not.toBeInTheDocument();
+    expect(fetchTopApiKeys).toHaveBeenCalledWith("claude-sonnet-4-5");
+  });
+
+  it("keeps rendering the client-side fallback when no fetcher is passed", () => {
+    render(<ActivityMetrics modelMetrics={modelMetrics} />);
+
+    expect(screen.getByText("fallback-key-alias")).toBeInTheDocument();
+  });
+
+  it("does not fetch top keys for rows that were never opened", async () => {
+    const twoModels: Record<string, ModelActivityData> = {
+      open: createMockModelActivityData("open", { total_spend: 200 }),
+      closed: createMockModelActivityData("closed", { total_spend: 50 }),
+    };
+    const fetchTopApiKeys = vi.fn().mockResolvedValue([]);
+
+    render(<ActivityMetrics modelMetrics={twoModels} fetchTopApiKeys={fetchTopApiKeys} />);
+
+    await screen.findByText("Top Virtual Keys by Spend");
+    expect(fetchTopApiKeys).toHaveBeenCalledWith("open");
+    expect(fetchTopApiKeys).not.toHaveBeenCalledWith("closed");
   });
 });
