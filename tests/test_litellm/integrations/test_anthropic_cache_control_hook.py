@@ -2634,6 +2634,42 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         assert "litellm_gateway_injected_cache" not in kwargs["litellm_metadata"]
 
     @pytest.mark.parametrize(
+        "tools,kwargs,injected",
+        [
+            ([MARKED_V1_TOOL], {"extra_body": {"tools": [UNMARKED_V1_TOOL]}}, False),
+            (None, {"cache_control": EPHEMERAL, "extra_body": {"cache_control": None}}, False),
+            ([UNMARKED_V1_TOOL], {"extra_body": {"tools": [UNMARKED_V1_TOOL]}}, True),
+        ],
+        ids=["extra_body_unmarks_direct_tool", "extra_body_nulls_root_cache_control", "no_client_mark_anywhere"],
+    )
+    def test_v1_messages_automatic_defaults_stand_down_for_a_direct_mark_extra_body_hides(
+        self, monkeypatch, tools, kwargs, injected
+    ):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        request_kwargs = {**copy.deepcopy(kwargs), "litellm_metadata": {}}
+
+        result_messages, result_system = self._inject(
+            copy.deepcopy(self.V1_MESSAGES), request_kwargs, tools=copy.deepcopy(tools)
+        )
+
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(result_messages, result_system) == (
+            2 if injected else 0
+        )
+        assert ("litellm_gateway_injected_cache" in request_kwargs["litellm_metadata"]) is injected
+
+    def test_chat_automatic_defaults_apply_when_extra_body_drops_the_only_client_mark(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params = {"extra_body": {"tools": [self.UNMARKED_TOOL]}}
+
+        self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES), tools=[self.MARKED_TOOL_TOP_LEVEL])
+        affinity = AnthropicCacheControlHook.messages_with_default_injections(
+            copy.deepcopy(self.CLEAN_MESSAGES), ["claude-sonnet-4-5"], tools=[self.MARKED_TOOL_TOP_LEVEL], request_kwargs=params
+        )
+
+        assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(affinity) == 2
+
+    @pytest.mark.parametrize(
         "marked_turns,expected_system",
         [(2, [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]), (3, "sys")],
     )
