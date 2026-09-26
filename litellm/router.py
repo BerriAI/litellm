@@ -117,6 +117,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -1350,6 +1351,9 @@ class Router:
         `_init_routing_groups`) so repeated `update_settings` calls don't
         accumulate dead selectors that keep receiving callback events.
         """
+        for selector in selectors:
+            if isinstance(selector, BaseRoutingStrategy):
+                selector.retire()
         selector_ids: Final = {id(s) for s in selectors if s is not None}
         if not selector_ids:
             return
@@ -12033,7 +12037,7 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        routing_args_updated = True
+                        routing_args_updated = value != self.routing_strategy_args
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
