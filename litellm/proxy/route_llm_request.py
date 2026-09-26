@@ -77,7 +77,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
     "aembedding": "/embeddings",
-    "aimage_generation": "/image/generations",
+    "aimage_generation": "/images/generations",
     "aspeech": "/audio/speech",
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
@@ -161,6 +161,10 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "aembedding": ("input",),
     "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
+    "arerank": ("query", "documents"),
+    "aspeech": ("input",),
+    "amoderation": ("input",),
+    "aimage_generation": ("prompt",),
 }
 
 
