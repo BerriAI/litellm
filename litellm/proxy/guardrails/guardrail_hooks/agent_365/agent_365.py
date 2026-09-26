@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
@@ -28,7 +28,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -162,7 +161,6 @@ class Agent365Guardrail(CustomGuardrail):
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_open",
         async_handler: AsyncHTTPHandler | None = None,
-        prometheus_logger_lookup: Callable[[], PrometheusLogger | None] = PrometheusLogger.get_instance,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail (event_hook, default_on)
     ) -> None:
         super().__init__(
@@ -187,7 +185,6 @@ class Agent365Guardrail(CustomGuardrail):
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self._prometheus_logger_lookup = prometheus_logger_lookup
         self._obo_token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()  # mutable-ok: lock-guarded LRU
         self._obo_cache_lock = threading.Lock()
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
@@ -588,7 +585,6 @@ class Agent365Guardrail(CustomGuardrail):
                 reason,
                 tool_name,
             )
-            self._count_fail_open()
             self._record_verdict(
                 data=data,
                 verdict="Unscanned",
@@ -615,13 +611,6 @@ class Agent365Guardrail(CustomGuardrail):
             "tool": tool_name,
         }
         raise HTTPException(status_code=503, detail=unavailable_detail)
-
-    def _count_fail_open(self) -> None:
-        prometheus: Final = self._prometheus_logger_lookup()
-        if prometheus is not None:
-            prometheus.record_guardrail_fail_open(
-                guardrail_name=self.guardrail_name or type(self).__name__, hook_type="pre_call"
-            )
 
     def _record_verdict(
         self,

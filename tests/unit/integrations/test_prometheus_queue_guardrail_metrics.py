@@ -158,7 +158,9 @@ class TestPrometheusQueueTimeMetric:
             if len(call[0]) > 0 and call[0][0] == 0.5:  # Our test queue time value
                 queue_time_called = True
                 break
-        assert not queue_time_called, "Queue time metric should not be recorded when queue_time_seconds is missing"
+        assert (
+            not queue_time_called
+        ), "Queue time metric should not be recorded when queue_time_seconds is missing"
 
     def test_queue_time_metric_not_recorded_when_negative(self):
         """Test that queue time metric is not recorded when queue_time_seconds is negative"""
@@ -222,7 +224,9 @@ class TestPrometheusQueueTimeMetric:
             if len(call[0]) > 0 and call[0][0] == -0.1:
                 negative_value_called = True
                 break
-        assert not negative_value_called, "Queue time metric should not be recorded for negative values"
+        assert (
+            not negative_value_called
+        ), "Queue time metric should not be recorded for negative values"
 
 
 class TestPrometheusTotalLatencyMetric:
@@ -395,7 +399,9 @@ class TestPrometheusGuardrailMetrics:
             error_type="none",
             hook_type=hook_type,
         )
-        mock_latency_metric.labels.return_value.observe.assert_called_once_with(latency_seconds)
+        mock_latency_metric.labels.return_value.observe.assert_called_once_with(
+            latency_seconds
+        )
 
         # Assert - requests metric should be incremented
         mock_requests_metric.labels.assert_called_once_with(
@@ -444,7 +450,9 @@ class TestPrometheusGuardrailMetrics:
             error_type=error_type,
             hook_type=hook_type,
         )
-        mock_latency_metric.labels.return_value.observe.assert_called_once_with(latency_seconds)
+        mock_latency_metric.labels.return_value.observe.assert_called_once_with(
+            latency_seconds
+        )
 
         # Assert - requests metric should be incremented
         mock_requests_metric.labels.assert_called_once_with(
@@ -546,36 +554,3 @@ class TestPrometheusGuardrailMetrics:
         mock_latency_metric.labels.assert_called_once()
         call_kwargs = mock_latency_metric.labels.call_args[1]
         assert call_kwargs["guardrail_name"] == guardrail_name
-
-    def test_record_guardrail_fail_open_increments_errors_total(self):
-        prometheus_logger = PrometheusLogger()
-
-        prometheus_logger.record_guardrail_fail_open(guardrail_name="a365", hook_type="pre_call")
-        prometheus_logger.record_guardrail_fail_open(guardrail_name="a365", hook_type="pre_call")
-
-        assert (
-            REGISTRY.get_sample_value(
-                "litellm_guardrail_errors_total",
-                {"guardrail_name": "a365", "error_type": "fail_open", "hook_type": "pre_call"},
-            )
-            == 2.0
-        )
-        assert (
-            REGISTRY.get_sample_value(
-                "litellm_guardrail_requests_total",
-                {"guardrail_name": "a365", "status": "success", "hook_type": "pre_call"},
-            )
-            is None
-        )
-
-    def test_record_guardrail_fail_open_swallows_metric_errors(self):
-        prometheus_logger = PrometheusLogger()
-        broken_counter = MagicMock()
-        broken_counter.labels.side_effect = ValueError("registry exploded")
-        prometheus_logger.litellm_guardrail_errors_total = broken_counter
-
-        prometheus_logger.record_guardrail_fail_open(guardrail_name="a365", hook_type="pre_call")
-
-        broken_counter.labels.assert_called_once_with(
-            guardrail_name="a365", error_type="fail_open", hook_type="pre_call"
-        )

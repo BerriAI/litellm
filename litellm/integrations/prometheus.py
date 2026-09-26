@@ -3252,16 +3252,6 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             verbose_logger.debug("Error recording guardrail metrics: %s", e)
 
-    def record_guardrail_fail_open(self, guardrail_name: str, hook_type: str) -> None:
-        try:
-            self.litellm_guardrail_errors_total.labels(
-                guardrail_name=guardrail_name,
-                error_type="fail_open",
-                hook_type=hook_type,
-            ).inc()
-        except Exception as e:
-            verbose_logger.debug("Error recording guardrail fail-open metric: %s", e)
-
     ########################################
     # Managed Batch Metric Recording Methods
     ########################################

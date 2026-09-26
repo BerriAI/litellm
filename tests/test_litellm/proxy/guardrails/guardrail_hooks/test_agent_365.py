@@ -12,7 +12,6 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.proxy._types import UserAPIKeyAuth
@@ -120,14 +119,6 @@ class FakeHandler:
         return item
 
 
-class FakePrometheus:
-    def __init__(self) -> None:
-        self.fail_opens: list[tuple[str, str]] = []
-
-    def record_guardrail_fail_open(self, guardrail_name: str, hook_type: str) -> None:
-        self.fail_opens.append((guardrail_name, hook_type))
-
-
 def _make_guardrail(
     handler: FakeHandler,
     *,
@@ -135,7 +126,6 @@ def _make_guardrail(
     agent_id: str | None = None,
     api_base: str = AGENT_365_PROD_API_BASE,
     authority_host: str = AGENT_365_DEFAULT_AUTHORITY_HOST,
-    prometheus: FakePrometheus | None = None,
 ) -> Agent365Guardrail:
     return Agent365Guardrail(
         guardrail_name="agent-365-guard",
@@ -147,20 +137,18 @@ def _make_guardrail(
         authority_host=authority_host,
         unreachable_fallback=unreachable_fallback,
         async_handler=handler,
-        prometheus_logger_lookup=lambda: prometheus,
         event_hook="pre_mcp_call",
         default_on=True,
     )
 
 
-def _default_fallback_guardrail(handler: FakeHandler, prometheus: FakePrometheus | None = None) -> Agent365Guardrail:
+def _default_fallback_guardrail(handler: FakeHandler) -> Agent365Guardrail:
     return Agent365Guardrail(
         guardrail_name="agent-365-guard",
         tenant_id="tenant-abc",
         client_id="client-xyz",
         client_secret="secret-123",
         async_handler=handler,
-        prometheus_logger_lookup=lambda: prometheus,
         event_hook="pre_mcp_call",
         default_on=True,
     )
@@ -614,43 +602,11 @@ class TestFailOpenDefault:
             [_response(503, text="entra down")],
         ],
     )
-    async def test_each_fail_open_counts_once_in_prometheus(self, responses):
-        prometheus: Final = FakePrometheus()
-        guardrail: Final = _default_fallback_guardrail(FakeHandler(responses), prometheus)
+    async def test_each_availability_failure_lets_the_call_through_as_failed_to_respond(self, responses):
+        guardrail: Final = _default_fallback_guardrail(FakeHandler(responses))
         data: Final = _mcp_data()
         assert await _run(guardrail, data) is data
-        assert prometheus.fail_opens == [("agent-365-guard", "pre_call")]
-
-    @pytest.mark.asyncio
-    async def test_allowed_and_blocked_calls_do_not_count_as_fail_open(self):
-        prometheus: Final = FakePrometheus()
-        handler: Final = FakeHandler([_token_response(), _allow_response(), _block_response()])
-        guardrail: Final = _default_fallback_guardrail(handler, prometheus)
-        await _run(guardrail, _mcp_data())
-        with pytest.raises(HTTPException):
-            await _run(guardrail, _mcp_data())
-        assert prometheus.fail_opens == []
-
-    @pytest.mark.asyncio
-    async def test_fail_closed_does_not_count_as_fail_open(self):
-        prometheus: Final = FakePrometheus()
-        handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_closed", prometheus=prometheus)
-        with pytest.raises(HTTPException):
-            await _run(guardrail, _mcp_data())
-        assert prometheus.fail_opens == []
-
-    def test_default_lookup_is_the_registered_prometheus_logger(self):
-        guardrail: Final = Agent365Guardrail(
-            guardrail_name="agent-365-guard",
-            tenant_id="tenant-abc",
-            client_id="client-xyz",
-            client_secret="secret-123",
-            async_handler=FakeHandler([]),
-            event_hook="pre_mcp_call",
-            default_on=True,
-        )
-        assert guardrail._prometheus_logger_lookup is PrometheusLogger.get_instance
+        assert _guardrail_info(data)["guardrail_status"] == "guardrail_failed_to_respond"
 
 
 class TestUnreachableFallback:

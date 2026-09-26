@@ -31,11 +31,9 @@ from integration._support.mcp import (
 )
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
-from prometheus_client.parser import text_string_to_metric_families
 
 TENANT: Final = "00000000-0000-4000-8000-0000000a3650"
 EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
-GUARDRAIL_ERRORS: Final = "litellm_guardrail_errors_total"
 CALLER_TOKEN: Final = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJpbnRlZ3JhdGlvbiJ9.synthetic-signature"
 GUARDRAIL_TIMEOUT_SECONDS: Final = 1.0
 SLOW_REPLY_SECONDS: Final = 3.0
@@ -113,7 +111,6 @@ def _config(
     sibling_url: str | None,
 ) -> Path:
     config: dict = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"]["callbacks"] = ["prometheus"]
     config["guardrails"] = [
         {
             "guardrail_name": name,
@@ -147,6 +144,7 @@ def _config(
         ),
     ]
     path: Final = tmp_path / "agent_365.yaml"
+    tmp_path.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(config))
     return path
 
@@ -221,8 +219,6 @@ def _rig(
 ) -> Iterator[Rig]:
     """``authority_env`` names the environment variable that carries the Entra double instead of the config."""
     alias: Final = "a365" + uuid.uuid4().hex[:8]
-    prom_dir: Final = tmp_path / "prom"
-    prom_dir.mkdir(parents=True)
     with (
         wire_server(_entra) as entra,
         wire_server(_agent_365) as agent_365,
@@ -232,7 +228,6 @@ def _rig(
             gateway,
             tmp_path,
             {
-                "PROMETHEUS_MULTIPROC_DIR": str(prom_dir),
                 "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
                 **(environment or {}),
                 **({authority_env: entra.url} if authority_env else {}),
@@ -264,26 +259,13 @@ def _guardrail_statuses(key: str) -> dict[str, str]:
     return {str(row["tool"]): str(row["status"]) for row in rows}
 
 
-def _guardrail_error_counts(candidate: Gateway, guardrail_name: str) -> dict[str, float]:
-    response: Final = candidate.client.get(
-        "/metrics", headers={"Authorization": f"Bearer {candidate.key}"}, follow_redirects=True
-    )
-    assert response.status_code == 200, f"GET /metrics: {response.status_code} {response.text[:300]}"
-    return {
-        sample.labels["error_type"]: float(sample.value)
-        for family in text_string_to_metric_families(response.text)
-        for sample in family.samples
-        if sample.name == GUARDRAIL_ERRORS and sample.labels.get("guardrail_name") == guardrail_name
-    }
-
-
 def _chat(rig: Rig, model: str, marker: str) -> httpx.Response:
     return rig.candidate.request(
         "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": marker}]}, key=rig.key
     )
 
 
-def test_default_lets_the_call_through_unscanned_and_counts_it_when_agent_365_cannot_evaluate(
+def test_default_lets_the_call_through_unscanned_when_agent_365_cannot_evaluate(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with _rig(gateway, tmp_path, fallback=None) as rig:
@@ -300,10 +282,6 @@ def test_default_lets_the_call_through_unscanned_and_counts_it_when_agent_365_ca
             "skipped": "guardrail_failed_to_respond",
             "denied": "guardrail_intervened",
         }, statuses
-        counts: Final = eventually(
-            lambda: _guardrail_error_counts(rig.candidate, rig.guardrail_name), lambda seen: len(seen) >= 2
-        )
-        assert counts == {"fail_open": 2.0, "HTTPException": 1.0}, counts
 
 
 def test_explicit_fail_closed_blocks_with_503_and_never_reaches_upstream_when_agent_365_is_down(
@@ -316,7 +294,6 @@ def test_explicit_fail_closed_blocks_with_503_and_never_reaches_upstream_when_ag
         assert rig.upstream_tool_names() == ("add",)
         statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 2, seconds=70)
         assert statuses == {"outage": "guardrail_failed_to_respond", "add": "success"}, statuses
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"HTTPException": 1.0}
 
 
 def test_explicit_fail_open_matches_the_default_and_still_blocks_policy_denials(
@@ -329,7 +306,6 @@ def test_explicit_fail_open_matches_the_default_and_still_blocks_policy_denials(
         assert rig.upstream_tool_names() == ("outage",)
         statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 2, seconds=70)
         assert statuses == {"outage": "guardrail_failed_to_respond", "denied": "guardrail_intervened"}, statuses
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"fail_open": 1.0, "HTTPException": 1.0}
 
 
 def test_default_fails_open_on_malformed_or_stalled_agent_365_replies(gateway: Gateway, tmp_path: Path) -> None:
@@ -340,7 +316,6 @@ def test_default_fails_open_on_malformed_or_stalled_agent_365_replies(gateway: G
         assert rig.upstream_tool_names() == ("nonjson", "nobool", "slow")
         statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 3, seconds=70)
         assert statuses == dict.fromkeys(("nonjson", "nobool", "slow"), "guardrail_failed_to_respond"), statuses
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"fail_open": 3.0}
 
 
 def test_default_fails_open_when_entra_is_down_stalled_malformed_or_refuses_the_gateway_credentials(
@@ -362,7 +337,6 @@ def test_default_fails_open_when_entra_is_down_stalled_malformed_or_refuses_the_
             seconds=70,
         )
         assert [row["gi"][0]["guardrail_status"] for row in rows] == ["guardrail_failed_to_respond"] * len(cases)
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"fail_open": float(len(cases))}
 
 
 def test_throttling_and_ordinary_4xx_from_agent_365_keep_blocking_under_the_default(
@@ -376,7 +350,6 @@ def test_throttling_and_ordinary_4xx_from_agent_365_keep_blocking_under_the_defa
         assert rig.upstream_tool_names() == ()
         statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 2, seconds=70)
         assert statuses == {"throttled": "guardrail_failed_to_respond", "rejected": "guardrail_intervened"}, statuses
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"HTTPException": 2.0}
 
 
 def test_caller_authentication_failures_keep_blocking_under_the_default(gateway: Gateway, tmp_path: Path) -> None:
@@ -397,7 +370,6 @@ def test_caller_authentication_failures_keep_blocking_under_the_default(gateway:
             seconds=70,
         )
         assert [row["gi"][0]["guardrail_status"] for row in rows] == ["guardrail_intervened"] * 3
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"HTTPException": 3.0}
 
 
 def test_every_mcp_entry_point_fails_open_on_outage_and_blocks_denials(gateway: Gateway, tmp_path: Path) -> None:
@@ -409,11 +381,6 @@ def test_every_mcp_entry_point_fails_open_on_outage_and_blocks_denials(gateway: 
             denied: Final = caller.call(f"{rig.alias}-denied", {"entry": entry}, server_id=rig.server_id)
             assert denied.error is not None and "Blocked by Microsoft Defender" in denied.raw, f"{entry}: {denied.raw}"
         assert rig.upstream_tool_names() == ("outage",) * len(ENTRY_POINTS)
-        counts: Final = eventually(
-            lambda: _guardrail_error_counts(rig.candidate, rig.guardrail_name),
-            lambda seen: sum(seen.values()) >= 2 * len(ENTRY_POINTS),
-        )
-        assert counts == {"fail_open": float(len(ENTRY_POINTS)), "HTTPException": float(len(ENTRY_POINTS))}, counts
 
 
 def test_chat_completions_never_touch_agent_365_while_a_sibling_guardrail_keeps_its_fail_closed_default(
@@ -425,7 +392,7 @@ def test_chat_completions_never_touch_agent_365_while_a_sibling_guardrail_keeps_
         assert chat.status_code == 500 and "Generic Guardrail API failed" in chat.text, chat.text
         assert rig.entra.drain() == () and rig.agent_365.drain() == ()
         assert rig.caller.call(f"{rig.alias}-outage", {"a": 1}).text == '{"a": 1}'
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {"fail_open": 1.0}
+        assert rig.upstream_tool_names() == ("outage",)
 
 
 def test_chat_completions_are_unaffected_by_the_mcp_guardrail(gateway: Gateway, tmp_path: Path) -> None:
@@ -441,7 +408,6 @@ def test_chat_completions_are_unaffected_by_the_mcp_guardrail(gateway: Gateway, 
             seconds=70,
         )
         assert rows[0]["gi"] is None, rows
-        assert _guardrail_error_counts(rig.candidate, rig.guardrail_name) == {}
 
 
 def test_agent365_authority_host_env_wins_over_azure_authority_host_when_config_has_none(
@@ -480,10 +446,7 @@ def test_thirty_call_burst_against_a_flapping_agent_365_reaches_upstream_exactly
         )
         assert seen == sorted(marker for _, marker in markers)
         assert rig.caller.call(f"{rig.alias}-denied", {"a": 1}).error is not None
-        counts: Final = eventually(
-            lambda: _guardrail_error_counts(rig.candidate, rig.guardrail_name), lambda seen: len(seen) >= 2
-        )
-        assert counts == {"fail_open": 15.0, "HTTPException": 1.0}, counts
+        assert rig.upstream_tool_names() == ()
 
 
 def test_default_survives_a_worker_kill_and_keeps_blocking_denials_on_two_workers(

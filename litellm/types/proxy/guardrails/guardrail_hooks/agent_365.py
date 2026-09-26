@@ -76,7 +76,7 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
         description=(
             "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, skips the evaluation, or "
             "rejects the gateway's own client credentials. 'fail_open' (default) allows the tool call and records "
-            "it as Unscanned in the logs, OpenTelemetry and the litellm_guardrail_errors_total Prometheus counter. "
+            "it as Unscanned in the logs and OpenTelemetry. "
             "'fail_closed' blocks it with HTTP 503. Policy blocks, 4xx rejections, throttling and a rejected "
             "caller token always block."
         ),
