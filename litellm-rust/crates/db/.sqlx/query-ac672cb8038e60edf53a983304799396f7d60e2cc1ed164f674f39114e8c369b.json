@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AutoRouterBaselineComparison\" SET retired = TRUE WHERE scope = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ac672cb8038e60edf53a983304799396f7d60e2cc1ed164f674f39114e8c369b"
+}

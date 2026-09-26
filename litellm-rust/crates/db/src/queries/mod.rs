@@ -39,6 +39,6 @@ macro_rules! declare_rows {
     };
 }
 
-mod autorouter;
+pub mod autorouter;
 mod keys;
 mod transaction;

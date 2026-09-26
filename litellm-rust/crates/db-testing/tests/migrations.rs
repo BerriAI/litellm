@@ -10,7 +10,11 @@ fn prisma_folder(migrations: &[(&str, &str)]) -> TempDir {
         fs::create_dir(directory.path().join(name)).unwrap();
         fs::write(directory.path().join(name).join("migration.sql"), sql).unwrap();
     }
-    fs::write(directory.path().join("migration_lock.toml"), "provider = \"postgresql\"").unwrap();
+    fs::write(
+        directory.path().join("migration_lock.toml"),
+        "provider = \"postgresql\"",
+    )
+    .unwrap();
     directory
 }
 
@@ -54,5 +58,8 @@ fn a_folder_without_migration_sql_is_an_error() {
 
     let error = prisma_migrations(directory.path()).unwrap_err();
 
-    assert!(error.to_string().contains("20260101000000_empty"), "{error}");
+    assert!(
+        error.to_string().contains("20260101000000_empty"),
+        "{error}"
+    );
 }

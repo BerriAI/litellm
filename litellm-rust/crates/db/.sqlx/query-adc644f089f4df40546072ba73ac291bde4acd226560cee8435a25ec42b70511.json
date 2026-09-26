@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_AutoRouterSession\"\n                (api_key, session_id, router_name, router_type, first_turn_at, last_turn_at, last_model)\n            VALUES ('key', 'session', 'router', 'auto', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'model')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "adc644f089f4df40546072ba73ac291bde4acd226560cee8435a25ec42b70511"
+}

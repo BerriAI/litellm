@@ -39,7 +39,7 @@ fn migration_names(directory: &Path) -> Result<Vec<String>, Error> {
         path: directory.to_owned(),
         source,
     };
-    
+
     fs::read_dir(directory)
         .map_err(read_error)?
         .map(|entry| {

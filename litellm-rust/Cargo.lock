@@ -3439,8 +3439,10 @@ name = "litellm-db"
 version = "0.1.0"
 dependencies = [
  "litellm-db-testing",
+ "rstest",
  "schemars 1.2.2",
  "sqlx",
+ "thiserror 2.0.19",
  "tokio",
 ]
 

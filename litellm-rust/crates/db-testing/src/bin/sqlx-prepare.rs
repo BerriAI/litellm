@@ -17,7 +17,7 @@ async fn main() -> Result<ExitCode, Error> {
         .env("SQLX_OFFLINE", "false")
         .status()
         .map_err(Error::Prepare)?;
-    
+
     Ok(if status.success() {
         ExitCode::SUCCESS
     } else {
