@@ -19194,6 +19194,41 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "databricks/databricks-claude-opus-5-5": {
+        "cache_creation_input_token_cost": 5.00003e-06,
+        "cache_creation_input_token_cost_above_1hr": 8.00002e-06,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 4.00001e-06,
+        "input_dbu_cost_per_token": 5.7143e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "metadata": {
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 1.999998e-05,
+        "output_dbu_cost_per_token": 0.000285714,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_adaptive_thinking": true,
+        "supports_anthropic_thinking_payload": true,
+        "supports_assistant_prefill": false,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_output_config": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "thinking_always_on": true
+    },
     "databricks/databricks-claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
@@ -64173,6 +64208,7 @@
         "supports_vision": true
     },
     "azure_ai/deepseek-r1": {
+        "deprecation_date": "2026-08-13",
         "input_cost_per_token": 1.35e-06,
         "output_cost_per_token": 5.4e-06,
         "litellm_provider": "azure_ai",
@@ -64180,6 +64216,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure_ai/deepseek-v3-0324": {
+        "deprecation_date": "2026-07-13",
         "input_cost_per_token": 1.14e-06,
         "output_cost_per_token": 4.56e-06,
         "litellm_provider": "azure_ai",
@@ -64187,6 +64224,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure_ai/deepseek-v3.1": {
+        "deprecation_date": "2026-07-13",
         "input_cost_per_token": 1.23e-06,
         "output_cost_per_token": 4.94e-06,
         "litellm_provider": "azure_ai",
@@ -64194,6 +64232,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure_ai/grok-3": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "azure_ai",
@@ -64201,6 +64240,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure_ai/grok-3-mini": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.27e-06,
         "litellm_provider": "azure_ai",
@@ -64208,6 +64248,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure_ai/grok-4-fast-non-reasoning": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
@@ -64215,6 +64256,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure_ai/grok-4-fast-reasoning": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
