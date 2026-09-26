@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from prisma import Json
 from prisma.types import (
     LiteLLM_SCIMSourceCreateInput,
+    LiteLLM_SCIMSourceOrderByInput,
     LiteLLM_SCIMSourceUpdateInput,
     LiteLLM_SCIMSourceWhereUniqueInput,
+    LiteLLM_VerificationTokenWhereUniqueInput,
 )
 from pydantic import BaseModel
 
@@ -54,8 +56,9 @@ async def _client() -> PrismaClient:
 async def list_sources(auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> tuple[SCIMSourceResponse, ...]:
     _require_source_admin(auth)
     client: Final = await _client()
+    order: Final[LiteLLM_SCIMSourceOrderByInput] = {"display_name": "asc"}
     async with client.tx() as tx:
-        sources: Final = await tx.litellm_scimsource.find_many(order={"display_name": "asc"})
+        sources: Final = await tx.litellm_scimsource.find_many(order=order)
     return tuple(source_response(source) for source in sources)
 
 
@@ -66,13 +69,14 @@ async def create_source(
     _require_source_admin(auth)
     client: Final = await _client()
     token_hash: Final = hash_token(data.provisioning_token.get_secret_value())
+    source_filter: Final[LiteLLM_SCIMSourceWhereUniqueInput] = {"key_hash": token_hash}
     async with client.tx() as tx:
         key: Final = await VerificationTokenRepository(SimpleNamespace(db=tx)).table.find_unique(
-            where={"token": token_hash}
+            where=LiteLLM_VerificationTokenWhereUniqueInput(token=token_hash)
         )
         if key is None or tuple(key.allowed_routes or ()) != ("/scim/*",):
             raise HTTPException(400, "Select a dedicated token restricted to /scim/*")
-        if await tx.litellm_scimsource.find_unique(where={"key_hash": token_hash}) is not None:
+        if await tx.litellm_scimsource.find_unique(where=source_filter) is not None:
             raise HTTPException(409, "This token already belongs to a provisioning source")
         group_ids: Final = tuple(
             frozenset(chain.from_iterable(mapping.access_group_ids for mapping in data.group_mappings))
@@ -88,7 +92,7 @@ async def create_source(
             tenant_id=str(data.tenant_id),
             key_hash=token_hash,
             enabled=data.enabled,
-            group_mappings=Json([mapping.model_dump(mode="json") for mapping in data.group_mappings]),
+            group_mappings=Json(data.model_dump(mode="json")["group_mappings"]),
         )
         source: Final = await tx.litellm_scimsource.create(data=create_data)
     return source_response(source)
@@ -118,7 +122,7 @@ async def update_source(
         update_data: Final[LiteLLM_SCIMSourceUpdateInput] = {
             "display_name": data.display_name,
             "enabled": data.enabled,
-            "group_mappings": Json([mapping.model_dump(mode="json") for mapping in data.group_mappings]),
+            "group_mappings": Json(data.model_dump(mode="json")["group_mappings"]),
         }
         updated: Final = await tx.litellm_scimsource.update(where=source_filter, data=update_data)
     return source_response(updated)
