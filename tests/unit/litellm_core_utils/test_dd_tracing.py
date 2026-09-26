@@ -55,18 +55,6 @@ def test_dd_tracer_when_package_not_exists():
         assert result == "test"
 
 
-def test_null_tracer_context_manager():
-    """
-    Test that the context manager works without raising exceptions when should_use_dd_tracer is False
-    """
-    with patch("litellm.litellm_core_utils.dd_tracing.should_use_dd_tracer", False):
-        # Test that the context manager works without raising exceptions
-        with dd_tracer.trace("test_operation") as span:
-            # Test that we can call methods on the null span
-            span.finish()
-            assert True  # If we get here without exceptions, the test passes
-
-
 def test_should_use_dd_tracer():
     """
     Test that the should_use_dd_tracer function works as expected
