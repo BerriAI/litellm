@@ -1,35 +1,17 @@
-import asyncio
-from dataclasses import dataclass
+import os
+from pathlib import Path
 from typing import Final
 
-import pytest
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-
-@dataclass(slots=True)
-class LeakProbe:
-    pending_from_loop: asyncio.AbstractEventLoop | None = None
-    ran_on_loop: asyncio.AbstractEventLoop | None = None
-    run_count: int = 0
-
-    async def record_run(self) -> None:
-        self.ran_on_loop = asyncio.get_running_loop()
-        self.run_count += 1
+CANARY_MODULE: Final = Path(__file__).with_name("logging_worker_drain_canary.py")
+CANARY_RUN: Final = (
+    "import pytest\n"
+    f"raise SystemExit(pytest.main([{str(CANARY_MODULE)!r}, '-p', 'no:xdist', '-p', 'no:cacheprovider', '-q']))\n"
+)
 
 
-PROBE: Final = LeakProbe()
-
-
-async def test_logging_worker_drain_1_leaves_an_event_pending() -> None:
-    PROBE.pending_from_loop = asyncio.get_running_loop()
-    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(PROBE.record_run())
-
-
-async def test_logging_worker_drain_2_never_inherits_the_pending_event() -> None:
-    if PROBE.pending_from_loop is None:
-        pytest.skip("the pending event was left by another xdist worker")
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    assert PROBE.run_count == 1
-    assert PROBE.ran_on_loop is PROBE.pending_from_loop
-    assert PROBE.ran_on_loop is not asyncio.get_running_loop()
+def test_drain_fixture_runs_pending_events_before_the_next_test_starts() -> None:
+    env_without_xdist: Final = {key: value for key, value in os.environ.items() if not key.startswith("PYTEST_XDIST")}
+    result: Final = run_child_interpreter(CANARY_RUN, env=env_without_xdist, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
