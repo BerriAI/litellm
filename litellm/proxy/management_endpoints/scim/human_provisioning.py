@@ -17,13 +17,12 @@ from prisma.types import (
 )
 from pydantic import TypeAdapter
 
-from litellm.proxy._types import LiteLLM_UserTable as UserPolicy
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.management_endpoints.internal_user_endpoints import check_user_license_capacity
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.types.proxy.management_endpoints.scim_agent_provisioning import canonical_directory_id
-from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMPatchOperation, SCIMUser
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMPatchOperation, SCIMUser, SCIMUserEmail
 
 
 def human_email(user: SCIMUser) -> str:
@@ -43,7 +42,16 @@ def changes_readonly_attribute(operation: SCIMPatchOperation) -> bool:
     return any(attribute.startswith(("groups", "externalid")) for attribute in attributes)
 
 
+def changes_email_attribute(operation: SCIMPatchOperation) -> bool:
+    value: Final = operation.value
+    fields: Final = TypeAdapter(dict[str, object]).validate_python(value) if isinstance(value, dict) else {}
+    attributes: Final = (operation.path,) if operation.path else tuple(fields)
+    return any(attribute.casefold().split("[", 1)[0].split(".", 1)[0] == "emails" for attribute in attributes)
+
+
 def validate_human_patch(patch: SCIMPatchOp) -> None:
+    if any(changes_email_attribute(operation) for operation in patch.Operations):
+        raise HTTPException(400, "Use PUT to replace a provisioned human's email")
     if any(changes_readonly_attribute(operation) for operation in patch.Operations):
         raise HTTPException(400, "externalId is immutable; update group membership through this source's Groups")
 
@@ -165,19 +173,15 @@ class SourceHumanProvisioner:
             raise HTTPException(409, "The human local identity was removed; automatic recreation is not permitted")
         if isinstance(change, SCIMUser):
             await self.claim_email(row, human_email(change))
-        if isinstance(change, SCIMPatchOp):
-            async with self.client.tx() as tx:
-                current: Final = await tx.litellm_usertable.find_unique(where=local_filter)
-            if current is None:
-                raise HTTPException(409, "The human local identity was removed during provisioning")
-            preview, _ = scim_v2.apply_scim_user_patch(UserPolicy.model_validate(current.model_dump()), change)
-            email: Final = TypeAdapter[str | None](str | None).validate_python(preview.get("user_email"))
-            if email:
-                await self.claim_email(row, email.casefold())
         result: Final = (
             await scim_v2.patch_user(user_id=row.local_id, patch_ops=change)
             if isinstance(change, SCIMPatchOp)
-            else await scim_v2.update_user(user_id=row.local_id, user=change.model_copy(update={"groups": None}))
+            else await scim_v2.update_user(
+                user_id=row.local_id,
+                user=change.model_copy(
+                    update={"groups": None, "emails": [SCIMUserEmail(value=human_email(change), primary=True)]}
+                ),
+            )
         )
         document: Final = result.model_copy(update={"id": row.id, "externalId": row.external_id, "userName": username})
         resource_filter: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": row.id}
