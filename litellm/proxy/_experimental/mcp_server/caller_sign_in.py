@@ -14,6 +14,7 @@ never imports a concrete provider.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
@@ -117,6 +118,6 @@ def caller_sign_in_for(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | No
     ]
     if not contributions:
         return None
-    issuers: Final = tuple(dict.fromkeys(issuer for contribution in contributions for issuer in contribution.issuers))
-    scopes: Final = tuple(dict.fromkeys(scope for contribution in contributions for scope in contribution.scopes))
+    issuers: Final = tuple(dict.fromkeys(itertools.chain.from_iterable(c.issuers for c in contributions)))
+    scopes: Final = tuple(dict.fromkeys(itertools.chain.from_iterable(c.scopes for c in contributions)))
     return CallerSignIn(issuers=issuers, scopes=scopes)
