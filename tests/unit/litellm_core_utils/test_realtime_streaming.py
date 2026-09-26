@@ -2933,6 +2933,62 @@ def test_translation_audio_duration_is_finalized_once(event_type: str):
     assert closed_events[0]["usage"] == {"type": "duration", "output_seconds": 1.0}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_bytes", (0, 48000))
+@pytest.mark.parametrize("event_type", ("input_audio_buffer.append", "session.input_audio_buffer.append"))
+@pytest.mark.parametrize(
+    "audio_format,bytes_per_second",
+    [("pcm16", 48000), ("g711_ulaw", 8000), ({"type": "audio/pcm", "rate": 16000}, 32000)],
+)
+async def test_translation_disconnect_bills_sent_input_audio(
+    output_bytes: int, event_type: str, audio_format: str | Mapping[str, object], bytes_per_second: int
+) -> None:
+    import base64
+
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=backend,
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.update", "session": {"audio": {"input": {"format": audio_format}}}})
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": event_type, "audio": base64.b64encode(bytes(2 * bytes_per_second)).decode()})
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(output_bytes)).decode()}
+    )
+    streaming._finalize_translation_usage()
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": output_bytes / 48000},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_translation_failed_audio_send_is_not_billed() -> None:
+    backend: Final = MagicMock()
+    backend.send = AsyncMock(side_effect=RuntimeError("send failed"))
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        await streaming._send_to_backend(json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"}))
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == []
+
+
 def test_translation_audio_duration_uses_session_output_format():
     import base64
 

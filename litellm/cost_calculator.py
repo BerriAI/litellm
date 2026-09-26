@@ -3014,6 +3014,7 @@ def handle_realtime_stream_cost_calculation(
         results=results,
         custom_llm_provider=custom_llm_provider,
         litellm_model_name=litellm_model_name,
+        potential_model_names=potential_model_names,
     )
     total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost + translation_cost
 
@@ -3043,6 +3044,7 @@ def handle_realtime_translation_cost_calculation(
     results: OpenAIRealtimeStreamList,
     custom_llm_provider: str,
     litellm_model_name: str,
+    potential_model_names: Sequence[str | None] = (),
 ) -> float:
     usage_events: Final = tuple(
         usage
@@ -3062,22 +3064,28 @@ def handle_realtime_translation_cost_calculation(
     )
     if input_seconds <= 0 and output_seconds <= 0:
         return 0.0
-    try:
-        model_info: Final = litellm.get_model_info(
-            model=litellm_model_name,
-            custom_llm_provider=custom_llm_provider,
-        )
-    except Exception:  # noqa: BLE001  # unknown model metadata should yield zero translation cost
-        return 0.0
-    input_cost_per_second: Final = model_info.get("input_cost_per_second")
-    output_cost_per_second: Final = model_info.get("output_cost_per_second")
-    input_cost: Final = (
-        input_seconds * input_cost_per_second if isinstance(input_cost_per_second, (int, float)) else 0.0
+    model_infos: Final = tuple(
+        _get_model_info_or_none(model, custom_llm_provider)
+        for model in (*potential_model_names, litellm_model_name)
+        if model is not None
     )
-    output_cost: Final = (
-        output_seconds * output_cost_per_second if isinstance(output_cost_per_second, (int, float)) else 0.0
+    input_cost_per_second: Final = next(
+        (
+            rate
+            for info in model_infos
+            if (rate := _declared_transcription_rate(info, ("input_cost_per_second",))) is not None
+        ),
+        0.0,
     )
-    return input_cost + output_cost
+    output_cost_per_second: Final = next(
+        (
+            rate
+            for info in model_infos
+            if (rate := _declared_transcription_rate(info, ("output_cost_per_second",))) is not None
+        ),
+        0.0,
+    )
+    return input_seconds * input_cost_per_second + output_seconds * output_cost_per_second
 
 
 def handle_realtime_transcription_cost_calculation(

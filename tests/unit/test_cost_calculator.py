@@ -4967,6 +4967,55 @@ def test_realtime_cached_multimodal_token_cost(_local_model_cost_map, provider: 
     assert actual == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("input_override,output_override", [(None, None), (0.25, 0.75), (0.0, 0.0), (0.0, None)])
+def test_realtime_translation_uses_deployment_rates_before_base_rates(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    input_override: float | None,
+    output_override: float | None,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "translation-base",
+        {
+            "litellm_provider": "azure",
+            "mode": "realtime",
+            "input_cost_per_second": 0.5,
+            "output_cost_per_second": 1.0,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "translation-deployment",
+        {
+            "litellm_provider": "azure",
+            "mode": "realtime",
+            **{
+                key: rate
+                for key, rate in (("input_cost_per_second", input_override), ("output_cost_per_second", output_override))
+                if rate is not None
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 3.0, "output_seconds": 2.0}}
+    ]
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=events,
+        combined_usage_object=Usage(),
+        custom_llm_provider="azure",
+        litellm_model_name="unmapped-provider-deployment",
+        custom_pricing_model="translation-deployment",
+        base_pricing_model="translation-base",
+    )
+
+    assert cost == pytest.approx(
+        3 * (0.5 if input_override is None else input_override)
+        + 2 * (1.0 if output_override is None else output_override)
+    )
+
+
 def test_realtime_translation_duration_cost(_local_model_cost_map):
     from litellm.cost_calculator import handle_realtime_translation_cost_calculation
 
