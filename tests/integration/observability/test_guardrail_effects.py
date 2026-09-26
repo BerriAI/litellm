@@ -807,11 +807,11 @@ def _during_call_masking_config(tmp_path: Path, policy_url: str, check: str, fil
     return path
 
 
-def test_bedrock_during_call_mask_keeps_tool_result(gateway: Gateway, tmp_path: Path) -> None:
+def test_bedrock_during_call_mask_leaves_tool_result_unscanned(gateway: Gateway, tmp_path: Path) -> None:
     check: Final = (
         "def apply_guardrail(inputs, request_data, input_type):\n"
         "    flat = str(request_data)\n"
-        '    if "record SSN {SSN}" in flat and "please summarise" in flat and "123-45-6789" not in flat:\n'
+        '    if "please summarise" in flat and "record SSN" not in flat and "123-45-6789" not in flat:\n'
         "        return allow()\n"
         '    return block("mask check failed")'
     )
@@ -857,7 +857,7 @@ def test_bedrock_during_call_mask_survives_pii_in_text(gateway: Gateway, tmp_pat
     check: Final = (
         "def apply_guardrail(inputs, request_data, input_type):\n"
         "    flat = str(request_data)\n"
-        '    if "no pii here" in flat and "my ssn {SSN}" in flat and "123-45-6789" not in flat:\n'
+        '    if "no pii here" not in flat and "my ssn {SSN}" in flat and "123-45-6789" not in flat:\n'
         "        return allow()\n"
         '    return block("mask check failed")'
     )
@@ -1438,7 +1438,7 @@ def test_bedrock_during_call_responses_function_call_output_string_scans_as_text
             assert len(upstream.drain()) == 1
 
 
-def test_bedrock_during_call_skip_tool_message_flag_drops_tool_result_text(gateway: Gateway, tmp_path: Path) -> None:
+def test_bedrock_during_call_does_not_scan_tool_result_text(gateway: Gateway, tmp_path: Path) -> None:
     tool_text: Final = "BLOCKME from tool"
 
     def guardrail(request: Request) -> Reply:
@@ -1451,7 +1451,6 @@ def test_bedrock_during_call_skip_tool_message_flag_drops_tool_result_text(gatew
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         bedrock_params: Final = _bedrock_policy(policy.url)
         bedrock_params["mode"] = "during_call"
-        bedrock_params["skip_tool_message_in_guardrail"] = True
         config["guardrails"] = [
             {"guardrail_name": "bedrock-skip-tool-" + uuid.uuid4().hex, "litellm_params": bedrock_params}
         ]

@@ -3646,7 +3646,7 @@ class _RecordingInputsGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: Any | None = None,
     ) -> GenericGuardrailAPIInputs:
         self.seen_inputs = inputs
         return inputs
@@ -3708,3 +3708,39 @@ class TestExtractHookBaseSignatureCompatibility:
 
         assert guardrail.seen_inputs is not None
         assert guardrail.seen_inputs["files"] == ["data:application/pdf;base64,JVBERi0xLjQK"]
+
+
+class _BaseSignatureGuardrailInputsHandler(OpenAIResponsesHandler):
+    def _extract_guardrail_inputs(self, data, input_data, flattened_tool_groups):
+        return super()._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
+
+
+class TestScansAttachmentsWithBaseSignatureOnTextOnly:
+    """A scans_attachments guardrail must still give base-signature subclasses the
+    base call shape when the request carries no attachment parts."""
+
+    @pytest.mark.asyncio
+    async def test_guardrail_inputs_base_signature_on_text_only(self):
+        handler = _BaseSignatureGuardrailInputsHandler()
+        guardrail = _AttachmentRecordingGuardrail(guardrail_name="scan-attachments")
+        data = {"model": "gpt-4o", "input": [{"role": "user", "content": "hello"}]}
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_inputs is not None
+        assert guardrail.seen_inputs["texts"] == ["hello"]
+        assert "files" not in guardrail.seen_inputs
+
+    @pytest.mark.asyncio
+    async def test_extract_hook_base_signature_on_text_only(self):
+        handler = _BaseSignatureExtractHandler()
+        guardrail = _AttachmentRecordingGuardrail(guardrail_name="scan-attachments")
+        data = {
+            "model": "gpt-4o",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_inputs is not None
+        assert "files" not in guardrail.seen_inputs

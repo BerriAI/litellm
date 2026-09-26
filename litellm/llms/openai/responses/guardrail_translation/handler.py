@@ -477,6 +477,28 @@ def _image_url_part_ref(content_item: Mapping[str, object], scan_attachments: bo
     return file_id if isinstance(file_id, str) and file_id else None
 
 
+_ATTACHMENT_PART_TYPES: Final = frozenset({"image_url", "input_image", "input_file"})
+
+
+def _input_has_attachment_parts(input_data: object) -> bool:
+    if not isinstance(input_data, list):
+        return False
+    for item in input_data:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict) and part.get("type") in _ATTACHMENT_PART_TYPES for part in content
+        ):
+            return True
+        output = item.get("output")
+        if isinstance(output, list) and any(
+            isinstance(part, dict) and part.get("type") in _ATTACHMENT_PART_TYPES for part in output
+        ):
+            return True
+    return False
+
+
 def _extract_tool_output_attachments(
     item: Mapping[str, object], images_to_check: list[str], files_to_check: list[str]
 ) -> None:
@@ -582,8 +604,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
-        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups, scan_attachments)
+        scan_attachments: Final = getattr(
+            guardrail_to_apply, "scans_attachments", False
+        ) is True and _input_has_attachment_parts(input_data)
+        extracted: Final = self._extract_guardrail_inputs(
+            data, input_data, flattened_tool_groups, **({"scan_attachments": True} if scan_attachments else {})
+        )
         if not (
             extracted.inputs.get("texts")
             or (scan_attachments and (extracted.inputs.get("images") or extracted.inputs.get("files")))

@@ -290,6 +290,32 @@ class _AnthropicSSEEvent(TypedDict, total=False):
     delta: ReadOnly[_AnthropicSSEDelta]
 
 
+_ATTACHMENT_BLOCK_TYPES: Final = frozenset({"image", "document"})
+
+
+def _block_tree_has_attachment(block: Mapping[str, object]) -> bool:
+    stack: Final[list[Mapping[str, object]]] = [block]  # mutable-ok: LIFO walk, no recursion
+    while stack:
+        part = stack.pop()
+        if part.get("type") in _ATTACHMENT_BLOCK_TYPES:
+            return True
+        inner = part.get("content")
+        if isinstance(inner, list):
+            stack.extend(candidate for candidate in inner if isinstance(candidate, dict))
+    return False
+
+
+def _request_has_attachment_blocks(data: Mapping[str, object], messages: Sequence[object]) -> bool:
+    if isinstance(data.get("system"), list):
+        return True
+    return any(
+        isinstance(part, dict) and _block_tree_has_attachment(part)
+        for message in messages
+        if isinstance(message, dict) and isinstance(message.get("content"), list)
+        for part in message["content"]
+    )
+
+
 class AnthropicMessagesHandler(BaseTranslation):
     """Process Anthropic messages with guardrails.
 
@@ -537,7 +563,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
+        scan_attachments: Final = getattr(
+            guardrail_to_apply, "scans_attachments", False
+        ) is True and _request_has_attachment_blocks(data, messages)
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.

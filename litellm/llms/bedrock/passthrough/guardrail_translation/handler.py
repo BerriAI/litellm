@@ -219,6 +219,14 @@ def _converse_input_blocks(
     )
 
 
+def _converse_body_has_attachments(body: RequestObject, skip_tool: bool) -> bool:
+    in_scope, scoped_out = _converse_input_blocks(body, skip_tool)
+    return any(
+        attachments != ((), ())
+        for attachments in (_converse_block_attachments(block) for block in (*in_scope, *scoped_out))
+    )
+
+
 def _converse_scoped_out_refs(image_refs: tuple[str, ...], file_refs: tuple[str, ...]) -> tuple[str, ...]:
     return (*file_refs, *(ref for ref in image_refs if not ref.startswith("data:")))
 
@@ -535,7 +543,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
-        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
+        scan_attachments: Final = getattr(
+            guardrail_to_apply, "scans_attachments", False
+        ) is True and _converse_body_has_attachments(body, skip_tool)
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
         images, files = (
             _extract_converse_attachments(body, skip_tool)

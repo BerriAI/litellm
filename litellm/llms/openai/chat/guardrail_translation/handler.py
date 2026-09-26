@@ -127,6 +127,18 @@ def _attachment_part_refs(content_item: Mapping[str, object], scan_attachments: 
     return image_ref, None
 
 
+_ATTACHMENT_PART_TYPES: Final = frozenset({"image_url", "file", "video_url", "input_audio"})
+
+
+def _request_has_attachment_parts(messages: Sequence[Mapping[str, object]]) -> bool:
+    return any(
+        isinstance(part, Mapping) and part.get("type") in _ATTACHMENT_PART_TYPES
+        for message in messages
+        if isinstance((content := message.get("content")), list)
+        for part in content
+    )
+
+
 def _scoped_out_attachment_refs(content: object) -> tuple[str, ...]:
     if not isinstance(content, list):
         return ()
@@ -183,7 +195,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
+        scan_attachments: Final = getattr(
+            guardrail_to_apply, "scans_attachments", False
+        ) is True and _request_has_attachment_parts(cast(Sequence[Mapping[str, object]], messages))
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -280,7 +294,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             not images_to_check
             and not files_to_check
             and not guardrail_to_apply.records_own_guardrail_information
-            and (not_run_reason := self._not_run_reason(messages, scan_attachments)) is not None
+            and (
+                not_run_reason := self._not_run_reason(
+                    messages, **({"scan_attachments": True} if scan_attachments else {})
+                )
+            )
+            is not None
         ):
             guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=not_run_reason,
@@ -336,7 +355,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _not_run_reason(
         self,
         messages: Sequence[dict[str, Any]],  # mutable-ok: raw request messages consumed by _extract_inputs
-        scan_attachments: bool,
+        scan_attachments: bool = False,
     ) -> str | None:
         """Why nothing was scanned, or None when the only unscoped content is attachments, which reach the guardrail but carry no texts."""
         texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
@@ -603,7 +622,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrailed_tool_calls: Final[Sequence[dict[str, object]]] = (
             cast(list[dict[str, object]], returned_tool_calls)
             if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
-            else tool_calls_to_check
+            else inputs.get("tool_calls") or tool_calls_to_check
         )
 
         # Step 3: Map guardrail responses back to original response structure

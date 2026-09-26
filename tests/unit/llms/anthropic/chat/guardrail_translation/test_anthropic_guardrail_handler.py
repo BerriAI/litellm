@@ -2989,9 +2989,7 @@ class _LegacyNestedHooksHandler(AnthropicMessagesHandler):
     @classmethod
     def _extract_tool_result(cls, content_item, msg_idx, content_idx):
         cls.seen_tool_result = True
-        return super()._extract_tool_result(
-            content_item=content_item, msg_idx=msg_idx, content_idx=content_idx
-        )
+        return super()._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
 
     @staticmethod
     def _image_sources(block):
@@ -3056,7 +3054,16 @@ class TestNestedHookBaseSignatureCompatibility:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "tool_result", "tool_use_id": "t1", "content": "from tool"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                                }
+                            ],
+                        },
                     ],
                 }
             ],
@@ -3159,3 +3166,42 @@ class TestScopedOutToolResultAttachments:
         assert guardrail.calls == 1
         assert guardrail.seen_texts == ["hello"]
         assert guardrail.seen_files == []
+
+
+class TestScansAttachmentsWithBaseSignatureOnTextOnly:
+    """A scans_attachments guardrail must still give base-signature subclasses the
+    base call shape when the request carries no attachment blocks."""
+
+    @pytest.mark.asyncio
+    async def test_extract_hook_base_signature_on_text_only(self):
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {"model": "claude-3", "messages": [{"role": "user", "content": "hello"}]}
+
+        await _BaseSignatureExtractHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["hello"]
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_nested_hooks_base_signature_on_text_only(self):
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "from tool"},
+                    ],
+                }
+            ],
+        }
+
+        await _LegacyNestedHooksHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert "files" not in guardrail.inputs

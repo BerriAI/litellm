@@ -511,3 +511,88 @@ class TestScopedOutMessageAttachments:
         assert guardrail.inputs is not None
         assert guardrail.inputs["texts"] == ["hello"]
         assert "files" not in guardrail.inputs
+
+
+class _BaseSignatureNotRunReasonHandler(OpenAIChatCompletionsHandler):
+    def _not_run_reason(self, messages):
+        return "no scannable content"
+
+
+class TestScansAttachmentsWithBaseSignatureOnTextOnly:
+    """A scans_attachments guardrail must still give base-signature subclasses the
+    base call shape when the request carries no attachment parts."""
+
+    @pytest.mark.asyncio
+    async def test_extract_inputs_base_signature_on_text_only(self):
+        guardrail = ScanningGuardrail()
+        data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "just text"}]}
+
+        await _BaseSignatureExtractInputsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["just text"]
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_not_run_reason_base_signature_on_text_only(self):
+        guardrail = ScanningGuardrail()
+        data = {"model": "gpt-4o", "messages": [{"role": "user", "content": []}]}
+
+        await _BaseSignatureNotRunReasonHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+
+class _InPlaceToolCallMutatingGuardrail(CustomGuardrail):
+    """Mutates the tool_calls list handed to apply_guardrail in place and returns
+    a payload without a tool_calls key."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if inputs.get("tool_calls"):
+            tool_call = inputs["tool_calls"][0]
+            assert isinstance(tool_call, dict)
+            function = tool_call.get("function")
+            assert isinstance(function, dict)
+            inputs["tool_calls"][0] = {
+                **tool_call,
+                "function": {**function, "arguments": "MASKED_ARGS"},
+            }
+        return GenericGuardrailAPIInputs(texts=list(inputs.get("texts") or []))
+
+
+class TestOutputToolCallAliasing:
+    @pytest.mark.asyncio
+    async def test_in_place_tool_call_mutation_survives_when_guardrail_returns_no_tool_calls(self):
+        import litellm
+
+        response = litellm.ModelResponse(
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "calling the tool",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "original"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        )
+
+        result = await OpenAIChatCompletionsHandler().process_output_response(
+            response=response, guardrail_to_apply=_InPlaceToolCallMutatingGuardrail()
+        )
+
+        tool_calls = result.choices[0].message.tool_calls
+        assert tool_calls[0]["function"]["arguments"] == "MASKED_ARGS"

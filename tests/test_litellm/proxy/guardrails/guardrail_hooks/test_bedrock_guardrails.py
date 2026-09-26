@@ -1017,8 +1017,7 @@ async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
 
     Regression for `400: At least one GuardrailContentBlock must be provided` on
     /v1/messages: with experimental_use_latest_role_message_only the scanned turn is the
-    Anthropic tool_result block; when it carries nothing readable, ApplyGuardrail
-    rejected the empty content list.
+    Anthropic tool_result block, which carries no text, so ApplyGuardrail rejected the call.
     """
     guardrail = BedrockGuardrail(
         guardrail_name="bedrock-tool-result",
@@ -1028,9 +1027,7 @@ async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
         default_on=True,
         experimental_use_latest_role_message_only=True,
     )
-    messages = _anthropic_tool_result_conversation()
-    messages[2]["content"] = [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": []}]
-    data = {"model": "claude-sonnet-4-5", "messages": messages}
+    data = {"model": "claude-sonnet-4-5", "messages": _anthropic_tool_result_conversation()}
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         await guardrail.async_moderation_hook(
@@ -1040,7 +1037,7 @@ async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
         )
 
     mock_post.assert_not_called()
-    assert data["messages"][-1]["content"] == [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": []}]
+    assert data["messages"] == _anthropic_tool_result_conversation()
 
 
 @pytest.mark.asyncio
@@ -1080,7 +1077,8 @@ async def test_during_call_hook_still_scans_tool_result_turn_carrying_text():
     mock_post.assert_called_once()
     sent = mock_post.call_args.kwargs["data"].decode()
     assert "now summarize that" in sent
-    assert "18C and sunny" in sent
+    # tool_result text is not extracted by this path (https://github.com/BerriAI/litellm/issues/33086)
+    assert "18C and sunny" not in sent
 
 
 @pytest.mark.asyncio
@@ -6276,7 +6274,7 @@ class TestBedrockGuardrailImageInput:
 
     @pytest.mark.asyncio
     async def test_a_document_nested_inside_a_tool_result_is_refused(self):
-        """A tool_result wrapper is transparent to attachments: the model reads the
+        """A tool_result wrapper is transparent to the refusal walk: the model reads the
         nested document, so the guardrail refuses it exactly like a top-level one."""
         messages = [
             {
@@ -6302,12 +6300,12 @@ class TestBedrockGuardrailImageInput:
         ]
 
         with pytest.raises(HTTPException) as exc_info:
-            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+            self._guardrail()._refuse_unscannable_leaf_parts(messages=messages)
 
         assert "Violated guardrail policy" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_a_tool_result_nested_base64_image_is_scanned_and_counted(self):
+    async def test_a_tool_result_nested_base64_image_is_neither_scanned_nor_counted(self):
         g = self._guardrail()
         messages = [
             {
@@ -6335,8 +6333,9 @@ class TestBedrockGuardrailImageInput:
         request = g.convert_to_bedrock_format(source="INPUT", messages=messages)
 
         kinds = [key for item in request["content"] for key in item]
-        assert "image" in kinds
-        assert BedrockGuardrail._image_count_in(messages) == 1
+        assert "image" not in kinds
+        assert "text" in kinds
+        assert BedrockGuardrail._image_count_in(messages) == 0
 
     @pytest.mark.asyncio
     async def test_an_image_url_part_with_only_a_file_id_is_refused(self):
@@ -7106,7 +7105,7 @@ def test_bedrock_guardrail_opts_into_attachment_scanning() -> None:
     assert BedrockGuardrail.scans_attachments is True
 
 
-def test_apply_masking_to_messages_keeps_tool_result_and_image_blocks() -> None:
+def test_apply_masking_to_messages_drops_tool_result_and_image_blocks_like_base() -> None:
     guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
     messages = [
         {
@@ -7119,18 +7118,12 @@ def test_apply_masking_to_messages_keeps_tool_result_and_image_blocks() -> None:
         }
     ]
 
-    result = guardrail._apply_masking_to_messages(
-        messages=messages, masked_texts=["record SSN {SSN}", "please summarise", "leftover"]
-    )
+    result = guardrail._apply_masking_to_messages(messages=messages, masked_texts=["please summarise"])
 
-    assert result[0]["content"] == [
-        {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "record SSN {SSN}"},
-        {"type": "text", "text": "please summarise"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}},
-    ]
+    assert result[0]["content"] == [{"type": "text", "text": "please summarise"}]
 
 
-def test_apply_masking_to_messages_masks_tool_result_inner_list_items() -> None:
+def test_apply_masking_to_messages_leaves_tool_result_inner_items_unmasked() -> None:
     guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
     messages = [
         {
@@ -7150,16 +7143,7 @@ def test_apply_masking_to_messages_masks_tool_result_inner_list_items() -> None:
 
     result = guardrail._apply_masking_to_messages(messages=messages, masked_texts=["inner ssn {SSN}"])
 
-    assert result[0]["content"] == [
-        {
-            "type": "tool_result",
-            "tool_use_id": "toolu_01A",
-            "content": [
-                {"type": "text", "text": "inner ssn {SSN}"},
-                {"type": "image", "source": {"data": "abc"}},
-            ],
-        }
-    ]
+    assert result[0]["content"] == []
 
 
 @pytest.mark.asyncio
@@ -7811,8 +7795,8 @@ async def _run_anthropic_during_call(guardrail, messages, response_json=None):
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_scans_tool_result_text_when_skip_flag_off():
-    """Without skip_tool_message_in_guardrail a tool_result string is scanned like base."""
+async def test_during_call_hook_does_not_scan_tool_result_text():
+    """The ApplyGuardrail scan sees only text parts: a tool_result string is never a leaf."""
     guardrail = BedrockGuardrail(
         guardrail_name="bedrock-tool-result-default",
         guardrailIdentifier="test-guardrail",
@@ -7820,11 +7804,20 @@ async def test_during_call_hook_scans_tool_result_text_when_skip_flag_off():
         event_hook=GuardrailEventHooks.during_call,
         default_on=True,
     )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "my ssn is 123-45-6789"},
+                {"type": "text", "text": "hi"},
+            ],
+        }
+    ]
 
-    _, mock_post = await _run_anthropic_during_call(guardrail, _skip_flag_tool_result_messages())
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
 
     mock_post.assert_called_once()
-    assert _sent_apply_guardrail_texts(mock_post) == ["hello", "BLOCKME from tool"]
+    assert _sent_apply_guardrail_texts(mock_post) == ["hi"]
 
 
 @pytest.mark.asyncio
@@ -7864,15 +7857,15 @@ async def test_during_call_hook_global_skip_tool_message_flag_drops_tool_result_
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_skip_tool_message_flag_keeps_tool_result_out_of_masked_writeback():
-    """Masked outputs align to scanned texts; a skipped tool_result consumes no slot."""
+async def test_during_call_hook_masked_writeback_drops_tool_result_like_base():
+    """Masked outputs align to scanned texts; a tool_result consumes no slot and is
+    dropped from the rewritten content list exactly like base masking did."""
     guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-tool-result-skip-mask",
+        guardrail_name="bedrock-tool-result-mask",
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.during_call,
         default_on=True,
-        skip_tool_message_in_guardrail=True,
     )
     messages = [
         {"role": "user", "content": "hello"},
@@ -7891,40 +7884,35 @@ async def test_during_call_hook_skip_tool_message_flag_keeps_tool_result_out_of_
 
     assert _sent_apply_guardrail_texts(mock_post) == ["hello", "and bye"]
     assert data["messages"][0]["content"] == "M1"
-    assert data["messages"][1]["content"] == [
-        {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "BLOCKME from tool"}
-    ]
+    assert data["messages"][1]["content"] == []
     assert data["messages"][2]["content"] == "M2"
 
 
-@pytest.mark.asyncio
-async def test_during_call_hook_skip_tool_message_flag_tool_result_only_turn_posts_nothing():
-    """Flag on + latest-role scoping over a tool_result-only turn scans nothing."""
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-tool-result-skip-empty",
-        guardrailIdentifier="test-guardrail",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.during_call,
-        default_on=True,
-        experimental_use_latest_role_message_only=True,
-        skip_tool_message_in_guardrail=True,
+def test_mask_content_list_drops_tool_result_and_consumes_no_masked_text() -> None:
+    guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
+
+    new_content, masking_index = guardrail._mask_content_list(
+        content_list=[
+            {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "BLOCKME from tool"},
+            {"type": "text", "text": "hi"},
+        ],
+        masked_texts=["M1"],
+        masking_index=0,
     )
 
-    _, mock_post = await _run_anthropic_during_call(guardrail, _anthropic_tool_result_conversation())
-
-    mock_post.assert_not_called()
+    assert new_content == [{"type": "text", "text": "M1"}]
+    assert masking_index == 1
 
 
 @pytest.mark.asyncio
-async def test_during_call_hook_skip_tool_message_flag_still_refuses_tool_result_document():
-    """The skip flag narrows text scanning only; attachments inside it stay refused."""
+async def test_during_call_hook_refuses_tool_result_document():
+    """A document nested in a tool_result is refused even though its text is not scanned."""
     guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-tool-result-skip-doc",
+        guardrail_name="bedrock-tool-result-doc",
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.during_call,
         default_on=True,
-        skip_tool_message_in_guardrail=True,
     )
     messages = [
         {"role": "user", "content": "hello"},
@@ -7977,9 +7965,7 @@ def test_convert_to_bedrock_format_inline_png_builds_an_image_item():
     messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}}
-            ],
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}}],
         }
     ]
 
