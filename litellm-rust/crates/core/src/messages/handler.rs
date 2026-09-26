@@ -204,50 +204,6 @@ fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
     debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
 }
 
-#[cfg(test)]
-mod tests {
-    use litellm_llms::base_llm::anthropic_messages::streaming::anthropic_sse_event_stream;
-    use rstest::rstest;
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
-
-    use super::*;
-
-    #[rstest]
-    #[case::event(
-        "data: {\"type\":\"ping\"}\n\n",
-        Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
-    )]
-    #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
-    #[tokio::test]
-    async fn decoded_streams_encode_events_and_stop_at_the_first_error(
-        #[case] body: &'static str,
-        #[case] expected: Option<&str>,
-    ) {
-        let upstream = MockServer::start().await;
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
-            .mount(&upstream)
-            .await;
-        let response = litellm_http::Client::plain_for_test()
-            .get(upstream.uri())
-            .send()
-            .await
-            .unwrap();
-        let MessagesResponse::Stream { mut chunks, .. } =
-            streaming_response(response, Some(anthropic_sse_event_stream), "test")
-        else {
-            panic!("a streaming response returns chunks");
-        };
-
-        let chunk = chunks.next().await.unwrap();
-        match expected {
-            Some(expected) => assert_eq!(chunk.unwrap().as_ref(), expected.as_bytes()),
-            None => assert!(matches!(chunk, Err(Error::InvalidResponse(_))), "{chunk:?}"),
-        }
-        assert!(chunks.next().await.is_none());
-    }
-}
-
 pub(super) async fn synthesize(
     host: &super::route::MessagesHost,
     message: AnthropicMessagesResponse,
@@ -305,4 +261,48 @@ pub(super) fn recover_thinking(
             .chain([("messages".into(), stripped)])
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_llms::base_llm::anthropic_messages::streaming::anthropic_sse_event_stream;
+    use rstest::rstest;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
+
+    use super::*;
+
+    #[rstest]
+    #[case::event(
+        "data: {\"type\":\"ping\"}\n\n",
+        Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
+    )]
+    #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
+    #[tokio::test]
+    async fn decoded_streams_encode_events_and_stop_at_the_first_error(
+        #[case] body: &'static str,
+        #[case] expected: Option<&str>,
+    ) {
+        let upstream = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .mount(&upstream)
+            .await;
+        let response = litellm_http::Client::plain_for_test()
+            .get(upstream.uri())
+            .send()
+            .await
+            .unwrap();
+        let MessagesResponse::Stream { mut chunks, .. } =
+            streaming_response(response, Some(anthropic_sse_event_stream), "test")
+        else {
+            panic!("a streaming response returns chunks");
+        };
+
+        let chunk = chunks.next().await.unwrap();
+        match expected {
+            Some(expected) => assert_eq!(chunk.unwrap().as_ref(), expected.as_bytes()),
+            None => assert!(matches!(chunk, Err(Error::InvalidResponse(_))), "{chunk:?}"),
+        }
+        assert!(chunks.next().await.is_none());
+    }
 }
