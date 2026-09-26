@@ -6,7 +6,13 @@ connection. The DB-backed per-user flow is exercised in higher-level
 tests in tests/mcp_tests.
 """
 
+from typing import Final
+from unittest.mock import AsyncMock
+
 import pytest
+from respx import MockRouter
+
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # Look up these names lazily on every access. Tests in this directory call
 # ``importlib.reload`` on the utils module to exercise registration logic,
@@ -568,7 +574,7 @@ async def test_resolve_static_headers_user_value_wins_over_empty_global(
     assert headers == {"Authorization": "Bearer user-secret"}
 
 
-# ── health-check skip for per-user-env-var-backed headers ──────────────────
+# ── health-check reachability for per-user-env-var-backed headers ───────────
 
 
 @pytest.mark.parametrize(
@@ -615,32 +621,26 @@ def test_references_per_user_env_var(static_headers, env_vars, expected):
 
 
 @pytest.mark.asyncio
-async def test_health_check_skips_servers_referencing_per_user_env_var(
-    mock_server, monkeypatch
-):
-    """A userless health probe cannot fill per-user ${NAME} placeholders, so a
-    server whose static_headers reference one must report 'unknown' without
-    connecting. Otherwise it forwards the literal placeholder upstream, gets a
-    401, and flips to 'unhealthy' even though real user calls succeed."""
+async def test_health_check_reaches_servers_without_forwarding_per_user_env_vars(
+    mock_server: MCPServer, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter
+) -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
     )
 
-    manager = MCPServerManager()
+    manager: Final = MCPServerManager()
     manager.registry[mock_server.server_id] = mock_server
+    create_client: Final = AsyncMock()
+    monkeypatch.setattr(manager, "_create_mcp_client", create_client)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.get(mock_server.url).respond(401)
 
-    created = []
+    result: Final = await manager.health_check_server(mock_server.server_id)
 
-    async def fake_create_client(*args, **kwargs):
-        created.append((args, kwargs))
-        raise RuntimeError("upstream rejected literal ${NAME}")
-
-    monkeypatch.setattr(manager, "_create_mcp_client", fake_create_client)
-
-    result = await manager.health_check_server(mock_server.server_id)
-
-    assert created == []
-    assert result.status == "unknown"
+    create_client.assert_not_called()
+    assert route.call_count == 1
+    assert not {"x-db-url", "x-other"}.intersection(route.calls[0].request.headers)
+    assert result.status == "reachable"
     assert result.health_check_error is None
 
 

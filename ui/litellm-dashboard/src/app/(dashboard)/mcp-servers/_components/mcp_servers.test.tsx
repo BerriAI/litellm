@@ -113,12 +113,14 @@ describe("compareServers", () => {
   it("sorts health before recency and display name", () => {
     const servers: MCPServer[] = [
       { ...server("healthy", "aaa", "2026-03-01T00:00:00Z"), status: "healthy" },
+      { ...server("reachable", "aaa", "2026-04-01T00:00:00Z"), status: "reachable" },
       { ...server("unknown", "bbb", "2026-02-01T00:00:00Z"), status: "unknown" },
       { ...server("unhealthy", "zzz", "2026-01-01T00:00:00Z"), status: "unhealthy" },
     ];
     expect(servers.sort((a, b) => compareServers(a, b, "health")).map((s) => s.server_id)).toEqual([
       "unhealthy",
       "unknown",
+      "reachable",
       "healthy",
     ]);
   });

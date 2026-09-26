@@ -32168,6 +32168,7 @@
                 {
                   "enum": [
                     "healthy",
+                    "reachable",
                     "unhealthy",
                     "unknown"
                   ],
@@ -32178,7 +32179,7 @@
                 }
               ],
               "default": "unknown",
-              "description": "Health status: 'healthy', 'unhealthy', 'unknown'",
+              "description": "Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)",
               "title": "Status"
             },
             "subject_token_type": {
@@ -35224,6 +35225,7 @@
                 {
                   "enum": [
                     "healthy",
+                    "reachable",
                     "unhealthy",
                     "unknown"
                   ],
@@ -35234,7 +35236,7 @@
                 }
               ],
               "default": "unknown",
-              "description": "Health status: 'healthy', 'unhealthy', 'unknown'",
+              "description": "Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)",
               "title": "Status"
             },
             "subject_token_type": {
@@ -38095,6 +38097,18 @@
                 "description": "Server IDs to check. If not provided, checks all accessible servers.",
                 "title": "Server Ids"
               }
+            },
+            {
+              "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+              "in": "query",
+              "name": "include_reachability",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+                "title": "Include Reachability",
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -38388,6 +38402,18 @@
               "schema": {
                 "title": "Server Id",
                 "type": "string"
+              }
+            },
+            {
+              "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+              "in": "query",
+              "name": "include_reachability",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+                "title": "Include Reachability",
+                "type": "boolean"
               }
             }
           ],
