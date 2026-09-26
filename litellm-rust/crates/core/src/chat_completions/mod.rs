@@ -6,24 +6,26 @@
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
-mod error;
 pub mod types;
-pub use error::Error;
-mod client;
+pub use crate::error::RouteError as Error;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
-use handler::execute_chat_completions_provider_call;
+use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_types::utils::ChatCompletionsResponse;
-use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use prepare::{parse_messages, prepare_provider_request, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
 
 use crate::chat_completions::types::ChatCompletionsRequest;
 
 pub async fn chat_completions(
+    resources: &crate::resources::CoreResources,
+    config: &HttpClientConfig,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+    let http = resources.pool.client(config, ClientVariant::Provider)?;
+    let request = prepare_provider_request(resolve_request(request)?)?;
+    handler::execute(&http, &resources.auth, request, &()).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or
@@ -38,9 +40,10 @@ pub fn chat_completions_decline_reason(
     messages: Value,
     optional_params: &Map<String, Value>,
 ) -> Option<&'static str> {
-    let Ok((_, config)) = resolve_provider_config(model, custom_llm_provider) else {
+    let Ok(resolved) = resolve_provider_config(model, custom_llm_provider) else {
         return Some("provider is not on the rust chat completions path");
     };
+    let config = resolved.config;
     let Ok(messages) = parse_messages(messages) else {
         return Some("unreadable message list");
     };
@@ -51,6 +54,3 @@ pub fn chat_completions_decline_reason(
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
 }
-
-#[cfg(test)]
-mod tests;

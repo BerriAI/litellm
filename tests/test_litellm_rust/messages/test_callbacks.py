@@ -5,6 +5,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
@@ -126,6 +127,7 @@ async def test_native_messages_stream_relays_provider_events_and_logs_success_on
         **arguments(messages_server, stream=True, callbacks=[recorder])
     )
     assert isinstance(stream, AsyncIterator)
+    assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
     first: Final = await anext(stream)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names
@@ -169,6 +171,7 @@ def test_native_sync_messages_stream_relays_provider_events_and_logs_success_onc
 
     stream: Final = litellm.anthropic.messages.create(**arguments(messages_server, stream=True, callbacks=[recorder]))
     assert isinstance(stream, Iterator)
+    assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
 
     assert b"".join(stream) == sse_payload()
     assert_served_natively(messages_server)
@@ -183,3 +186,56 @@ def test_native_sync_messages_returns_the_provider_message(messages_server: Reco
     assert_served_natively(messages_server)
     assert response["content"] == MESSAGES_RESPONSE["content"]
     assert len(recorder.wait_for("log_success_event")) == 1
+
+
+@pytest.mark.asyncio
+async def test_native_messages_pre_call_sees_the_shaped_optional_params(
+    messages_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+
+    await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, callbacks=[recorder], temperature=0.2, top_k=3, drop_params=True)
+    )
+
+    sent: Final = messages_server.requests[0].body
+    assert not {"temperature", "top_k"} & sent.keys()
+    pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
+    assert isinstance(pre_call, dict)
+    optional_params: Final = pre_call["optional_params"]
+    assert isinstance(optional_params, dict)
+    assert not {"model", "messages", "temperature", "top_k"} & optional_params.keys()
+    assert optional_params["max_tokens"] == sent["max_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_failing_pre_call_logger_does_not_fail_the_call(messages_server: RecordingServer) -> None:
+    class Broken(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            raise RuntimeError("logger exploded")
+
+    response: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, callbacks=[Broken()]))
+
+    assert_served_natively(messages_server)
+    assert response["content"] == MESSAGES_RESPONSE["content"]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_stream_success_log_carries_usage_rebuilt_from_the_relayed_events(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(STREAM)
+    recorder: Final = RecordingLogger()
+
+    stream: Final = await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, stream=True, callbacks=[recorder])
+    )
+    assert isinstance(stream, AsyncIterator)
+    async for _ in stream:
+        pass
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    usage: Final = success[0].response.usage
+    assert usage.completion_tokens == MESSAGES_EVENTS[4][1]["usage"]["output_tokens"]
+    assert usage.prompt_tokens == MESSAGES_RESPONSE["usage"]["input_tokens"]
+    assert success[0].response.choices[0].message.content == "Hello from native Messages"

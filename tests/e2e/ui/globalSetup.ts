@@ -2,6 +2,7 @@ import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import { expectUnrestrictedDashboard, setInvitedUserPassword } from "./helpers/userOnboarding";
+import { hideLiteAdmin } from "./helpers/navigation";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -74,6 +75,9 @@ async function globalSetup() {
       const dismiss = page.getByText("Don't ask me again");
       if (await dismiss.isVisible({ timeout: 1_500 }).catch(() => false)) {
         await dismiss.click();
+      }
+      if (role === Role.ProxyAdmin) {
+        await hideLiteAdmin(page);
       }
       // The login flow stores a post-login return URL in the litellm_return_url
       // cookie. If the snapshot captures it before the app consumes it, every

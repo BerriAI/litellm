@@ -21,5 +21,7 @@ function in a full stack is not
 
 ## Where it goes
 
-By the domain a user would name: `pricing`, `spend`, `routing`. Add the node and its `covers` ids to
-`contracts.json` or collection fails. Needs no proxy, DB or Redis: `tests/unit`
+By the domain a user would name: `pricing`, `spend`, `routing`, `mcp`. A file only needs to live in a
+directory that a `GROUPS` entry in `run.py` selects; there is no manifest and no `covers` marker on new
+tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
+fix in the test and not a deletion. Needs no proxy, DB or Redis: `tests/unit`

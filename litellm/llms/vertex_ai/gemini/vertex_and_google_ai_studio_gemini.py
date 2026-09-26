@@ -364,7 +364,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Check if the model is Gemini 3 or newer.
         """
-        model_name = model.split("/")[-1].lower()
+        model_name: Final = model.split("/")[-1].lower()
         is_vertex_fine_tuned_model: Final = model_name.isdigit() or (
             model.startswith("gemini/") and not model_name.startswith("gemini-")
         )
