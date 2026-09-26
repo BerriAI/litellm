@@ -332,3 +332,34 @@ def test_resolve_mappers_composition_layers_vocabularies():
 def test_resolve_mappers_rejects_unknown_name():
     with pytest.raises(ValueError, match="unknown mapper name 'nope'"):
         resolve_mappers(["genai", "nope"])
+
+
+def test_langfuse_mapper_derives_trace_name_input_and_output():
+    attrs = LangfuseMapper().map(_llm_call(call_type="acompletion"))
+
+    assert attrs["langfuse.trace.name"] == "litellm-acompletion"
+    assert attrs["langfuse.trace.input"] == attrs["langfuse.observation.input"]
+    assert attrs["langfuse.trace.output"] == attrs["langfuse.observation.output"]
+
+
+def test_langfuse_mapper_derived_name_yields_to_the_caller_name():
+    attrs = LangfuseMapper().map(_llm_call(call_type="acompletion", trace=TraceControls(name="caller-trace")))
+
+    assert attrs["langfuse.trace.name"] == "caller-trace"
+
+
+def test_langfuse_mapper_without_call_type_or_name_emits_no_trace_name():
+    attrs = LangfuseMapper().map(_llm_call(call_type=None, trace=TraceControls()))
+
+    assert "langfuse.trace.name" not in attrs
+
+
+def test_langfuse_root_trace_attributes_match_the_generation_pairs():
+    data = _llm_call(call_type="aresponses", trace=TraceControls())
+    generation = LangfuseMapper().map(data)
+
+    root = LangfuseMapper.trace_attributes(TraceControls(), "aresponses")
+    assert root == {"langfuse.trace.name": "litellm-aresponses"}
+    assert generation["langfuse.trace.name"] == root["langfuse.trace.name"]
+    assert generation["langfuse.trace.input"] == generation["langfuse.observation.input"]
+    assert generation["langfuse.trace.output"] == generation["langfuse.observation.output"]

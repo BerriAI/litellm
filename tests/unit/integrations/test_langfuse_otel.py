@@ -1,5 +1,7 @@
 import json
 import os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -104,19 +106,13 @@ class TestLangfuseOtelIntegration:
         mock_kwargs = {"test": "kwargs"}
         mock_response = {"test": "response"}
 
-        with patch(
-            "litellm.integrations.arize._utils.set_attributes"
-        ) as mock_set_attributes:
-            LangfuseOtelLogger.set_langfuse_otel_attributes(
-                mock_span, mock_kwargs, mock_response
-            )
+        with patch("litellm.integrations.arize._utils.set_attributes") as mock_set_attributes:
+            LangfuseOtelLogger.set_langfuse_otel_attributes(mock_span, mock_kwargs, mock_response)
 
             mock_set_attributes.assert_called_once_with(
                 mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
             )
-            mock_span.set_attribute.assert_any_call(
-                "langfuse.observation.type", "generation"
-            )
+            mock_span.set_attribute.assert_any_call("langfuse.observation.type", "generation")
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
@@ -125,17 +121,11 @@ class TestLangfuseOtelIntegration:
         test_env = "staging"
 
         with patch.dict(os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": test_env}):
-            with patch(
-                "litellm.integrations.arize._utils.safe_set_attribute"
-            ) as mock_safe_set_attribute:
-                LangfuseOtelLogger._set_langfuse_specific_attributes(
-                    mock_span, mock_kwargs, {}
-                )
+            with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+                LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, mock_kwargs, {})
 
                 # safe_set_attribute(span, key, value) → positional args
-                mock_safe_set_attribute.assert_called_once_with(
-                    mock_span, "langfuse.environment", test_env
-                )
+                mock_safe_set_attribute.assert_any_call(mock_span, "langfuse.environment", test_env)
 
     def test_set_langfuse_environment_attribute_prefers_dynamic_param(self):
         """Per-key/team langfuse_environment beats the deployment env var."""
@@ -148,18 +138,10 @@ class TestLangfuseOtelIntegration:
                 self.attributes[key] = value
 
         span = _RecordingSpan()
-        mock_kwargs = {
-            "standard_callback_dynamic_params": {
-                "langfuse_environment": "team-a-env"
-            }
-        }
+        mock_kwargs = {"standard_callback_dynamic_params": {"langfuse_environment": "team-a-env"}}
 
-        with patch.dict(
-            os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "deployment-wide"}
-        ):
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                span, mock_kwargs, {}
-            )
+        with patch.dict(os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "deployment-wide"}):
+            LangfuseOtelLogger._set_langfuse_specific_attributes(span, mock_kwargs, {})
 
         assert span.attributes["langfuse.environment"] == "team-a-env"
 
@@ -223,12 +205,8 @@ class TestLangfuseOtelIntegration:
         kwargs = {"litellm_params": {"metadata": metadata}}
 
         # Capture calls to safe_set_attribute
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                MagicMock(), kwargs, None
-            )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
 
             # Build expected calls manually for clarity
             from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
@@ -243,15 +221,12 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.TRACE_USER_ID.value: "user-123",
                 LangfuseSpanAttributes.SESSION_ID.value: "sess-456",
                 # Lists / dicts should be JSON strings
-                LangfuseSpanAttributes.TAGS.value: json.dumps(["tagA", "tagB"]),
                 LangfuseSpanAttributes.TRACE_NAME.value: "trace-name",
                 LangfuseSpanAttributes.TRACE_ID.value: "traceid",  # stripped dashes
                 LangfuseSpanAttributes.TRACE_METADATA.value: json.dumps({"k": "v"}),
                 LangfuseSpanAttributes.RELEASE.value: "rel-1",
                 LangfuseSpanAttributes.EXISTING_TRACE_ID.value: "existing-id",
-                LangfuseSpanAttributes.UPDATE_TRACE_KEYS.value: json.dumps(
-                    ["key1", "key2"]
-                ),
+                LangfuseSpanAttributes.UPDATE_TRACE_KEYS.value: json.dumps(["key1", "key2"]),
                 LangfuseSpanAttributes.DEBUG_LANGFUSE.value: True,
             }
 
@@ -261,9 +236,7 @@ class TestLangfuseOtelIntegration:
                 for call in mock_safe_set_attribute.call_args_list
             }
 
-            assert (
-                actual == expected
-            ), "Mismatch between expected and actual OTEL attribute mapping."
+            assert actual == expected, "Mismatch between expected and actual OTEL attribute mapping."
 
     @pytest.mark.parametrize(
         "metadata, expected_version",
@@ -288,16 +261,10 @@ class TestLangfuseOtelIntegration:
     def test_version_emitted_on_langfuse_v4_key(self, metadata, expected_version):
         kwargs = {"litellm_params": {"metadata": {"trace_release": "rel-9", **metadata}}}
 
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                MagicMock(), kwargs, None
-            )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
 
-        emitted = {
-            call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list
-        }
+        emitted = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
         if expected_version is None:
             assert "langfuse.version" not in emitted
@@ -335,12 +302,8 @@ class TestLangfuseOtelIntegration:
             "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}],
         }
 
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                MagicMock(), kwargs, response_obj
-            )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, response_obj)
 
             expect_output = {
                 LangfuseSpanAttributes.OBSERVATION_INPUT.value: [
@@ -356,11 +319,10 @@ class TestLangfuseOtelIntegration:
             actual = {
                 call.args[1]: json.loads(call.args[2])
                 for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] in expect_output
             }
 
-            assert (
-                actual == expect_output
-            ), "Mismatch in observation input/output OTEL attributes."
+            assert actual == expect_output, "Mismatch in observation input/output OTEL attributes."
 
     def test_set_langfuse_specific_attributes_with_tool_calls(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with tool calls in Langfuse format."""
@@ -384,9 +346,7 @@ class TestLangfuseOtelIntegration:
                         "content": None,
                         "tool_calls": [
                             ChatCompletionMessageToolCall(
-                                function=Function(
-                                    arguments='{"location":"Tokyo"}', name="get_weather"
-                                ),
+                                function=Function(arguments='{"location":"Tokyo"}', name="get_weather"),
                                 id="call_123",
                                 type="function",
                             )
@@ -396,12 +356,8 @@ class TestLangfuseOtelIntegration:
             ],
         )
 
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                MagicMock(), {}, response_obj
-            )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), {}, response_obj)
 
             expected = {
                 LangfuseSpanAttributes.OBSERVATION_OUTPUT.value: [
@@ -419,10 +375,9 @@ class TestLangfuseOtelIntegration:
             actual = {
                 call.args[1]: json.loads(call.args[2])
                 for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] in expected
             }
-            assert (
-                actual == expected
-            ), "Mismatch in observation output OTEL attribute for tool calls."
+            assert actual == expected, "Mismatch in observation output OTEL attribute for tool calls."
 
     def test_construct_dynamic_otel_headers_with_langfuse_keys(self):
         """Test that construct_dynamic_otel_headers creates proper auth headers when langfuse keys are provided."""
@@ -573,9 +528,7 @@ class TestLangfuseOtelKeyDynamicConfig:
             logger = LangfuseOtelLogger()
             assert logger.OTEL_EXPORTER == "console"
 
-            tracer = logger.get_tracer_to_use_for_request(
-                {"standard_callback_dynamic_params": self._dynamic_params()}
-            )
+            tracer = logger.get_tracer_to_use_for_request({"standard_callback_dynamic_params": self._dynamic_params()})
 
         assert tracer is not logger.tracer
         assert len(logger._tracer_provider_cache) == 1
@@ -636,9 +589,7 @@ class TestLangfuseOtelKeyDynamicConfig:
         with self._clean_env():
             logger = LangfuseOtelLogger()
             with patch.object(otel_module.verbose_logger, "debug", side_effect=_spy):
-                logger.get_tracer_to_use_for_request(
-                    {"standard_callback_dynamic_params": self._dynamic_params()}
-                )
+                logger.get_tracer_to_use_for_request({"standard_callback_dynamic_params": self._dynamic_params()})
 
         logged = "\n".join(recorded_arguments)
         assert "initializing span processor" in logged
@@ -698,12 +649,8 @@ class TestLangfuseOtelResponsesAPI:
             LangfuseLLMObsOTELAttributes,
         )
 
-        with patch(
-            "litellm.integrations.arize._utils.set_attributes"
-        ) as mock_set_attributes:
-            with patch(
-                "litellm.integrations.arize._utils.safe_set_attribute"
-            ) as mock_safe_set_attribute:
+        with patch("litellm.integrations.arize._utils.set_attributes") as mock_set_attributes:
+            with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
                 logger = LangfuseOtelLogger()
                 logger.set_langfuse_otel_attributes(mock_span, kwargs, mock_response)
 
@@ -716,9 +663,7 @@ class TestLangfuseOtelResponsesAPI:
                 mock_safe_set_attribute.assert_any_call(
                     mock_span, "langfuse.generation.name", "responses_test_generation"
                 )
-                mock_safe_set_attribute.assert_any_call(
-                    mock_span, "langfuse.trace.name", "responses_api_trace"
-                )
+                mock_safe_set_attribute.assert_any_call(mock_span, "langfuse.trace.name", "responses_api_trace")
 
     def test_responses_api_metadata_extraction(self):
         """Test that metadata is correctly extracted from ResponsesAPI kwargs."""
@@ -768,9 +713,7 @@ class TestLangfuseOtelResponsesAPI:
 
         mock_span = MagicMock()
 
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
             LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, {})
 
             # Verify specific attributes were set
@@ -812,11 +755,12 @@ class TestLangfuseOtelResponsesAPI:
     def test_responses_api_with_output(self):
         """Test Langfuse OTEL logger with Responses API output (reasoning + message)."""
         from openai.types.responses import (
-            ResponseReasoningItem,
             ResponseOutputMessage,
             ResponseOutputText,
+            ResponseReasoningItem,
         )
         from openai.types.responses.response_reasoning_item import Summary
+
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 
         # Create Responses API response with reasoning and message
@@ -831,7 +775,11 @@ class TestLangfuseOtelResponsesAPI:
                         Summary(
                             text="Let me analyze this problem step by step...",
                             type="summary_text",
-                        )
+                        ),
+                        Summary(
+                            text="Now checking the forecast data.",
+                            type="summary_text",
+                        ),
                     ],
                 ),
                 ResponseOutputMessage(
@@ -852,21 +800,15 @@ class TestLangfuseOtelResponsesAPI:
 
         kwargs = {
             "call_type": "responses",
-            "messages": [
-                {"role": "user", "content": "What's the weather in San Francisco?"}
-            ],
+            "messages": [{"role": "user", "content": "What's the weather in San Francisco?"}],
             "model": "gpt-4o",
             "optional_params": {},
         }
 
         mock_span = MagicMock()
 
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                mock_span, kwargs, response_obj
-            )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
 
             # Verify observation output was set
             output_calls = [
@@ -879,28 +821,32 @@ class TestLangfuseOtelResponsesAPI:
             output_json = output_calls[0].args[2]
             output_data = json.loads(output_json)
 
-            # Verify output contains reasoning and message
+            # Verify output contains both reasoning summaries and the message
             assert isinstance(output_data, list)
-            assert len(output_data) == 2
+            assert len(output_data) == 3
 
-            # Verify reasoning summary
             assert output_data[0]["role"] == "reasoning_summary"
-            assert (
-                output_data[0]["content"]
-                == "Let me analyze this problem step by step..."
-            )
+            assert output_data[0]["content"] == "Let me analyze this problem step by step..."
+            assert output_data[1]["role"] == "reasoning_summary"
+            assert output_data[1]["content"] == "Now checking the forecast data."
 
             # Verify message
-            assert output_data[1]["role"] == "assistant"
-            assert (
-                output_data[1]["content"]
-                == "The weather in San Francisco is sunny, 20°C."
-            )
+            assert output_data[2]["role"] == "assistant"
+            assert output_data[2]["content"] == "The weather in San Francisco is sunny, 20°C."
+
+            trace_output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.TRACE_OUTPUT.value
+            ]
+            assert len(trace_output_calls) > 0, "trace.output should be set"
+            assert trace_output_calls[0].args[2] == output_json
 
     def test_responses_api_with_function_calls(self):
         """Test Langfuse OTEL logger with Responses API function_call output."""
-        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
         from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 
         # Create Responses API response with function call
         response_obj = ResponsesAPIResponse(
@@ -920,21 +866,15 @@ class TestLangfuseOtelResponsesAPI:
 
         kwargs = {
             "call_type": "responses",
-            "messages": [
-                {"role": "user", "content": "What's the weather in San Francisco?"}
-            ],
+            "messages": [{"role": "user", "content": "What's the weather in San Francisco?"}],
             "model": "gpt-4o",
             "optional_params": {},
         }
 
         mock_span = MagicMock()
 
-        with patch(
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(
-                mock_span, kwargs, response_obj
-            )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
 
             # Verify observation output was set
             output_calls = [
@@ -989,9 +929,11 @@ class TestLangfuseOtelResponsesAPI:
 
         mock_span = MagicMock()
 
-        with patch(  # test-quality-ok: the span attribute sink is the observable boundary; sibling tests in this class stub the same seam
-            "litellm.integrations.arize._utils.safe_set_attribute"
-        ) as mock_safe_set_attribute:
+        with (
+            patch(  # test-quality-ok: the span attribute sink is the observable boundary; sibling tests in this class stub the same seam
+                "litellm.integrations.arize._utils.safe_set_attribute"
+            ) as mock_safe_set_attribute
+        ):
             LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
 
             output_calls = [
@@ -1008,3 +950,250 @@ class TestLangfuseOtelResponsesAPI:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+class _RecordingSpan:
+    def __init__(self) -> None:
+        self.attributes: dict[str, object] = {}
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+
+def _emitted(kwargs: Mapping[str, object], response_obj: object = None) -> Mapping[str, object]:
+    span: Final = _RecordingSpan()
+    LangfuseOtelLogger._set_langfuse_specific_attributes(span, kwargs, response_obj)
+    return span.attributes
+
+
+class TestDerivedTraceFields:
+    def test_chat_call_derives_trace_name_input_and_output(self):
+        from litellm.types.utils import Choices, ModelResponse
+
+        response_obj = ModelResponse(
+            id="chatcmpl-derived",
+            model="gpt-4o",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    message={"role": "assistant", "content": "Sunny."},
+                )
+            ],
+        )
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "messages": [{"role": "user", "content": "weather?"}],
+                "litellm_params": {"metadata": {}},
+            },
+            response_obj,
+        )
+
+        assert attributes["langfuse.trace.name"] == "litellm-acompletion"
+        assert attributes["langfuse.trace.input"] == attributes["langfuse.observation.input"]
+        assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
+        assert json.loads(attributes["langfuse.trace.input"]) == [{"role": "user", "content": "weather?"}]
+        assert json.loads(attributes["langfuse.trace.output"]) == {"role": "assistant", "content": "Sunny."}
+
+    def test_missing_call_type_defaults_to_completion(self):
+        attributes = _emitted(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "litellm_params": {"metadata": {}},
+            }
+        )
+        assert attributes["langfuse.trace.name"] == "litellm-completion"
+
+    def test_caller_trace_name_wins_and_is_the_only_name(self):
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {"trace_name": "caller-trace"}},
+            }
+        )
+        assert attributes["langfuse.trace.name"] == "caller-trace"
+
+    def test_existing_trace_id_leaves_derived_trace_fields_off(self, monkeypatch):
+        import litellm
+        from litellm.types.utils import Choices, ModelResponse
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit"])
+        response_obj = ModelResponse(
+            id="chatcmpl-joined",
+            model="gpt-4o",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    message={"role": "assistant", "content": "hi"},
+                )
+            ],
+        )
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "messages": [{"role": "user", "content": "hi"}],
+                "cache_hit": True,
+                "litellm_params": {
+                    "metadata": {"existing_trace_id": "abc123", "tags": ["experiment"]},
+                },
+                "standard_logging_object": {"request_tags": ["injected"]},
+            },
+            response_obj,
+        )
+        assert "langfuse.trace.name" not in attributes
+        assert attributes["langfuse.trace.existing_id"] == "abc123"
+        assert "langfuse.trace.input" not in attributes
+        assert "langfuse.trace.output" not in attributes
+        assert "langfuse.trace.tags" not in attributes
+        assert "langfuse.observation.input" in attributes
+        assert "langfuse.observation.output" in attributes
+
+    def test_responses_api_output_mirrors_observation_output_items(self):
+        from openai.types.responses import ResponseFunctionToolCall
+
+        response_obj = ResponsesAPIResponse(
+            id="response-derived",
+            created_at=1625247700,
+            output=[
+                ResponseFunctionToolCall(
+                    id="fc-1",
+                    type="function_call",
+                    name="get_weather",
+                    call_id="call-1",
+                    arguments='{"city":"sf"}',
+                    status="completed",
+                )
+            ],
+        )
+        attributes = _emitted(
+            {
+                "call_type": "aresponses",
+                "litellm_params": {"metadata": {}},
+            },
+            response_obj,
+        )
+        assert attributes["langfuse.trace.name"] == "litellm-aresponses"
+        assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
+        assert json.loads(attributes["langfuse.trace.output"]) == [
+            {
+                "id": "fc-1",
+                "name": "get_weather",
+                "call_id": "call-1",
+                "type": "function_call",
+                "arguments": {"city": "sf"},
+            }
+        ]
+
+    def test_tags_merge_caller_request_and_default_tags_in_order(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit", "user_api_key_alias"])
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "cache_hit": True,
+                "litellm_params": {
+                    "metadata": {"tags": ["a", "b"], "user_api_key_alias": "k1"},
+                },
+                "standard_logging_object": {"request_tags": ["b", "c"]},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == [
+            "a",
+            "b",
+            "c",
+            "cache_hit:True",
+            "user_api_key_alias:k1",
+        ]
+
+    def test_cache_key_default_tag_falls_back_to_preset_cache_key(self, monkeypatch):
+        import litellm
+
+        class _PresetCache:
+            @staticmethod
+            def _get_preset_cache_key_from_kwargs(**kwargs) -> str:
+                return "preset-abc"
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_key"])
+        monkeypatch.setattr(litellm, "cache", _PresetCache())
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {}},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:preset-abc"]
+
+    def test_cache_key_default_tag_prefers_hidden_params_over_preset(self, monkeypatch):
+        import litellm
+
+        class _PresetCache:
+            @staticmethod
+            def _get_preset_cache_key_from_kwargs(**kwargs) -> str:
+                return "preset-abc"
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_key"])
+        monkeypatch.setattr(litellm, "cache", _PresetCache())
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {"hidden_params": {"cache_key": "explicit-key"}}},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:explicit-key"]
+
+    def test_caller_tags_string_is_a_single_tag(self):
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {"tags": "single"}},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["single"]
+
+    def test_no_tags_anywhere_leaves_trace_tags_unset(self):
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {}},
+            }
+        )
+        assert "langfuse.trace.tags" not in attributes
+
+    def test_empty_string_role_is_omitted_from_output(self):
+        response_obj = {
+            "id": "chatcmpl-norole",
+            "choices": [{"message": {"role": "", "content": "hi"}}],
+        }
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {}},
+            },
+            response_obj,
+        )
+        assert json.loads(attributes["langfuse.observation.output"]) == {"content": "hi"}
+
+    def test_no_messages_leaves_trace_input_unset_but_emits_output(self):
+        from litellm.types.utils import Choices, ModelResponse
+
+        response_obj = ModelResponse(
+            id="chatcmpl-nomsg",
+            model="gpt-4o",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    message={"role": "assistant", "content": "hi"},
+                )
+            ],
+        )
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {}},
+            },
+            response_obj,
+        )
+        assert "langfuse.trace.input" not in attributes
+        assert "langfuse.observation.input" not in attributes
+        assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
