@@ -703,7 +703,7 @@ async def _update_database_and_spend_counters(
 
     with spend_counter_batch_scope(
         spend_counter_cache.redis_cache,
-        counter_keys=post_call_counter_keys(
+        counter_keys=_post_call_counter_keys_or_empty(
             token=user_api_key,
             team_id=team_id,
             user_id=user_id,
@@ -775,6 +775,32 @@ async def _update_database_and_spend_counters(
                     budget_reservation["finalized"] = True
             raise
         return True
+
+
+def _post_call_counter_keys_or_empty(
+    token: str | None,
+    team_id: str | None,
+    user_id: str | None,
+    org_id: str | None,
+    end_user_id: str | None,
+    tags: Sequence[object] | None,
+    model_access_groups: Sequence[str] | None,
+    project_id: str | None,
+) -> frozenset[str]:
+    try:
+        return post_call_counter_keys(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            end_user_id=end_user_id,
+            tags=tags,
+            model_access_groups=model_access_groups,
+            project_id=project_id,
+        )
+    except Exception as e:  # noqa: BLE001  # counter keys are best-effort; a bad key shape must not skip the spend write
+        verbose_proxy_logger.debug("post-call spend counter keys unavailable, proceeding unbatched: %s", e)
+        return frozenset()
 
 
 async def _reconcile_budget_reservation_before_db_update(

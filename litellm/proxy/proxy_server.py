@@ -3768,7 +3768,9 @@ async def _redis_cached_entities(user_api_key_cache: UserApiKeyCache, missing: S
     except Exception as e:  # noqa: BLE001  # a failed batch degrades to "not cached", same as a per-key miss
         verbose_proxy_logger.debug("update_cache: batched entity read failed, treating keys as uncached: %s", e)
         return {}
-    result: Final = cast(Mapping[str, object], fetched)
+    result: Final = cast(
+        Mapping[str, object], fetched
+    )  # cast-ok: async_batch_get_cache is untyped; it returns key->cached-value pairs
     backfill_kwargs: Final = (
         {} if user_api_key_cache.default_in_memory_ttl is None else {"ttl": user_api_key_cache.default_in_memory_ttl}
     )
@@ -3923,7 +3925,9 @@ async def update_cache(
                 # do nothing if not in cache
                 return
             elif response_cost is not None:
-                increment: Final = cast(float, global_proxy_spend) + response_cost
+                increment: Final = (
+                    cast(float, global_proxy_spend) + response_cost
+                )  # cast-ok: GLOBAL_PROXY_SPEND_CACHE_KEY holds a float written by this same spend update path
                 values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
