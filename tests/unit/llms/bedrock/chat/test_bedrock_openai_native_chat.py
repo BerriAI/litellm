@@ -240,7 +240,9 @@ class TestFunctionToolsReasoningBridge:
     """gpt-5.6/6 reject function tools while reasoning on chat completions; those requests
     bridge to the native /v1/responses surface instead of regressing to Converse."""
 
-    FUNCTION_TOOL = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    FUNCTION_TOOL = [
+        {"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}
+    ]
 
     @staticmethod
     def _register(model, rejects):
@@ -283,7 +285,9 @@ class TestFunctionToolsReasoningBridge:
         assert self._bridge("global.openai.gpt-6-luna", tools=self.FUNCTION_TOOL) == "responses"
 
     def test_tools_with_reasoning_none_stays_chat(self):
-        assert self._bridge("global.openai.gpt-6-luna", tools=self.FUNCTION_TOOL, reasoning_effort="none") != "responses"
+        assert (
+            self._bridge("global.openai.gpt-6-luna", tools=self.FUNCTION_TOOL, reasoning_effort="none") != "responses"
+        )
 
     def test_gpt55_tools_with_reasoning_stays_chat(self):
         # gpt-5.5 isn't flagged (serves tools with reasoning natively), so no bridge.
