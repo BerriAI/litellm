@@ -131,6 +131,7 @@ jobs:
             test-path: >-
               tests/test_litellm/proxy/analytics_endpoints
               tests/test_litellm/proxy/management_endpoints
+              tests/unit/proxy/management_endpoints/test_auto_router_usage.py
               tests/test_litellm/proxy/list_api
               tests/test_litellm/proxy/memory
               tests/test_litellm/proxy/guardrails

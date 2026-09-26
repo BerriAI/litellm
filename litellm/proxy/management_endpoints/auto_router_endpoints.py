@@ -39,6 +39,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
+from litellm.proxy.management_endpoints.auto_router_usage import router as usage_router
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
 )
@@ -93,6 +94,7 @@ else:
         pass
 
 router: Final = APIRouter()
+router.include_router(usage_router)
 
 
 class _TeamTable(Protocol):

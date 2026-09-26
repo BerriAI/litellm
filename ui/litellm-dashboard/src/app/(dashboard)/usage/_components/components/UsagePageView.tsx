@@ -34,6 +34,7 @@ import { getApiKeyTruncation, getExportBlockedReason } from "@/components/Entity
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
+  formatDate,
   gatewayDailyActivityCall,
   Organization,
   tagListCall,
@@ -873,7 +874,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <div className="flex justify-end mt-2 mb-4">
                     <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
                   </div>
-                  <ActivityMetrics modelMetrics={modelMetrics} />
+                  <ActivityMetrics
+                    modelMetrics={modelMetrics}
+                    routingScope={
+                      modelViewType === "individual" && startTime && endTime
+                        ? {
+                            start_date: formatDate(startTime),
+                            end_date: formatDate(endTime),
+                            user_id: effectiveUserId,
+                          }
+                        : undefined
+                    }
+                  />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
                   <KeyActivityPanel

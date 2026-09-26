@@ -15,12 +15,15 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ChevronDown } from "lucide-react";
 import React, { useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
+import ModelRoutingShare from "./UsagePage/components/ModelRoutingShare";
+import type { RoutingUsageScope } from "./UsagePage/routingUsage";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
 import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
+  routingScope?: RoutingUsageScope;
   modelMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
 }
@@ -41,8 +44,10 @@ const ModelSection = ({
   modelName,
   metrics,
   hidePromptCachingMetrics = false,
+  routingScope,
 }: {
   modelName: string;
+  routingScope?: RoutingUsageScope;
   metrics: ModelActivityData;
   hidePromptCachingMetrics?: boolean;
 }) => {
@@ -54,6 +59,7 @@ const ModelSection = ({
           <CardContent>
             <p className="text-sm text-muted-foreground">Total Requests</p>
             <h3 className="text-lg font-medium text-foreground">{metrics.total_requests.toLocaleString()}</h3>
+            {routingScope && <ModelRoutingShare model={modelName} scope={routingScope} />}
           </CardContent>
         </Card>
         <Card>
@@ -300,7 +306,11 @@ const ModelCollapsible = ({
   );
 };
 
-export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, hidePromptCachingMetrics = false }) => {
+export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
+  modelMetrics,
+  hidePromptCachingMetrics = false,
+  routingScope,
+}) => {
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
     if (a === "") return 1;
     if (b === "") return -1;
@@ -479,6 +489,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
           >
             <ModelSection
               modelName={modelName || "Unknown Model"}
+              routingScope={routingScope}
               metrics={modelMetrics[modelName]}
               hidePromptCachingMetrics={hidePromptCachingMetrics}
             />
