@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 from unittest.mock import AsyncMock
 
+from litellm._internal_context import in_post_response_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES, LLMCachingHandler
 
 
@@ -700,6 +701,37 @@ def test_async_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatc
     asyncio.run(_short_lived_script())
 
     assert len(writes) == 1
+
+
+def test_async_cache_write_runs_in_the_post_response_phase_without_leaking_it(monkeypatch):
+    """The response-cache write happens after the response is handed to the caller, so the
+    service spans it logs must detach from the request trace even while the server span is
+    still open. The marker must stay inside the write task and not leak into the request."""
+    import litellm
+
+    phases = []
+
+    class _PhaseRecordingCache:
+        supported_call_types = ["acompletion"]
+        cache = None
+
+        async def async_add_cache(self, result, dynamic_cache_object=None, **kwargs):
+            phases.append(in_post_response_phase())
+
+    async def acompletion(**kwargs):
+        return None
+
+    handler = LLMCachingHandler(original_function=acompletion, request_kwargs={}, start_time=datetime.now())
+    monkeypatch.setattr(litellm, "cache", _PhaseRecordingCache())
+
+    async def _request():
+        await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+        leaked = in_post_response_phase()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        return leaked
+
+    assert asyncio.run(_request()) is False, "the phase must not leak into the request task"
+    assert phases == [True], "async_add_cache must observe the post-response phase"
 
 
 @pytest.mark.asyncio
