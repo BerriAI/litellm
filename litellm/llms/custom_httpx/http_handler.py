@@ -8,7 +8,8 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Mapping
+from contextlib import aclosing
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -553,6 +554,11 @@ class HTTPResponseLimitError(ValueError):
     pass
 
 
+_WIRE_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length"})
+_ENCODED_OVERHEAD_DIVISOR: Final = 4096
+_ENCODED_OVERHEAD_BYTES: Final = 64
+
+
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(self, original_error, message: str | None = None, text: str | None = None):
         # Create a new error with the masked URL
@@ -603,6 +609,48 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.message = message
         self.text = text
         self.status_code = original_error.response.status_code
+
+
+def _headers_of_the_decoded_body(headers: httpx.Headers) -> httpx.Headers:
+    return httpx.Headers(
+        tuple((name, value) for name, value in headers.multi_items() if name not in _WIRE_BODY_HEADERS)
+    )
+
+
+def _wire_byte_limit(headers: httpx.Headers, max_bytes: int) -> int:
+    if headers.get("content-encoding", "identity").strip().lower() == "identity":
+        return max_bytes
+    return max_bytes + max_bytes // _ENCODED_OVERHEAD_DIVISOR + _ENCODED_OVERHEAD_BYTES
+
+
+async def _wire_bounded(response: httpx.Response, limit: int) -> AsyncGenerator[bytes, None]:
+    async for chunk in response.aiter_raw():
+        if response.num_bytes_downloaded > limit:
+            raise HTTPResponseLimitError("Response exceeds the configured size limit")
+        yield chunk
+
+
+def _already_read_within(response: httpx.Response, max_bytes: int) -> httpx.Response:
+    if len(response.content) > max_bytes:
+        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+    return httpx.Response(
+        response.status_code,
+        headers=_headers_of_the_decoded_body(response.headers),
+        content=response.content,
+        request=response.request,
+    )
+
+
+async def _decoded_within(response: httpx.Response, wire: AsyncGenerator[bytes, None], max_bytes: int) -> bytes:
+    decoding: Final = httpx.Response(
+        response.status_code, headers=response.headers, content=wire, request=response.request
+    )
+    with BytesIO() as body:
+        async for chunk in decoding.aiter_bytes(chunk_size=65536):
+            if body.tell() + len(chunk) > max_bytes:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+            body.write(chunk)
+        return body.getvalue()
 
 
 class AsyncHTTPHandler:
@@ -780,17 +828,17 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
-                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
-            if int(response.headers.get("content-length", "0")) > max_bytes:
+            if response.is_stream_consumed:
+                return _already_read_within(response, max_bytes)
+            wire_limit: Final = _wire_byte_limit(response.headers, max_bytes)
+            if int(response.headers.get("content-length", "0")) > wire_limit:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
-            with BytesIO() as body:
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    if body.tell() + len(chunk) > max_bytes:
-                        raise HTTPResponseLimitError("Response exceeds the configured size limit")
-                    body.write(chunk)
+            async with aclosing(_wire_bounded(response, wire_limit)) as wire:
                 return httpx.Response(
-                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
+                    response.status_code,
+                    headers=_headers_of_the_decoded_body(response.headers),
+                    content=await _decoded_within(response, wire, max_bytes),
+                    request=response.request,
                 )
         finally:
             await response.aclose()

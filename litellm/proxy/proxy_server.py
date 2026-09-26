@@ -742,6 +742,13 @@ from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
+from litellm.proxy.rag_endpoints.upload_security import (
+    EicarTestMalwareScanner,
+    MalwareScanner,
+    RagIngestConfigError,
+    parse_rag_ingest_settings,
+    resolve_malware_scanner,
+)
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -861,6 +868,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
+from litellm.types.proxy.rag_ingest import RagIngestSettings
 from litellm.types.proxy.spend_capture_rate import SpendCaptureProvider, SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
@@ -1035,6 +1043,8 @@ def cleanup_router_config_variables():
         user_config_file_path, \
         otel_logging, \
         user_custom_auth, \
+        rag_upload_malware_scanner, \
+        rag_ingest_settings, \
         user_custom_auth_path, \
         user_custom_key_generate, \
         user_custom_key_update, \
@@ -1053,6 +1063,8 @@ def cleanup_router_config_variables():
     user_config_file_path = None
     otel_logging = None
     user_custom_auth = None
+    rag_upload_malware_scanner = EicarTestMalwareScanner()
+    rag_ingest_settings = RagIngestSettings()
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_key_update = None
@@ -2562,6 +2574,8 @@ polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
 native_background_mode: list[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
+rag_upload_malware_scanner: MalwareScanner = EicarTestMalwareScanner()
+rag_ingest_settings: RagIngestSettings = RagIngestSettings()
 user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
@@ -4509,6 +4523,14 @@ _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: Final[dict[str, tuple[str, ...]]] = {
         "audit_log_callbacks",
     ),
 }
+_DB_OVERLAY_REMOTE_MODULE_NESTED_STR_FIELDS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = MappingProxyType(
+    {
+        "general_settings": (
+            ("litellm_jwtauth", "custom_validate"),
+            ("rag_ingest", "malware_scanner"),
+        ),
+    }
+)
 
 
 def _is_remote_module_url(value: object) -> bool:
@@ -4605,16 +4627,17 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> obj
                 if isinstance(lp, dict):
                     _scrub_guardrail_inner(lp)
 
-    # ``general_settings.litellm_jwtauth.custom_validate`` is a nested
-    # string field.
-    if section == "general_settings":
-        jwt: Final = sanitized.get("litellm_jwtauth")
-        if isinstance(jwt, dict) and _is_remote_module_url(jwt.get("custom_validate")):
+    for parent, nested_field in _DB_OVERLAY_REMOTE_MODULE_NESTED_STR_FIELDS.get(section, ()):
+        if isinstance(nested := sanitized.get(parent), dict) and _is_remote_module_url(nested.get(nested_field)):
             verbose_proxy_logger.warning(
-                "Refused remote-URL custom_validate from DB-overlay general_settings.litellm_jwtauth: %r",
-                jwt.get("custom_validate"),
+                "Refused remote-URL %s from DB-overlay %s.%s: %r",
+                nested_field,
+                section,
+                parent,
+                nested.get(nested_field),
             )
-            jwt["custom_validate"] = None
+            nested[nested_field] = None
+    if section == "general_settings":
         # ``pass_through_endpoints`` is a list of dicts whose ``target``
         # is passed through ``create_pass_through_route`` →
         # ``get_instance_fn``. A DB-overlay ``target: "s3://attacker/m.i"``
@@ -5929,6 +5952,8 @@ class ProxyConfig:
             user_config_file_path, \
             otel_logging, \
             user_custom_auth, \
+            rag_upload_malware_scanner, \
+            rag_ingest_settings, \
             user_custom_auth_path, \
             user_custom_key_generate, \
             user_custom_key_update, \
@@ -6345,6 +6370,19 @@ class ProxyConfig:
 
             TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
 
+        parsed_rag_ingest_settings: Final = parse_rag_ingest_settings(general_settings.get("rag_ingest"))
+        if isinstance(parsed_rag_ingest_settings, RagIngestConfigError):
+            raise ValueError(parsed_rag_ingest_settings.message)
+        resolved_malware_scanner: Final = resolve_malware_scanner(
+            parsed_rag_ingest_settings,
+            config_file_path=config_file_path,
+            load_instance=get_instance_fn,
+        )
+        if isinstance(resolved_malware_scanner, RagIngestConfigError):
+            raise ValueError(resolved_malware_scanner.message)
+        rag_ingest_settings = parsed_rag_ingest_settings
+        rag_upload_malware_scanner = resolved_malware_scanner
+
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
         if declared_proxy_ranges(general_settings) is None:
@@ -6461,7 +6499,6 @@ class ProxyConfig:
                 custom_auth_configured=custom_auth is not None,
                 run_common_checks=bool(general_settings.get("custom_auth_run_common_checks", False)),
             )
-
             log_once_if_budget_reservation_disabled(
                 disabled=general_settings.get("disable_budget_reservation") is True,
             )
