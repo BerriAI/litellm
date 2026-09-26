@@ -26,6 +26,7 @@ def rig(tmp_path: Path) -> Iterator[Rig]:
         yield value
 
 
+@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as two callers
 @pytest.mark.parametrize("outcome", ["success", "provider_4xx"])
 def test_config_deployment_api_key_reaches_only_the_provider(
     rig: Rig, outcome: str, request: pytest.FixtureRequest
@@ -58,6 +59,7 @@ def test_config_deployment_api_key_reaches_only_the_provider(
             sinks={name: sink.requests() for name, sink in rig.sinks.items()},
             ids={"request_id": request_id, "team_id": caller.team_id, "model_id": CONFIG_MODEL, "model": CONFIG_MODEL},
             callers=caller.callers(rig),
+            own_headers=rig.own_headers,
         )
         record_route_sweep(report.routes, request.node.nodeid)
         assert_marker_seen(

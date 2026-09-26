@@ -16,7 +16,19 @@ import pytest
 from integration._support.client import eventually, string_value
 from integration.security._canary import MARKER, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
-from integration.security._sweeps import assert_marker_seen, record_route_sweep, sweep_all, sweep_redis
+from integration._support.wire import Request
+from integration.security._sweeps import (
+    ADMIN_ONLY_ALLOWANCES,
+    PROVIDER_PASSTHROUGH_REASON,
+    assert_marker_seen,
+    get_routes,
+    record_route_sweep,
+    route_allowance,
+    route_denied,
+    sweep_all,
+    sweep_redis,
+    sweep_sink,
+)
 
 
 @pytest.fixture(scope="module")
@@ -33,10 +45,50 @@ def test_find_canary_decodes_base64_at_every_alignment_and_gzip(prefix: str) -> 
     assert [match.slot for match in find_canary(f"Authorization: Basic {basic}", (marker,))] == [MARKER]
     assert [match.slot for match in find_canary(f'{{"token":"{urlsafe}"}}', (marker,))] == [MARKER]
     assert [match.slot for match in find_canary(gzip.compress(f"Basic {basic}".encode()), (marker,))] == [MARKER]
+    embedded: Final = b"prefix:" + gzip.compress(f"Basic {basic}".encode()) + b":suffix"
+    assert [match.slot for match in find_canary(embedded, (marker,))] == [MARKER]
     assert find_canary(f"Basic {basic}".replace(basic[10:20], "A" * 10), (marker,)) == ()
     assert find_canary(f"sk-...{marker.core[-4:]}", (marker,)) == ()
 
 
+def test_route_allowances_match_only_their_exact_route_and_caller() -> None:
+    routes: Final = get_routes()
+    callers: Final = ("admin", "internal_user", "Admin", "admin ", "")
+    for route, caller in ADMIN_ONLY_ALLOWANCES:
+        assert route in routes, f"Allowance names a route the proxy no longer registers: {route}"
+        for variant in (route + "/", route.upper(), route.rstrip("s"), "/v1" + route):
+            assert route_allowance(variant, caller) is None, variant
+    allowed: Final = {(route, caller) for route in routes for caller in callers if route_allowance(route, caller)}
+    assert allowed == set(ADMIN_ONLY_ALLOWANCES), allowed
+    assert all(route_denied(route) is None for route, _ in ADMIN_ONLY_ALLOWANCES)
+
+
+def test_only_provider_passthrough_routes_match_the_passthrough_deny_rule() -> None:
+    denied: Final = {route for route in get_routes() if route_denied(route) == PROVIDER_PASSTHROUGH_REASON}
+    assert "/openai/{endpoint:path}" in denied and "/langfuse/{endpoint:path}" in denied
+    assert all(route.endswith("/{endpoint:path}") and route.count("{") == 1 for route in denied), denied
+    for swept in ("/v1/files/{file_id:path}", "/spend/logs/ui/{request_id}", "/v1/memory/{key:path}"):
+        assert route_denied(swept) is None, swept
+
+
+def test_sink_own_header_allows_only_that_header_and_slot() -> None:
+    own: Final = canary("B1")
+    other: Final = canary(MARKER)
+    request: Final = Request(
+        "POST",
+        "/",
+        {"authorization": f"Bearer {own.value}", "x-extra": f"Bearer {own.value}", "x-other": other.value},
+        f'{{"copied": "{own.value}"}}'.encode(),
+    )
+    hits: Final = sweep_sink("double", (request,), (own, other), own_header=("authorization", own.slot))
+    assert {(hit.slot, hit.location) for hit in hits} == {
+        (MARKER, "double[0] POST / header x-other"),
+        ("B1", "double[0] POST / body"),
+        ("B1", "double[0] POST / header x-extra"),
+    }
+
+
+@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as two callers
 def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.FixtureRequest) -> None:
     marker: Final = canary(MARKER)
     with rig.proxy.scenario() as scenario:
@@ -60,6 +112,7 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
             sinks={name: sink.requests() for name, sink in rig.sinks.items()},
             ids={"request_id": request_id, "team_id": caller.team_id, "model_id": CONFIG_MODEL, "model": CONFIG_MODEL},
             callers=caller.callers(rig),
+            own_headers=rig.own_headers,
         )
         record_route_sweep(report.routes, request.node.nodeid)
         assert_marker_seen(

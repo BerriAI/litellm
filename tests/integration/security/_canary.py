@@ -16,15 +16,14 @@ API:
   ``blob`` either raw, inside any base64-looking run after decoding it (standard and URL-safe
   alphabets, padded or not, at every 4-character alignment), or inside a gzip stream. Decoding
   is applied recursively a few levels deep, so a gzip body carrying a ``Basic`` header value is
-  still searched. JSON and URL encoding leave a hex core unchanged, so the raw search covers
+  still searched, and a gzip member is inflated wherever it starts in the blob (bytes before or
+  after it do not hide it). JSON and URL encoding leave a hex core unchanged, so the raw search covers
   them. A properly masked value such as ``sk-...e71b`` is not a match.
 """
 
 from __future__ import annotations
 
-import base64
 import binascii
-import gzip
 import re
 import uuid
 import zlib
@@ -35,7 +34,9 @@ from typing import Final
 
 _BASE64_RUN: Final = re.compile(rb"[A-Za-z0-9+/_-]{24,}={0,2}")
 _GZIP_MAGIC: Final = b"\x1f\x8b"
+_TO_STANDARD: Final = bytes.maketrans(b"-_", b"+/")
 _MAX_DEPTH: Final = 3
+_MAX_INFLATED: Final = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,26 +76,36 @@ def canary(slot_id: str) -> Canary:
 
 
 def _decoded_runs(blob: bytes) -> Iterable[tuple[str, bytes]]:
-    for run in _BASE64_RUN.finditer(blob):
-        text = run.group().rstrip(b"=")
+    for text in dict.fromkeys(run.group().rstrip(b"=") for run in _BASE64_RUN.finditer(blob)):
         for offset in range(4):
             aligned = text[offset:]
             aligned = aligned[: len(aligned) - len(aligned) % 4] if len(aligned) % 4 == 1 else aligned
             padded = aligned + b"=" * (-len(aligned) % 4)
-            for name, decode in (("base64", base64.b64decode), ("base64url", base64.urlsafe_b64decode)):
+            alphabets = (("base64", b"+/"), ("base64url", b"-_"))
+            for name, extra in alphabets if any(char in aligned for char in b"+/-_") else alphabets[:1]:
                 try:
-                    yield name, decode(padded)
+                    yield (
+                        name,
+                        binascii.a2b_base64(
+                            padded.translate(_TO_STANDARD) if extra == b"-_" else padded, strict_mode=False
+                        ),
+                    )
                 except (binascii.Error, ValueError):
                     continue
 
 
-def _gunzipped(blob: bytes) -> bytes | None:
-    if not blob.startswith(_GZIP_MAGIC):
-        return None
-    try:
-        return gzip.decompress(blob)
-    except (OSError, EOFError, zlib.error):
-        return None
+def _gunzipped(blob: bytes) -> Iterable[bytes]:
+    """Inflate every gzip member in ``blob``, wherever it starts, ignoring trailing bytes."""
+    start = blob.find(_GZIP_MAGIC)
+    while start != -1:
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            inflated = inflater.decompress(blob[start:], _MAX_INFLATED)
+        except zlib.error:
+            inflated = b""
+        if inflated:
+            yield inflated
+        start = blob.find(_GZIP_MAGIC, start + 1)
 
 
 def _matches(blob: bytes, canaries: Sequence[Canary], encoding: str, depth: int) -> Iterable[Match]:
@@ -104,11 +115,23 @@ def _matches(blob: bytes, canaries: Sequence[Canary], encoding: str, depth: int)
             yield Match(candidate.slot, encoding)
     if depth >= _MAX_DEPTH:
         return
-    inflated: Final = _gunzipped(blob)
-    if inflated is not None:
+    for inflated in _gunzipped(blob):
         yield from _matches(inflated, canaries, f"{encoding}>gzip" if encoding != "raw" else "gzip", depth + 1)
     for name, decoded in _decoded_runs(blob):
-        yield from _matches(decoded, canaries, f"{encoding}>{name}" if encoding != "raw" else name, depth + 1)
+        label = f"{encoding}>{name}" if encoding != "raw" else name
+        if _worth_descending(decoded):
+            yield from _matches(decoded, canaries, label, depth + 1)
+        else:
+            lowered_decoded = decoded.lower()
+            yield from (Match(c.slot, label) for c in canaries if c.core.encode() in lowered_decoded)
+
+
+def _worth_descending(decoded: bytes) -> bool:
+    """Decode further only text or gzip; a misaligned or non-base64 run decodes to noise."""
+    if _GZIP_MAGIC in decoded:
+        return True
+    printable: Final = sum(1 for byte in decoded if 32 <= byte < 127 or byte in (9, 10, 13))
+    return printable >= 0.9 * len(decoded)
 
 
 def find_canary(blob: bytes | str, canaries: Sequence[Canary]) -> tuple[Match, ...]:

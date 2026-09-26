@@ -13,13 +13,24 @@ API:
   (``schema.table.column`` outside ``public``); a table dropped mid-sweep is skipped.
 - ``get_routes() -> tuple[str, ...]`` and ``sweep_routes(gateway, canaries, ids, *, callers)``
   (S2): every GET ``APIRoute`` registered on the proxy app (``app.routes``, which includes the
-  routes hidden from the OpenAPI spec), enumerated once per session by importing the app in a
-  child interpreter. Path parameters are filled from ``ids`` (parameter name -> value); a route
-  whose parameters are not all known is listed in ``RouteSweep.unfilled``. ``ROUTE_DENY_LIST``
-  names the routes skipped because they stream forever or redirect into an external flow.
-  Responses with status >= 500 and transport errors are reported in ``RouteSweep.errors`` so a
-  broken route is visible instead of silently passing. ``record_route_sweep(routes, node)``
-  appends that report to ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact).
+  routes hidden from the OpenAPI spec and every lazily registered feature router), enumerated
+  once per session by importing the app in a child interpreter. Path parameters are filled from
+  ``ids`` (parameter name -> value), then from ``DEFAULT_IDS``; any other parameter gets
+  ``PLACEHOLDER_ID`` so the route is still called and its (usually 404) response still searched.
+  A parameter in ``REAL_ID_REQUIRED`` is never given a placeholder (the proxy would call a public
+  provider); such a route is skipped unless ``ids`` supplies it. Routes called with a placeholder
+  or skipped for want of a real id are listed in ``RouteSweep.unfilled``; pass real ids to make
+  them return data. ``route_denied(route)`` names why a route is skipped: ``ROUTE_DENY_LIST``
+  holds the routes that stream forever, redirect into an external flow or contact an external
+  service, and ``PROVIDER_PASSTHROUGH`` matches the ``/<provider>/{endpoint:path}`` routes that
+  forward to the provider (swept by the pass-through slots, not by S2). Every response is searched
+  whatever its status; responses with status >= 500 are also listed in ``RouteSweep.errors``.
+  A call that got no response at all (timeout, reset) is listed in ``RouteSweep.unreachable``,
+  and ``sweep_all`` fails on it, since that route went unchecked. ``ADMIN_ONLY_ALLOWANCES``
+  names exact ``(route, caller label)`` pairs allowed to return a credential by design; those
+  hits land in ``RouteSweep.allowed`` instead of ``hits``, and every other caller of that route
+  is still swept. ``record_route_sweep(routes, node)`` appends the report to
+  ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact).
 - ``sweep_responses(responses, canaries) -> tuple[Hit, ...]`` (S3): body and headers of every
   client-facing response the scenario received.
 - ``sweep_sink(name, requests, canaries, *, own_header=None) -> tuple[Hit, ...]`` (S4): every
@@ -76,8 +87,42 @@ ROUTE_DENY_LIST: Final = MappingProxyType(
         "/fallback/login": "HTML login page",
         "/plugin-proxy/{plugin_name}/{path:path}": "reverse proxy to a plugin process",
         "/openai_passthrough/{endpoint:path}": "forwards to a provider, not a proxy read",
+        "/get/latest_release_info": "fetches the latest release from api.github.com",
     }
 )
+
+PROVIDER_PASSTHROUGH: Final = re.compile(r"^(/[^/{}]+)+/\{endpoint:path\}$")
+PROVIDER_PASSTHROUGH_REASON: Final = "provider pass-through: forwards to the provider, not a proxy read"
+
+
+def route_denied(route: str) -> str | None:
+    """Why S2 skips ``route``, or None when it is swept."""
+    if route in ROUTE_DENY_LIST:
+        return ROUTE_DENY_LIST[route]
+    return PROVIDER_PASSTHROUGH_REASON if PROVIDER_PASSTHROUGH.match(route) else None
+
+
+DEFAULT_IDS: Final = MappingProxyType({"provider": "openai"})
+PLACEHOLDER_ID: Final = "canary-placeholder-id"
+REAL_ID_REQUIRED: Final = MappingProxyType(
+    {
+        "video_id": "a video id encodes its provider; an unknown id falls back to the public OpenAI API",
+        "character_id": "a character id encodes its provider; an unknown id falls back to the public OpenAI API",
+    }
+)
+
+ADMIN_ONLY_ALLOWANCES: Final = MappingProxyType(
+    {
+        ("/get/config/callbacks", "admin"): (
+            "proxy admin holds the master key and edits these env values in the config UI"
+        ),
+    }
+)
+
+
+def route_allowance(route: str, caller: str) -> str | None:
+    """The documented reason ``caller`` may read a credential from ``route``, or None."""
+    return ADMIN_ONLY_ALLOWANCES.get((route, caller))
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +139,8 @@ class RouteSweep:
     called: tuple[str, ...]
     unfilled: tuple[str, ...]
     errors: tuple[str, ...] = field(default=())
+    unreachable: tuple[str, ...] = field(default=())
+    allowed: tuple[Hit, ...] = field(default=())
 
 
 def format_hits(hits: Iterable[Hit]) -> str:
@@ -145,12 +192,23 @@ def get_routes() -> tuple[str, ...]:
     """Every GET APIRoute path on the proxy app, including routes hidden from the OpenAPI spec.
 
     The child imports the same source tree the owned proxy runs from (``INTEGRATION_PROXY_ROOT``
-    or this checkout), without reading the database.
+    or this checkout), without reading the database. Lazily registered feature routers
+    (``LAZY_FEATURES``) are loaded first, so their GET routes are enumerated too; on the running
+    proxy the first request to such a path registers the router before it is served. Mounted
+    ASGI sub-apps (the MCP server) are not ``APIRoute`` entries and are out of scope for S2.
     """
     script: Final = (
-        "import json\n"
+        "import asyncio, json\n"
         "from fastapi.routing import APIRoute\n"
+        "from litellm.proxy._lazy_features import LAZY_FEATURES, _force_load\n"
         "from litellm.proxy.proxy_server import app\n"
+        "async def load():\n"
+        "    for feature in LAZY_FEATURES:\n"
+        "        await _force_load(app, feature)\n"
+        "asyncio.run(load())\n"
+        "paths = [getattr(r, 'path', '') for r in app.routes]\n"
+        "missing = sorted(f.name for f in LAZY_FEATURES if not any(f.matches(p) for p in paths))\n"
+        "print('MISSING=' + json.dumps(missing))\n"
         "print('ROUTES=' + json.dumps(sorted({r.path for r in app.routes "
         "if isinstance(r, APIRoute) and 'GET' in r.methods})))\n"
     )
@@ -165,17 +223,31 @@ def get_routes() -> tuple[str, ...]:
         timeout=120,
         check=True,
     )
-    line: Final = next(line for line in completed.stdout.splitlines() if line.startswith("ROUTES="))
-    routes: Final = tuple(json.loads(line.removeprefix("ROUTES=")))
+    lines: Final = completed.stdout.splitlines()
+    missing: Final = json.loads(next(line for line in lines if line.startswith("MISSING=")).removeprefix("MISSING="))
+    routes: Final = tuple(
+        json.loads(next(line for line in lines if line.startswith("ROUTES=")).removeprefix("ROUTES="))
+    )
+    assert missing == [], f"Lazy features registered no route, so S2 cannot sweep them: {missing}"
     assert "/spend/logs/ui/{request_id}" in routes, "Route enumeration missed hidden routes"
+    assert "/guardrails/list" in routes, "Route enumeration missed lazily registered feature routes"
     return routes
 
 
-def _filled(route: str, ids: Mapping[str, str]) -> str | None:
+def _filled(route: str, ids: Mapping[str, str]) -> tuple[str, bool]:
+    """The concrete path, and whether any parameter fell back to ``PLACEHOLDER_ID``."""
+    known: Final = {**DEFAULT_IDS, **ids}
     names: Final = _PATH_PARAMETER.findall(route)
-    if any(name not in ids for name in names):
-        return None
-    return _PATH_PARAMETER.sub(lambda match: quote(ids[match.group(1)], safe=""), route)
+    path: Final = _PATH_PARAMETER.sub(lambda match: quote(known.get(match.group(1), PLACEHOLDER_ID), safe=""), route)
+    return path, any(name not in known for name in names)
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteCall:
+    hits: tuple[Hit, ...]
+    allowed: tuple[Hit, ...]
+    error: str | None
+    unreachable: str | None
 
 
 def sweep_routes(
@@ -186,34 +258,47 @@ def sweep_routes(
     callers: Mapping[str, str] | None = None,
 ) -> RouteSweep:
     """S2: call every GET route as each caller (label -> bearer key; default the master key)."""
-    routes: Final = tuple(route for route in get_routes() if route not in ROUTE_DENY_LIST)
-    targets: Final = tuple((route, _filled(route, ids)) for route in routes)
-    unfilled: Final = tuple(route for route, path in targets if path is None)
-    paths: Final = tuple(path for _, path in targets if path is not None)
+    routes: Final = tuple(route for route in get_routes() if route_denied(route) is None)
+    targets: Final = tuple(
+        (route, *_filled(route, ids))
+        for route in routes
+        if all(name in ids for name in _PATH_PARAMETER.findall(route) if name in REAL_ID_REQUIRED)
+    )
     who: Final = callers if callers is not None else {"admin": gateway.key}
     base_url: Final = str(gateway.client.base_url)
 
-    def call(label: str, key: str, path: str) -> tuple[tuple[Hit, ...], str | None]:
+    def call(route: str, label: str, key: str, path: str) -> _RouteCall:
         location: Final = f"GET {path} as {label}"
         try:
             with httpx.Client(base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False) as client:
                 response = client.get(path, headers={"Authorization": f"Bearer {key}"})
         except httpx.HTTPError as error:
-            return (), f"{location}: {type(error).__name__}"
+            return _RouteCall((), (), None, f"{location}: {type(error).__name__}")
         headers = "\n".join(f"{name}: {value}" for name, value in response.headers.items())
         found = _hits(
             "S2", f"{location} -> {response.status_code}", response.content + b"\n" + headers.encode(), canaries
         )
-        return found, (f"{location}: {response.status_code}" if response.status_code >= 500 else None)
+        allowed = route_allowance(route, label) is not None
+        return _RouteCall(
+            () if allowed else found,
+            found if allowed else (),
+            f"{location}: {response.status_code}" if response.status_code >= 500 else None,
+            None,
+        )
 
-    jobs: Final = tuple((label, key, path) for label, key in who.items() for path in paths)
+    jobs: Final = tuple((route, label, key, path) for label, key in who.items() for route, path, _ in targets)
     with ThreadPoolExecutor(max_workers=8) as pool:
         results: Final = tuple(pool.map(lambda job: call(*job), jobs))
     return RouteSweep(
-        hits=tuple(hit for found, _ in results for hit in found),
-        called=tuple(f"{label} {path}" for label, _, path in jobs),
-        unfilled=unfilled,
-        errors=tuple(error for _, error in results if error is not None),
+        hits=tuple(hit for result in results for hit in result.hits),
+        called=tuple(f"{label} {path}" for _, label, _, path in jobs),
+        unfilled=(
+            *(route for route, _, placeholder in targets if placeholder),
+            *(route for route in routes if route not in {target for target, _, _ in targets}),
+        ),
+        errors=tuple(result.error for result in results if result.error is not None),
+        unreachable=tuple(result.unreachable for result in results if result.unreachable is not None),
+        allowed=tuple(hit for result in results for hit in result.allowed),
     )
 
 
@@ -222,7 +307,14 @@ def record_route_sweep(routes: RouteSweep, node: str) -> None:
     destination: Final = os.environ.get("INTEGRATION_RESULTS_DIR")
     if not destination:
         return
-    entry: Final = {"node": node, "called": len(routes.called), "errors": routes.errors, "unfilled": routes.unfilled}
+    entry: Final = {
+        "node": node,
+        "called": len(routes.called),
+        "errors": routes.errors,
+        "unreachable": routes.unreachable,
+        "unfilled": routes.unfilled,
+        "allowed": [f"{hit.slot} {hit.location}" for hit in routes.allowed],
+    }
     with (Path(destination) / "security-route-sweep.jsonl").open("a") as report:
         report.write(json.dumps(entry) + "\n")
 
@@ -307,8 +399,13 @@ def sweep_all(
     callers: Mapping[str, str] | None = None,
     own_headers: Mapping[str, tuple[str, str]] | None = None,
 ) -> SweepReport:
-    """S1 to S5 for one finished scenario."""
+    """S1 to S5 for one finished scenario; fails if any GET route returned no response.
+
+    Redis goes first: it holds entries with a TTL, and the route walk is the slow sweep.
+    """
+    redis: Final = sweep_redis(canaries)
     routes: Final = sweep_routes(gateway, canaries, ids, callers=callers)
+    assert not routes.unreachable, f"GET routes returned no response, so S2 did not check them: {routes.unreachable}"
     hits: Final = (
         *sweep_database(canaries),
         *routes.hits,
@@ -318,7 +415,7 @@ def sweep_all(
             for name, received in sinks.items()
             for hit in sweep_sink(name, received, canaries, own_header=(own_headers or {}).get(name))
         ),
-        *sweep_redis(canaries),
+        *redis,
     )
     return SweepReport(hits, routes)
 
