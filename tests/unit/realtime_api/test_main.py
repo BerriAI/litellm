@@ -463,6 +463,30 @@ _GA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=())
 _BETA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=((b"openai-beta", b"realtime=v1"),))
 
 
+@pytest.mark.parametrize("model", ["gpt-realtime-2.1", "gpt-realtime-2", "gpt-realtime-2-2026-05-06"])
+def test_azure_ga_only_protocol_comes_from_model_metadata(local_model_cost_map, model: str) -> None:
+    from litellm.llms.azure.realtime.handler import azure_realtime_protocol_for_client
+
+    assert (
+        azure_realtime_protocol_for_client(
+            None,
+            model=model,
+            realtime_mode="realtime",
+            query_params=None,
+            websocket=_BETA_CLIENT,
+        )
+        == "GA"
+    )
+    with pytest.raises(ValueError, match="requires the Azure OpenAI v1 Realtime API"):
+        azure_realtime_protocol_for_client(
+            "beta",
+            model=model,
+            realtime_mode="realtime",
+            query_params=None,
+            websocket=_BETA_CLIENT,
+        )
+
+
 async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):

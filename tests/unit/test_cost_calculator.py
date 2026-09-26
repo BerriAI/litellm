@@ -160,10 +160,6 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
-
-
-
-
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
@@ -575,6 +571,15 @@ def test_transcription_usage_cost_returns_zero_for_unknown_type():
     assert _transcription_usage_cost({}, {}) == 0.0
 
 
+@pytest.mark.parametrize("malformed_seconds", [-1.0, float("nan"), float("inf"), 10**1000, True])
+def test_transcription_ignores_invalid_provider_duration(malformed_seconds: float | int | bool) -> None:
+    from litellm.cost_calculator import _get_transcription_usage_duration
+
+    response: Final = SimpleNamespace(usage={"type": "duration", "seconds": malformed_seconds})
+
+    assert _get_transcription_usage_duration(response) is None
+
+
 def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
     """session.model is used when transcription-specific model fields are absent."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -824,7 +829,7 @@ def test_completion_cost_image_generation_reads_deployment_model_info_price_from
     assert cost == pytest.approx(0.08)
 
 
-def test_completion_cost_image_generation_registered_deployment_price_keeps_map_token_rates(
+def test_completion_cost_image_generation_registered_deployment_applies_custom_image_rate(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     deployment_id: Final = "gemini-image-deployment-priced-per-image"
@@ -1276,8 +1281,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     assert cost_with_cache < cost_no_cache
     print(f"Cost without cache: {cost_no_cache}")
     print(f"Cost with cache: {cost_with_cache}")
-
-
 
 
 def test_gemini_25_explicit_caching_cost_direct_usage():
@@ -1846,8 +1849,6 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
-
-
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2598,8 +2599,6 @@ def test_gemini_without_cache_tokens_details():
     assert usage.prompt_tokens_details.text_tokens >= 0
 
     print("✅ Gemini without cacheTokensDetails works correctly")
-
-
 
 
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
@@ -4919,6 +4918,179 @@ def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_car
     assert info["supports_response_schema"] is False
     assert info["supports_url_context"] is False
     assert info["supports_pdf_input"] is False
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize("model", ("gpt-realtime-2.1", "gpt-realtime-2.1-mini"))
+def test_realtime_cached_multimodal_token_cost(_local_model_cost_map, provider: str, model: str):
+    model_name: Final = f"azure/{model}" if provider == "azure" else model
+    rates: Final = litellm.model_cost[model_name]
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 300,
+                    "total_tokens": 1300,
+                    "input_token_details": {
+                        "text_tokens": 400,
+                        "audio_tokens": 400,
+                        "image_tokens": 200,
+                        "cached_tokens": 300,
+                        "cached_tokens_details": {"text_tokens": 100, "audio_tokens": 150, "image_tokens": 50},
+                    },
+                    "output_token_details": {"text_tokens": 100, "audio_tokens": 100, "reasoning_tokens": 100},
+                }
+            },
+        },
+    ]
+    combined: Final = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    actual: Final = handle_realtime_stream_cost_calculation(
+        results=events,
+        combined_usage_object=combined,
+        custom_llm_provider=provider,
+        litellm_model_name=model_name,
+    )
+    expected: Final = (
+        300 * rates["input_cost_per_token"]
+        + 250 * rates["input_cost_per_audio_token"]
+        + 150 * rates["input_cost_per_image_token"]
+        + 100 * rates["cache_read_input_token_cost"]
+        + 150 * rates["cache_read_input_audio_token_cost"]
+        + 50 * rates["cache_read_input_image_token_cost"]
+        + 200 * rates["output_cost_per_token"]
+        + 100 * rates["output_cost_per_audio_token"]
+    )
+
+    assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("input_override,output_override", [(None, None), (0.25, 0.75), (0.0, 0.0), (0.0, None)])
+def test_realtime_translation_uses_deployment_rates_before_base_rates(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    input_override: float | None,
+    output_override: float | None,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "translation-base",
+        {
+            "litellm_provider": "azure",
+            "mode": "realtime",
+            "input_cost_per_second": 0.5,
+            "output_cost_per_second": 1.0,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "translation-deployment",
+        {
+            "litellm_provider": "azure",
+            "mode": "realtime",
+            **{
+                key: rate
+                for key, rate in (("input_cost_per_second", input_override), ("output_cost_per_second", output_override))
+                if rate is not None
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 3.0, "output_seconds": 2.0}}
+    ]
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=events,
+        combined_usage_object=Usage(),
+        custom_llm_provider="azure",
+        litellm_model_name="unmapped-provider-deployment",
+        custom_pricing_model="translation-deployment",
+        base_pricing_model="translation-base",
+    )
+
+    assert cost == pytest.approx(
+        3 * (0.5 if input_override is None else input_override)
+        + 2 * (1.0 if output_override is None else output_override)
+    )
+
+
+def test_realtime_translation_duration_cost(_local_model_cost_map):
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "gpt-realtime-translate"
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "output_seconds": 2.0}}
+    ]
+    actual: Final = handle_realtime_translation_cost_calculation(
+        results=events,
+        custom_llm_provider="openai",
+        litellm_model_name=model,
+    )
+
+    assert actual == pytest.approx(2 * litellm.model_cost[model]["output_cost_per_second"])
+
+
+@pytest.mark.parametrize("output_seconds", [None, 2.0])
+def test_realtime_translation_duration_cost_includes_provider_input_usage(
+    _local_model_cost_map, output_seconds: float | None
+):
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "gpt-realtime-translate"
+    events: Final[OpenAIRealtimeStreamList] = [
+        {
+            "type": "session.closed",
+            "usage": {
+                "type": "duration",
+                "input_seconds": 3.0,
+                **({"output_seconds": output_seconds} if output_seconds is not None else {}),
+            },
+        }
+    ]
+    actual: Final = handle_realtime_translation_cost_calculation(
+        results=events,
+        custom_llm_provider="openai",
+        litellm_model_name=model,
+    )
+
+    expected: Final = (
+        3 * litellm.model_cost[model]["input_cost_per_second"]
+        + (output_seconds or 0) * litellm.model_cost[model]["output_cost_per_second"]
+    )
+    assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("malformed_duration", [-1.0, float("nan"), float("inf"), 10**1000, True])
+def test_realtime_translation_duration_cost_ignores_malformed_provider_usage(
+    _local_model_cost_map, malformed_duration: float | int | bool
+) -> None:
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "gpt-realtime-translate"
+    input_invalid_events: Final[OpenAIRealtimeStreamList] = [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": malformed_duration, "output_seconds": 1.5},
+        }
+    ]
+    output_invalid_events: Final[OpenAIRealtimeStreamList] = [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": malformed_duration},
+        }
+    ]
+
+    input_invalid_cost: Final = handle_realtime_translation_cost_calculation(
+        results=input_invalid_events, custom_llm_provider="openai", litellm_model_name=model
+    )
+    output_invalid_cost: Final = handle_realtime_translation_cost_calculation(
+        results=output_invalid_events, custom_llm_provider="openai", litellm_model_name=model
+    )
+
+    assert input_invalid_cost == pytest.approx(1.5 * litellm.model_cost[model]["output_cost_per_second"])
+    assert output_invalid_cost == pytest.approx(2.0 * litellm.model_cost[model]["input_cost_per_second"])
 
 
 def test_realtime_honours_deployment_custom_pricing(monkeypatch: pytest.MonkeyPatch) -> None:

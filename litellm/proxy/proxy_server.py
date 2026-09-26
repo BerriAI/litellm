@@ -49,6 +49,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
+from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, assert_never
@@ -12365,7 +12366,11 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
-        data = {key: value for key, value in form_data.items() if key != "file"} | data
+        data = {
+            key: value is True or str(value).lower() in ("1", "true") if key == "stream" else value
+            for key, value in form_data.items()
+            if key != "file"
+        } | data
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -12418,6 +12423,12 @@ async def audio_transcriptions(
                 call_type="transcription",
             )
 
+            if data.get("stream") is True and ProxyLogging.has_post_call_guardrails(data, llm_router):
+                raise HTTPException(
+                    detail="Streaming transcription does not support output guardrails. Use stream=false.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
             ## ROUTE TO CORRECT ENDPOINT ##
             llm_call: Final = await route_request(
                 data=data,
@@ -12430,6 +12441,29 @@ async def audio_transcriptions(
             raise e
         finally:
             file_object.close()  # close the file read in by io library
+
+        if data.get("stream") is True:
+            if not hasattr(response, "__aiter__"):
+                raise TypeError(f"Streaming transcription returned {type(response).__name__}, expected an async stream")
+            stream_response: Final = cast(AsyncIterator[TranscriptionStreamEvent], response)
+
+            async def transcription_event_stream(
+                stream: AsyncIterator[TranscriptionStreamEvent],
+            ) -> AsyncGenerator[str, None]:
+                try:
+                    async for event in stream:
+                        yield f"data: {event.model_dump_json()}\n\n"
+                finally:
+                    close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+                    if callable(close):
+                        close_result: Final = close()
+                        if inspect.isawaitable(close_result):
+                            await close_result
+
+            return StreamingResponse(
+                transcription_event_stream(stream_response),
+                media_type="text/event-stream",
+            )
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -12597,9 +12631,39 @@ async def _reject_realtime_session(
         await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
+def _resolve_realtime_route_model(
+    model: str | None,
+    intent: str | None,
+    is_translation: bool,
+) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
+def _resolve_realtime_upstream_query_model(
+    model: str | None,
+    intent: str | None,
+    is_translation: bool,
+    route_model: str,
+) -> str | None:
+    if intent == "transcription":
+        return None
+    if is_translation:
+        return route_model
+    return model
+
+
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
+@app.websocket("/openai/v1/realtime/translations")
+@app.websocket("/v1/realtime/translations")
+@app.websocket("/realtime/translations")
 async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
@@ -12617,15 +12681,13 @@ async def realtime_websocket_endpoint(
     if requested_protocols:
         accept_kwargs["subprotocol"] = requested_protocols[0]
 
-    route_model = model
+    is_translation: Final = websocket.url.path.endswith("/realtime/translations")
+    route_model: Final = _resolve_realtime_route_model(model, intent, is_translation)
     if route_model is None:
-        if intent == "transcription":
-            route_model = "gpt-realtime-whisper"
-        else:
-            await _reject_realtime_session(
-                websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
-            )
-            return
+        await _reject_realtime_session(
+            websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
+        )
+        return
     assert route_model is not None
     try:
         await can_key_call_resolved_model(
@@ -12641,12 +12703,24 @@ async def realtime_websocket_endpoint(
     await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
-    query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
+    query_model: Final = _resolve_realtime_upstream_query_model(
+        model=model,
+        intent=intent,
+        is_translation=is_translation,
+        route_model=route_model,
+    )
+    query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
+        RealtimeQueryParams,
+        dict(  # mutable-ok: downstream realtime routing normalizes this request-scoped query mapping
+            _realtime_query_params_template(query_model, intent)
+        ),
+    )
 
     data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
+        "realtime_mode": "translation" if is_translation else "realtime",
     }
 
     # Pass guardrails into data so pre-call guardrail processing picks them up

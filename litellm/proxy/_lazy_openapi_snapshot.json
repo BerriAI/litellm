@@ -27458,6 +27458,51 @@
           ]
         }
       },
+      "/openai/v1/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_openai_v1_realtime_translations_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_openai_v1_realtime_translations_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/openai/v1/responses": {
         "post": {
           "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
@@ -46513,6 +46558,51 @@
           ]
         }
       },
+      "/openai/v1/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_openai_v1_realtime_translations_calls_post_2",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_openai_v1_realtime_translations_client_secrets_post_2",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
       "/realtime/calls": {
         "post": {
           "operationId": "proxy_realtime_calls_realtime_calls_post",
@@ -46585,6 +46675,51 @@
           ]
         }
       },
+      "/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_realtime_translations_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_realtime_translations_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
       "/v1/realtime/calls": {
         "post": {
           "operationId": "proxy_realtime_calls_v1_realtime_calls_post",
@@ -46652,6 +46787,51 @@
             }
           ],
           "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/translations/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_v1_realtime_translations_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/translations/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_v1_realtime_translations_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
           "tags": [
             "realtime"
           ]
