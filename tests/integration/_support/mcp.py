@@ -18,9 +18,10 @@ from integration._support.wire import Reply, Request, wire_server
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import SamplingMessage, TextContent
+from mcp.types import InitializeRequestParams, InitializeResult, SamplingMessage, TextContent
 from mcp_tests.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel
 from sse_starlette.sse import AppStatus
@@ -63,8 +64,23 @@ class Confirmation(BaseModel):
     confirmed: bool
 
 
-def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPServer:
+def math_service(
+    name: str = "integration-math",
+    *,
+    rich: bool = False,
+    record: Callable[[dict[str, object]], None],
+) -> MCPServer:
     service: Final = MCPServer(name)
+
+    async def capture_negotiation(ctx: ServerRequestContext[object, object], call_next: CallNext) -> HandlerResult:
+        result: Final = await call_next(ctx)
+        if ctx.method == "initialize":
+            requested: Final = InitializeRequestParams.model_validate(ctx.params).protocol_version
+            returned: Final = InitializeResult.model_validate(result).protocol_version
+            record({"body": {}, "negotiation": {"requested": requested, "returned": returned}})
+        return result
+
+    service.middleware.append(capture_negotiation)
     service.add_tool(add)
     service.add_tool(multiply)
 
@@ -184,14 +200,14 @@ def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
 
 @contextmanager
 def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) -> Iterator[McpPeer]:
-    service: Final = math_service(rich=rich)
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+    service: Final = math_service(rich=rich, record=observed.put)
     security: Final = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     app: Final = (
         _draining_sse_watcher(service.sse_app(transport_security=security))
         if transport == "sse"
         else service.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
     )
-    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
     with asgi_server(_capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None) as url:
         yield McpPeer(url + ("/sse" if transport == "sse" else "/mcp"), observed, transport)
 

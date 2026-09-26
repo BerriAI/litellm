@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
+from integration._support.conformance import require_negotiations, translation_cases
 from integration._support.mcp import (
     ENTRY_POINTS,
     PEER_KINDS,
@@ -157,41 +158,88 @@ def test_server_initiated_sampling_and_elicitation_surface_as_errors_not_success
         assert len(tool_calls(peer.drain())) == 1
 
 
-@pytest.mark.parametrize("downstream", ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"))
-@pytest.mark.parametrize("upstream", ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"))
-@pytest.mark.parametrize("peer_kind", ("http", "sse", "stdio"))
-@pytest.mark.parametrize("ingress", ("http", "sse"))
+@pytest.mark.parametrize(
+    ("downstream", "upstream", "peer_kind", "ingress"),
+    tuple(pytest.param(*case, id="-".join(case)) for case in translation_cases()),
+)
 def test_pinned_revision_pairs_list_and_call_through_gateway(
-    gateway: Gateway, downstream: str, upstream: str, peer_kind: PeerKind, ingress: str
+    gateway: Gateway, downstream: str, upstream: str, peer_kind: PeerKind, ingress: str, tmp_path
 ) -> None:
     import asyncio
+    import os
+    from pathlib import Path
 
-    from mcp.types import CallToolRequestParams
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.sse import sse_client
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.types import (
+        ClientCapabilities,
+        Implementation,
+        InitializeRequest,
+        InitializeRequestParams,
+        InitializeResult,
+        InitializedNotification,
+    )
 
-    from litellm.experimental_mcp_client.client import MCPClient
-    from litellm.types.mcp import MCPTransport
-
-    with peer_of(peer_kind) as peer, gateway.scenario() as scenario:
+    with peer_of(peer_kind, rich=True) as peer, gateway.scenario() as scenario:
         alias: Final = "versions" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias, mcp_info={"protocol_version": upstream})
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         endpoint: Final = str(gateway.client.base_url).rstrip("/") + ("/mcp/sse" if ingress == "sse" else "/mcp")
-        client: Final = MCPClient(
-            server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version=downstream,
-            extra_headers={"Authorization": f"Bearer {key}", "x-mcp-servers": identity}, timeout=15,
-        )
+        headers: Final = {"Authorization": f"Bearer {key}", "x-mcp-servers": identity}
 
-        async def exercise() -> None:
-            tools: Final = await client.list_tools(raise_on_error=True)
-            assert f"{alias}-add" in tuple(tool.name for tool in tools)
-            result: Final = await client.call_tool(CallToolRequestParams(name=f"{alias}-add", arguments={"a": 3, "b": 4}))
-            assert result.is_error is False
-            assert result.content[0].text == "7"
+        async def exercise() -> tuple[str, str]:
+            async with httpx.AsyncClient(headers=headers, timeout=15) as http:
+                transport: Final = (
+                    sse_client(endpoint, headers=headers)
+                    if ingress == "sse"
+                    else streamable_http_client(endpoint, http_client=http)
+                )
+                async with transport as streams, ClientSession(streams[0], streams[1]) as session:
+                    initialized: Final = await session.send_request(
+                        InitializeRequest(
+                            params=InitializeRequestParams(
+                                protocol_version=downstream,
+                                capabilities=ClientCapabilities(),
+                                client_info=Implementation(name="conformance-gap-client", version="1"),
+                            )
+                        ),
+                        InitializeResult,
+                    )
+                    require_negotiations(downstream, ((downstream, initialized.protocol_version),))
+                    session.adopt(initialized)
+                    await session.send_notification(InitializedNotification())
+                    tools: Final = await session.list_tools()
+                    assert f"{alias}-add" in tuple(tool.name for tool in tools.tools)
+                    result: Final = await session.call_tool(f"{alias}-add", {"a": 3, "b": 4})
+                    assert result.is_error is False
+                    assert result.content[0].text == "7"
+                    prompts: Final = await session.list_prompts()
+                    assert tuple(prompt.name for prompt in prompts.prompts) == (f"{alias}-greeting",)
+                    prompt: Final = await session.get_prompt(f"{alias}-greeting", {"name": "Ada"})
+                    assert prompt.messages[0].content.text == "Hello, Ada"
+                    resources: Final = await session.list_resources()
+                    assert tuple(str(resource.uri) for resource in resources.resources) == ("status://ready",)
+                    resource: Final = await session.read_resource(resources.resources[0].uri)
+                    assert resource.contents[0].text == "ready"
+                    templates: Final = await session.list_resource_templates()
+                    assert tuple(template.uri_template for template in templates.resource_templates) == (
+                        "greeting://{name}",
+                    )
+                    return downstream, initialized.protocol_version
 
         peer.drain()
-        asyncio.run(exercise())
+        negotiated: Final = asyncio.run(exercise())
         observed: Final = peer.drain()
-        negotiations: Final = tuple(item["body"] for item in observed if item["body"].get("method") == "initialize")
-        assert negotiations, "The operation must reach the upstream negotiation"
-        assert all(request["params"]["protocolVersion"] == upstream for request in negotiations), negotiations
+        negotiations: Final = tuple(
+            (item["negotiation"]["requested"], item["negotiation"]["returned"])
+            for item in observed
+            if "negotiation" in item
+        )
+        require_negotiations(upstream, negotiations)
         assert len(tool_calls(observed)) == 1
+        output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(tmp_path)))
+        (output / f"negotiation-{downstream}-{upstream}-{peer_kind}-{ingress}.json").write_text(
+            json.dumps({"client_gateway": negotiated, "gateway_upstream": negotiations}, indent=2) + "\n"
+        )

@@ -39,3 +39,50 @@ The mcp shard runs the MCP gateway against SDK peers owned by each test (`_suppo
 Browser contracts live in `tests/e2e/ui/tests/integrationCritical` and run only through `tests/e2e/ui/integration.config.ts`. The expected browser results are listed in `expected.json` in that directory and checked by `.circleci/scripts/verify_integration_browser.py`. The CircleCI browser shard builds the checked-out dashboard, starts the owned proxy with that build, and verifies one exact browser result without retries or skips. The default Playwright selection excludes this directory. The focused project flow asserts the submitted create and clear values, fresh SQL state and actual blocked/restored serving while preserving model restrictions
 
 Two always-on `-replica` CircleCI jobs (management, database) run their groups in replica mode, where every proxy connects through a real `litellm_writer` role and a real read-only `litellm_reader` role against the same PostgreSQL. Nothing is captured there: the job passes when the tests pass, and a write routed to the read-only reader fails the test that issued it. A deeper check runs on demand as the `routing_parity` workflow, triggered through the CircleCI API v2 pipeline endpoint on the PR branch with `{"parameters": {"routing_parity_base": "<40-hex merge-base sha>"}}`. The workflow fans out over the seven groups, and each `routing-parity-<group>` job runs its own group twice against the same test harness, once with `litellm/`, `enterprise/`, and `litellm-proxy-extras/` checked out from the base revision and once from the head, with a pytest plugin snapshotting `pg_stat_statements` into `routing-observed.json` per side. The `check` step then compares the two observations and writes `routing-diff.txt`: a statement seen on both sides fails when its role set changed, globally or for the same test (per-test capture is skipped under xdist), unless it is listed in `tests/integration/routing/either_role.json`, where each entry names the statement and a one-line reason it legitimately runs on whichever role asks for it, printed under `== either role ==`. Queries seen on only one side are listed, never failed, `pg_stat_statements` evictions and a role that never ran a statement are failures
+
+
+### MCP conformance
+
+The `mcp` group runs a pinned official conformance client against the official reference
+both directly and through a source-built gateway. Install it with
+`MCP_CONFORMANCE_ROOT=/tmp/mcp-conformance bash .circleci/scripts/install_mcp_conformance.sh`
+after the existing integration dependency setup, then use the normal MCP integration command.
+The destination must be fresh. The installer verifies each immutable archive before extraction
+and uses both upstream lockfiles. CircleCI installs this automatically and publishes runner logs,
+raw checks, negotiation observations and helper coverage with the existing integration artifacts.
+
+The runner is pinned to `7169291ec0b68eb370fddcd9947313ab0d5e4156`; the unmodified legacy
+reference is pinned separately to `8f3994c75ff1aed1e39f91cff9358e2bc2c81dcd`. The newer
+reference mistakes a valid legacy initialize containing `_meta: {}` for stateless traffic.
+Full download URLs and archive SHA-256 values live in the installer.
+
+Coverage is deliberately explicit:
+
+- The official client negotiates 2025-11-25. Its `--spec-version` flag selects assertions;
+  it does not pin its SDK handshake. Official cases cover each declared upstream revision.
+- Session termination is a separate mandatory gateway contract. Its raw HTTP control uses
+  the current pinned reference, which correctly returns 404 after deletion. The legacy
+  reference returns 400 for that case. Both references run unmodified with their own lockfiles.
+- The SDK matrix supplies the older-client gap: all 16 declared ordered revision pairs,
+  HTTP and SSE ingress, and HTTP, SSE and stdio upstreams. It checks the seven operations in
+  `capabilities.py` and records requested and returned revisions on both connections.
+- The official simple-text scenario accepts error text, and its reference rejects its omitted
+  arguments. Exact text with `{}` and omitted-argument forwarding therefore have explicit SDK
+  cases. This limitation cannot be treated as a successful official simple-text result.
+- The schema scenario looks up an unprefixed fixture name. A direct/gateway SDK comparison
+  instead requires the full JSON Schema 2020-12 input schema to survive unchanged.
+- The official DNS-rebinding scenario explicitly targets unauthenticated localhost servers.
+  This authenticated gateway instead has explicit allowed/denied Origin execution cases with
+  `LITELLM_CORS_ORIGINS` configured, covering HTTP and SSE. The default wildcard is unchanged.
+- Logging, completion, resource subscriptions, sampling and elicitation are not advertised by
+  this gateway contract; their capability-specific scenarios do not establish legacy support.
+  Modern 2026-07-28 and extension scenarios belong to later activation gates.
+
+The adapter changes only authentication and the fixture name to the gateway's advertised prefix.
+It preserves protocol versions, arguments, metadata, Origin/Host headers and response bytes.
+No discovery warm-up or expected-failure exemption is used. Missing, failed, skipped or wrongly
+negotiated required cases fail the MCP integration result.
+
+An installed workflow alone is not a merge gate. After these changes reach the default branch,
+verify the hosted MCP job's exact status name and add that check to the existing main ruleset.
+Do not mark LIT-7744 complete until all applicable cases pass and that requirement is active.

@@ -18,6 +18,7 @@ PY
 mkdir -p "$root"
 tar -xzf "$archive" --strip-components=1 -C "$root"
 npm ci --ignore-scripts --prefix "$root"
+npm ci --ignore-scripts --prefix "$root/examples/servers/typescript"
 # The current reference misclassifies legacy initialize _meta as stateless traffic.
 # Use the last official legacy reference; leave its source and lockfile untouched.
 curl --fail --location --silent --show-error \
