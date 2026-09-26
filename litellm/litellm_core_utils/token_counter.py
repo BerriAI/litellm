@@ -1037,7 +1037,7 @@ def _format_type(props, indent):
         return "any"
 
 
-_INLINE_DATA_BASE64_RE: Final = re.compile(r"[A-Za-z0-9+/=]{16,}")
+_INLINE_DATA_BASE64_RE: Final = re.compile(r"[A-Za-z0-9+/=_-]{16,}")
 
 
 def _elide_data_key(obj: Mapping[str, object]) -> Mapping[str, object]:

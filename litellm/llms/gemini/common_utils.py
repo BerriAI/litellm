@@ -495,7 +495,10 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
-        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        from litellm.llms.gemini.count_tokens.handler import (
+            ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS,
+            GoogleAIStudioTokenCounter,
+        )
         from litellm.llms.gemini.count_tokens.transformation import (
             InvalidCountTokensRequest,
             build_count_tokens_payload,
@@ -521,17 +524,24 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
 
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
         counted_tools: Final = tools if tools is not None else litellm_params.get("tools")
-        payload: Final = (
-            build_count_tokens_payload(model=model_to_use, messages=messages or (), system=system, tools=counted_tools)
-            if contents is None
-            else native_count_tokens_payload(model=model_to_use, contents=contents, system=system, tools=counted_tools)
-        )
+        try:
+            payload: Final = (
+                build_count_tokens_payload(
+                    model=model_to_use, messages=messages or (), system=system, tools=counted_tools
+                )
+                if contents is None
+                else native_count_tokens_payload(
+                    model=model_to_use, contents=contents, system=system, tools=counted_tools
+                )
+            )
+        except Exception as e:  # noqa: BLE001  # native-path translation failures are untranslatable input like build_count_tokens_payload's
+            return failed(f"Invalid token count request: {e!r}", 400)
         if isinstance(payload, InvalidCountTokensRequest):
             return failed(payload.message, 400)
         count_tokens_params_request: Final = {
             key: value
             for key, value in copy.deepcopy(litellm_params).items()
-            if key not in ("system_instruction", "tools", "client")
+            if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
         } | {"model": model_to_use, "contents": payload.contents}
         try:
             result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
@@ -542,10 +552,15 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             )
         except (litellm.APIError, litellm.APIConnectionError) as e:
             return failed(e.message, e.status_code)
-        if "totalTokens" not in result:
-            return failed("Google Gen AI Studio countTokens response has no totalTokens", 502, result)
+        total_tokens: Final = result.get("totalTokens") if isinstance(result, dict) else None
+        if not isinstance(total_tokens, int) or isinstance(total_tokens, bool):
+            return failed(
+                "Google Gen AI Studio countTokens response has no totalTokens",
+                502,
+                result if isinstance(result, dict) else None,
+            )
         return TokenCountResponse(
-            total_tokens=result["totalTokens"],
+            total_tokens=total_tokens,
             request_model=request_model,
             model_used=model_to_use,
             tokenizer_type="gemini_api",

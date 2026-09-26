@@ -507,6 +507,21 @@ def test_native_count_tokens_payload_maps_each_tool_shape():
     )
 
 
+@pytest.mark.parametrize(
+    ("anthropic_tool", "expected"),
+    [
+        ({"type": "web_search_20250305", "name": "web_search"}, {"googleSearch": {}}),
+        ({"type": "web_search", "name": "web_search"}, {"googleSearch": {}}),
+        ({"type": "web_fetch_20250910", "name": "web_fetch"}, {"urlContext": {}}),
+        ({"type": "code_execution_20250825", "name": "code_execution"}, {"codeExecution": {}}),
+    ],
+)
+def test_native_count_tokens_payload_maps_anthropic_hosted_tools_not_functions(anthropic_tool, expected):
+    tools = _native_tools([anthropic_tool])
+
+    assert tools == (expected,)
+
+
 def test_native_count_tokens_payload_keeps_contents_and_reads_system_text_or_instruction():
     contents = [{"role": "user", "parts": [{"text": "hi"}]}]
     instruction = {"parts": [{"text": "be terse"}]}

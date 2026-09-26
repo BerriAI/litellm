@@ -437,6 +437,7 @@ class TestGoogleAIStudioTokenCounter:
                     "tools": [_function_tool("deployment_default_tool")],
                     "system_instruction": {"parts": [{"text": "deployment default"}]},
                     "client": object(),
+                    "self": "bogus",
                 }
             },
             request_model="gemini/gemini-2.5-flash",
@@ -455,6 +456,53 @@ class TestGoogleAIStudioTokenCounter:
             for declaration in tool["function_declarations"]
         ]
         assert declared_names == counted_tool_names
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_native_tools_not_mappings_returns_400_without_http_call(self):
+        token_counter = GoogleAIStudioTokenCounter()
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini/gemini-2.5-flash",
+            tools=["just-a-string"],
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 400
+        assert "Invalid token count request" in (result.error_message or "")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "upstream_json",
+        [
+            {"totalTokens": "abc"},
+            {"promptTokensDetails": []},
+            [{"totalTokens": 5}],
+        ],
+    )
+    async def test_count_tokens_malformed_provider_response_returns_502(self, upstream_json):
+        import httpx
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=upstream_json)
+
+        result = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini/gemini-2.5-flash",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 502
+        assert "totalTokens" in (result.error_message or "")
 
     def test_clean_contents_for_gemini_api_removes_id_field(self):
         """Test that _clean_contents_for_gemini_api removes unsupported 'id' field from function responses"""

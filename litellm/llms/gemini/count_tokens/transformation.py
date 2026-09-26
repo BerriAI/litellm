@@ -105,8 +105,26 @@ def _has_anthropic_shape(
     return False
 
 
+_ANTHROPIC_HOSTED_TOOL_TO_GEMINI: Final = MappingProxyType(
+    {
+        "web_search": "googleSearch",
+        "web_fetch": "urlContext",
+        "code_execution": "codeExecution",
+    }
+)
+
+
 def _is_gemini_tool_shape(tool: Mapping[str, object]) -> bool:
     return any(key in tool for key in _GEMINI_TOOL_KEYS)
+
+
+def _native_hosted_tool(tool: Mapping[str, object]) -> Tools | None:
+    tool_type: Final = tool.get("type")
+    if not isinstance(tool_type, str):
+        return None
+    dated: Final = _ANTHROPIC_DATED_TOOL_TYPE_RE.match(tool_type)
+    gemini_key: Final = _ANTHROPIC_HOSTED_TOOL_TO_GEMINI.get(dated.group(1) if dated else tool_type)
+    return cast(Tools, {gemini_key: {}}) if gemini_key else None  # cast-ok: single-key Gemini hosted-tool shape
 
 
 def _as_openai_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
@@ -187,11 +205,19 @@ def _native_tools(model: str, tools: Sequence[Mapping[str, object]] | None) -> t
         for tool in tools
         if _is_gemini_tool_shape(tool)
     )
+    translated: Final = tuple(_native_hosted_tool(tool) for tool in tools)
+    hosted: Final = tuple(hosted_tool for hosted_tool in translated if hosted_tool is not None)
     mapped: Final = _gemini_tools_like_chat(
         model=model,
-        tool_params=_openai_tool_params(tuple(tool for tool in tools if not _is_gemini_tool_shape(tool))),
+        tool_params=_openai_tool_params(
+            tuple(
+                tool
+                for tool, hosted_tool in zip(tools, translated)
+                if not _is_gemini_tool_shape(tool) and hosted_tool is None
+            )
+        ),
     )
-    return _apply_mixed_tool_drop_rule(passthrough + (mapped or ()))
+    return _apply_mixed_tool_drop_rule(passthrough + hosted + (mapped or ()))
 
 
 def _payload_like_chat(

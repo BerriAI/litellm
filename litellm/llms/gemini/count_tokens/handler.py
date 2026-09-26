@@ -14,6 +14,12 @@ if TYPE_CHECKING:
 else:
     GenerateContentContentListUnionDict = Any
 
+# Deployment litellm_params keys that must not be forwarded into acount_tokens:
+# every name here is bound by the method signature or supplied explicitly by the
+# caller, so a deployment carrying one raises TypeError (duplicate keyword) or
+# silently hijacks request wiring (e.g. a stray "client" or "tools").
+ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS: Final = frozenset({"self", "system_instruction", "tools", "client"})
+
 
 def build_count_tokens_request(
     model: str,

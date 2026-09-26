@@ -170,7 +170,9 @@ async def google_count_tokens(request: Request, model_name: str):
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
     data: Final = await _read_request_body(request=request)
-    contents: Final = data.get("contents", [])
+    generate_content_request: Final = data.get("generateContentRequest")
+    wrapped: Final = generate_content_request if isinstance(generate_content_request, dict) else {}
+    contents: Final = data.get("contents") or wrapped.get("contents") or []
     # Create TokenCountRequest for the internal endpoint
     from litellm.proxy._types import TokenCountRequest
 
@@ -181,8 +183,8 @@ async def google_count_tokens(request: Request, model_name: str):
         model=model_name,
         contents=contents,
         messages=messages,  # compatibility when use openai-like endpoint
-        tools=data.get("tools"),
-        system=data.get("systemInstruction"),
+        tools=data.get("tools") or wrapped.get("tools"),
+        system=data.get("systemInstruction") or wrapped.get("systemInstruction"),
     )
 
     # Call the internal token counter function with direct request flag set to False
