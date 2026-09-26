@@ -242,6 +242,7 @@ async def test_new_tag_persists_a_budget():
         tag_name="budget-tag",
         description=None,
         models=[],
+        spend=0.0,
         created_at=datetime(2024, 1, 1),
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
@@ -311,6 +312,7 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
         tag_name="budget-tag",
         description=None,
         models=[],
+        spend=0.0,
         created_at=datetime(2024, 1, 1),
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
@@ -365,6 +367,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
         tag_name="budget-tag",
         description=None,
         models=[],
+        spend=0.0,
         created_at=datetime(2024, 1, 1),
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
@@ -596,6 +599,283 @@ async def test_update_tag_invalidates_only_the_tag_cache():
 
             assert recording_cache.deleted == ["tag:cache-tag"]
             assert _published_keys(mock_publish) == ["tag:cache-tag"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_resets_spend():
+    """POST /tag/update with spend writes it to the DB and returns it in the response."""
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+        ):
+            mock_spend_counter_cache.redis_cache = None
+
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            existing_tag = Mock()
+            existing_tag.tag_name = "batch-jobs"
+            existing_tag.description = "nightly batch jobs"
+            existing_tag.models = []
+            existing_tag.budget_id = None
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+            updated_tag = Mock()
+            updated_tag.tag_name = "batch-jobs"
+            updated_tag.description = "nightly batch jobs"
+            updated_tag.models = []
+            updated_tag.model_info = {}
+            updated_tag.spend = 0.0
+            updated_tag.budget_id = None
+            updated_tag.created_at = datetime.now()
+            updated_tag.updated_at = datetime.now()
+            updated_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+            response = client.post(
+                "/tag/update",
+                json={"name": "batch-jobs", "spend": 0},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+            result = response.json()
+            assert result["tag"]["spend"] == 0.0
+
+            update_call_kwargs = mock_db.litellm_tagtable.update.call_args.kwargs
+            assert update_call_kwargs["data"]["spend"] == 0.0
+
+            mock_spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
+                key="spend:tag:batch-jobs", value=0.0, ttl=60
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_resets_spend_in_redis():
+    """POST /tag/update with spend also refreshes the counter in Redis when configured."""
+    from datetime import datetime
+    from unittest.mock import AsyncMock, MagicMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+        ):
+            mock_spend_counter_cache.redis_cache = MagicMock()
+            mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            existing_tag = Mock()
+            existing_tag.tag_name = "batch-jobs"
+            existing_tag.description = "nightly batch jobs"
+            existing_tag.models = []
+            existing_tag.budget_id = None
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+            updated_tag = Mock()
+            updated_tag.tag_name = "batch-jobs"
+            updated_tag.description = "nightly batch jobs"
+            updated_tag.models = []
+            updated_tag.model_info = {}
+            updated_tag.spend = 0.0
+            updated_tag.budget_id = None
+            updated_tag.created_at = datetime.now()
+            updated_tag.updated_at = datetime.now()
+            updated_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+            response = client.post(
+                "/tag/update",
+                json={"name": "batch-jobs", "spend": 0},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+            result = response.json()
+            assert result["tag"]["spend"] == 0.0
+
+            mock_spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
+                key="spend:tag:batch-jobs", value=0.0, ttl=60
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_resets_spend_redis_failure_does_not_fail_request():
+    """A Redis error while refreshing the counter must not fail the /tag/update request (best-effort)."""
+    from datetime import datetime
+    from unittest.mock import AsyncMock, MagicMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+        ):
+            mock_spend_counter_cache.redis_cache = MagicMock()
+            mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock(
+                side_effect=Exception("boom")
+            )
+
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            existing_tag = Mock()
+            existing_tag.tag_name = "batch-jobs"
+            existing_tag.description = "nightly batch jobs"
+            existing_tag.models = []
+            existing_tag.budget_id = None
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+            updated_tag = Mock()
+            updated_tag.tag_name = "batch-jobs"
+            updated_tag.description = "nightly batch jobs"
+            updated_tag.models = []
+            updated_tag.model_info = {}
+            updated_tag.spend = 0.0
+            updated_tag.budget_id = None
+            updated_tag.created_at = datetime.now()
+            updated_tag.updated_at = datetime.now()
+            updated_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+            response = client.post(
+                "/tag/update",
+                json={"name": "batch-jobs", "spend": 0},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+            result = response.json()
+            assert result["tag"]["spend"] == 0.0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_without_spend_does_not_touch_counter_cache():
+    """A description-only update must not write to LiteLLM_TagTable.spend or the spend counter."""
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+        ):
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            existing_tag = Mock()
+            existing_tag.tag_name = "batch-jobs"
+            existing_tag.description = "old description"
+            existing_tag.models = []
+            existing_tag.budget_id = None
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+            updated_tag = Mock()
+            updated_tag.tag_name = "batch-jobs"
+            updated_tag.description = "new description"
+            updated_tag.models = []
+            updated_tag.model_info = {}
+            updated_tag.spend = 5.0
+            updated_tag.budget_id = None
+            updated_tag.created_at = datetime.now()
+            updated_tag.updated_at = datetime.now()
+            updated_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+            response = client.post(
+                "/tag/update",
+                json={"name": "batch-jobs", "description": "new description"},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+            result = response.json()
+            assert result["tag"]["spend"] == 5.0
+
+            update_call_kwargs = mock_db.litellm_tagtable.update.call_args.kwargs
+            assert "spend" not in update_call_kwargs["data"]
+
+            mock_spend_counter_cache.in_memory_cache.set_cache.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_rejects_non_finite_spend():
+    """NaN/inf must 400, not reach the DB or the spend counter."""
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            mock_db.litellm_tagtable.update = AsyncMock()
+
+            # httpx's `json=` kwarg encodes with allow_nan=False and raises client-side
+            # before a request is even sent, so NaN must go over the wire as raw content
+            # (stdlib json.dumps allows NaN by default) to exercise the server's own check.
+            response = client.post(
+                "/tag/update",
+                content=json.dumps({"name": "batch-jobs", "spend": float("nan")}),
+                headers={
+                    "Authorization": "Bearer sk-1234",
+                    "Content-Type": "application/json",
+                },
+            )
+            assert response.status_code == 400
+            mock_db.litellm_tagtable.update.assert_not_called()
     finally:
         app.dependency_overrides.clear()
 

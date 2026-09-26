@@ -64,6 +64,7 @@ class _TagRecord(Protocol):
     description: str | None
     models: Sequence[str]
     model_info: object
+    spend: float
     budget_id: str | None
     created_at: datetime
     updated_at: datetime
@@ -339,6 +340,7 @@ async def new_tag(
             created_at=new_tag_record.created_at.isoformat(),
             updated_at=new_tag_record.updated_at.isoformat(),
             created_by=new_tag_record.created_by,
+            spend=new_tag_record.spend,
         )
 
         return {
@@ -408,6 +410,7 @@ async def update_tag(
     - description: Optional[str] - Updated description
     - models: List[str] - Updated list of allowed LLM models
     - budget_id: Optional[str] - The id for a budget to associate with the tag
+    - spend: Optional[float] - Set the tag's accumulated spend (e.g. 0 to reset it). Omit to leave unchanged. Does not change budget_reset_at; the current budget window is left as-is
 
     ### BUDGET UPDATE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
@@ -418,10 +421,14 @@ async def update_tag(
     - model_max_budget: Optional[dict] - Max budget for a specific model
     - budget_duration: Optional[str] - Frequency of resetting tag budget
     """
+    from litellm.proxy.management_endpoints.common_utils import validate_finite_spend
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
+
+    # Reject NaN/±inf spend before it can reach the DB / spend counter.
+    validate_finite_spend(tag.spend)
 
     try:
         # Check if tag exists
@@ -445,7 +452,7 @@ async def update_tag(
         model_info: Final = await _get_model_names(prisma_client, tag.models or [])
 
         # Prepare update data
-        update_data: Final = {
+        update_data: Final[dict[str, object]] = {
             "description": tag.description,
             "models": tag.models or [],
             "model_info": json.dumps(model_info),
@@ -455,6 +462,9 @@ async def update_tag(
         if budget_id != existing_tag.budget_id:
             update_data["budget_id"] = budget_id
 
+        if tag.spend is not None:
+            update_data["spend"] = tag.spend
+
         # Update tag in database
         updated_tag_record: Final = await _table(TagRepository(prisma_client)).update(
             where={"tag_name": tag.name},
@@ -462,6 +472,28 @@ async def update_tag(
         )
 
         await _evict_tag_cache_keys((tag_cache_key(tag.name),))
+
+        if tag.spend is not None:
+            # Refresh the live spend counter immediately, the same way /key/update does for
+            # spend:key:<hash> - otherwise the tag stays blocked on the stale cached value
+            # until the counter's TTL expires.
+            from litellm.proxy.proxy_server import spend_counter_cache
+
+            counter_key: Final = f"spend:tag:{tag.name}"
+            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=tag.spend, ttl=60)
+            if spend_counter_cache.redis_cache is not None:
+                try:
+                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
+                except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
+                    # tag.name is admin-supplied; strip CR/LF before it reaches the logs so it
+                    # cannot forge additional log lines.
+                    safe_counter_key: Final = counter_key.replace("\r", "").replace("\n", "")
+                    verbose_proxy_logger.warning(
+                        "Failed to update spend counter %s in Redis after tag spend update: %s. "
+                        "Budget checks may use stale value until counter expires.",
+                        safe_counter_key,
+                        redis_err,
+                    )
 
         # Build response
         tag_config: Final = TagConfig(
@@ -472,6 +504,7 @@ async def update_tag(
             created_at=updated_tag_record.created_at.isoformat(),
             updated_at=updated_tag_record.updated_at.isoformat(),
             created_by=updated_tag_record.created_by,
+            spend=updated_tag_record.spend,
         )
 
         return {

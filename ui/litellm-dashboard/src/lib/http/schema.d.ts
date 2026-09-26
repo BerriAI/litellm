@@ -15420,6 +15420,7 @@ export interface paths {
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
+         *     - spend: Optional[float] - Set the tag's accumulated spend (e.g. 0 to reset it). Omit to leave unchanged. Does not change budget_reset_at; the current budget window is left as-is
          *
          *     ### BUDGET UPDATE PARAMS ###
          *     - max_budget: Optional[float] - Max budget for tag
@@ -42939,6 +42940,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
