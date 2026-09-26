@@ -184,8 +184,9 @@ def test_excluded_services_drops_db_spans_at_tenant_only(
             f"db spans reached tenant: {sorted(str(s['name']) for s in tenant_spans)}"
         )
         operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
-        operator_systems: Final = _db_systems(_trace_spans(audit_sinks.operator, operator_trace))
         assert operator_trace == tenant_trace
+        _, all_operator = recorded_spans(audit_sinks.operator, op_start)
+        operator_systems: Final = _db_systems(all_operator)
         assert {"redis", "postgresql"} <= operator_systems, f"operator lost db spans: {operator_systems}"
         _, all_tenant = recorded_spans(audit_sinks.tenant, ten_start)
         names: Final = sorted(str(span["name"]) for span in all_tenant)
