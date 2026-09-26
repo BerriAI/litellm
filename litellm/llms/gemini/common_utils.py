@@ -519,16 +519,18 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 original_response=original_response,
             )
 
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        counted_tools: Final = tools if tools is not None else litellm_params.get("tools")
         payload: Final = (
-            build_count_tokens_payload(model=model_to_use, messages=messages or (), system=system, tools=tools)
+            build_count_tokens_payload(model=model_to_use, messages=messages or (), system=system, tools=counted_tools)
             if contents is None
-            else native_count_tokens_payload(model=model_to_use, contents=contents, system=system, tools=tools)
+            else native_count_tokens_payload(model=model_to_use, contents=contents, system=system, tools=counted_tools)
         )
         if isinstance(payload, InvalidCountTokensRequest):
             return failed(payload.message, 400)
         count_tokens_params_request: Final = {
             key: value
-            for key, value in copy.deepcopy((deployment or {}).get("litellm_params", {})).items()
+            for key, value in copy.deepcopy(litellm_params).items()
             if key not in ("system_instruction", "tools", "client")
         } | {"model": model_to_use, "contents": payload.contents}
         try:

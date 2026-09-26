@@ -409,7 +409,13 @@ class TestGoogleAIStudioTokenCounter:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_count_tokens_ignores_litellm_params_keys_that_collide_with_explicit_kwargs(self):
+    @pytest.mark.parametrize(
+        "request_tool_names, counted_tool_names",
+        [(None, ["deployment_default_tool"]), (["request_tool"], ["request_tool"])],
+    )
+    async def test_count_tokens_counts_deployment_tools_the_router_would_send(
+        self, request_tool_names: list[str] | None, counted_tool_names: list[str]
+    ):
         import httpx
 
         recorded: list[httpx.Request] = []
@@ -418,6 +424,9 @@ class TestGoogleAIStudioTokenCounter:
             recorded.append(request)
             return httpx.Response(200, json={"totalTokens": 9})
 
+        def _function_tool(name: str) -> dict[str, object]:
+            return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+
         result = await GoogleAIStudioTokenCounter().count_tokens(
             model_to_use="gemini-2.5-flash",
             messages=[{"role": "user", "content": "hello"}],
@@ -425,19 +434,27 @@ class TestGoogleAIStudioTokenCounter:
             deployment={
                 "litellm_params": {
                     "api_key": "test-key",
-                    "tools": [{"name": "deployment_default_tool"}],
+                    "tools": [_function_tool("deployment_default_tool")],
                     "system_instruction": {"parts": [{"text": "deployment default"}]},
                     "client": object(),
                 }
             },
             request_model="gemini/gemini-2.5-flash",
+            tools=None if request_tool_names is None else [_function_tool(name) for name in request_tool_names],
             client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
         )
 
         assert result is not None
         assert result.error is not True
         assert result.total_tokens == 9
-        assert json.loads(recorded[-1].content) == {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
+        generate_content_request = json.loads(recorded[-1].content)["generateContentRequest"]
+        assert "systemInstruction" not in generate_content_request
+        declared_names = [
+            declaration["name"]
+            for tool in generate_content_request["tools"]
+            for declaration in tool["function_declarations"]
+        ]
+        assert declared_names == counted_tool_names
 
     def test_clean_contents_for_gemini_api_removes_id_field(self):
         """Test that _clean_contents_for_gemini_api removes unsupported 'id' field from function responses"""
