@@ -1553,7 +1553,7 @@ async def get_service_provider_config(request: Request):
     return SCIMServiceProviderConfig(meta=meta)
 
 
-def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
+def parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
     """Parse the SCIM equality filters Okta uses before user lifecycle changes."""
     match: Final = re.match(
         r"""\s*([\w.]+)\s+eq\s+(['"]?)(.*?)\2\s*$""",
@@ -1595,7 +1595,7 @@ async def get_users(
             # Okta locates users by userName before deprovisioning. LiteLLM
             # exposes SCIM userName from user_email, while older SCIM-created
             # users may still have user_id == userName, so support both.
-            parsed_filter: Final = _parse_scim_eq_filter(filter)
+            parsed_filter: Final = parse_scim_eq_filter(filter)
             if parsed_filter:
                 filter_attribute, filter_value = parsed_filter
                 if filter_attribute == "username":
