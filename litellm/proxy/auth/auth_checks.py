@@ -3983,6 +3983,8 @@ async def get_object_permission(
         ).find_unique(where={"object_permission_id": object_permission_id})
 
         if response is None:
+            if check_db_only:
+                raise HTTPException(status_code=403, detail="Referenced object permission does not exist")
             return None
 
         _perm_obj: Final = LiteLLM_ObjectPermissionTable.model_validate(response.dict())
@@ -3995,6 +3997,8 @@ async def get_object_permission(
 
         return _perm_obj
     except Exception:
+        if check_db_only:
+            raise
         return None
 
 
