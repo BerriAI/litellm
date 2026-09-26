@@ -1,6 +1,7 @@
 """The status line script is copied verbatim to the user's machine, so these drive it the way Claude Code
 and Codex do: the documented stdin payload, a transcript on disk, and the proxy behind an injected fetch."""
 
+import hashlib
 import io
 import json
 import os
@@ -155,6 +156,23 @@ class TestCredentials:
 
 
 class TestSessionCache:
+    def test_old_coverage_only_cache_is_refreshed_before_displaying_totals(self, tmp_path: Path) -> None:
+        credentials: Final = Credentials("http://p", "sk")
+        identity: Final = "\n".join((credentials.base_url, credentials.api_key, SESSION_ID))
+        old_path: Final = tmp_path / hashlib.sha256(identity.encode()).hexdigest()
+        old_path.write_text(json.dumps({
+            "fetched_at": 100.0,
+            "session": {
+                **RECORDED._asdict(), "spend": 10.0, "baseline_spend": 1.5,
+                "turns": 3, "savings_estimated_turns": 1, "savings_estimated_actual_spend": 2.0,
+            },
+        }))
+
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            return Fetched(RECORDED, True)
+
+        assert load_session(credentials, SESSION_ID, tmp_path, fetch, now=lambda: 101.0) == RECORDED
+
     def test_a_definite_answer_is_served_from_the_cache_within_the_ttl(self, tmp_path):
         calls = []
 

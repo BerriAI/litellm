@@ -68,6 +68,9 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   avg_session_seconds: 7560,
   avg_tokens_per_session: 5_300_000,
   spend: 359.86,
+  llm_spend: (overrides.spend ?? 359.86) - (overrides.classifier_cost ?? 6.146),
+  cost_coverage: "complete",
+  cost_requests: overrides.turns ?? 3073,
   savings_estimated_turns: overrides.turns ?? 3073,
   savings_estimated_actual_spend: overrides.spend ?? 359.86,
   classifier_cost: 6.146,
@@ -102,6 +105,9 @@ const zeroTotals: Totals = {
   avg_session_seconds: 0,
   avg_tokens_per_session: 0,
   spend: 0,
+  llm_spend: 0,
+  cost_coverage: "complete",
+  cost_requests: 0,
   savings_estimated_turns: 0,
   savings_estimated_actual_spend: 0,
   classifier_cost: 0,
@@ -116,6 +122,7 @@ const group = (overrides: Partial<AutoRouterBenchmarkGroup> = {}): AutoRouterBen
   router_name: "claude-auto",
   router_type: "complexity",
   ...totals(),
+  cost_requests: null,
   ...overrides,
 });
 
@@ -157,37 +164,24 @@ describe("AutoRouterBenchmarksTab", () => {
     mockAutoRouters();
   });
 
-  it.each([
-    { estimatedTurns: 0, saved: null, pct: null },
-    { estimatedTurns: 10, saved: -0.5, pct: -33.3 },
-    { estimatedTurns: 10, saved: 0, pct: 0 },
-  ])("preserves costs for $estimatedTurns estimated turns with savings $saved", ({ estimatedTurns, saved, pct }) => {
-    const cohort = {
+  it.each([0, 2])("retains historical savings when only %i turns have current estimates", (estimatedTurns) => {
+    const history: Partial<Totals> = {
       savings_estimated_turns: estimatedTurns,
-      savings_estimated_actual_spend: estimatedTurns ? 2 : 0,
-      saved_spend: saved,
-      baseline_spend: estimatedTurns ? 2 + (saved ?? 0) : null,
-      saved_pct: pct,
-      saved_per_session: null,
+      savings_estimated_actual_spend: estimatedTurns ? 0.0004 : 0,
+      cost_coverage: "partial",
+      cost_requests: null,
+      baseline_spend: null,
+      saved_pct: null,
     };
-    const partial = totals(cohort);
+    const partial = totals(history);
     mockHook({ data: response([], partial) });
     renderTab();
-    expect(screen.getByText("Estimated savings on covered turns")).toBeInTheDocument();
-    expect(screen.getByText(`${estimatedTurns} of 3,073 turns estimated`)).toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Actual spend on covered turns")).toBeInTheDocument();
-    expect(screen.getByText("Estimated baseline spend on covered turns")).toBeInTheDocument();
-    expect(screen.getAllByText("Unavailable")).toHaveLength(estimatedTurns ? 1 : 3);
-    if (saved === 0) {
-      expect(screen.getByText("0%")).toBeInTheDocument();
-      expect(screen.getAllByText("$2.00")).toHaveLength(2);
-    } else if (estimatedTurns) {
-      expect(screen.getByText("-$0.5000")).toBeInTheDocument();
-      expect(screen.getByText("+33%")).toBeInTheDocument();
-    } else {
-      expect(screen.queryByText("+0%")).not.toBeInTheDocument();
-    }
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
+    expect(screen.queryByText("-86%")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual(["Unavailable", "Unavailable"]);
+    expect(screen.getByText("$23.13")).toBeInTheDocument();
+    expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
   });
 
   it("leads with total estimated savings, before the four session-shape metrics", () => {
@@ -216,7 +210,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("-86%")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
     expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Estimated spend at highest-tier model")).toBeInTheDocument();
+    expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
     expect(screen.getByText("$2,534.45")).toBeInTheDocument();
     expect(screen.getByText("32.7")).toBeInTheDocument();
     expect(screen.getByText("2.1h")).toBeInTheDocument();
@@ -242,16 +236,31 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getAllByText("$10,126.28").length).toBeGreaterThan(0);
   });
 
-  it.each([null, undefined])("keeps totals when the classification breakdown is %s", (classifier_cost) => {
-    const stats = totals({ classifier_cost });
+  it.each([null, undefined])("keeps recorded savings when the comparison is unavailable: %s", (classifier_cost) => {
+    const partialCosts: Partial<Totals> = {
+      classifier_cost,
+      cost_coverage: "partial",
+      baseline_spend: null,
+      saved_pct: null,
+    };
+    const stats = totals(partialCosts);
     mockHook({ data: response([group(stats)], stats) });
     renderTab();
 
     expect(screen.getAllByText("Unavailable")).toHaveLength(2);
     expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
+    expect(screen.queryByText("LLM spend")).not.toBeInTheDocument();
     expect(screen.getByText("$2,174.59")).toBeInTheDocument();
-    expect(screen.getByText(/some usage predates classification-cost tracking/)).toBeInTheDocument();
+  });
+
+  it.each([
+    { llm_spend: undefined, displayed: "$353.71" },
+    { llm_spend: null, displayed: "Unavailable" },
+  ])("only derives LLM spend when an older proxy omits its subtotal: %j", ({ llm_spend, displayed }) => {
+    mockHook({ data: response([], totals({ llm_spend })) });
+    renderTab();
+
+    expect(screen.getAllByRole("definition")[1]).toHaveTextContent(displayed);
   });
 
   it("pairs the savings with the session count it was earned over, in its own tile", () => {
@@ -275,7 +284,7 @@ describe("AutoRouterBenchmarksTab", () => {
       "Actual auto-router spend",
       "LLM spend",
       "Classification cost($2.00 / 1K turns)",
-      "Estimated spend at highest-tier model",
+      "Estimated baseline spend",
     ]);
     expect(values).toEqual(["$359.86", "$353.71", "$6.15", "$2,534.45"]);
   });
@@ -441,7 +450,11 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(onDateChange).toHaveBeenCalledWith({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) });
   });
 
-  it("scopes the query to one key when the usage view is mounted for a key", () => {
+  it.each([
+    { apiKey: "key-hash-1", userId: undefined },
+    { apiKey: undefined, userId: "user-1" },
+    { apiKey: "key-hash-1", userId: "user-1" },
+  ])("preserves the key/user filters for the usage view: %j", ({ apiKey, userId }) => {
     mockHook({ data: response([group()]) });
     const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
     const activity = {
@@ -456,11 +469,11 @@ describe("AutoRouterBenchmarksTab", () => {
     };
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <AutoRouterUsageView accessToken="sk-test" activity={activity} apiKey="key-hash-1" />
+        <AutoRouterUsageView accessToken="sk-test" activity={activity} apiKey={apiKey} userId={userId} />
       </QueryClientProvider>,
     );
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, "key-hash-1", undefined);
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, apiKey, userId);
     expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Shadow Evals" })).not.toBeInTheDocument();
   });

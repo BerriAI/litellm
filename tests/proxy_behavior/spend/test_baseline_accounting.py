@@ -107,6 +107,11 @@ async def _user_sessions(db: Prisma, record: BaselineAccountingRecord) -> dict[s
     return {str(row["user_id"]): row for row in rows}
 
 
+async def _daily_user(db: Prisma, record: BaselineAccountingRecord) -> dict[str, object]:
+    rows: Final = await db.query_raw('SELECT * FROM "LiteLLM_DailyUserSpend" WHERE api_key=$1', record.api_key)
+    return rows[0]
+
+
 async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
     store: Final = _store(db)
     late: Final = record("late", 10001.0, user_id="late-user")
@@ -117,6 +122,10 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     before: Final = await _session(db, late)
     assert before["savings_estimated_actual_spend"] == before["spend"] == 0.17
     assert before["saved_spend"] == 0.0
+    before_daily: Final = await _daily_user(db, late)
+    assert before_daily["autorouter_estimated_requests"] == 1
+    assert before_daily["autorouter_estimated_actual_spend"] == before["spend"]
+    assert before_daily["autorouter_savings_spend"] == 0.0
     before_users: Final = await _user_sessions(db, late)
     assert set(before_users) == {"late-user"}
     assert before_users["late-user"]["savings_estimated_turns"] == 1
@@ -126,6 +135,8 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     pending: Final = await _session(db, late)
     assert pending["spend"] == 0.34 and pending["savings_estimated_turns"] == 0
     assert pending["saved_spend"] == pending["savings_estimated_actual_spend"] == 0.0
+    pending_daily: Final = await _daily_user(db, late)
+    assert pending_daily["autorouter_estimated_requests"] == pending_daily["autorouter_estimated_actual_spend"] == 0
     pending_users: Final = await _user_sessions(db, late)
     assert set(pending_users) == {"late-user", "early-user"}
     for user in pending_users.values():
@@ -143,6 +154,14 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     assert logs[0]["spend"] == 0.17
     assert logs[0]["metadata"]["autorouter_savings_estimate"]["provenance"] == "modeled"
     assert after["saved_spend"] == pytest.approx(logs[0]["metadata"]["autorouter_savings"])
+    after_daily: Final = await _daily_user(db, late)
+    assert after_daily["autorouter_estimated_requests"] == after["savings_estimated_turns"]
+    assert after_daily["autorouter_estimated_actual_spend"] == after["savings_estimated_actual_spend"]
+    for field in (
+        "api_requests", "autorouter_accounted_requests", "autorouter_requests", "autorouter_llm_spend",
+        "autorouter_classifier_cost", "autorouter_classifier_cost_recorded_requests",
+    ):
+        assert after_daily[field] == 0
     after_users: Final = await _user_sessions(db, late)
     assert after_users["early-user"] == pending_users["early-user"]
     for field in (
@@ -179,6 +198,10 @@ async def test_commit_ack_loss_and_concurrent_duplicate_delivery_are_idempotent(
     session: Final = await _session(db, event)
     assert session["turns"] == session["savings_estimated_turns"] == 2
     assert session["spend"] == session["savings_estimated_actual_spend"] == 0.34
+    daily: Final = await _daily_user(db, event)
+    assert daily["autorouter_estimated_requests"] == session["savings_estimated_turns"]
+    assert daily["autorouter_estimated_actual_spend"] == session["savings_estimated_actual_spend"]
+    assert daily["autorouter_accounted_requests"] == daily["autorouter_requests"] == 0
     users: Final = await _user_sessions(db, event)
     assert set(users) == ({"first-user", "second-user"} if attributed else set())
     for user in users.values():

@@ -5532,6 +5532,13 @@ class BaseDailySpendTransaction(TypedDict):
     # missing value to zero, so requiring it here would describe a shape the aggregation
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
+    autorouter_accounted_requests: ReadOnly[NotRequired[int]]
+    autorouter_requests: ReadOnly[NotRequired[int]]
+    autorouter_llm_spend: ReadOnly[NotRequired[float]]
+    autorouter_classifier_cost: ReadOnly[NotRequired[float]]
+    autorouter_classifier_cost_recorded_requests: ReadOnly[NotRequired[int]]
+    autorouter_estimated_requests: ReadOnly[NotRequired[int]]
+    autorouter_estimated_actual_spend: ReadOnly[NotRequired[float]]
 
     # request level metrics
     spend: float

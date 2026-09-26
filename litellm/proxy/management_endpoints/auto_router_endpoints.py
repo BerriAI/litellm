@@ -31,6 +31,8 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.autorouter_daily_spend import AUTOROUTER_DAILY_COSTS_SQL, AutoRouterDailyCosts
+from litellm.proxy.db.autorouter_historical_spend import recover_daily_router_costs
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     bounded_session_id,
@@ -686,10 +688,37 @@ def _savings_cohort(
     return saved_spend, actual_spend + saved_spend
 
 
+def _recorded_baseline_spend(turns: int, estimated_turns: int, actual_spend: float, saved_spend: float) -> float | None:
+    if 0 < estimated_turns < turns:
+        return None
+    if estimated_turns == 0 and saved_spend == 0:
+        return None
+    return actual_spend + saved_spend
+
+
+async def _daily_router_costs(
+    prisma_client: "PrismaClient", start_date: str, end_date: str, api_key: str | None, user_id: str | None
+) -> tuple[float, AutoRouterDailyCosts]:
+    rows: Final = await _query_raw(prisma_client, AUTOROUTER_DAILY_COSTS_SQL, start_date, end_date, api_key, user_id)
+    recorded: Final = AutoRouterDailyCosts.model_validate(rows[0]) if rows else AutoRouterDailyCosts()
+    if recorded.complete:
+        return recorded.saved_spend, recorded
+    try:
+        recovered: Final = await recover_daily_router_costs(prisma_client, start_date, end_date, api_key, user_id)
+        return recorded.saved_spend, recovered if recovered is not None else recorded
+    except Exception:  # noqa: BLE001  # optional recovery must preserve durable daily savings and costs
+        verbose_proxy_logger.warning("Auto-router historical cost recovery unavailable; using recorded daily costs")
+        return recorded.saved_spend, recorded
+
+
 def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return_misses: Final = row.return_turns - row.return_hits
-    saved_spend, baseline_spend = _savings_cohort(
-        row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
+    comparison_savings: Final = row.savings_estimated_saved_spend if row.savings_estimated_turns else row.saved_spend
+    comparison_actual: Final = row.savings_estimated_actual_spend if row.savings_estimated_turns else row.spend
+    baseline_spend: Final = (
+        comparison_actual + comparison_savings
+        if row.savings_estimated_turns or not row.turns
+        else _recorded_baseline_spend(row.turns, 0, row.spend, row.saved_spend)
     )
     sessions: Final = row.sessions
     return AutoRouterBenchmarkTotals(
@@ -699,15 +728,16 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         avg_session_seconds=row.session_seconds / sessions if sessions else 0.0,
         avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
         spend=row.spend,
+        llm_spend=row.spend - row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
+        cost_coverage="complete" if row.classifier_cost_recorded_turns == row.turns else "partial",
+        cost_requests=row.turns,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
-        saved_spend=saved_spend,
+        saved_spend=row.saved_spend,
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
-        saved_pct=_pct(saved_spend, baseline_spend) if saved_spend is not None and baseline_spend is not None else None,
-        saved_per_session=(row.savings_estimated_saved_spend / sessions if sessions else 0.0)
-        if row.savings_estimated_turns == row.turns
-        else None,
+        saved_pct=_pct(comparison_savings, baseline_spend) if baseline_spend is not None else None,
+        saved_per_session=row.saved_spend / sessions if sessions else 0.0,
         cache=AutoRouterCacheStats(
             coverage_pct=_pct(row.covered_turns, row.turns),
             hit_rate_pct=_pct(row.cache_hits, row.covered_turns),
@@ -736,6 +766,9 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         avg_session_seconds=totals.avg_session_seconds,
         avg_tokens_per_session=totals.avg_tokens_per_session,
         spend=totals.spend,
+        llm_spend=totals.llm_spend,
+        cost_coverage=totals.cost_coverage,
+        cost_requests=totals.cost_requests,
         saved_spend=totals.saved_spend,
         savings_estimated_turns=totals.savings_estimated_turns,
         savings_estimated_actual_spend=totals.savings_estimated_actual_spend,
@@ -847,12 +880,12 @@ async def get_auto_router_benchmarks(
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
     baseline, and prompt-caching behaviour bucketed by what the router did.
 
-    Reads session rollups folded once per request at spend-write time, so this endpoint
-    never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
-    internal user when written; older key-only history remains outside user views. A session
-    is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
-    end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
-    over that bucket's turns.
+    Total savings use the same request-date daily aggregation as Overall cost optimization,
+    including recorded history and requests without session IDs. Costs use matching request
+    dates with explicit coverage for history predating daily router cost tracking. Session
+    statistics and per-router groups cover whole sessions that overlap the window.
+    A user filter uses the user recorded when each row was written.
+    Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is over its turns.
 
     The rollup supplies the measures, never the list. Which routers appear comes from the
     model registry, so one shows up as soon as it is configured and reads zero until it
@@ -887,11 +920,35 @@ async def get_auto_router_benchmarks(
         *(_benchmark_group(row) for row in rows),
         *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
     )
+    session_totals: Final = _benchmark_totals(_summed_agg_row(rows))
+    saved_spend, costs = await _daily_router_costs(
+        prisma_client,
+        start_day.strftime("%Y-%m-%d"),
+        end_day.strftime("%Y-%m-%d"),
+        api_key,
+        user_id,
+    )
+    baseline_spend: Final = costs.baseline_spend(saved_spend)
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
         routers_in_scope=len(groups),
-        totals=_benchmark_totals(_summed_agg_row(rows)),
+        totals=session_totals.model_copy(
+            update=MappingProxyType(
+                {
+                    "saved_spend": saved_spend,
+                    "spend": costs.recorded_spend,
+                    "llm_spend": costs.recorded_llm_spend,
+                    "classifier_cost": costs.recorded_classifier_cost,
+                    "cost_coverage": costs.coverage,
+                    "cost_requests": costs.requests if costs.complete else None,
+                    "savings_estimated_turns": costs.estimated_requests,
+                    "savings_estimated_actual_spend": costs.estimated_actual_spend,
+                    "baseline_spend": baseline_spend,
+                    "saved_pct": _pct(saved_spend, baseline_spend) if baseline_spend is not None else None,
+                }
+            )
+        ),
         groups=groups,
     )
 
@@ -927,7 +984,7 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
-    saved_spend, baseline_spend = _savings_cohort(
+    _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
     )
     return AutoRouterSessionResponse(
@@ -939,11 +996,11 @@ async def get_auto_router_session(
         spend=row.spend,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
-        saved_spend=saved_spend,
-        baseline_spend=baseline_spend if row.savings_estimated_turns == row.turns else None,
-        savings_estimated_baseline_spend=baseline_spend,
+        saved_spend=row.saved_spend,
+        baseline_spend=_recorded_baseline_spend(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend),
+        savings_estimated_baseline_spend=estimated_baseline_spend,
         baseline_model=row.baseline_model,
-        baseline_models=row.savings_estimated_baseline_models,
+        baseline_models=row.baseline_models,
     )
 
 

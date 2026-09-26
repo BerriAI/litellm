@@ -949,6 +949,7 @@ class PrismaManager:
                             prisma_command_timeout,
                             run_prisma,
                         )
+                        from litellm_proxy_extras.utils import ProxyExtrasDBManager
                     except ImportError as e:
                         verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
                         return False
@@ -967,6 +968,7 @@ class PrismaManager:
                         stdout=None,
                         stderr=None,
                     )
+                    ProxyExtrasDBManager.apply_autorouter_daily_coverage()
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
             except subprocess.TimeoutExpired as e:

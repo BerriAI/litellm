@@ -3,6 +3,7 @@
 import re
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Final
 
 import pytest
 
@@ -55,20 +56,30 @@ def test_conflict_key_normalizes_every_nullable_key_column(column):
 
 
 @pytest.mark.parametrize("order", [("null_first"), ("empty_first")])
-def test_null_and_empty_provider_merge_into_one_row(order):
+@pytest.mark.parametrize("entity", ["user", "tag"])
+def test_null_and_empty_provider_merge_into_one_row(order, entity):
     """Two queue entries differing only in NULL versus '' arbitrate to the same row.
     Postgres rejects one statement touching a row twice, so they must be folded first.
     Asserted under both input orders: a single ordering would prove nothing here."""
-    null_entry = tag_txn(custom_llm_provider=None, spend=0.25, api_requests=1)
-    empty_entry = tag_txn(custom_llm_provider="", spend=0.75, api_requests=3)
+    metrics: Final = {
+        "autorouter_accounted_requests": 1, "autorouter_requests": 1,
+        "autorouter_llm_spend": 0.5, "autorouter_classifier_cost": 0.125,
+        "autorouter_classifier_cost_recorded_requests": 1,
+        "autorouter_estimated_requests": 1, "autorouter_estimated_actual_spend": 0.625,
+    }
+    null_entry = tag_txn(custom_llm_provider=None, spend=0.25, api_requests=1, **metrics)
+    empty_entry = tag_txn(custom_llm_provider="", spend=0.75, api_requests=3, **metrics)
     transactions = (null_entry, empty_entry) if order == "null_first" else (empty_entry, null_entry)
 
-    merged = merge_by_conflict_key(TAG_TABLE, transactions)
+    merged = merge_by_conflict_key(DAILY_SPEND_TABLES[entity], transactions)
 
     assert len(merged) == 1
     _, folded = merged[0]
     assert folded["spend"] == pytest.approx(1.0)
     assert folded["api_requests"] == 4
+    if entity == "user":
+        for field, value in metrics.items():
+            assert folded[field] == value * 2
 
 
 def test_distinct_keys_are_not_merged_and_are_ordered_deterministically():

@@ -628,6 +628,42 @@ def prompt_caching_savings_for_request(
     return _prompt_caching_savings(request_pricing[1], request_pricing[0], usage_object, cost_breakdown, billed_at)
 
 
+def known_autorouter_savings(
+    model: str | None,
+    custom_llm_provider: str | None,
+    routing_decision: Mapping[str, object] | None,
+    usage_object: Mapping[str, object] | None,
+    model_id: str | None = None,
+    llm_router: "Callable[[], Router | None] | None" = None,
+    cost_breakdown: Mapping[str, object] | None = None,
+    recorded_autorouter_savings: object = None,
+    recorded_autorouter_savings_estimate: Mapping[str, object] | None = None,
+) -> float | None:
+    recorded: Final = (
+        recorded_estimated_autorouter_savings(
+            MappingProxyType(
+                {
+                    "autorouter_savings": recorded_autorouter_savings,
+                    "autorouter_savings_estimate": recorded_autorouter_savings_estimate,
+                }
+            )
+        )
+        if recorded_autorouter_savings_estimate is not None
+        else _numeric_savings(recorded_autorouter_savings)
+    )
+    if recorded is not None or recorded_autorouter_savings_estimate is not None:
+        return recorded
+    return autorouter_savings_for_request(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        routing_decision=routing_decision,
+        usage_object=usage_object,
+        model_id=model_id,
+        llm_router=llm_router,
+        cost_breakdown=cost_breakdown,
+    )
+
+
 def compute_savings_spend(
     model: str | None,
     custom_llm_provider: str | None,
@@ -697,32 +733,16 @@ def compute_savings_spend(
     prompt_caching: Final = _prompt_caching_savings(pricing, provider, usage_object, cost_breakdown, billed_at) or 0.0
     gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0
 
-    # The figure the logging path recorded wins, before the usage gate on purpose: a row
-    # whose usage no longer parses still carries the number computed when it did.
-    recorded_savings: Final = (
-        recorded_estimated_autorouter_savings(
-            MappingProxyType(
-                {
-                    "autorouter_savings": recorded_autorouter_savings,
-                    "autorouter_savings_estimate": recorded_autorouter_savings_estimate,
-                }
-            )
-        )
-        if recorded_autorouter_savings_estimate is not None
-        else _numeric_savings(recorded_autorouter_savings)
-    )
-    autorouter: Final = (
-        recorded_savings
-        if recorded_savings is not None or recorded_autorouter_savings_estimate is not None
-        else autorouter_savings_for_request(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            routing_decision=routing_decision,
-            usage_object=usage_object,
-            model_id=model_id,
-            llm_router=llm_router,
-            cost_breakdown=cost_breakdown,
-        )
+    autorouter: Final = known_autorouter_savings(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        routing_decision=routing_decision,
+        usage_object=usage_object,
+        model_id=model_id,
+        llm_router=llm_router,
+        cost_breakdown=cost_breakdown,
+        recorded_autorouter_savings=recorded_autorouter_savings,
+        recorded_autorouter_savings_estimate=recorded_autorouter_savings_estimate,
     )
     return SavingsSpend(
         compression=compression,

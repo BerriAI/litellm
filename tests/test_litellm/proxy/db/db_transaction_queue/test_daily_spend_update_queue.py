@@ -209,6 +209,13 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "prompt_caching_savings_spend": 0,
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
+        "autorouter_accounted_requests": 0,
+        "autorouter_requests": 0,
+        "autorouter_llm_spend": 0,
+        "autorouter_classifier_cost": 0,
+        "autorouter_classifier_cost_recorded_requests": 0,
+        "autorouter_estimated_requests": 0,
+        "autorouter_estimated_actual_spend": 0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
     }
@@ -263,6 +270,13 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "prompt_caching_savings_spend": 0,
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
+        "autorouter_accounted_requests": 0,
+        "autorouter_requests": 0,
+        "autorouter_llm_spend": 0,
+        "autorouter_classifier_cost": 0,
+        "autorouter_classifier_cost_recorded_requests": 0,
+        "autorouter_estimated_requests": 0,
+        "autorouter_estimated_actual_spend": 0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
     }
@@ -549,7 +563,7 @@ async def test_every_optional_daily_metric_aggregates(daily_spend_update_queue):
         # additive metrics may be declared NotRequired[float] for rows queued by a pod
         # running the previous release, so unwrap before matching
         args = get_args(annotation)
-        return (args[0] if args else annotation) in (int, float)
+        return _numeric(args[0]) if args else annotation in (int, float)
 
     numeric_fields = [
         name for name, annotation in BaseDailySpendTransaction.__annotations__.items() if _numeric(annotation)

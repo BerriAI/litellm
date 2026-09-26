@@ -1,6 +1,7 @@
 """Idempotent journal migration and primary transactional ownership."""
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import AsyncGenerator, Iterator
@@ -101,3 +102,49 @@ async def test_locked_projection_is_bounded_and_cancellation_propagates(
             with pytest.raises(asyncio.CancelledError):
                 await pending
         assert await store.project("scope") == "unchanged"
+
+
+_COVERAGE_MIGRATION: Final = Path(__file__).parents[2] / (
+    "litellm-proxy-extras/litellm_proxy_extras/migrations/20260923000000_add_daily_autorouter_costs/migration.sql"
+)
+
+
+@pytest.mark.parametrize("repair", (False, True))
+def test_daily_coverage_install_and_old_publisher_preserve_history(
+    database: tuple[str, psycopg.Connection[tuple[object, ...]]], repair: bool,
+) -> None:
+    _, connection = database
+    connection.execute("""CREATE TABLE "LiteLLM_DailyUserSpend" (
+        id TEXT PRIMARY KEY, user_id TEXT, date TEXT, api_key TEXT, model TEXT, custom_llm_provider TEXT,
+        mcp_namespaced_tool_name TEXT, endpoint TEXT, model_group TEXT, updated_at TIMESTAMP,
+        spend FLOAT8 DEFAULT 0, autorouter_savings_spend FLOAT8 DEFAULT 0,
+        UNIQUE (user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint));
+        INSERT INTO "LiteLLM_DailyUserSpend"
+        (id,user_id,date,api_key,model,custom_llm_provider,mcp_namespaced_tool_name,endpoint,spend,autorouter_savings_spend)
+        VALUES ('recorded','owner','2026-09-23','key','','','','',10,30)""")
+    connection.execute(
+        'INSERT INTO "LiteLLM_AutoRouterBaselineObservation" (request_id,scope,started_at,revision,data) '
+        "VALUES ('request','scope',0,1,%s)",
+        (json.dumps({"daily": {"date": "2026-09-23", "api_key": "key",
+                              "targets": [{"entity": "user", "entity_id": "owner"}]}}),),
+    )
+    connection.execute(_COVERAGE_MIGRATION.read_text())
+    if repair:
+        connection.execute('ALTER TABLE "LiteLLM_AutoRouterBaselineObservation" '
+                           'DISABLE TRIGGER litellm_update_daily_autorouter_coverage')
+    connection.execute(_COVERAGE_MIGRATION.read_text())
+    for status, expected_count, expected_actual in (
+        ("estimated", 1, 2), ("estimated", 1, 2), ("unknown", 0, 0), ("estimated", 1, 2),
+    ):
+        connection.execute(
+            'UPDATE "LiteLLM_AutoRouterBaselineObservation" SET publication=%s WHERE request_id=%s',
+            (json.dumps({"status": status, "actual_spend": 2, "baseline_spend": 2}), "request"),
+        )
+        assert connection.execute(
+            "SELECT id,spend,autorouter_savings_spend,autorouter_estimated_requests,autorouter_estimated_actual_spend "
+            'FROM "LiteLLM_DailyUserSpend"'
+        ).fetchall() == [("recorded", 10, 30, expected_count, expected_actual)]
+    connection.execute('DELETE FROM "LiteLLM_AutoRouterBaselineObservation"')
+    assert connection.execute(
+        'SELECT autorouter_estimated_requests,autorouter_estimated_actual_spend FROM "LiteLLM_DailyUserSpend"'
+    ).fetchall() == [(1, 2)]

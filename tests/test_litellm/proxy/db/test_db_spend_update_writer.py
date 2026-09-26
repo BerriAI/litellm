@@ -2789,6 +2789,7 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent(
 
     payload = {
         "request_id": "req-no-compression",
+        "status": "success",
         "user": "test-user",
         "startTime": "2026-07-17T00:00:00",
         "api_key": "test-key",
@@ -2819,6 +2820,8 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent(
     assert transaction["prompt_caching_savings_spend"] == 0
     assert transaction["spend"] == 0.01
     assert transaction["autorouter_savings_spend"] == expected
+    assert transaction["autorouter_estimated_requests"] == int(expected != 0.0)
+    assert transaction["autorouter_estimated_actual_spend"] == (0.015 if expected != 0.0 else 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -3578,6 +3581,47 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
     assert internal["autorouter_savings_spend"] == 0.0
     assert user_sent["api_requests"] == 1
     assert user_sent["successful_requests"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved, estimate", [
+    (0.0, None), (-0.25, None), (0.5, None),
+    (0.0, {"version": 3, "status": "estimated"}),
+    (0.5, {"version": 3, "status": "unknown"}),
+])
+@pytest.mark.parametrize("kind", ("routed", "plain", "failed", "internal", "malformed", "empty"))
+async def test_daily_router_costs_account_for_every_external_request_without_a_session(
+    saved: float, estimate: dict[str, object] | None, kind: str,
+) -> None:
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status.return_value = "failure" if kind == "failed" else "success"
+    decision: Final = {"router_model_name": "auto", "classifier_cost": 0.125}
+    metadata: Final = {
+        "routing_decision": {"plain": None, "malformed": ["not-a-decision"], "empty": {}}.get(kind, decision),
+        "internal_call_origin": "autorouter_classifier" if kind == "internal" else None,
+        "autorouter_savings": saved,
+        "autorouter_savings_estimate": estimate,
+    }
+    transaction: Final = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload={
+            "user": "request-user", "startTime": "2026-09-23T23:59:59+00:00", "api_key": "hash",
+            "model": "selected", "model_group": "auto", "custom_llm_provider": "openai",
+            "call_type": "acompletion", "prompt_tokens": 10, "completion_tokens": 5,
+            "status": "failure" if kind == "failed" else "success", "spend": 0.5, "metadata": json.dumps(metadata),
+        },
+        prisma_client=prisma, type="user",
+    )
+    assert transaction is not None
+    routed: Final = kind == "routed"
+    estimated: Final = routed and (estimate is None or estimate["status"] == "estimated")
+    assert transaction["autorouter_accounted_requests"] == transaction["api_requests"] == int(kind != "internal")
+    assert transaction["autorouter_requests"] == int(routed)
+    assert transaction["autorouter_llm_spend"] == (0.5 if routed else 0.0)
+    assert transaction["autorouter_classifier_cost"] == (0.125 if routed else 0.0)
+    assert transaction["autorouter_classifier_cost_recorded_requests"] == int(routed)
+    assert transaction["autorouter_estimated_requests"] == int(estimated)
+    assert transaction["autorouter_estimated_actual_spend"] == (0.625 if estimated else 0.0)
 
 
 def _response_time_payload(request_duration_ms: object, metadata: dict | None = None) -> dict:
