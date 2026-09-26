@@ -20,7 +20,7 @@ from typing import Any, Dict
 
 import pytest
 
-from tests.test_litellm.caching._redis_script_fakes import fake_scripts
+from tests.unit.caching._redis_script_fakes import fake_scripts
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (

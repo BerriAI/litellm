@@ -4,11 +4,12 @@ Not shipped: ``litellm/caching/_redis_scripts.py`` is generated from this module
 checked in, so litellm itself never imports redis-lua-py. After editing a script here,
 regenerate with:
 
-    uv run python -m redis_lua_py generate redis_scripts.scripts --out litellm/caching/_redis_scripts.py
+    uv run --with redis-lua-py==0.13.0 python -m redis_lua_py generate redis_scripts.scripts --out litellm/caching/_redis_scripts.py
 
-``tests/test_litellm/caching/test_redis_scripts.py`` fails while the generated module
-is out of date. Script bodies are compiled to Lua, never run as Python; see
-https://ignacemaes.com/redis-lua-py/ for what they may contain.
+``tests/unit/caching/test_redis_scripts.py`` fails while the generated module
+is out of date, whenever redis-lua-py is installed. Script bodies are compiled
+to Lua, never run as Python; see https://ignacemaes.com/redis-lua-py/ for what
+they may contain.
 """
 
 from __future__ import annotations

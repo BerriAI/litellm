@@ -17,7 +17,7 @@ busy holder; a Redis blip degrades to an extra refresh, never a stale bearer.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, field
 from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
@@ -25,6 +25,10 @@ from litellm.caching._redis_scripts import delete_if_owner, pexpire_if_owner
 from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_coordinator import (
     LockAcquisition,
 )
+
+
+def _unnamespaced(key: str) -> str:
+    return key
 
 
 class RedisCommands(Protocol):
@@ -43,7 +47,8 @@ class RedisCommands(Protocol):
 class RedisDistributedLock:
     client: RedisCommands
     _: KW_ONLY
-    namespace_key: Callable[[str], str] = lambda key: key
+    # A factory, not a plain default: a function stored on the class reads as a method to static analysis.
+    namespace_key: Callable[[str], str] = field(default_factory=lambda: _unnamespaced)
 
     async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition:
         try:

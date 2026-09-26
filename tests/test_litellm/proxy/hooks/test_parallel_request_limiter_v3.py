@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import Router
-from tests.test_litellm.caching._redis_script_fakes import fake_scripts
+from tests.unit.caching._redis_script_fakes import fake_scripts
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
