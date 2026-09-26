@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, NoReturn
 
 from fastapi import HTTPException
 
@@ -47,5 +47,5 @@ def classify_agent_subject(
     return AgentSubject(kind="application", oid=oid, mode="autonomous")
 
 
-def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403) -> None:
+def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403) -> NoReturn:
     raise HTTPException(503 if failure.code == "policy_unavailable" else status_code, failure.message)
