@@ -313,6 +313,17 @@ def model_access_group_cache_key(access_group_name: str) -> str:
     return f"model_access_group:{access_group_name}"
 
 
+def live_model_access_group_limits_cache_key(access_group_name: str) -> str:
+    """Cache key the Live delegation gate stores one access group's full limit row under.
+
+    The gate needs the rpm and tpm columns that ``model_access_group:{name}`` flattens away, so it
+    keeps its own entry next to the flattened one. Any eviction of the flattened entry must clear
+    this key too: the gate reads cache-first, and a raised or lowered group limit left cached here
+    keeps permitting or refusing managed delegation until the entry's TTL expires (LIT-3803).
+    """
+    return f"live:model_access_group_limits:{access_group_name}"
+
+
 def model_access_group_registry_cache_key() -> str:
     """Cache key for the set of model access group names that have a budget row."""
     return "model_access_group_registry"

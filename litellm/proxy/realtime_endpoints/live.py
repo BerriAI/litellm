@@ -13,6 +13,8 @@ from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebS
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 from starlette.types import Message
 
+from litellm._logging import verbose_proxy_logger
+
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
@@ -28,10 +30,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    _cache_team_object,  # pyright: ignore[reportPrivateUsage]  # same cache write the chat path performs
+    _get_team_object_from_cache,  # pyright: ignore[reportPrivateUsage]  # same cache read the chat path performs
     can_key_call_resolved_model,  # pyright: ignore[reportUnknownVariableType]  # legacy authorization accepts untyped deployment lists
     can_org_access_model,
     can_user_call_model,
     collect_matched_model_access_groups,
+    get_object_permission,
     get_org_object,
     get_project_object,
     get_team_membership,
@@ -40,7 +45,10 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import get_websocket_api_key, user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
+from litellm.proxy.common_utils.user_api_key_cache import (
+    get_management_object_ttl,
+    live_model_access_group_limits_cache_key,
+)
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # limiter class is the existing hook identity
 )
@@ -62,7 +70,6 @@ _routes: Final = APIRouter()
 _JSON: Final = TypeAdapter[JsonValue](JsonValue)
 _EMPTY: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 _CACHEABLE_MODEL = TypeVar("_CACHEABLE_MODEL", bound=BaseModel)
-_LIVE_GROUP_LIMITS_CACHE_PREFIX: Final = "live:model_access_group_limits:"
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
 _DEPLOYMENT: Final = TypeAdapter(LiveDeployment)
@@ -727,20 +734,39 @@ async def _live_team(auth: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
     if auth.team_id is None:
         return None
     team_id: Final = auth.team_id
-
-    async def load() -> LiteLLM_TeamTableCachedObj | None:
-        row: Final = await TeamRepository(server.prisma_client).find_by_id(team_id, id_field="team_id")
-        if row is None:
-            return None
-        team: Final = LiteLLM_TeamTableCachedObj.model_validate(row.model_dump())
-        team.last_refreshed_at = time.time()
-        return team
-
-    return await _live_cached_object(
+    cached: Final = await _get_team_object_from_cache(
         key=f"team_id:{team_id}",
-        model_type=LiteLLM_TeamTableCachedObj,
-        load=load,
+        user_api_key_cache=server.user_api_key_cache,
+        parent_otel_span=None,
     )
+    if cached is not None:
+        return cached
+
+    row: Final = await TeamRepository(server.prisma_client).find_by_id(team_id, id_field="team_id")
+    if row is None:
+        return None
+    team: Final = LiteLLM_TeamTableCachedObj.model_validate(row.model_dump())
+    if team.object_permission_id and not team.object_permission:
+        # The entry is written under the key the chat path reads, so it has to carry the same
+        # permission relation the chat path caches; a cache hit elsewhere must not see a team
+        # stripped of the permissions it was about to enforce.
+        try:
+            team.object_permission = await get_object_permission(
+                object_permission_id=team.object_permission_id,
+                prisma_client=server.prisma_client,
+                user_api_key_cache=server.user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=server.proxy_logging_obj,
+            )
+        except Exception as exc:  # noqa: BLE001  # same degradation as the chat path: cache the team without permissions and log it
+            verbose_proxy_logger.debug("Failed to load object_permission for Live team %s: %s", team_id, exc)
+    await _cache_team_object(
+        team_id=team_id,
+        team_table=team,
+        user_api_key_cache=server.user_api_key_cache,
+        proxy_logging_obj=server.proxy_logging_obj,
+    )
+    return team
 
 
 def _live_team_budget_configured(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable | None) -> bool:
@@ -848,7 +874,7 @@ async def _live_fetch_group_limits(groups: tuple[str, ...]) -> tuple[LiteLLM_Bud
     await asyncio.gather(
         *(
             server.user_api_key_cache.async_set_cache(
-                key=f"{_LIVE_GROUP_LIMITS_CACHE_PREFIX}{group}",
+                key=live_model_access_group_limits_cache_key(group),
                 value=limit,
                 model_type=LiteLLM_BudgetTable,
                 ttl=get_management_object_ttl(server.user_api_key_cache),
@@ -866,7 +892,7 @@ async def _live_model_group_limits(groups: tuple[str, ...]) -> tuple[LiteLLM_Bud
     cached: Final = await asyncio.gather(
         *(
             server.user_api_key_cache.async_get_cache(
-                key=f"{_LIVE_GROUP_LIMITS_CACHE_PREFIX}{group}",
+                key=live_model_access_group_limits_cache_key(group),
                 model_type=LiteLLM_BudgetTable,
             )
             for group in groups

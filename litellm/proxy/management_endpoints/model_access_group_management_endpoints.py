@@ -26,6 +26,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    live_model_access_group_limits_cache_key,
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
 )
@@ -200,7 +201,14 @@ async def _evict_model_access_group_cache_keys(access_group: str, auth_cache: Us
     )
 
     await evict_and_broadcast(
-        cache_keys=(model_access_group_cache_key(access_group), model_access_group_registry_cache_key()),
+        cache_keys=(
+            model_access_group_cache_key(access_group),
+            # The Live delegation gate caches the same group's full limit row next to the flattened
+            # entry because it needs the rpm and tpm columns; leaving that entry behind keeps the
+            # old limit deciding managed delegation until its TTL expires.
+            live_model_access_group_limits_cache_key(access_group),
+            model_access_group_registry_cache_key(),
+        ),
         user_api_key_cache=auth_cache,
     )
 

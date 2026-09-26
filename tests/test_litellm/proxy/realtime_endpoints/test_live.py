@@ -1484,6 +1484,32 @@ async def test_managed_budget_fails_closed_when_the_team_row_is_unreadable(monke
 
 
 @pytest.mark.asyncio
+async def test_live_team_caches_the_permission_relation_with_the_team(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    team = LiteLLM_TeamTable(team_id="team", object_permission_id="perm-1")
+    db = SimpleNamespace(
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+        litellm_objectpermissiontable=SimpleNamespace(
+            find_unique=AsyncMock(return_value=LiteLLM_ObjectPermissionTable(object_permission_id="perm-1"))
+        ),
+    )
+    cache = _auth_cache()
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+
+    loaded: Final = await live._live_team(UserAPIKeyAuth(api_key="owner", team_id="team"))
+    assert loaded is not None and loaded.object_permission is not None
+
+    cached_entries: Final = [
+        call.kwargs["value"] for call in cache.async_set_cache.await_args_list if call.kwargs["key"] == "team_id:team"
+    ]
+    assert len(cached_entries) == 1, "the team must be cached under the key the chat path reads"
+    assert cached_entries[0].object_permission is not None
+
+
+@pytest.mark.asyncio
 async def test_managed_budget_fails_closed_when_the_default_budget_is_unreadable(monkeypatch):
     from litellm.proxy import proxy_server
 
