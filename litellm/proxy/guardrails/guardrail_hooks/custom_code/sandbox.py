@@ -27,13 +27,15 @@ from RestrictedPython import (
     safe_builtins,
     utility_builtins,
 )
-from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
+from RestrictedPython.Eval import default_guarded_getitem
 from RestrictedPython.Guards import (
     full_write_guard,
     guarded_iter_unpack_sequence,
     safer_getattr,
 )
+from RestrictedPython.transformer import copy_locations
 
+from .bounded_execution import budget_ok, budgeted_iter
 from .primitives import get_custom_code_primitives
 
 
@@ -46,10 +48,30 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
     check, print-scope wrapping, and any future additions to that method are
     inherited automatically. ``AsyncFor``/``AsyncWith``/``Await`` delegate to
     ``node_contents_visit`` so their children still get transformed.
+
+    ``visit_While`` rewrites ``while test:`` to ``while _budget_ok_() and test:``
+    so a loop that never yields is still stopped at the execution deadline;
+    ``for`` loops and comprehensions get the same check through ``_getiter_``.
     """
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
         return self.visit_FunctionDef(node)
+
+    def visit_While(self, node: ast.While) -> ast.AST:
+        visited: Final = self.node_contents_visit(node)
+        budget_check: Final = ast.Call(
+            func=ast.Name(id="_budget_ok_", ctx=ast.Load()),
+            args=[],  # mutable-ok: ast accepts list fields only
+            keywords=[],  # mutable-ok: ast accepts list fields only
+        )
+        test: Final = ast.BoolOp(
+            op=ast.And(),
+            values=[budget_check, visited.test],  # mutable-ok: ast accepts list fields only
+        )
+        copy_locations(test, visited.test)
+        bounded: Final = ast.While(test=test, body=visited.body, orelse=visited.orelse)
+        copy_locations(bounded, visited)
+        return bounded
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
         return self.node_contents_visit(node)
@@ -113,10 +135,11 @@ def build_sandbox_globals() -> dict[str, object]:
         "__builtins__": _build_sandbox_builtins(),
         "_getattr_": safer_getattr,
         "_getitem_": default_guarded_getitem,
-        "_getiter_": default_guarded_getiter,
+        "_getiter_": budgeted_iter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
         "_write_": full_write_guard,
         "_inplacevar_": _inplacevar_,
+        "_budget_ok_": budget_ok,
     }
 
 
