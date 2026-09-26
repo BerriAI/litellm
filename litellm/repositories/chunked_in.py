@@ -63,7 +63,7 @@ def _filters_field(where: Mapping[str, object], field: str) -> bool:
 
 
 def _chunk_filter(field: str, chunk: tuple[Hashable, ...], where: Mapping[str, object] | None) -> Mapping[str, object]:
-    membership: Final = {field: {"in": chunk}}  # mutable-ok: prisma's query builder only accepts dict filters
+    membership: Final = {field: {"in": list(chunk)}}  # mutable-ok: the dict and list a hand-written filter sends
     if where is None:
         return membership
     return {"AND": (dict(where), membership)}  # mutable-ok: prisma's query builder only accepts dict filters

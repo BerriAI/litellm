@@ -238,3 +238,9 @@ async def test_a_chunk_size_outside_1_to_the_max_is_refused_before_any_query(
         with pytest.raises(ValueError, match="chunk_size"):
             await operation
     assert table.filters == []
+
+
+async def test_the_chunk_filter_equals_a_hand_written_filter() -> None:
+    table = _table(2)
+    await find_many_in(table, "id", ["id-0", "id-1", "id-0"])
+    assert table.filters == [{"id": {"in": ["id-0", "id-1"]}}]

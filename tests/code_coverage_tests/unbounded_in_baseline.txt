@@ -141,7 +141,6 @@ litellm/proxy/proxy_server.py _add_access_group_models_to_team_models prisma acc
 litellm/proxy/proxy_server.py _fetch_db_models_for_search prisma not.in 0
 litellm/proxy/proxy_server.py _gather_team_accessible_model_ids prisma model_name.in 0
 litellm/proxy/proxy_server.py get_all_team_models prisma team_id.in 0
-litellm/proxy/spend_tracking/key_metadata_recovery.py _details_for_user_ids prisma user_id.in 0
 litellm/proxy/spend_tracking/ptu_flat_cost_rollup.py _prune_filter prisma model.in 0
 litellm/proxy/spend_tracking/spend_management_endpoints.py _find_team_rows prisma team_id.in 0
 litellm/proxy/spend_tracking/spend_management_endpoints.py ui_view_session_spend_logs prisma team_id.in 0

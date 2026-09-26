@@ -3,6 +3,7 @@ import uuid
 from datetime import timedelta
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -12,10 +13,47 @@ from prisma import Prisma
 from prisma.errors import DataError
 from psycopg import sql
 
+from litellm.proxy.spend_tracking.key_metadata_recovery import attach_user_details
 from litellm.repositories.chunked_in import count_in, delete_many_in, find_many_in, update_many_in
 
 ROWS: Final = 40_000
 OUTSIDE: Final = 25
+
+
+def _scoped_url(url: str, schema: str) -> str:
+    parsed: Final = urlsplit(url)
+    return urlunsplit(parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema})))
+
+
+@asynccontextmanager
+async def _user_table(users: int) -> AsyncIterator[Prisma]:
+    """A private schema holding a copy of the migrated `LiteLLM_UserTable`, seeded with `users` rows."""
+    schema: Final = f"integration_{uuid.uuid4().hex}"
+    url: Final = os.environ["DATABASE_URL"]
+    table: Final = sql.Identifier(schema, "LiteLLM_UserTable")
+    with psycopg.connect(url, autocommit=True) as setup:
+        setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            setup.execute(
+                sql.SQL('CREATE TABLE {} (LIKE "LiteLLM_UserTable" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)').format(
+                    table
+                )
+            )
+            setup.execute(
+                sql.SQL(
+                    "INSERT INTO {} (user_id, user_email) "
+                    "SELECT 'user-' || n, 'user-' || n || '@example.com' FROM generate_series(0, %s) n"
+                ).format(table),
+                (users - 1,),
+            )
+            database: Final = Prisma(datasource={"url": _scoped_url(url, schema)})
+            await database.connect()
+            try:
+                yield database
+            finally:
+                await database.disconnect()
+        finally:
+            setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
 @asynccontextmanager
@@ -23,10 +61,7 @@ async def _config_table() -> AsyncIterator[tuple[Prisma, str]]:
     """A private schema holding only `LiteLLM_Config`, seeded with ROWS listed and OUTSIDE unlisted rows."""
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
-    parsed: Final = urlsplit(url)
-    scoped_url: Final = urlunsplit(
-        parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema}))
-    )
+    scoped_url: Final = _scoped_url(url, schema)
     table: Final = sql.Identifier(schema, "LiteLLM_Config")
     with psycopg.connect(url, autocommit=True) as setup:
         setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
@@ -117,3 +152,11 @@ async def test_delete_many_in_deletes_every_listed_row_and_nothing_else() -> Non
         )
         assert deleted == ROWS
         assert _count(schema, sql.SQL("TRUE")) == OUTSIDE
+
+
+@pytest.mark.covers("other.database.chunked_in.key_metadata_recovery_attaches_details_past_the_bind_parameter_cap")
+async def test_key_metadata_recovery_attaches_user_details_for_more_users_than_the_bind_parameter_cap() -> None:
+    async with _user_table(ROWS) as database:
+        recovered: Final = {f"key-{n}": {"key_alias": f"alias-{n}", "user_id": f"user-{n}"} for n in range(ROWS)}
+        attached: Final = await attach_user_details(SimpleNamespace(db=database), recovered)  # pyright: ignore[reportArgumentType]  # only .db is read
+        assert all(attached[f"key-{n}"].get("user_email") == f"user-{n}@example.com" for n in range(ROWS))
