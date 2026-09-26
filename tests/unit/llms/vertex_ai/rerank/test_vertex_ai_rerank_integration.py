@@ -115,8 +115,16 @@ class TestVertexAIRerankIntegration:
         # Results should be sorted by relevance score (descending)
         assert result.results[0]["index"] == 3  # Highest score
         assert result.results[0]["relevance_score"] == 0.95
+        assert (
+            result.results[0]["document"]["text"]
+            == "Google's Gemini AI model represents a significant advancement in artificial intelligence technology."
+        )
         assert result.results[1]["index"] == 0  # Second highest score
         assert result.results[1]["relevance_score"] == 0.92
+        assert (
+            result.results[1]["document"]["text"]
+            == "Gemini is a cutting edge large language model created by Google."
+        )
 
         # Verify metadata: 4 input records bill as 1 search unit (ceil(4/100))
         assert result.meta["billed_units"]["search_units"] == 1
@@ -159,6 +167,7 @@ class TestVertexAIRerankIntegration:
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=mock_logging,
+            request_data=request_data,
         )
 
         # Verify response structure with default scores
@@ -168,6 +177,7 @@ class TestVertexAIRerankIntegration:
                 result_item["relevance_score"] == 1.0
             )  # Default score when details are ignored
             assert "index" in result_item
+            assert "document" not in result_item
 
     def test_document_title_generation(self):
         """Test that document titles are generated correctly from content."""
