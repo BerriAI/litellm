@@ -13,7 +13,6 @@ from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import brotli
 import certifi
 import httpx
 import pytest
@@ -1884,15 +1883,15 @@ async def test_bounded_get_bounds_an_already_read_body_on_its_decoded_length(mon
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("encoding", "compress"),
-    [("gzip", gzip.compress), ("deflate", zlib.compress), ("br", brotli.compress)],
+    [("gzip", gzip.compress), ("deflate", zlib.compress), ("br", None)],
 )
 async def test_bounded_get_never_inflates_a_compressed_body_past_the_cap(
-    respx_mock, monkeypatch, encoding: str, compress: Callable[[bytes], bytes]
+    respx_mock, monkeypatch, encoding: str, compress: Callable[[bytes], bytes] | None
 ):
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     inflated: Final = 64 * 1024 * 1024
     cap: Final = 1024 * 1024
-    bomb: Final = compress(b"\0" * inflated)
+    bomb: Final = (compress or pytest.importorskip("brotli").compress)(b"\0" * inflated)
     assert len(bomb) < cap
 
     class WireStream(httpx.AsyncByteStream):
@@ -1910,6 +1909,29 @@ async def test_bounded_get_never_inflates_a_compressed_body_past_the_cap(
         tracemalloc.stop()
         await handler.close()
     assert peak < 4 * cap, f"decoder materialized {peak} bytes for a {cap} byte cap"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [("gzip", gzip.compress), ("deflate", zlib.compress), ("br", None)],
+)
+async def test_bounded_get_decodes_a_compressed_body_under_the_cap_and_rejects_a_truncated_one(
+    respx_mock, monkeypatch, encoding: str, compress: Callable[[bytes], bytes] | None
+):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document: Final = b"line %d of the notes\n" * 2000 % tuple(range(2000))
+    wire: Final = (compress or pytest.importorskip("brotli").compress)(document)
+    for name, body in (("whole", wire), ("cut", wire[: len(wire) // 2])):
+        respx_mock.get(f"https://cdn.example/{name}").respond(200, content=body, headers={"content-encoding": encoding})
+    handler = AsyncHTTPHandler()
+    try:
+        served = await handler.get("https://cdn.example/whole", max_response_bytes=len(document))
+        assert served.content == document
+        with pytest.raises(httpx.DecodingError, match="ended before the end of the stream"):
+            await handler.get("https://cdn.example/cut", max_response_bytes=len(document))
+    finally:
+        await handler.close()
 
 
 @pytest.mark.asyncio
