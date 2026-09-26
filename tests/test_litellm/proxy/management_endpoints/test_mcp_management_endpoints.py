@@ -8239,10 +8239,23 @@ def _lit3974_prisma_client(
 
     def find_many_side_effect(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
         where: Final[object | None] = kwargs.get("where")
-        return [] if isinstance(where, Mapping) and "submitted_by" in where else [server]
+        if not isinstance(where, Mapping):
+            return [server]
+        if "submitted_by" in where and where["submitted_by"] != server.submitted_by:
+            return []
+        server_filter: Final = where.get("server_id")
+        if isinstance(server_filter, Mapping):
+            return [server] if server.server_id in server_filter.get("in", ()) else []
+        if isinstance(server_filter, str):
+            return [server] if server.server_id == server_filter else []
+        return [server]
+
+    def find_unique_side_effect(**kwargs: object) -> LiteLLM_MCPServerTable | None:
+        where: Final[object | None] = kwargs.get("where")
+        return server if isinstance(where, Mapping) and where.get("server_id") == server.server_id else None
 
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=find_many_side_effect)
-    prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=server)
+    prisma.db.litellm_mcpservertable.find_unique = AsyncMock(side_effect=find_unique_side_effect)
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
     prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=organization)
@@ -8785,6 +8798,97 @@ class TestLIT3974ResolutionRegressions:
 
 
 class TestLIT3974ResolutionCharacterization:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("caller", ["denied", "admin"])
+    @pytest.mark.parametrize(
+        "approval_status,registered",
+        [
+            ("pending_review", False),
+            ("rejected", False),
+            ("draft", False),
+            ("pending_review", True),
+            ("rejected", True),
+            ("draft", True),
+            (None, False),
+            ("active", False),
+        ],
+    )
+    async def test_catalog_view_does_not_expose_hidden_database_details(
+        self, caller: str, approval_status: str | None, registered: bool
+    ) -> None:
+        server_id: Final = "lit3974_hidden_submission"
+        prisma, manager, auth = await self._resolution_case("db_runtime", caller, server_id)
+        hidden: Final = generate_mock_mcp_server_db_record(server_id=server_id).model_copy(
+            update={
+                "approval_status": approval_status,
+                "submitted_by": "another-user",
+                "review_notes": "private submission review",
+            }
+        )
+        prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=hidden)
+        if not registered:
+            manager.config_mcp_servers = {}
+        health: Final = AsyncMock(return_value=hidden)
+        add: Final = AsyncMock()
+        with (
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "add_server", add),
+            patch.object(manager, "health_check_server", health),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "view_all"}),
+        ):
+            listed: Final = await mgmt_endpoints.fetch_all_mcp_servers(auth, team_id=None)
+            assert (server_id in {item.server_id for item in listed}) is registered
+            if caller != "admin":
+                with pytest.raises(HTTPException) as error:
+                    await mgmt_endpoints.fetch_mcp_server(_make_mock_request(), server_id, auth)
+                assert error.value.status_code == 403
+                add.assert_not_awaited()
+                health.assert_not_awaited()
+                return
+            detail: Final = await mgmt_endpoints.fetch_mcp_server(_make_mock_request(), server_id, auth)
+        assert detail.server_id == server_id
+        assert detail.submitted_by == "another-user"
+        assert detail.review_notes == "private submission review"
+
+    @pytest.mark.asyncio
+    async def test_credential_metadata_resolves_permissions_once_for_multiple_servers(self) -> None:
+        first_id: Final = "lit3974_first_credential"
+        second_id: Final = "lit3974_second_credential"
+        prisma, manager, caller = await self._resolution_case("db_runtime", "allowed", first_id)
+        ids: Final = (first_id, second_id)
+        rows: Final = tuple(
+            generate_mock_mcp_server_db_record(server_id=sid, alias=f"alias-{sid}") for sid in ids
+        )
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(rows))
+        auth: Final = caller.model_copy(
+            update={"object_permission": LiteLLM_ObjectPermissionTable(
+                object_permission_id="lit3974_multiple_credentials", mcp_servers=list(ids)
+            )}
+        )
+        manager.config_mcp_servers = {
+            **manager.config_mcp_servers,
+            second_id: generate_mock_mcp_server_config_record(server_id=second_id),
+        }
+        permissions: Final = AsyncMock(wraps=manager.get_allowed_mcp_servers)
+        credentials: Final = [{"server_id": sid, "expires_at": None, "connected_at": None} for sid in ids]
+        with (
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "get_allowed_mcp_servers", permissions),
+            patch.object(mgmt_endpoints, "list_user_oauth_credentials", AsyncMock(return_value=credentials)),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            result: Final = await mgmt_endpoints.list_mcp_user_credentials(auth)
+        assert [item.server_id for item in result] == list(ids)
+        assert [item.alias for item in result] == [row.alias for row in rows]
+        assert all(item.has_credential for item in result)
+        assert permissions.await_count <= 1, "credential count must not multiply permission resolution"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("source", ["db_runtime", "config"])
     @pytest.mark.parametrize(
