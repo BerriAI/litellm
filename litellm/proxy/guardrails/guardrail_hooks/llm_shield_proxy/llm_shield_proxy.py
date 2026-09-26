@@ -127,32 +127,45 @@ _RESPONSES_STRUCTURAL_FIELDS: Final = frozenset(
 # Terminal Responses API events that repeat the whole reply under `response`.
 _RESPONSES_TERMINAL_EVENTS: Final = frozenset(("response.completed", "response.incomplete"))
 
-# JSON Schema keywords that hold free text an application writes, and so can hold PII.
-# `enum` and `const` are deliberately absent: the model has to reproduce those values
-# exactly, and one redacted into the non-restorable vault would come back as a stand-in.
-_SCHEMA_TEXT_KEYWORDS: Final = frozenset(("description", "title"))
-_SCHEMA_VALUE_KEYWORDS: Final = frozenset(("examples", "default"))
-
-# JSON Schema keywords whose value is a map of name -> subschema, a single subschema, or
-# a list of subschemas. Knowing which is which is what lets the walk tell a property
-# *named* "description" apart from the `description` keyword.
-_SCHEMA_MAP_KEYWORDS: Final = frozenset(("properties", "patternProperties", "$defs", "definitions", "dependentSchemas"))
-_SCHEMA_KEYWORDS: Final = frozenset(
+# JSON Schema keywords whose value has to reach the model or a validator verbatim, so the
+# schema walk leaves them alone: types, formats, patterns, references, required-property
+# lists, and `enum` / `const`, which the model must reproduce exactly -- a value redacted
+# into the non-restorable vault would come back as a stand-in and break the call.
+# Everything else is scanned.
+_SCHEMA_STRUCTURAL_KEYWORDS: Final = frozenset(
     (
-        "items",
-        "additionalProperties",
-        "additionalItems",
-        "unevaluatedProperties",
-        "unevaluatedItems",
-        "propertyNames",
-        "contains",
-        "not",
-        "if",
-        "then",
-        "else",
+        "type",
+        "format",
+        "pattern",
+        "enum",
+        "const",
+        "required",
+        "dependentRequired",
+        "propertyOrdering",
+        "discriminator",
+        "contentEncoding",
+        "contentMediaType",
+        "$ref",
+        "$id",
+        "$schema",
+        "$anchor",
+        "$dynamicRef",
+        "$dynamicAnchor",
+        "$recursiveRef",
+        "$recursiveAnchor",
+        "$vocabulary",
     )
 )
-_SCHEMA_LIST_KEYWORDS: Final = frozenset(("allOf", "anyOf", "oneOf", "prefixItems"))
+
+# Keywords holding JSON values rather than schemas: every string in them is collected,
+# whatever the keys around it are called.
+_SCHEMA_VALUE_KEYWORDS: Final = frozenset(("examples", "default"))
+
+# Keywords whose value maps names to subschemas. Their keys are property names, not
+# keywords, so a property called `type` or `enum` is walked like any other subschema.
+_SCHEMA_MAP_KEYWORDS: Final = frozenset(
+    ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies")
+)
 
 # The accumulator the collectors below append into. It never escapes
 # _locate_request_texts, which freezes it into a tuple before returning.
@@ -347,29 +360,44 @@ def _collect_tool_definitions(data: MutableRequest, privileged: _SlotSink) -> No
 def _collect_schema_text(schema: object, privileged: _SlotSink) -> None:
     """Collects the free text in a JSON Schema, at any depth.
 
-    That is every `description` and `title` string, and every string inside `examples`
-    and `default`. The walk follows the schema's own structure -- `properties` and the
-    other subschema keywords -- rather than every nested dict, which is what tells a
-    property *named* "description" (a subschema, descended into) from the `description`
-    keyword (text, collected). Nested past `_MAX_JSON_DEPTH`, the request is refused.
+    Scan by default: every string is collected except under the keywords in
+    `_SCHEMA_STRUCTURAL_KEYWORDS`, whose values must go out verbatim. A list of keywords
+    *to* collect would leak every one it forgot -- draft-07 `dependencies`, a `$comment`,
+    a vendor `x-` extension -- which is how this walk started out.
+
+    Structure matters in two places. Under `properties` and the other name -> subschema
+    maps, keys are property names rather than keywords, so a property called `type` is a
+    subschema to walk, not a keyword to skip. And `examples` / `default` hold JSON values,
+    so all their strings are collected whatever the keys around them are called. Nested
+    past `_MAX_JSON_DEPTH`, the request is refused.
     """
     pending: Final[list] = [(schema, 0)]  # mutable-ok: local walk stack.
     while pending:
         node, depth = pending.pop()
+        if depth > _MAX_JSON_DEPTH:
+            if isinstance(node, (dict, list)) and node:
+                raise _RequestTooDeep("schema")
+            continue
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                _collect_entry(node, index, privileged)
+                if isinstance(item, (dict, list)):
+                    pending.append((item, depth + 1))
+            continue
         if not isinstance(node, dict):
             continue
-        if depth > _MAX_JSON_DEPTH:
-            raise _RequestTooDeep("schema")
         for keyword, value in tuple(node.items()):
-            if keyword in _SCHEMA_TEXT_KEYWORDS:
-                _collect(node, keyword, privileged)
-            elif keyword in _SCHEMA_VALUE_KEYWORDS:
+            if keyword in _SCHEMA_STRUCTURAL_KEYWORDS:
+                continue
+            if keyword in _SCHEMA_VALUE_KEYWORDS:
                 _collect(node, keyword, privileged)
                 _collect_json_leaves(value, privileged, strict=True)
             elif keyword in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
                 pending.extend((child, depth + 1) for child in value.values())
-            elif keyword in _SCHEMA_KEYWORDS or keyword in _SCHEMA_LIST_KEYWORDS:
-                pending.extend((child, depth + 1) for child in (value if isinstance(value, list) else (value,)))
+            elif isinstance(value, str):
+                _collect(node, keyword, privileged)
+            elif isinstance(value, (dict, list)):
+                pending.append((value, depth + 1))
 
 
 def _collect_output_contracts(data: MutableRequest, slots: _SlotSink, privileged: _SlotSink) -> None:

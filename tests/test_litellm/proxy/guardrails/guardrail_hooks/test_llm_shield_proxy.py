@@ -634,8 +634,8 @@ class TestRequestCoverage:
         assert data["input"][0]["summary"][0]["text"] == "user asked about [EMAIL_1]"
 
     def test_tool_schemas_give_up_their_free_text_and_nothing_else(self):
-        """Descriptions, titles, examples and defaults are collected. Names, types, enum
-        and const values must reach the model exactly as sent."""
+        """Every string is collected except what must reach the model verbatim: names,
+        types, formats, patterns, required lists, enum and const values."""
         data = {
             "tools": [
                 {
@@ -651,10 +651,23 @@ class TestRequestCoverage:
                                 "description": {"type": "string", "description": "named"},
                                 "kind": {"type": "string", "enum": ["a", "b"], "const": "a", "description": "enum"},
                                 "deep": {"type": "array", "items": {"type": "object", "description": "nested"}},
-                                "to": {"type": "string", "examples": ["example"], "default": "default"},
-                                "choice": {"anyOf": [{"type": "object", "default": {"who": "object-default"}}]},
+                                "to": {
+                                    "type": "string",
+                                    "format": "email",
+                                    "pattern": "^.+@.+$",
+                                    "examples": ["example"],
+                                    "default": "default",
+                                },
+                                "choice": {"anyOf": [{"type": "object", "default": {"type": "object-default"}}]},
+                                # Property names that collide with keywords are subschemas all the same.
+                                "type": {"type": "string", "description": "named-type"},
                             },
+                            "required": ["to"],
                             "$defs": {"shared": {"description": "defined"}},
+                            # Keywords nobody listed: scanned by default.
+                            "dependencies": {"mode": {"description": "dependent"}},
+                            "$comment": "comment",
+                            "x-note": "vendor",
                         },
                     },
                 }
@@ -663,15 +676,19 @@ class TestRequestCoverage:
         _, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
 
         assert sorted(text for text, _ in privileged) == [
+            "comment",
             "default",
             "defined",
+            "dependent",
             "enum",
             "example",
             "named",
+            "named-type",
             "nested",
             "object-default",
             "title",
             "top",
+            "vendor",
         ]
 
     def test_schema_nesting_past_the_bound_is_refused(self):
