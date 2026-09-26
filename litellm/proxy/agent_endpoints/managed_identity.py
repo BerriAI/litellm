@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import Final
 
+from fastapi import HTTPException
+
 from litellm.types.proxy.agent_identity import (
     AgentExecutionMode,
     AgentIdentityBinding,
@@ -44,3 +46,7 @@ def classify_agent_subject(
     if not frozenset(binding.required_roles).issubset(roles):
         return AgentIdentityFailure(message="Token lacks the required application roles")
     return AgentSubject(kind="application", oid=oid, mode="autonomous")
+
+
+def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403) -> None:
+    raise HTTPException(503 if failure.code == "policy_unavailable" else status_code, failure.message)
