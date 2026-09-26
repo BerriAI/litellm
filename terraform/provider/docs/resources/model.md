@@ -159,8 +159,6 @@ The following arguments are supported:
 
 * `input_cost_per_pixel` - (Optional) float. Cost applied per input pixel for models that charge by image size.
 
-* `input_cost_per_reference_pixel` - (Optional) float. Cost applied per reference image pixel for image-edit models.
-
 * `output_cost_per_pixel` - (Optional) float. Cost applied per output pixel for image-generation models.
 
 * `input_cost_per_second` - (Optional) float. Cost applied per input second for audio/transcription models.

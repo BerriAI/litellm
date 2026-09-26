@@ -159,9 +159,6 @@ pub struct ModelInfo {
     pub input_cost_per_pixel: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_query: Option<f64>,
-    /// USD per billable pixel of the reference images sent with an image edit (Azure AI FLUX.2 counts them in whole 1024x1024 megapixels).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_cost_per_reference_pixel: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_request: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -333,10 +333,6 @@
           "type": "number",
           "minimum": 0
         },
-        "input_cost_per_reference_pixel": {
-          "type": "number",
-          "minimum": 0
-        },
         "input_cost_per_request": {
           "type": "number",
           "minimum": 0

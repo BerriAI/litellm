@@ -126,10 +126,6 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if inputCostPerPixel := d.Get("input_cost_per_pixel").(float64); inputCostPerPixel > 0 {
 		litellmParams["input_cost_per_pixel"] = inputCostPerPixel
 	}
-	inputCostPerReferencePixel := d.Get("input_cost_per_reference_pixel").(float64)
-	if inputCostPerReferencePixel > 0 || (isUpdate && d.HasChange("input_cost_per_reference_pixel")) {
-		litellmParams["input_cost_per_reference_pixel"] = inputCostPerReferencePixel
-	}
 	if outputCostPerPixel := d.Get("output_cost_per_pixel").(float64); outputCostPerPixel > 0 {
 		litellmParams["output_cost_per_pixel"] = outputCostPerPixel
 	}

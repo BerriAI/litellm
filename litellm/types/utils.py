@@ -358,7 +358,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
     output_cost_per_pixel: ReadOnly[float | None]
-    input_cost_per_reference_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
@@ -3709,7 +3708,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
-    input_cost_per_reference_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
     # Include all ModelInfoBase fields as optional

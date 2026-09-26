@@ -26,8 +26,7 @@ _REFERENCE_PIXELS: Final = TypeAdapter(tuple[Annotated[int, Field(strict=True, g
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Flux2MegapixelPrices:
     first: float
-    additional: float
-    reference: float
+    megapixel: float
 
 
 def _price(resolved: ModelInfo, cost_key: str) -> float | None:
@@ -52,30 +51,19 @@ def _deployment_price(deployment: ModelInfo | None, cost_key: str) -> float | No
 
 
 def _flux2_prices(resolved: ModelInfo, deployment: ModelInfo | None) -> _Flux2MegapixelPrices:
-    # A deployment that prices the generated image itself also prices its references, unless it sets a reference
-    # rate: a flat per-image price covers them, and a pixel rate bills them at that rate
-    deployment_reference_rate: Final = _deployment_price(deployment, "input_cost_per_reference_pixel")
     deployment_image_price: Final = _deployment_price(deployment, "output_cost_per_image")
     if deployment_image_price is not None:
-        return _Flux2MegapixelPrices(
-            first=deployment_image_price,
-            additional=0.0,
-            reference=(deployment_reference_rate or 0.0) * MEGAPIXEL,
-        )
+        return _Flux2MegapixelPrices(first=deployment_image_price, megapixel=0.0)
     deployment_pixel_rate: Final = _deployment_price(deployment, "input_cost_per_pixel")
     if deployment_pixel_rate is not None:
         return _Flux2MegapixelPrices(
-            first=deployment_pixel_rate * MEGAPIXEL,
-            additional=deployment_pixel_rate * MEGAPIXEL,
-            reference=(deployment_pixel_rate if deployment_reference_rate is None else deployment_reference_rate)
-            * MEGAPIXEL,
+            first=deployment_pixel_rate * MEGAPIXEL, megapixel=deployment_pixel_rate * MEGAPIXEL
         )
     catalog_megapixel_rate: Final = _pixel_rate(resolved, "input_cost_per_pixel") * MEGAPIXEL
     catalog_first_megapixel: Final = _price(resolved, "output_cost_per_image")
     return _Flux2MegapixelPrices(
         first=catalog_megapixel_rate if catalog_first_megapixel is None else catalog_first_megapixel,
-        additional=catalog_megapixel_rate,
-        reference=_pixel_rate(resolved, "input_cost_per_reference_pixel") * MEGAPIXEL,
+        megapixel=catalog_megapixel_rate,
     )
 
 
@@ -84,8 +72,9 @@ def _billable_megapixels(pixels: int) -> int:
 
 
 def _billable_reference_megapixels(reference_pixels: tuple[int, ...]) -> int:
-    # Azure's FLUX.2 request_meta (2026-09-25) bills a lone reference at no more than 4 MP, and each reference of a
-    # multi-reference edit as exactly 1 MP whatever its size
+    # Azure's FLUX.2 request_meta (2026-09-25) bills a lone reference at no more than 4 MP, each reference of a
+    # multi-reference edit as exactly 1 MP whatever its size, and every reference megapixel at the rate of an
+    # additional generated one
     match reference_pixels:
         case ():
             return 0
@@ -104,14 +93,14 @@ def _reference_cost(prices: _Flux2MegapixelPrices, image_response: ImageResponse
     except ValidationError:
         verbose_logger.warning("Ignoring malformed FLUX.2 reference pixel counts: %r", reported_pixels)
         return 0.0
-    return prices.reference * _billable_reference_megapixels(reference_pixels)
+    return prices.megapixel * _billable_reference_megapixels(reference_pixels)
 
 
 def _flux2_generated_cost(
     prices: _Flux2MegapixelPrices, image_response: ImageResponse, requested_pixels: int, n: int | None
 ) -> float:
     return sum(
-        prices.first + prices.additional * (_billable_megapixels(pixels) - 1)
+        prices.first + prices.megapixel * (_billable_megapixels(pixels) - 1)
         for pixels in _generated_pixels(image_response, requested_pixels, n)
     )
 
