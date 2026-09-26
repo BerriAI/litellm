@@ -9290,3 +9290,62 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
     assert result.budget_reservation == reservation
     assert websocket.state.budget_reservation is reservation
     assert websocket.scope["state"]["budget_reservation"] is reservation
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_keep_the_spend_counter_batch_open_through_budget_reservation():
+    """The admission MGET is still live when the budget reservation runs, so its warm checks read the same
+    snapshot instead of paying their own round trips; the batch closes once the reservation is done."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.spend_tracking.spend_counter_batch import (
+        active_spend_counter_batch,
+        spend_counter_batch_scope,
+    )
+
+    token = UserAPIKeyAuth(api_key="sk-test", token="hashed", max_budget=10.0)
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    batch_open_during_reservation: list[bool] = []
+
+    async def _reserve(**kwargs):
+        batch = active_spend_counter_batch()
+        batch_open_during_reservation.append(batch is not None and batch.is_open)
+
+    redis = MagicMock()
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "prisma_client": MagicMock(),
+        "spend_counter_cache": MagicMock(redis_cache=redis),
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: authorization has its own tests above; this one checks the batch lifetime
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the reservation helper imports reserve_budget_for_request in its body
+                "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+                side_effect=_reserve,
+            ),
+            spend_counter_batch_scope(redis),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+            )
+            batch = active_spend_counter_batch()
+            assert batch is not None and batch.is_open is False
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert batch_open_during_reservation == [True]
+    assert active_spend_counter_batch() is None

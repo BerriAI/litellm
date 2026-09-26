@@ -1880,8 +1880,8 @@ async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(
 async def test_fail_closed_releases_earlier_counters_before_503(
     spend_counter_state,
 ):
-    """#33923: when a later counter's reservation write fails in strict mode, the
-    counters that already reserved must be released before the 503 propagates."""
+    """#33923: when a later counter cannot be reserved in strict mode, no counter may keep a
+    reservation once the 503 propagates."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
@@ -1919,8 +1919,8 @@ async def test_fail_closed_releases_earlier_counters_before_503(
         counter_cache.in_memory_cache.get_cache(
             key="spend:key:key-budget-fail-closed-release"
         )
-        == 0.0
-    )
+        or 0.0
+    ) == 0.0
 
 
 @pytest.mark.asyncio
@@ -1982,21 +1982,10 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
         max_budget=1.0,
     )
 
-    import litellm.proxy.proxy_server as ps
-
-    original_increment_counter = ps._increment_spend_counter_cache
-    first_increment = True
-
-    async def fail_after_increment(counter_key: str, increment: float):
-        nonlocal first_increment
-        if first_increment:
-            first_increment = False
-            await counter_cache.async_increment_cache(key=counter_key, value=increment)
-            raise RuntimeError("lost increment response")
-        return await original_increment_counter(
-            counter_key=counter_key,
-            increment=increment,
-        )
+    async def fail_after_increment(pending):
+        for item in pending:
+            await counter_cache.async_increment_cache(key=item.counter_key, value=item.increment)
+        raise RuntimeError("lost increment response")
 
     with (
         patch(
@@ -2004,7 +1993,7 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
             return_value=0.5,
         ),
         patch(
-            "litellm.proxy.proxy_server._increment_spend_counter_cache",
+            "litellm.proxy.proxy_server.run_spend_counter_pipeline",
             side_effect=fail_after_increment,
         ),
         patch(

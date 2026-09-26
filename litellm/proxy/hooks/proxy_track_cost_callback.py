@@ -30,6 +30,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     get_llm_router,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
     SpendEventBuildError,
@@ -695,6 +696,62 @@ async def _update_database_and_spend_counters(
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
 ) -> bool:
+    """One spend counter batch spans the reservation reconcile and the counter update, so the reserved counters and
+    the post-call counters are read with a single MGET and their increments leave in a single pipeline."""
+    from litellm.proxy.proxy_server import spend_counter_cache
+    from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
+
+    counter_keys: Final = frozenset(
+        get_reserved_counter_keys(budget_reservation=budget_reservation)
+    ) | post_call_counter_keys(
+        token=user_api_key,
+        team_id=team_id,
+        user_id=user_id,
+        org_id=org_id,
+        end_user_id=end_user_id,
+        tags=request_tags,
+        model_access_groups=model_access_groups,
+        project_id=project_id,
+    )
+    with spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys):
+        return await _update_database_and_spend_counters_in_batch(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key=user_api_key,
+            user_id=user_id,
+            end_user_id=end_user_id,
+            team_id=team_id,
+            org_id=org_id,
+            kwargs=kwargs,
+            completion_response=completion_response,
+            start_time=start_time,
+            end_time=end_time,
+            response_cost=response_cost,
+            budget_reservation=budget_reservation,
+            request_tags=request_tags,
+            model_access_groups=model_access_groups,
+            project_id=project_id,
+        )
+
+
+async def _update_database_and_spend_counters_in_batch(
+    proxy_logging_obj: "ProxyLogging",
+    increment_spend_counters: _IncrementSpendCounters,
+    user_api_key: str | None,
+    user_id: str | None,
+    end_user_id: str | None,
+    team_id: str | None,
+    org_id: str | None,
+    kwargs: dict,
+    completion_response: object,
+    start_time: datetime | None,
+    end_time: datetime | None,
+    response_cost: float,
+    budget_reservation: dict | None,
+    request_tags: list[str] | None,
+    model_access_groups: Sequence[str] | None,
+    project_id: str | None,
+) -> bool:
     if budget_reservation is not None:
         await _reconcile_budget_reservation_before_db_update(
             budget_reservation=budget_reservation, response_cost=response_cost
@@ -762,11 +819,14 @@ async def _reconcile_budget_reservation_before_db_update(
     budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps applied_adjustment on the caller's shared reservation dict
     response_cost: float,
 ) -> None:
+    """Reads the reserved counters into the open batch and reseeds any that were flushed since reservation; the
+    adjustments themselves are written by ``increment_spend_counters`` in the same pipeline as its increments, or by
+    the release / invalidation that runs when the spend write fails."""
     from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
 
     try:
-        await reconcile_budget_reservation(
-            budget_reservation=budget_reservation, actual_cost=response_cost, finalize=False
+        _ = await reconcile_budget_reservation(
+            budget_reservation=budget_reservation, actual_cost=response_cost, finalize=False, apply_consistent=False
         )
     except Exception:  # noqa: BLE001  # a failed reconcile must not block the spend write; the counters are dropped instead
         verbose_proxy_logger.warning(

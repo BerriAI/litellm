@@ -6106,7 +6106,7 @@ async def test_tag_cache_update_called():
         "spend": 10.0,
     }
 
-    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
+    with patch.object(cache, "async_batch_get_cache", new=AsyncMock(return_value=[mock_tag_obj])) as mock_get_cache:
         with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
             await litellm.proxy.proxy_server.update_cache(
                 token=None,
@@ -6120,7 +6120,7 @@ async def test_tag_cache_update_called():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
+            mock_get_cache.assert_awaited_once_with(keys=["tag:test-tag"], parent_otel_span=None)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -6151,15 +6151,11 @@ async def test_tag_cache_update_multiple_tags():
     mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
     mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
 
-    async def mock_get_cache_side_effect(key):
-        if key == "tag:tag1":
-            return mock_tag1_obj
-        elif key == "tag:tag2":
-            return mock_tag2_obj
-        return None
+    async def mock_get_cache_side_effect(keys, **kwargs):
+        return [{"tag:tag1": mock_tag1_obj, "tag:tag2": mock_tag2_obj}.get(key) for key in keys]
 
     with patch.object(
-        cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
+        cache, "async_batch_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
     ) as mock_get_cache:
         with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
             await litellm.proxy.proxy_server.update_cache(
@@ -6174,7 +6170,7 @@ async def test_tag_cache_update_multiple_tags():
 
             await asyncio.sleep(0.1)
 
-            assert mock_get_cache.call_count == 2
+            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -6205,8 +6201,8 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     try:
         with patch.object(
             cache,
-            "async_get_cache",
-            new=AsyncMock(return_value={"tag_name": "active-tag", "spend": 1.0}),
+            "async_batch_get_cache",
+            new=AsyncMock(return_value=[{"tag_name": "active-tag", "spend": 1.0}]),
         ):
             with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
                 await litellm.proxy.proxy_server.update_cache(
@@ -6293,18 +6289,21 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
     global_key = "{}:spend".format(admin_name)
 
-    async def fake_get(key, **kwargs):
+    def fake_get(key):
         if key == "user-lit":
             return {"user_id": "user-lit", "spend": 1.0}
         if key == global_key:
             return 10.0
         return None
 
+    async def fake_batch_get(keys, **kwargs):
+        return [fake_get(key) for key in keys]
+
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
     cache = DualCache(default_in_memory_ttl=300)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     try:
-        with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=fake_get)):
+        with patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=fake_batch_get)):
             with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
                 await litellm.proxy.proxy_server.update_cache(
                     token=None,
@@ -13674,7 +13673,7 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
     }
 
     original_reconcile = br.reconcile_budget_reservation
-    br.reconcile_budget_reservation = AsyncMock(return_value=None)
+    br.reconcile_budget_reservation = AsyncMock(return_value=())
     try:
         with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
             await increment_spend_counters(
