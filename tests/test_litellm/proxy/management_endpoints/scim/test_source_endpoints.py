@@ -208,3 +208,34 @@ async def test_source_update_rejects_missing_mapped_group_before_writing(monkeyp
         await update_source("source", request, ADMIN)
     assert failure.value.status_code == 400
     tx.litellm_scimsource.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_source_mapping_accepts_access_groups_across_query_batches(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+
+    tx: Final = source_database(monkeypatch)
+    group_ids: Final = tuple(f"group-{index}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    groups: Final = [SimpleNamespace(access_group_id=group_id) for group_id in group_ids]
+    tx.litellm_accessgrouptable.find_many.side_effect = [groups[:-1], groups[-1:]]
+    request: Final = SCIMSourceCreate(
+        display_name="Source",
+        tenant_id=TENANT,
+        provisioning_token="test-token",
+        group_mappings=[{"external_group_id": TENANT, "access_group_ids": group_ids}],
+    )
+    stored: Final = SimpleNamespace(
+        source_id="source", **request.model_dump(mode="json", exclude={"provisioning_token"})
+    )
+    tx.litellm_scimsource.create.return_value = stored
+    tx.litellm_scimsource.update = AsyncMock(return_value=stored)
+    if operation == "update":
+        tx.litellm_scimsource.find_unique.return_value = stored
+    result: Final = (
+        await create_source(request, ADMIN) if operation == "create" else await update_source("source", request, ADMIN)
+    )
+    assert result.group_mappings[0].access_group_ids == group_ids
+    assert tx.litellm_accessgrouptable.find_many.await_count == 2
