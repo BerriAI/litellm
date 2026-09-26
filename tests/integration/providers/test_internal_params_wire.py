@@ -290,6 +290,7 @@ async def test_internal_params_never_reach_provider_body(
             "stream_chunk_size": 64,
             "_litellm_undeclared_sentinel": "internal",
             "extra_body": {"custom_provider_key": 1},
+            "metadata": {"user_api_key_hash": "h"},
             "max_tokens": 16,
             "timeout": 5,
             "num_retries": 0,
@@ -310,6 +311,7 @@ async def test_internal_params_never_reach_provider_body(
         body: Final = json.loads(requests[0].body)
         keys: Final = keys_at_every_depth(body)
         assert "stream_chunk_size" not in keys
+        assert "user_api_key_hash" not in keys, keys
         assert not INTERNAL_FIELDS.intersection(keys)
         assert not frozenset(key for key in keys if key.startswith("_litellm_")), keys
         assert _custom_key(body, provider) == 1
