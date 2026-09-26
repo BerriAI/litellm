@@ -177,6 +177,7 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
     include_permission: Final[LiteLLM_AgentsTableInclude] = {
         "object_permission": True,
         "identity": True,
+        "litellm_budget_table": True,
     }
     async with AGENT_RECONCILE_LOCK:
         if _agent_from_registry(agent_id_or_name) is not None:

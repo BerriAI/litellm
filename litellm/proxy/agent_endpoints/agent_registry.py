@@ -632,7 +632,7 @@ class AgentRegistry:
             # Create agent in DB
             created_agent: Final = await agents_table(prisma_client).create(
                 data={**create_data, **_managed_fields(agent, None, created_by)},
-                include={"object_permission": True, "identity": True},
+                include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
 
             return AgentResponse.model_validate(created_agent.model_dump())
@@ -695,7 +695,7 @@ class AgentRegistry:
         """
         try:
             existing_record: Final = await agents_table(prisma_client).find_unique(
-                where={"agent_id": agent_id}, include={"identity": True}
+                where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
             )
             if existing_record is None:
                 raise Exception(f"Agent with ID {agent_id} not found")
@@ -747,7 +747,7 @@ class AgentRegistry:
                     "updated_by": updated_by,
                     "updated_at": datetime.now(timezone.utc),
                 },
-                include={"object_permission": True, "identity": True},
+                include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
             if patched_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
@@ -777,7 +777,7 @@ class AgentRegistry:
             # caller echoed back redacted (or omitted) rather than persisting
             # the marker -- or nothing -- over the real stored credential.
             existing_row: Final = await agents_table(prisma_client).find_unique(
-                where={"agent_id": agent_id}, include={"identity": True}
+                where={"agent_id": agent_id}, include={"identity": True, "litellm_budget_table": True}
             )
             existing_litellm_params: Final = parse_agent_litellm_params(
                 existing_row.litellm_params if existing_row is not None else None
@@ -845,7 +845,7 @@ class AgentRegistry:
                         updated_by,
                     ),
                 },
-                include={"object_permission": True, "identity": True},
+                include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
 
             if updated_agent is None:
@@ -868,7 +868,7 @@ class AgentRegistry:
         try:
             agents_from_db: Final = await agents_table(prisma_client).find_many(
                 order={"created_at": "desc"},
-                include={"object_permission": True, "identity": True},
+                include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
 
             agents: Final[list[dict[str, object]]] = []
