@@ -215,10 +215,14 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
 
 def _record_relayed_reference_pixels(image_response: ImageResponse, request_data: Mapping[str, object]) -> None:
     reference_pixels: Final = tuple(
-        _relayed_image_pixels(value) for key, value in request_data.items() if _REFERENCE_IMAGE_FIELD.fullmatch(key)
+        _relayed_image_pixels(value) for key, value in request_data.items() if _is_relayed_reference(key, value)
     )
     if reference_pixels:
         record_reference_pixels(image_response, reference_pixels)
+
+
+def _is_relayed_reference(key: str, value: object) -> bool:
+    return _REFERENCE_IMAGE_FIELD.fullmatch(key) is not None and value not in (None, "")
 
 
 def _relayed_image_pixels(value: object) -> int | None:

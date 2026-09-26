@@ -20,6 +20,7 @@ from litellm.types.utils import ImageResponse, ModelInfo
 MEGAPIXEL: Final = 1024 * 1024
 MAX_LONE_REFERENCE_MEGAPIXELS: Final = 4
 IMAGE_HEADER_BASE64_PREFIX_CHARS: Final = 64 * 1024
+JPEG_HEADER_BASE64_PREFIX_CHARS: Final = 512 * 1024
 REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM: Final = "reference_image_pixels"
 DEPLOYMENT_PER_IMAGE_PRICE_KEYS: Final = ("output_cost_per_image", "input_cost_per_image")
 _REFERENCE_PIXELS: Final = TypeAdapter(tuple[Annotated[int, Field(strict=True, gt=0)] | None, ...])
@@ -152,7 +153,7 @@ def base64_image_pixels(encoded_image: str, start: int = 0) -> int | None:
     header_pixels: Final = _pixels(header_bytes)
     if header_pixels is not None or len(encoded_image) <= header_end or get_image_type(header_bytes) != "jpeg":
         return header_pixels
-    return _pixels(_decoded(encoded_image[start:]))
+    return _pixels(_decoded(encoded_image[start : start + JPEG_HEADER_BASE64_PREFIX_CHARS]))
 
 
 def _decoded(encoded_image: str) -> bytes:

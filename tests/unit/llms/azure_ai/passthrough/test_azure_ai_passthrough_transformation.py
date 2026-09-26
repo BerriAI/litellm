@@ -568,6 +568,13 @@ def _jpeg_b64(width: int, height: int) -> str:
         ),
         pytest.param({"input_image": "https://example.com/café.png"}, 1, id="non-ascii-url-as-one-megapixel"),
         pytest.param({}, 0, id="generation-without-references"),
+        pytest.param({"input_image": None}, 0, id="null-reference-field-is-not-a-reference"),
+        pytest.param({"input_image": ""}, 0, id="empty-reference-field-is-not-a-reference"),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), **{f"input_image_{index}": None for index in range(2, 9)}},
+            1,
+            id="unused-reference-slots-are-not-references",
+        ),
     ),
 )
 def test_flux_2_relay_through_the_provider_route_bills_the_references_in_the_request(

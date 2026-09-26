@@ -485,6 +485,28 @@ def test_flux2_pro_measures_a_returned_jpeg_whose_frame_header_sits_past_the_dec
     assert cost == pytest.approx(first + additional * 3)
 
 
+def test_flux2_pro_bills_the_requested_size_for_a_returned_jpeg_whose_frame_header_is_past_any_header_prefix() -> None:
+    first, additional = _pro_megapixel_rates()
+    app_segments: Final = b"".join(b"\xff\xe2" + struct.pack(">H", 65_535) + b"\x00" * 65_533 for _ in range(8))
+    jpeg: Final = (
+        b"\xff\xd8"
+        + app_segments
+        + b"\xff\xc0\x00\x11\x08"
+        + struct.pack(">HH", 2048, 2048)
+        + b"\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=ImageResponse(data=[ImageObject(b64_json=base64.b64encode(jpeg).decode())]),
+        custom_llm_provider="azure_ai",
+        size="1024x1280",
+        call_type="image_generation",
+    )
+
+    assert cost == pytest.approx(first + additional)
+
+
 @pytest.mark.parametrize(
     ("returned_image", "warns"),
     (
