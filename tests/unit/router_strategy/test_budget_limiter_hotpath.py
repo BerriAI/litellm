@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import logging
+import threading
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
+from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -300,6 +302,27 @@ def test_router_add_deployment_registers_deployment_budget(disable_budget_sync, 
     assert config.max_budget == 0.000000000001
 
 
+def _leave_a_task_pending_on_a_closed_loop() -> None:
+    def park_a_task_then_close_the_loop() -> None:
+        loop: Final = asyncio.new_event_loop()
+
+        async def park() -> None:
+            await loop.create_future()
+
+        loop.create_task(park())
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+        loop.close()
+
+    parker: Final = threading.Thread(target=park_a_task_then_close_the_loop)
+    parker.start()
+    parker.join()
+
+
+def _limiter_error_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name == verbose_router_logger.name]
+
+
 @pytest.mark.asyncio
 async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_task(disable_budget_sync, caplog):
     """The budget sync runs every second, so an open breaker must not add an error line or an unretrieved task exception per cycle."""
@@ -321,11 +344,12 @@ async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_ta
         with caplog.at_level(logging.ERROR):
             await limiter._sync_in_memory_spend_with_redis()
             await asyncio.sleep(0)
+            _leave_a_task_pending_on_a_closed_loop()
             gc.collect()
     finally:
         loop.set_exception_handler(None)
 
-    assert caplog.records == []
+    assert _limiter_error_lines(caplog) == []
     unretrieved.assert_not_called()
     assert limiter.redis_increment_operation_queue == [
         {"key": "provider_spend:openai:1d", "increment_value": 0.5, "ttl": 60}
@@ -381,11 +405,12 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
         with caplog.at_level(logging.ERROR):
             await limiter._push_in_memory_increments_to_redis()
             await asyncio.sleep(0)
+            _leave_a_task_pending_on_a_closed_loop()
             gc.collect()
     finally:
         loop.set_exception_handler(None)
 
-    assert [record.getMessage() for record in caplog.records] == [
+    assert _limiter_error_lines(caplog) == [
         "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
     ]
     unretrieved.assert_not_called()
