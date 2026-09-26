@@ -74,7 +74,7 @@ pytestmark = pytest.mark.skip(
 
 # Add the litellm package to path
 sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 )
 
 # Config file path - can be overridden with DATABRICKS_TEST_CONFIG env var

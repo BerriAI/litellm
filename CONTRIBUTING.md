@@ -98,7 +98,7 @@ Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litel
 
 The `tests/unit/` directory follows the same structure as `litellm/`:
 
-- `litellm/proxy/caching_routes.py` → `tests/unit/proxy/test_caching_routes.py`
+- `litellm/proxy/caching_routes.py` → `tests/test_litellm/proxy/test_caching_routes.py`
 - `litellm/utils.py` → `tests/unit/test_utils.py`
 
 ### Example Test
