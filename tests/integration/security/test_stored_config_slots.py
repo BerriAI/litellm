@@ -202,6 +202,10 @@ def _finish(
     record_route_sweep(report.routes, request.node.nodeid)
     unswept: Final = tuple(route for route in detail_routes if f"admin {route}" not in report.routes.called)
     assert not unswept, f"S2 never called the scenario's detail routes: {unswept}"
+    unfound: Final = tuple(
+        (route, status) for route in detail_routes if (status := gateway.request("GET", route).status_code) != 200
+    )
+    assert not unfound, f"The scenario's detail routes did not resolve its ids: {unfound}"
     assert_marker_seen(
         report,
         {
@@ -652,6 +656,13 @@ def test_config_guardrail_api_key_reaches_only_the_guardrail(
             caller: Final = _caller(scenario, models=[CONFIG_MODEL])
             response, request_id = _chat(owned.proxy, caller.key, CONFIG_MODEL, "E1", marker, outcome)
             _guardrail_delivered(guardrail, marker, e1)
+            listed: Final = owned.proxy.get("/v2/guardrails/list")["guardrails"]
+            assert isinstance(listed, list)
+            guardrail_id: Final = next(
+                string_value(object_value(entry)["guardrail_id"])
+                for entry in listed
+                if object_value(entry)["guardrail_name"] == name
+            )
             _finish(
                 owned,
                 owned.proxy,
@@ -661,8 +672,8 @@ def test_config_guardrail_api_key_reaches_only_the_guardrail(
                 response=response,
                 request_id=request_id,
                 caller=caller,
-                ids={"model": CONFIG_MODEL, "guardrail_id": name},
-                detail_routes=(f"/guardrails/{name}/info",),
+                ids={"model": CONFIG_MODEL, "guardrail_id": guardrail_id},
+                detail_routes=(f"/guardrails/{guardrail_id}/info", f"/guardrails/{guardrail_id}"),
                 reads=_reads(owned.proxy, {"/guardrails/list": {}, "/v2/guardrails/list": {}}),
                 extra_sinks={GUARDRAIL_SINK: guardrail.requests},
                 own_headers={GUARDRAIL_SINK: ("x-api-key", "E1")},
