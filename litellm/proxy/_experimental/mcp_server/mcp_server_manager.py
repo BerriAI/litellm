@@ -4401,8 +4401,6 @@ class MCPServerManager:
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
-        # tools/call resolves the BYOK credential before keying its listed-tools slot; resolve the
-        # same value here or a stored-credential server would list into a slot the call never reads.
         resolved_mcp_auth_header: Final = (
             mcp_auth_header
             if not server.is_byok or isinstance(mcp_auth_header, dict)
