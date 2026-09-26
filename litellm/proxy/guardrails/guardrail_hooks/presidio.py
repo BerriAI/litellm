@@ -173,18 +173,26 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
 
 
 def _resolved_token_salt(value: str | None) -> str:
-    """Resolve an ``os.environ/<VAR>`` reference the way guardrail api_key and
-    api_base are resolved, so the salt can live in the environment rather than
-    in config.yaml. A reference that resolves to nothing raises rather than
-    falling back to an unkeyed digest."""
+    """Resolve the salt from an ``os.environ/<VAR>`` reference, the way guardrail
+    api_key and api_base are already resolved.
+
+    A literal is refused rather than used. The salt is the HMAC key, so it has to
+    survive as a secret for the tokens to mean anything, and a literal does not:
+    guardrail_registry logs the whole params mapping at debug before
+    initialization, so a literal reaches the proxy log in full and anyone with
+    the log can test candidate values against the tokens they can see."""
     if value is None:
         return ""
-    if value.startswith("os.environ/"):
-        resolved: Final = get_secret_str(value)
-        if resolved is None or not resolved.strip():
-            raise ValueError(f"presidio_token_salt: {value!r} resolves to an unset or blank environment variable")
-        return resolved
-    return value
+    if not value.startswith("os.environ/"):
+        raise ValueError(
+            "presidio_token_salt must be an os.environ/<VAR> reference, not a literal. "
+            "The salt is the HMAC key behind every stable token, and guardrail params "
+            "are logged in full at debug level."
+        )
+    resolved: Final = get_secret_str(value)
+    if resolved is None or not resolved.strip():
+        raise ValueError(f"presidio_token_salt: {value!r} resolves to an unset or blank environment variable")
+    return resolved
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):

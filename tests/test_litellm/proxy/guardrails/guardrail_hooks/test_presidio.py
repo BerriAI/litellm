@@ -6,6 +6,7 @@ Tests PII detection and masking for different message formats
 import asyncio
 import copy
 import json
+import os
 import re
 from contextlib import asynccontextmanager
 from typing import Dict, Final, List, Tuple
@@ -4188,9 +4189,19 @@ def _mask(
     return masked, request_data["metadata"]["pii_tokens"]
 
 
-def _stable_guardrail(salt: str = "unit-test-salt") -> _OPTIONAL_PresidioPIIMasking:
+def _stable_guardrail(salt: str = "unit-test-salt", guardrail_name: str | None = None) -> _OPTIONAL_PresidioPIIMasking:
+    """Build a stable-token guardrail on a salt held where the real one has to be.
+
+    The salt is only ever read through an os.environ reference, so the tests put
+    it there rather than passing a literal the constructor refuses."""
+    var = f"PRESIDIO_TEST_SALT_{abs(hash(salt)) % 10**8}"
+    os.environ[var] = salt
     return _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, output_parse_pii=True, presidio_stable_tokens=True, presidio_token_salt=salt
+        mock_testing=True,
+        output_parse_pii=True,
+        presidio_stable_tokens=True,
+        presidio_token_salt=f"os.environ/{var}",
+        **({"guardrail_name": guardrail_name} if guardrail_name else {}),
     )
 
 
@@ -4289,14 +4300,33 @@ def test_stable_token_config_reaches_the_guardrail(monkeypatch):
         mode="pre_call",
         output_parse_pii=True,
         presidio_stable_tokens=True,
-        presidio_token_salt="from-config",
+        presidio_token_salt="os.environ/PRESIDIO_CONFIG_SALT",
     )
+    monkeypatch.setenv("PRESIDIO_CONFIG_SALT", "from-config")
     callbacks = initialize_presidio(params, {"guardrail_name": "presidio-unit", "litellm_params": params})
 
     assert callbacks
     for callback in callbacks:
         assert callback.presidio_stable_tokens is True
         assert callback.presidio_token_salt == "from-config"
+
+
+def test_a_literal_salt_is_refused(monkeypatch):
+    """The salt is the HMAC key, and guardrail params are logged in full at debug.
+
+    A literal would therefore reach the proxy log, where anyone holding it could
+    test candidate values against the tokens they can already see.
+    """
+    monkeypatch.setenv("PRESIDIO_ANALYZER_API_BASE", "http://localhost:5002")
+    monkeypatch.setenv("PRESIDIO_ANONYMIZER_API_BASE", "http://localhost:5001")
+
+    with pytest.raises(ValueError, match="os.environ"):
+        _OPTIONAL_PresidioPIIMasking(
+            mock_testing=True,
+            output_parse_pii=True,
+            presidio_stable_tokens=True,
+            presidio_token_salt="a-literal-secret",
+        )
 
 
 def test_stable_token_salt_resolves_an_os_environ_reference(monkeypatch):
@@ -4329,20 +4359,8 @@ def test_stable_tokens_require_a_salt():
 
 def test_stable_tokens_are_namespaced_per_guardrail():
     """One salt shared by two guardrails must not produce one token"""
-    first = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        output_parse_pii=True,
-        presidio_stable_tokens=True,
-        presidio_token_salt="shared",
-        guardrail_name="tenant-a",
-    )
-    second = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        output_parse_pii=True,
-        presidio_stable_tokens=True,
-        presidio_token_salt="shared",
-        guardrail_name="tenant-b",
-    )
+    first = _stable_guardrail("shared", guardrail_name="tenant-a")
+    second = _stable_guardrail("shared", guardrail_name="tenant-b")
     entity = [_analyze_result("PERSON", "Alice Brenner", "Alice Brenner")]
 
     assert _mask(first, "Alice Brenner", entity)[0] != _mask(second, "Alice Brenner", entity)[0]
