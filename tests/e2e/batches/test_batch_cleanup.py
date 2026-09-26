@@ -4,7 +4,14 @@ from typing import Final
 from unittest.mock import Mock, call
 
 import pytest
-from batch_cleanup import BATCH_CANCEL_TIMEOUT_SECONDS, CLEANUP_DELAYS, cleanup_batch, cleanup_file, cleanup_result
+from batch_cleanup import (
+    BATCH_CANCEL_TIMEOUT_SECONDS,
+    CLEANUP_DELAYS,
+    BatchCleanupLeftover,
+    cleanup_batch,
+    cleanup_file,
+    cleanup_result,
+)
 from batch_client import AZURE_FILE_EXPIRY_SECONDS, BatchObject, FileDeleteResponse, batch_upload_form
 from capabilities import CAPABILITIES, Capability
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
@@ -13,6 +20,10 @@ from models import KeyGenerateBody
 
 MANAGED_FILE_ID: Final = "bGl0ZWxsbV9wcm94eTtmaWxlLTE="
 MANAGED_BATCH_ID: Final = "bGl0ZWxsbV9wcm94eTtiYXRjaC0x"
+IN_USE_REFUSAL: Final = (
+    f'{{"error":{{"message":"Cannot delete file {MANAGED_FILE_ID}. The file is referenced by 1 batch(es) in '
+    f'non-terminal state: {MANAGED_BATCH_ID}: cancelling. ","type":"invalid_request_error","code":"400"}}}}'
+)
 
 
 class ExpectedCalls[T]:
@@ -125,6 +136,29 @@ class TestFileCleanup:
             cleanup_file(client, "file-1", key="test-key")
         client.calls.assert_done()
 
+    def test_delete_refused_because_a_batch_still_references_the_file_is_left_and_reported(self) -> None:
+        client: Final = CleanupClient(
+            calls=ExpectedCalls((f"delete None {MANAGED_FILE_ID}",)),
+            files=(UnknownApiError(status_code=400, body=IN_USE_REFUSAL),),
+        )
+        with pytest.warns(BatchCleanupLeftover, match=MANAGED_FILE_ID):
+            cleanup_file(client, MANAGED_FILE_ID, key="test-key")
+        client.calls.assert_done()
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            UnknownApiError(status_code=400, body="Invalid file id"),
+            UnknownApiError(status_code=409, body=IN_USE_REFUSAL),
+            UnknownApiError(status_code=501, body=IN_USE_REFUSAL),
+        ],
+    )
+    def test_any_other_delete_failure_still_raises(self, failure: UnknownApiError) -> None:
+        client: Final = CleanupClient(calls=ExpectedCalls((f"delete None {MANAGED_FILE_ID}",)), files=(failure,))
+        with pytest.raises(AssertionError, match=f"Delete file {MANAGED_FILE_ID} failed: HTTP {failure.status_code}"):
+            cleanup_file(client, MANAGED_FILE_ID, key="test-key")
+        client.calls.assert_done()
+
     def test_cleanup_is_idempotent_when_file_is_already_deleted(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(("delete azure file-1",)),
@@ -188,29 +222,50 @@ class TestBatchCancellation:
         client.calls.assert_done()
         delays.assert_done()
 
-    def test_cancellation_timeout_is_reported_but_file_and_key_cleanup_still_run(self) -> None:
+    def test_batch_still_cancelling_at_the_deadline_and_its_input_file_are_left_and_reported(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(
                 (
                     f"retrieve None {MANAGED_BATCH_ID}",
                     f"retrieve None {MANAGED_BATCH_ID}",
-                    "delete None file-1",
+                    f"delete None {MANAGED_FILE_ID}",
                     "delete key test-key",
                 )
             ),
             batches=(batch("cancelling"), batch("cancelling")),
-            files=(deleted_file(),),
+            files=(UnknownApiError(status_code=400, body=IN_USE_REFUSAL),),
         )
         times: Final = (0.0, BATCH_CANCEL_TIMEOUT_SECONDS)
         ticks: Final[Callable[[], float]] = Mock(side_effect=times)
         manager: Final = ResourceManager(client=client, strict_cleanup=True)
         key: Final = manager.key()
-        manager.defer(lambda: cleanup_file(client, "file-1", key=key))
+        manager.defer(lambda: cleanup_file(client, MANAGED_FILE_ID, key=key))
         manager.defer(lambda: cleanup_batch(client, MANAGED_BATCH_ID, key=key, clock=ticks))
-        with pytest.raises(ExceptionGroup) as caught:
+        with pytest.warns(BatchCleanupLeftover) as leftovers:
             manager.teardown()
-        assert "cancellation did not finish" in str(caught.value.exceptions[0])
-        assert "last status cancelling" in str(caught.value.exceptions[0])
+        client.calls.assert_done()
+        messages: Final = tuple(str(warning.message) for warning in leftovers)
+        assert len(messages) == 2
+        assert MANAGED_BATCH_ID in messages[0] and "cancelling" in messages[0]
+        assert MANAGED_FILE_ID in messages[1]
+
+    @pytest.mark.parametrize(
+        "last, reported",
+        [
+            (batch("in_progress"), f"did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, last status in_progress"),
+            (UnknownApiError(status_code=403, body="forbidden"), "after cancellation failed: HTTP 403"),
+        ],
+    )
+    def test_anything_but_still_cancelling_at_the_deadline_still_fails(
+        self, last: Result[BatchObject], reported: str
+    ) -> None:
+        client: Final = CleanupClient(
+            calls=ExpectedCalls((f"retrieve None {MANAGED_BATCH_ID}",) * 2), batches=(batch("cancelling"), last)
+        )
+        times: Final = (0.0, BATCH_CANCEL_TIMEOUT_SECONDS)
+        ticks: Final[Callable[[], float]] = Mock(side_effect=times)
+        with pytest.raises(AssertionError, match=reported):
+            cleanup_batch(client, MANAGED_BATCH_ID, key="test-key", clock=ticks)
         client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "failed", "expired", "cancelled"])
