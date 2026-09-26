@@ -3648,6 +3648,76 @@ def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_trace
     assert data["litellm_session_id"] == "explicit-trace-id-value"
 
 
+def test_add_litellm_metadata_from_request_headers_body_trace_id_beats_traceparent():
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_session_id_beats_baggage():
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": "caller-chosen-session-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "caller-chosen-session-id"
+    assert "litellm_session_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_steering_is_per_field():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+def test_add_litellm_metadata_from_request_headers_litellm_metadata_steering_honoured():
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"litellm_metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+@pytest.mark.parametrize("empty_session_id", ["", None])
+def test_add_litellm_metadata_from_request_headers_empty_body_session_id_falls_back_to_baggage(
+    empty_session_id: str | None,
+):
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": empty_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+
+
+@pytest.mark.parametrize("field", ["trace_id", "session_id"])
+def test_add_litellm_metadata_from_request_headers_promoted_metadata_beats_headers(field: str):
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {field: "caller-chosen"}, "litellm_metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert field not in data["litellm_metadata"]
+    assert f"litellm_{field}" not in data
+
+
 def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
     return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=0x00F067AA0BA902B7, is_remote=False))
 
@@ -8128,6 +8198,85 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
 
     assert updated["metadata"]["session_id"] == "client-session-1"
     assert _spend_log_session_id(updated) == "client-session-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "client_body"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": [], "metadata": {"session_id": ""}}),
+        ("/v1/responses", {"model": "gpt-4o", "input": "hi"}),
+    ],
+)
+async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, client_body: dict[str, object]):
+    request = _request_for(path)
+    request.headers = {"baggage": "session.id=baggage-session-42"}
+
+    updated = await add_litellm_data_to_request(
+        data=client_body,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert updated["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("policy", [None, "reject", "generate"])
+async def test_promoted_caller_trace_ids_beat_traceparent_and_baggage(path: str, policy: str | None):
+    request = _request_for(path)
+    request.headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy} if policy else {},
+    )
+
+    assert updated["litellm_metadata"]["trace_id"] == "caller-trace"
+    assert updated["litellm_metadata"]["session_id"] == "caller-session"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_reject_ignores_requester_session_id_shadowed_by_empty_litellm_metadata():
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data={
+                "model": "gpt-4o",
+                "input": "hi",
+                "metadata": {"session_id": "caller-session"},
+                "litellm_metadata": {"session_id": ""},
+            },
+            request=_request_for("/v1/responses"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"missing_session_id": "reject"},
+        )
+    assert exc_info.value.code == "400"
+
+
+def test_add_litellm_metadata_from_request_headers_empty_litellm_metadata_field_falls_back_to_headers():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"},
+        "litellm_metadata": {"trace_id": "", "session_id": ""},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "baggage-session-42"
 
 
 @pytest.mark.asyncio

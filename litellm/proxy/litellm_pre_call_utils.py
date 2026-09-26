@@ -150,6 +150,19 @@ def _session_id_from_baggage(baggage: str) -> str | None:
     return None
 
 
+def _caller_set_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> bool:
+    active: Final = data.get(metadata_variable_name)
+    if isinstance(active, Mapping) and field in active:
+        active_map: Final = cast(Mapping[str, object], active)  # cast-ok: isinstance above, free-form JSON values
+        return bool(active_map[field])
+    promoted: Final = metadata_variable_name == "litellm_metadata" and field in LITELLM_TRACE_CONTROL_METADATA_FIELDS
+    requester: Final = data.get("metadata")
+    if not promoted or not isinstance(requester, Mapping):
+        return False
+    requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
+    return bool(requester_map.get(field))
+
+
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Only proxy-validated keys are stamped, proven by the unforgeable
     via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
@@ -825,7 +838,7 @@ def apply_missing_session_id_policy(
         ):
             metadata["session_id"] = body_session_id
         return
-    if data.get("litellm_session_id") or metadata.get("session_id"):
+    if data.get("litellm_session_id") or _caller_set_trace_field(data, _metadata_variable_name, "session_id"):
         return
     match policy:
         case "generate":
@@ -1574,12 +1587,17 @@ class LiteLLMProxyRequestSetup:
         # Last-resort fallback: the W3C standards for trace/session propagation
         # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
         # Lower priority than everything above - only fires when neither the
-        # explicit litellm headers nor the Anthropic-metadata path found
-        # anything - but lets a caller's existing traceparent/baggage headers
-        # (from real OTel instrumentation) correlate with litellm's own logs
-        # instead of generating an unrelated trace_id.
+        # explicit litellm headers, the Anthropic-metadata path, nor the
+        # caller's own request metadata set the field - but lets a caller's
+        # existing traceparent/baggage headers (from real OTel instrumentation)
+        # correlate with litellm's own logs instead of generating an unrelated
+        # trace_id.
         normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
-        if "litellm_trace_id" not in data:
+        if "litellm_trace_id" not in data and not _caller_set_trace_field(
+            cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+            _metadata_variable_name,
+            "trace_id",
+        ):
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
                 trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
@@ -1589,7 +1607,11 @@ class LiteLLMProxyRequestSetup:
                     verbose_proxy_logger.debug(
                         "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
                     )
-        if "litellm_session_id" not in data:
+        if "litellm_session_id" not in data and not _caller_set_trace_field(
+            cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+            _metadata_variable_name,
+            "session_id",
+        ):
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
                 session_id_from_baggage: Final = _session_id_from_baggage(baggage)
