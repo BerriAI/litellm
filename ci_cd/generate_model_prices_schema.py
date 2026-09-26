@@ -31,6 +31,7 @@ EXTRA_BOOLEAN_KEYS = frozenset(
         "uses_embed_content",
         "use_openai_responses_path",
         "bedrock_converse_supports_strict_tools",
+        "bedrock_chat_rejects_function_tools_while_reasoning",
         "thinking_always_on",
     }
 )

@@ -63,9 +63,9 @@ BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
 class BedrockOpenAIChatConfig(OpenAIGPT5Config, BaseAWSLLM):
     """Chat Completions config for the OpenAI models on the bedrock-runtime endpoint."""
 
-    def __init__(self, **kwargs) -> None:
-        OpenAIGPT5Config.__init__(self, **kwargs)
-        BaseAWSLLM.__init__(self, **kwargs)
+    def __init__(self) -> None:
+        OpenAIGPT5Config.__init__(self)
+        BaseAWSLLM.__init__(self)
 
     @property
     def custom_llm_provider(self) -> str | None:

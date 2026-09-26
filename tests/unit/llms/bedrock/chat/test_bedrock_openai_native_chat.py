@@ -237,3 +237,70 @@ class TestFunctionToolsReasoningBridge:
 
     def test_no_tools_stays_chat(self):
         assert self._bridge("global.openai.gpt-6-luna", reasoning_effort="low") != "responses"
+
+
+class TestPredicateEdgeCases:
+    def test_supports_openai_chat_none_model(self):
+        assert bedrock_supports_openai_chat(None, litellm.model_cost) is False
+
+    def test_rejects_helper_empty_model(self):
+        assert bedrock_chat_rejects_function_tools_while_reasoning("", litellm.model_cost) is False
+
+    def test_non_converse_route_is_not_native(self):
+        # An explicit invoke route never reaches the native chat surface.
+        assert bedrock_uses_native_openai_chat("invoke/anthropic.claude-v2") is False
+
+
+class TestDispatchAndParamMapping:
+    """Cover the get_optional_params branch and the completion dispatch touch-point."""
+
+    def _register(self):
+        litellm.register_model(
+            {
+                MODEL: {
+                    "litellm_provider": "bedrock_converse",
+                    "mode": "chat",
+                    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+                    "supports_reasoning": True,
+                }
+            }
+        )
+
+    def test_get_optional_params_uses_openai_names_not_converse(self):
+        import litellm.utils as u
+
+        self._register()
+        params = u.get_optional_params(
+            model=MODEL,
+            custom_llm_provider="bedrock",
+            max_completion_tokens=10,
+            temperature=0.5,
+            drop_params=True,
+        )
+        # OpenAI Chat mapping, not Converse's camelCase maxTokens
+        assert "maxTokens" not in params
+        assert params.get("max_completion_tokens") == 10
+        # reasoning model drops a non-default temperature
+        assert "temperature" not in params
+
+    def test_completion_dispatches_to_native_http_handler(self, monkeypatch):
+        import litellm.main as m
+        from litellm.types.utils import ModelResponse
+
+        self._register()
+        seen = {}
+
+        def fake_completion(**kwargs):
+            seen["model"] = kwargs.get("model")
+            seen["provider"] = kwargs.get("custom_llm_provider")
+            return ModelResponse()
+
+        monkeypatch.setattr(m.base_llm_http_handler, "completion", fake_completion)
+        litellm.completion(
+            model=f"bedrock/{MODEL}",
+            messages=[{"role": "user", "content": "hi"}],
+            max_completion_tokens=10,
+            aws_region_name="us-east-1",
+        )
+        assert seen["provider"] == "bedrock"
+        assert seen["model"] == MODEL
