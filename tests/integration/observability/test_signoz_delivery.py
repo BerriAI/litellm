@@ -746,15 +746,7 @@ def test_missing_ingestion_endpoint_fails_loudly_at_boot(
         provider, operator_sink, tenant_sink, tmp_path_factory.mktemp("signoz-noenv"), False, 2, None
     )
     started: Final = factory.start()
-    try:
-        broken: Final = next(started)
-    except AssertionError as refused:
-        assert "Owned proxy exited before readiness" in str(refused), refused
-        logs: Final = tuple(factory.directory.glob("owned-proxy-*.log"))
-        assert any("SIGNOZ_INGESTION_ENDPOINT not found" in log.read_text() for log in logs), [
-            log.read_text()[-2000:] for log in logs
-        ]
-        return
+    broken: Final = next(started)
     try:
         response: Final = broken.chat(_marker())
         assert response.status_code == 200, response.text
@@ -776,13 +768,7 @@ def test_empty_ingestion_endpoint_is_treated_as_missing(
         provider, operator_sink, tenant_sink, tmp_path_factory.mktemp("signoz-empty"), False, 2, ""
     )
     started: Final = factory.start()
-    try:
-        broken: Final = next(started)
-    except AssertionError as refused:
-        assert "Owned proxy exited before readiness" in str(refused), refused
-        logs: Final = tuple(factory.directory.glob("owned-proxy-*.log"))
-        assert any("SIGNOZ_INGESTION_ENDPOINT not found" in log.read_text() for log in logs)
-        return
+    broken: Final = next(started)
     try:
         response: Final = broken.chat(_marker())
         assert response.status_code == 200, response.text
