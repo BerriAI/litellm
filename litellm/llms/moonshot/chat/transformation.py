@@ -86,13 +86,12 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default Moonshot AI /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = "https://api.moonshot.ai/v1"
+        clean_api_base: Final = (api_base or "https://api.moonshot.ai/v1").rstrip("/")
 
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
+        if not clean_api_base.endswith("/chat/completions"):
+            return f"{clean_api_base}/chat/completions"
 
-        return api_base
+        return clean_api_base
 
     def get_supported_openai_params(self, model: str) -> list:
         """
