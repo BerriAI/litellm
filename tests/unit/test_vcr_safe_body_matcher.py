@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import itertools
 import json
 import os
-import queue
 import sys
-import threading
-import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Final, Iterator
+from typing import Final
 
 import pytest
 import vcr
+from vcr.request import Request
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _REPO_ROOT not in sys.path:
@@ -395,31 +391,8 @@ def test_before_record_request_is_idempotent_on_the_same_request_object():
     assert fp_after_first != "no-key"
 
 
-@pytest.fixture
-def local_upstream() -> Iterator[tuple[str, "queue.Queue[str]"]]:
-    served_paths: Final = queue.Queue[str]()
-    hits: Final = itertools.count(1)
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            served_paths.put(self.path)
-            payload: Final = json.dumps({"served_by": "live server", "hit": next(hits)}).encode()
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, *args: object) -> None:
-            pass
-
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}/v1/moderations", served_paths
-    finally:
-        server.shutdown()
-        server.server_close()
+LOCAL_UPSTREAM: Final = "http://127.0.0.1:54321/v1/moderations"
+REMOTE_UPSTREAM: Final = "https://api.openai.com/v1/moderations"
 
 
 def _recorder_with_repo_matchers(cassette_dir: Path) -> vcr.VCR:
@@ -431,59 +404,52 @@ def _recorder_with_repo_matchers(cassette_dir: Path) -> vcr.VCR:
     return recorder
 
 
-def _fetch_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=5) as response:
-        return json.loads(response.read())
+def _request_to(uri: str) -> Request:
+    return Request(
+        method="POST",
+        uri=uri,
+        body=b'{"model":"omni-moderation-latest","input":"hi"}',
+        headers={"content-type": "application/json"},
+    )
 
 
-def _paths_served(served_paths: "queue.Queue[str]", expected: int) -> tuple[str, ...]:
-    def pull() -> Iterator[str]:
-        for _ in range(expected):
-            try:
-                yield served_paths.get(timeout=5)
-            except queue.Empty:
-                return
-
-    return tuple(pull())
+def _response_served_by(server: str) -> dict[str, object]:
+    payload: Final = json.dumps({"served_by": server}).encode()
+    return {
+        "status": {"code": 200, "message": "OK"},
+        "headers": {"content-type": ["application/json"]},
+        "body": {"string": payload},
+    }
 
 
-def test_config_never_records_or_replays_a_test_owned_local_upstream(
-    tmp_path: Path, local_upstream: tuple[str, "queue.Queue[str]"]
-):
-    url, served_paths = local_upstream
+def _stored_uris(session: vcr.cassette.Cassette) -> list[str]:
+    return [request.uri for request in session.requests]
+
+
+def test_config_never_records_a_test_owned_local_upstream(tmp_path: Path):
     recorder: Final = _recorder_with_repo_matchers(tmp_path)
 
-    with recorder.use_cassette("local_upstream.yaml", **vcr_config_dict()) as first_session:
-        first_body: Final = _fetch_json(url)
-    with recorder.use_cassette("local_upstream.yaml", **vcr_config_dict()) as second_session:
-        second_body: Final = _fetch_json(url)
+    with recorder.use_cassette("local_upstream.yaml", **vcr_config_dict()) as session:
+        session.append(_request_to(LOCAL_UPSTREAM), _response_served_by("the test's own server"))
+        session.append(_request_to(REMOTE_UPSTREAM), _response_served_by("a real provider"))
 
-    assert _paths_served(served_paths, expected=2) == ("/v1/moderations", "/v1/moderations")
-    assert (first_body, second_body) == (
-        {"served_by": "live server", "hit": 1},
-        {"served_by": "live server", "hit": 2},
-    )
-    assert (first_session.play_count, second_session.play_count) == (0, 0)
-    assert not (tmp_path / "local_upstream.yaml").exists()
+    assert _stored_uris(session) == [REMOTE_UPSTREAM]
+    assert (tmp_path / "local_upstream.yaml").exists()
 
 
-def test_config_never_replays_a_localhost_response_an_earlier_run_stored(
-    tmp_path: Path, local_upstream: tuple[str, "queue.Queue[str]"]
-):
-    url, served_paths = local_upstream
+def test_config_never_replays_a_localhost_response_an_earlier_run_stored(tmp_path: Path):
     recorder: Final = _recorder_with_repo_matchers(tmp_path)
     config_that_recorded_localhost: Final = vcr_config_dict() | {"ignore_localhost": False}
 
-    with recorder.use_cassette("stored_by_an_earlier_run.yaml", **config_that_recorded_localhost):
-        stored_body: Final = _fetch_json(url)
-    assert (tmp_path / "stored_by_an_earlier_run.yaml").exists()
+    with recorder.use_cassette("stored_by_an_earlier_run.yaml", **config_that_recorded_localhost) as earlier_run:
+        earlier_run.append(_request_to(LOCAL_UPSTREAM), _response_served_by("an earlier run's server"))
+        earlier_run.append(_request_to(REMOTE_UPSTREAM), _response_served_by("a real provider"))
+    assert _stored_uris(earlier_run) == [LOCAL_UPSTREAM, REMOTE_UPSTREAM]
 
     with recorder.use_cassette("stored_by_an_earlier_run.yaml", **vcr_config_dict()) as session:
-        live_body: Final = _fetch_json(url)
+        replayable: Final = tuple(
+            bool(session.can_play_response_for(_request_to(uri))) for uri in (LOCAL_UPSTREAM, REMOTE_UPSTREAM)
+        )
 
-    assert _paths_served(served_paths, expected=2) == ("/v1/moderations", "/v1/moderations")
-    assert (stored_body, live_body) == (
-        {"served_by": "live server", "hit": 1},
-        {"served_by": "live server", "hit": 2},
-    )
-    assert session.play_count == 0
+    assert replayable == (False, True)
+    assert _stored_uris(session) == [REMOTE_UPSTREAM]
