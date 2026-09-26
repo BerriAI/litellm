@@ -461,7 +461,9 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     folded_metadata: Final = {**metadata, **metadata_fields}
     columns: Final = handle_key_type(data, {**column_fields})
     expires: Final = (
-        now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
+        now + timedelta(seconds=duration_in_seconds(duration=data.duration))
+        if data.duration is not None
+        else data.expires
     )
     budget_reset_at: Final = (
         get_budget_reset_time(budget_duration=data.budget_duration) if data.budget_duration is not None else None
@@ -4896,6 +4898,7 @@ async def generate_key_helper_fn(
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
+    expires: datetime | None = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -4915,12 +4918,11 @@ async def generate_key_helper_fn(
         else:
             token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
 
-    if duration is None:  # allow tokens that never expire
-        expires = None
-    else:
-        # Add duration to current time for exact expiration (not standardized reset time)
-        duration_seconds: Final = duration_in_seconds(duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    resolved_expires: Final = (
+        datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+        if duration is not None
+        else expires
+    )
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -4997,7 +4999,7 @@ async def generate_key_helper_fn(
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
-            "expires": expires,
+            "expires": resolved_expires,
             "models": models,
             "aliases": aliases_json,
             "config": config_json,

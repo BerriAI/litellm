@@ -32584,6 +32584,8 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /** Expires */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
@@ -41816,6 +41818,8 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /** Expires */
+            expires?: string | null;
             /** Grace Period */
             grace_period?: string | null;
             /** Guardrails */
@@ -47887,6 +47891,8 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /** Expires */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
