@@ -406,3 +406,19 @@ async def test_service_client_is_replaced_once_its_ttl_elapses(mock_env_vars):
     first.close.assert_awaited_once()
     second.close.assert_not_awaited()
     assert fake_aio_module.DataLakeServiceClient.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_replaced_at_the_exact_ttl_boundary(mock_env_vars):
+    fake_aio_module = _fake_datalake_module()
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS, 2_000_000.0))
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: next(ticks))
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is not first, "a call exactly at the TTL must rebuild the client"
+    first.close.assert_awaited_once()
+    second.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 2
