@@ -78,7 +78,7 @@ vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] 
 rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
-serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
+serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"
