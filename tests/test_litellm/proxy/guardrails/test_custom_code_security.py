@@ -373,11 +373,13 @@ class _LocalServer:
 
     def __init__(self) -> None:
         self.hits: list[tuple[str, str]] = []
+        self.received_headers: list[list[tuple[str, str]]] = []
         server = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 server.hits.append(("GET", self.path))
+                server.received_headers.append(list(self.headers.items()))
                 if self.path.startswith("/redirect-to/"):
                     self._redirect()
                     return
@@ -387,6 +389,7 @@ class _LocalServer:
 
             def do_POST(self) -> None:
                 server.hits.append(("POST", self.path))
+                server.received_headers.append(list(self.headers.items()))
                 if self.path.startswith("/redirect-to/"):
                     self._redirect()
                     return
@@ -513,6 +516,22 @@ async def test_http_post_does_not_follow_redirects(local_server, second_server, 
 
     assert "status=302" in reason
     assert second_server.hits == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["http_post", "http_get"])
+async def test_caller_host_header_never_reaches_the_validated_destination(local_server, monkeypatch, call):
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
+    guardrail = _reporting_guardrail(
+        f'{call}("http://127.0.0.1:{local_server.port}/marker", headers={{"host": "spoofed", "X-Extra": "kept"}})'
+    )
+
+    reason = await _block_reason(guardrail)
+
+    assert "status=200" in reason
+    (received,) = local_server.received_headers
+    assert [value for name, value in received if name.lower() == "host"] == [f"127.0.0.1:{local_server.port}"]
+    assert ("x-extra", "kept") in received
 
 
 @pytest.mark.asyncio

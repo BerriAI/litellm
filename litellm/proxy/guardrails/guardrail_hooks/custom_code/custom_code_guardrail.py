@@ -84,9 +84,9 @@ class CustomCodeGuardrailError(Exception):
         self.details: Mapping[str, object] = details or {}
 
 
-class CustomCodeCompilationError(CustomCodeGuardrailError, ValueError):
-    """Raised when custom code fails to compile; a ValueError so the guardrail endpoints treat it as a
-    configuration error and roll the write back."""
+class CustomCodeCompilationError(CustomCodeGuardrailError):
+    """Raised when custom code fails to compile. Deliberately not a ValueError: a config-file guardrail whose
+    code does not compile must stop startup instead of being skipped, so the guardrail endpoints catch it by name."""
 
 
 class CustomCodeExecutionError(CustomCodeGuardrailError):
@@ -119,7 +119,8 @@ class CustomCodeGuardrail(CustomGuardrail):
 
     The code runs in a sandboxed environment that provides:
     - Access to LiteLLM primitives (regex_match, json_parse, etc.)
-    - No file I/O or network access
+    - No file I/O; network access only through `http_get`/`http_post`/`http_request`, which refuse
+      private, link-local and loopback destinations unless the host is allowlisted
     - No imports allowed
 
     Users write an `apply_guardrail(inputs, request_data, input_type)` function

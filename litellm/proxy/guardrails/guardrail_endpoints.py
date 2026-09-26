@@ -27,6 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution impo
     await_with_timeout,
     call_off_loop_with_timeout,
 )
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
@@ -406,7 +407,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -2143,6 +2144,8 @@ async def test_custom_code_guardrail(
                 error=f"Syntax error in custom code: {e}",
                 error_type="compilation",
             )
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2190,11 +2193,7 @@ async def test_custom_code_guardrail(
         try:
             result: Final = await _run_test_guardrail(execute_guardrail, EXECUTION_TIMEOUT_SECONDS)
         except ExecutionTimeoutError:
-            return TestCustomCodeGuardrailResponse(
-                success=False,
-                error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
-                error_type="execution",
-            )
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2224,6 +2223,14 @@ async def test_custom_code_guardrail(
             error=f"Unexpected error: {e}",
             error_type="execution",
         )
+
+
+def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
+    return TestCustomCodeGuardrailResponse(
+        success=False,
+        error=f"Execution timeout: code took longer than {timeout:g} seconds",
+        error_type="execution",
+    )
 
 
 async def _run_test_guardrail(execute_guardrail: Callable[[], object], timeout: float) -> object:

@@ -552,11 +552,12 @@ async def _execute_http_request(
 ) -> httpx.Response:
     """Execute the HTTP request using the appropriate client method."""
     json_body, data_body = _prepare_http_body(body)
+    outbound_headers: Final = _caller_headers(headers)
 
     if method == "GET":
-        return await async_safe_get(client, url, headers=headers or {}, timeout=timeout)
+        return await async_safe_get(client, url, headers=outbound_headers)
 
-    destination_url, destination_headers = await _validated_destination(url, headers)
+    destination_url, destination_headers = await _validated_destination(url, outbound_headers)
     if method == "POST":
         return await client.post(
             url=destination_url, headers=destination_headers, json=json_body, data=data_body, timeout=timeout
@@ -577,11 +578,19 @@ async def _execute_http_request(
         raise ValueError(f"Unsupported HTTP method: {method}")
 
 
-async def _validated_destination(url: str, headers: dict[str, str] | None) -> tuple[str, dict[str, str]]:
+def _caller_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    if headers is None:
+        return {}
     if not litellm.user_url_validation:
-        return url, headers or {}
+        return headers
+    return {name: value for name, value in headers.items() if name.lower() != "host"}
+
+
+async def _validated_destination(url: str, headers: dict[str, str]) -> tuple[str, dict[str, str]]:
+    if not litellm.user_url_validation:
+        return url, headers
     destination_url, host_header = await asyncio.to_thread(validate_url, url)
-    return destination_url, {**(headers or {}), "Host": host_header}
+    return destination_url, {**headers, "Host": host_header}
 
 
 async def http_get(

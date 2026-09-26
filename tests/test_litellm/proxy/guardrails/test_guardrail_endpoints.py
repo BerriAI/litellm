@@ -2581,6 +2581,29 @@ async def test_test_custom_code_endpoint_returns_a_timeout_for_an_infinite_loop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(20)
+async def test_test_custom_code_endpoint_reports_a_module_level_infinite_loop_as_a_timeout():
+    """Module-level code that outran the load deadline was reported as a compile failure, as if the
+    source were invalid."""
+    request = TestCustomCodeGuardrailRequest(
+        custom_code=(
+            "n = 0\nwhile True:\n    n += 1\n\n"
+            "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
+        ),
+        test_input={"texts": ["x"]},
+    )
+    started = time.monotonic()
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is False
+    assert response.error_type == "execution"
+    assert response.error is not None
+    assert response.error.startswith("Execution timeout: code took longer than 5 seconds")
+    assert time.monotonic() - started < 8.0
+
+
+@pytest.mark.asyncio
 async def test_test_custom_code_endpoint_awaits_an_async_guardrail():
     request = TestCustomCodeGuardrailRequest(
         custom_code=(
