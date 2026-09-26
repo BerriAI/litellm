@@ -91,7 +91,7 @@ class AgentRequestHandler:
         and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
         if user_api_key_auth is not None and user_api_key_auth.managed_agent_policy is not None:
             return await _managed_actor_agent_access(user_api_key_auth)
-        key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
+        key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(user_api_key_auth)
         caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth)
         own_access: Final = _intersect_agent_access(key_team_access, caller_access)
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
@@ -109,13 +109,13 @@ class AgentRequestHandler:
         return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth)
 
     @staticmethod
-    async def _resolve_key_team_agent_access(
+    async def resolve_key_team_agent_access(
         user_api_key_auth: UserAPIKeyAuth | None,
         *,
         strict: bool = False,
     ) -> AgentAccess:
         try:
-            key_access: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth, strict=strict)
+            key_access: Final = await AgentRequestHandler.get_allowed_agents_for_key(user_api_key_auth, strict=strict)
             team_access: Final = await AgentRequestHandler._get_allowed_agents_for_team(
                 user_api_key_auth, strict=strict
             )
@@ -240,7 +240,7 @@ class AgentRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
-    async def _get_allowed_agents_for_key(
+    async def get_allowed_agents_for_key(
         user_api_key_auth: UserAPIKeyAuth | None = None,
         *,
         strict: bool = False,
@@ -315,7 +315,7 @@ class AgentRequestHandler:
         2. Also includes agents from team's access_group_ids (unified access groups)
 
         Fetches the team object once and reuses it for both permission sources.
-        Declared-but-empty grants stay restricted; see `_get_allowed_agents_for_key`.
+        Declared-but-empty grants stay restricted; see `get_allowed_agents_for_key`.
         """
         if user_api_key_auth is None:
             return UnrestrictedAgentAccess()
@@ -623,7 +623,7 @@ async def accessible_agents(
 async def _strict_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
     if auth.managed_agent_policy is not None:
         return await _managed_actor_agent_access(auth)
-    return await AgentRequestHandler._resolve_key_team_agent_access(auth, strict=True)
+    return await AgentRequestHandler.resolve_key_team_agent_access(auth, strict=True)
 
 
 async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
@@ -632,7 +632,7 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
         return RestrictedAgentAccess(frozenset())
     permission: Final = LiteLLM_ObjectPermissionTable.model_validate(agent.object_permission or MappingProxyType({}))
     own_auth: Final = UserAPIKeyAuth(object_permission=permission)
-    own: Final = _granted_ids(await AgentRequestHandler._get_allowed_agents_for_key(own_auth, strict=True))
+    own: Final = _granted_ids(await AgentRequestHandler.get_allowed_agents_for_key(own_auth, strict=True))
 
     from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 
@@ -653,6 +653,6 @@ async def verified_human_agent_grants(user_id: str | None) -> frozenset[str]:
     if user_id is None:
         return frozenset()
     human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
-    sources: Final = await MCPRequestHandler._admitted_subject_sources(human)
+    sources: Final = await MCPRequestHandler.admitted_subject_sources(human)
     human_access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
     return frozenset().union(*(_granted_ids(access) for access in human_access))
