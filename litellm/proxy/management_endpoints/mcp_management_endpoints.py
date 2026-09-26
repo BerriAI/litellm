@@ -2544,13 +2544,9 @@ if MCP_AVAILABLE:
         async def lookup_metadata(server_id: str) -> LiteLLM_MCPServerTable | None:
             return servers.get(server_id)
 
-        items: Final[list[MCPUserCredentialListItem]] = []
-        for cred in oauth_creds:
-            if "server_id" not in cred:
-                continue
-            sid = cred["server_id"]
+        async def visible_metadata(server_id: str) -> LiteLLM_MCPServerTable | None:
             resolved: Final = await resolve_mcp_server(
-                sid,
+                server_id,
                 manager=global_mcp_server_manager,
                 db_lookup=lookup_metadata,
             )
@@ -2562,7 +2558,14 @@ if MCP_AVAILABLE:
                     global_mcp_server_manager.get_allowed_mcp_servers,
                 )
             )
-            srv = resolved.table if resolved is not None and visible else None
+            return resolved.table if resolved is not None and visible else None
+
+        items: Final[list[MCPUserCredentialListItem]] = []
+        for cred in oauth_creds:
+            if "server_id" not in cred:
+                continue
+            sid = cred["server_id"]
+            srv = await visible_metadata(sid)
             expires_at: str | None = cred.get("expires_at")
             items.append(
                 MCPUserCredentialListItem(
