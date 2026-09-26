@@ -210,6 +210,7 @@ class TestBatchCancellation:
         with pytest.raises(ExceptionGroup) as caught:
             manager.teardown()
         assert "cancellation did not finish" in str(caught.value.exceptions[0])
+        assert "last status cancelling" in str(caught.value.exceptions[0])
         client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "failed", "expired", "cancelled"])
