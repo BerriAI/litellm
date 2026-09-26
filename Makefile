@@ -56,7 +56,7 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
-	@echo "  make rust-sqlx-prepare  - Migrate SQLX_DATABASE_URL and refresh litellm-rust/crates/db/.sqlx"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -308,9 +308,7 @@ test-rust-extension:
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 
 rust-sqlx-prepare:
-	@test -n "$$SQLX_DATABASE_URL" || { echo "set SQLX_DATABASE_URL to a scratch Postgres, it gets prisma migrate deploy" >&2; exit 1; }
-	DATABASE_URL="$$SQLX_DATABASE_URL" $(UV_RUN) prisma migrate deploy --schema litellm-proxy-extras/litellm_proxy_extras/schema.prisma
-	cd litellm-rust/crates/db && DATABASE_URL="$$SQLX_DATABASE_URL" cargo sqlx prepare -- --all-targets --features postgres-tests
+	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/

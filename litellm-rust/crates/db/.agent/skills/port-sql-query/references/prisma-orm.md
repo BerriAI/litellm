@@ -5,7 +5,7 @@
 Run the exact call against a scratch database. It really executes, so never point it at a database you care about:
 
 ```bash
-SQLX_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5544/litellm \
+SCRATCH_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5544/litellm \
   uv run --no-sync python scripts/prisma_sql.py \
   'db.litellm_verificationtoken.update(where={"token": "t"}, data={"budget_limits": "{}"})'
 ```

@@ -12,8 +12,8 @@ schema = ["dep:schemars"]
 [dependencies]
 schemars = { workspace = true, optional = true, features = ["chrono04"] }
 sqlx.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
+litellm-db-testing.workspace = true
 rstest.workspace = true
 tokio.workspace = true

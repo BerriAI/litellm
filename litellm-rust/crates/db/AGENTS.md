@@ -27,24 +27,24 @@
 - Offline cache
   - `.cargo/config.toml` forces `SQLX_OFFLINE=true`, so builds read this crate's `.sqlx` and never touch a database. Never unset it: builds would then depend on whatever database `DATABASE_URL` points at
   - Any new or edited `.sql` file (whitespace included) and any migration that touches a queried table needs a refresh. "`SQLX_OFFLINE=true` but there is no cached data for this query" means one was missed
-  - Refresh from the repo root and commit `.sqlx` with the change: `SQLX_DATABASE_URL=<scratch postgres> make rust-sqlx-prepare`
-    - The target runs `prisma migrate deploy` against `SQLX_DATABASE_URL` first, so never point it at a database you care about
-    - A local one: `docker run -d --name litellm-sqlx -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=litellm -p 127.0.0.1:5544:5432 postgres:16`
-    - It needs sqlx-cli 0.9.0: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres`
+  - Refresh from the repo root with `make rust-sqlx-prepare` and commit `.sqlx` with the change. `--check` instead of refreshing: `cargo run -p litellm-db-testing --bin sqlx-prepare -- --check` from `litellm-rust`
+    - It needs Docker and sqlx-cli 0.9.0 (`cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres`), nothing else
   - A refresh that fails to compile means a migration and a query disagree, and the error says what the database rejected (`column t.team_alias does not exist`)
     - Renamed or dropped column: update the `.sql` file in the same change, then refresh
     - Changed type or nullability: update the parameter type or the row struct field
     - A migration that drops or renames a column released code still reads should be raised in review, not only patched here
   - rust-analyzer keeps showing the error on `declare_queries!` until the cache is refreshed
 - Tests
-  - Tests that need a database sit behind the `postgres-tests` feature and read `DATABASE_URL` of a migrated Postgres: `cargo test -p litellm-db --features postgres-tests`
+  - Tests that need a database sit behind the `postgres-tests` feature and get their own migrated Postgres container from the `database` fixture: `cargo test -p litellm-db --features postgres-tests` needs only Docker
   - Without the feature only tests that need no database run, so plain `cargo test` works anywhere
+- Migrated databases (`litellm-db-testing`)
+  - Prisma generates the migrations (`litellm-proxy-extras/litellm_proxy_extras/migrations`) and applies them in production. Rust only applies the same files to throwaway containers, for `.sqlx` and tests
+  - `MigratedPostgres::start()` runs a Postgres container pinned to the digest the Postgres Tests workflow uses and applies every migration with sqlx
+  - The folders apply in name order, which is Prisma's order, numbered from 1 because timestamps repeat, and outside a transaction because Prisma does not wrap them (some bring their own `BEGIN`/`COMMIT` or build indexes `CONCURRENTLY`)
+  - sqlx records them in `_sqlx_migrations`, so these databases have no `_prisma_migrations`
 - Enforcement
-  - The LiteLLM Rust DB workflow applies the real migrations, then runs `cargo sqlx prepare --check`, clippy with `postgres-tests,schema` and the `postgres-tests` suite
+  - The LiteLLM Rust DB workflow runs the `sqlx-prepare --check` binary, clippy with `postgres-tests,schema` and the `postgres-tests` suite, all against containers
   - Clippy bans the unchecked `sqlx::query*` functions and `sqlx::raw_sql`
-- Schema handshake
-  - `build.rs` embeds the newest migration folder name as `REQUIRED_MIGRATION`
-  - `schema_compatibility` reports `Behind` unless `_prisma_migrations` has that migration finished and not rolled back. Rust declines when the database is behind, and a database ahead of it is fine
 
 
 ## Data Modelling

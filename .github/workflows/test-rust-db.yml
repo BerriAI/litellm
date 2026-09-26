@@ -40,44 +40,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    services:
-      postgres:
-        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: litellm_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
-
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-
-      - uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
-
-      - name: Install the Prisma CLI
-        run: uv sync --frozen --no-install-project --only-group proxy-dev
-
-      - uses: ./.github/actions/cache-prisma-binaries
-
-      - name: Apply the Prisma migrations
-        run: uv run --no-sync prisma migrate deploy --schema litellm-proxy-extras/litellm_proxy_extras/schema.prisma
 
       - run: rustup toolchain install --no-self-update
         working-directory: litellm-rust
@@ -91,8 +57,8 @@ jobs:
         run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres
 
       - name: Check the committed .sqlx against the migrated schema
-        working-directory: litellm-rust/crates/db
-        run: cargo sqlx prepare --check -- --all-targets --features postgres-tests
+        working-directory: litellm-rust
+        run: cargo run --locked -p litellm-db-testing --bin sqlx-prepare -- --check
 
       - name: Lint the database tests
         working-directory: litellm-rust

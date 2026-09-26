@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Print the SQL Prisma sends for one ORM call, as the starting point of a shared query file.
 
-    SQLX_DATABASE_URL=postgresql://... python scripts/prisma_sql.py \\
+    SCRATCH_DATABASE_URL=postgresql://... python scripts/prisma_sql.py \\
         'db.litellm_verificationtoken.update(where={"token": "t"}, data={"budget_limits": "{}"})'
 
-The expression runs for real against SQLX_DATABASE_URL with `db` bound to a connected
+The expression runs for real against SCRATCH_DATABASE_URL with `db` bound to a connected
 Prisma client, so point it at a scratch database migrated by prisma migrate deploy.
 """
 
@@ -63,9 +63,9 @@ def main() -> int:
     if len(sys.argv) != 2:
         sys.stderr.write(__doc__ or "")
         return 2
-    url: Final = os.environ.get("SQLX_DATABASE_URL")
+    url: Final = os.environ.get("SCRATCH_DATABASE_URL")
     if not url:
-        sys.stderr.write("set SQLX_DATABASE_URL to a scratch Postgres migrated by prisma migrate deploy\n")
+        sys.stderr.write("set SCRATCH_DATABASE_URL to a scratch Postgres migrated by prisma migrate deploy\n")
         return 2
     with tempfile.TemporaryDirectory() as directory:
         log_path: Final = Path(directory) / "engine.log"

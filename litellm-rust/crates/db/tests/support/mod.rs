@@ -1,9 +1,18 @@
+use litellm_db_testing::MigratedPostgres;
 use rstest::fixture;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
+
+pub struct Database {
+    pub pool: PgPool,
+    _postgres: MigratedPostgres,
+}
 
 #[fixture]
-pub async fn transaction() -> Transaction<'static, Postgres> {
-    let url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must point at a Postgres migrated by prisma migrate deploy");
-    PgPool::connect(&url).await.unwrap().begin().await.unwrap()
+pub async fn database() -> Database {
+    let postgres = MigratedPostgres::start().await.unwrap();
+    let pool = PgPool::connect(postgres.url()).await.unwrap();
+    Database {
+        pool,
+        _postgres: postgres,
+    }
 }
