@@ -4590,6 +4590,46 @@ async def test_tag_budget_check_reads_from_spend_counter():
 
 
 @pytest.mark.asyncio
+async def test_responses_metadata_tag_is_checked_before_dispatch():
+    from litellm.proxy.utils import ProxyLogging
+
+    tag_object = LiteLLM_TagTable(
+        tag_name="service:reporting",
+        spend=1.5,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        assert counter_key == "spend:tag:service:reporting"
+        return 1.5
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={"service:reporting": tag_object},
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body={
+                    "model": "gpt-4o-mini",
+                    "input": "hello",
+                    "metadata": {"tags": ["service:reporting"]},
+                    "litellm_metadata": {},
+                },
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+
+    assert exc_info.value.entity_type == "tag"
+    assert exc_info.value.entity_id == "service:reporting"
+
+
+@pytest.mark.asyncio
 async def test_team_member_budget_check_reads_from_spend_counter():
     """Team member budget check should use get_current_spend when counter exists."""
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
