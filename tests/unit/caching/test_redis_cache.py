@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import Iterator
 from datetime import timedelta
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1023,7 +1024,12 @@ async def test_breaker_metrics_track_state_and_failure_class():
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _breaker_metrics, is_redis_timeout_failure
+
+    metrics: Final = _breaker_metrics()
+    for collector in (metrics._state_gauge, metrics._transitions, metrics._failures):
+        if collector is not None and collector not in REGISTRY._collector_to_names:
+            REGISTRY.register(collector)
 
     def sample(name, labels=None):
         return REGISTRY.get_sample_value(name, labels) or 0.0

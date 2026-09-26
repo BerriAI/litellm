@@ -180,6 +180,39 @@ class TestLoggingWorker:
 
         assert sorted(fired) == ["first", "second"]
 
+    def test_callback_finishing_after_loop_change_settles_only_its_own_queue(self):
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10, concurrency=1)
+        fired = []
+
+        async def marker(name, delay=0.0):
+            await asyncio.sleep(delay)
+            fired.append(name)
+
+        async def start_slow_callback():
+            worker.ensure_initialized_and_enqueue(marker("slow", delay=0.05))
+            await asyncio.sleep(0.01)
+
+        async def log_on_second_loop():
+            for name in ("b1", "b2", "b3"):
+                worker.ensure_initialized_and_enqueue(marker(name))
+            for _ in range(2):
+                await asyncio.sleep(0)
+
+        first_loop = asyncio.new_event_loop()
+        try:
+            first_loop.run_until_complete(start_slow_callback())
+            first_loop_tasks = tuple(asyncio.all_tasks(first_loop))
+            asyncio.run(log_on_second_loop())
+            first_loop.run_until_complete(asyncio.sleep(0.1))
+            failures = [
+                task.exception() for task in first_loop_tasks if task.done() and not task.cancelled() and task.exception()
+            ]
+        finally:
+            first_loop.close()
+
+        assert failures == []
+        assert "slow" in fired
+
     @pytest.mark.parametrize("stranded", ["still_queued", "dequeued_never_started"])
     def test_flush_on_new_loop_drains_tasks_stranded_on_previous_loop(self, stranded):
         """
