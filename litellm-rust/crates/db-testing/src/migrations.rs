@@ -12,6 +12,8 @@ pub const PRISMA_MIGRATIONS_DIR: &str = concat!(
     "/../../../litellm-proxy-extras/litellm_proxy_extras/migrations"
 );
 
+const MIGRATION_FILENAME: &str = "migration.sql";
+
 pub fn prisma_migrations(directory: &Path) -> Result<Vec<Migration>, Error> {
     let mut names = migration_names(directory)?;
     names.sort();
@@ -19,7 +21,7 @@ pub fn prisma_migrations(directory: &Path) -> Result<Vec<Migration>, Error> {
         .into_iter()
         .zip(1..)
         .map(|(name, version)| {
-            let path = directory.join(&name).join("migration.sql");
+            let path = directory.join(&name).join(MIGRATION_FILENAME);
             let sql = fs::read_to_string(&path).map_err(|source| Error::Read { path, source })?;
             Ok(Migration::new(
                 version,
@@ -37,6 +39,7 @@ fn migration_names(directory: &Path) -> Result<Vec<String>, Error> {
         path: directory.to_owned(),
         source,
     };
+    
     fs::read_dir(directory)
         .map_err(read_error)?
         .map(|entry| {

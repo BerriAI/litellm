@@ -6,7 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-postgres-tests = []
+default = ["postgres"]
+postgres = []
 schema = ["dep:schemars"]
 
 [dependencies]
@@ -15,5 +16,4 @@ sqlx.workspace = true
 
 [dev-dependencies]
 litellm-db-testing.workspace = true
-rstest.workspace = true
 tokio.workspace = true

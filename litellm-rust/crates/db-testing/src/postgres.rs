@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use sqlx::{Connection, PgConnection, migrate::Migrator};
+use sqlx::{PgPool, migrate::Migrator};
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
@@ -14,6 +14,7 @@ const POSTGRES_TAG: &str =
 pub struct MigratedPostgres {
     _container: ContainerAsync<Postgres>,
     url: String,
+    pool: PgPool,
 }
 
 impl MigratedPostgres {
@@ -24,18 +25,22 @@ impl MigratedPostgres {
             container.get_host().await?,
             container.get_host_port_ipv4(5432).await?,
         );
-        let mut connection = PgConnection::connect(&url).await?;
+        let pool = PgPool::connect(&url).await?;
         Migrator::with_migrations(prisma_migrations(Path::new(PRISMA_MIGRATIONS_DIR))?)
-            .run(&mut connection)
+            .run(&pool)
             .await?;
-        connection.close().await?;
         Ok(Self {
             _container: container,
             url,
+            pool,
         })
     }
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 }

@@ -35,15 +35,15 @@
     - A migration that drops or renames a column released code still reads should be raised in review, not only patched here
   - rust-analyzer keeps showing the error on `declare_queries!` until the cache is refreshed
 - Tests
-  - Tests that need a database sit behind the `postgres-tests` feature and get their own migrated Postgres container from the `database` fixture: `cargo test -p litellm-db --features postgres-tests` needs only Docker
-  - Without the feature only tests that need no database run, so plain `cargo test` works anywhere
+  - Tests that need a database start their own `MigratedPostgres` and query through its `pool()`, so `cargo test -p litellm-db` needs only Docker
+  - They sit behind the default `postgres` feature. `--no-default-features` runs only the tests that need no database, for machines without Docker
 - Migrated databases (`litellm-db-testing`)
   - Prisma generates the migrations (`litellm-proxy-extras/litellm_proxy_extras/migrations`) and applies them in production. Rust only applies the same files to throwaway containers, for `.sqlx` and tests
   - `MigratedPostgres::start()` runs a Postgres container pinned to the digest the Postgres Tests workflow uses and applies every migration with sqlx
   - The folders apply in name order, which is Prisma's order, numbered from 1 because timestamps repeat, and outside a transaction because Prisma does not wrap them (some bring their own `BEGIN`/`COMMIT` or build indexes `CONCURRENTLY`)
   - sqlx records them in `_sqlx_migrations`, so these databases have no `_prisma_migrations`
 - Enforcement
-  - The LiteLLM Rust DB workflow runs the `sqlx-prepare --check` binary, clippy with `postgres-tests,schema` and the `postgres-tests` suite, all against containers
+  - The LiteLLM Rust DB workflow runs the `sqlx-prepare --check` binary, clippy with `schema` and the database tests, all against containers
   - Clippy bans the unchecked `sqlx::query*` functions and `sqlx::raw_sql`
 
 

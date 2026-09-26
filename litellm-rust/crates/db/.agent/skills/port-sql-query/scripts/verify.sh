@@ -13,10 +13,10 @@ echo "== refresh litellm-rust/crates/db/.sqlx"
 make rust-sqlx-prepare
 
 echo "== clippy, offline"
-(cd litellm-rust && env -u DATABASE_URL cargo clippy -p litellm-db --all-targets --locked --features postgres-tests,schema -- -D warnings)
+(cd litellm-rust && env -u DATABASE_URL cargo clippy -p litellm-db --all-targets --locked --features schema -- -D warnings)
 
-echo "== postgres-tests"
-(cd litellm-rust && cargo test -p litellm-db --locked --features postgres-tests)
+echo "== database tests"
+(cd litellm-rust && cargo test -p litellm-db --locked)
 
 echo "== shared query gate"
 uv run --no-sync python tests/code_coverage_tests/check_shared_sql_queries.py

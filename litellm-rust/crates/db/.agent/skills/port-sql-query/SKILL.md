@@ -19,7 +19,7 @@ During the migration Python owns migrations and keeps executing each query until
 3. At the call site import the constant by name (`from litellm.proxy.db.queries.<domain> import <NAME>`, not the module) and pass it where the SQL text was, keeping the arguments in `$1`, `$2`, ... order
 4. Declare it in `litellm-rust/crates/db/src/queries/<domain>.rs` (add `mod <domain>;` to `mod.rs` for a new domain), with a row struct if a caller reads the rows. Parameter types mirror what Python passes: `Option<T>` where Python may pass `None`, `&JsonValue` for `$n::jsonb`
 5. Lower `INLINE_RAW_SQL_CEILING` or `ORM_CALL_CEILING` in `tests/code_coverage_tests/check_shared_sql_queries.py` by the number of calls moved. It wants the exact count, so a ceiling left too high fails too
-6. Run `scripts/verify.sh` (needs Docker and sqlx-cli). It refreshes `.sqlx`, then runs clippy, the `postgres-tests` suite and the gate. Fix and rerun until it passes
+6. Run `scripts/verify.sh` (needs Docker and sqlx-cli). It refreshes `.sqlx`, then runs clippy, the database tests and the gate. Fix and rerun until it passes
 7. Run the Python tests of the module you touched, preferring the database-backed ones (`tests/proxy_behavior/...`) with `DATABASE_URL` on a scratch Postgres after `prisma migrate deploy --schema litellm-proxy-extras/litellm_proxy_extras/schema.prisma`. Mocked tests do not see SQL mistakes
 8. Commit the `.sql` file, the Python change, the Rust declaration and `.sqlx` together
 
@@ -34,5 +34,5 @@ During the migration Python owns migrations and keeps executing each query until
 ## Switching a query to Rust execution (later)
 
 - Make its declaration return the row struct instead of discarding it and drop the row's `dead_code` expectation
-- Expose it through python-bridge, add a `postgres-tests` parity case against the Python path on the same seeded rows, and stage it in `litellm/rust_bridge/catalog.py`
+- Expose it through python-bridge, add a database parity case against the Python path on the same seeded rows, and stage it in `litellm/rust_bridge/catalog.py`
 - Queries that share a Prisma transaction switch together
