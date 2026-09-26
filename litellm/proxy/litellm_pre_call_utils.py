@@ -1659,7 +1659,19 @@ class LiteLLMProxyRequestSetup:
         _key_agent_id: Final = getattr(user_api_key_dict, "agent_id", None)
         _existing_agent_id: Final = data[_metadata_variable_name].get("agent_id")
         _resolved_agent_id: Final = _key_agent_id or _existing_agent_id
-        data[_metadata_variable_name]["agent_id"] = _resolved_agent_id
+        data[_metadata_variable_name]["agent_id"] = user_api_key_dict.invoked_agent_id or _resolved_agent_id
+        managed_context: Final = user_api_key_dict.managed_agent_context
+        data[_metadata_variable_name].update(
+            MappingProxyType(
+                {
+                    "actor_agent_id": user_api_key_dict.agent_id,
+                    "target_agent_id": user_api_key_dict.invoked_agent_id,
+                    "billing_agent_id": user_api_key_dict.agent_id or user_api_key_dict.invoked_agent_id,
+                    "agent_execution_mode": managed_context.mode if managed_context else None,
+                    "verified_human_user_id": managed_context.user_id if managed_context else None,
+                }
+            )
+        )
 
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
