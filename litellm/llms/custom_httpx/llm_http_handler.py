@@ -781,6 +781,7 @@ class BaseLLMHTTPHandler:
                     messages=messages,
                     client=client,
                     json_mode=json_mode,
+                    litellm_params=litellm_params,
                 )
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
@@ -944,6 +945,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 json_mode=json_mode,
                 signed_json_body=signed_json_body,
+                litellm_params=litellm_params,
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(

@@ -257,7 +257,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
-    all_litellm_params,
+    is_litellm_owned_kwarg,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -288,7 +288,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -4161,26 +4161,10 @@ def _remove_unsupported_params(non_default_params: dict, supported_openai_params
     return non_default_params
 
 
-def filter_out_litellm_params(kwargs: dict) -> dict:
-    """
-    Filter out LiteLLM internal parameters from kwargs dict.
-
-    Returns a new dict containing only non-LiteLLM parameters that should be
-    passed to external provider APIs.
-
-    Args:
-        kwargs: Dictionary that may contain LiteLLM internal parameters
-
-    Returns:
-        Dictionary with LiteLLM internal parameters filtered out
-
-    Example:
-        >>> kwargs = {"query": "test", "shared_session": session_obj, "metadata": {}}
-        >>> filtered = filter_out_litellm_params(kwargs)
-        >>> # filtered = {"query": "test"}
-    """
-
-    return {key: value for key, value in kwargs.items() if key not in all_litellm_params}
+def filter_out_litellm_params(
+    kwargs: Mapping[str, object], excluding: Collection[str] = frozenset()
+) -> dict[str, object]:
+    return {key: value for key, value in kwargs.items() if key not in excluding and not is_litellm_owned_kwarg(key)}
 
 
 def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
@@ -10136,14 +10120,8 @@ def get_standard_openai_params(params: Mapping[str, object]) -> dict:
     return {k: v for k, v in params.items() if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS and v is not None}
 
 
-def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict:
-    openai_params: Final = litellm.OPENAI_CHAT_COMPLETION_PARAMS
-    default_params: Final = openai_params + all_litellm_params
-    non_default_params: Final = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
-
-    return non_default_params
+def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str, object]:
+    return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
 
 
 def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
@@ -10189,12 +10167,10 @@ def strip_reasoning_summary_aliases_from_optional_params(
     return op, rs_val
 
 
-def get_non_default_transcription_params(kwargs: dict) -> dict:
+def get_non_default_transcription_params(kwargs: Mapping[str, object]) -> dict[str, object]:
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
-    default_params: Final = OPENAI_TRANSCRIPTION_PARAMS + all_litellm_params
-    non_default_params: Final = {k: v for k, v in kwargs.items() if k not in default_params}
-    return non_default_params
+    return filter_out_litellm_params(kwargs, excluding=OPENAI_TRANSCRIPTION_PARAMS)
 
 
 def add_openai_metadata(

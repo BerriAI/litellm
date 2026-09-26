@@ -1,26 +1,28 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
-import litellm
 import pytest
-from litellm.integrations.custom_logger import CustomLogger
 
+from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.types.litellm_params import ControlOptions
 
-class LitellmParamsRecorder(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.seen: tuple[Mapping[str, object], ...] = ()
+DEFAULT_CHUNKING_REQUESTS: Final = (
+    pytest.param(MappingProxyType({}), id="unset"),
+    pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": True}), id="dropped"),
+    pytest.param(
+        MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": "true"}), id="dropped_by_string_flag"
+    ),
+    pytest.param(MappingProxyType({CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=1)}), id="forged_options"),
+    pytest.param(MappingProxyType({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}}), id="forged_mapping"),
+)
 
-    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
-        params: Final = kwargs["litellm_params"]
-        assert isinstance(params, Mapping)
-        self.seen = (*self.seen, params)
-
-
-def record_litellm_params(monkeypatch: pytest.MonkeyPatch) -> LitellmParamsRecorder:
-    recorder: Final = LitellmParamsRecorder()
-    monkeypatch.setattr(litellm, "input_callback", [recorder])
-    return recorder
+ROUTER_CHUNK_SIZE_CASES: Final = (
+    pytest.param(MappingProxyType({"stream_chunk_size": 64}), 64, id="int"),
+    pytest.param(MappingProxyType({"stream_chunk_size": "64"}), 64, id="digit_string"),
+    pytest.param(MappingProxyType({}), None, id="unset"),
+    pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": True}), None, id="dropped"),
+)
 
 
 def keys_at_every_depth(value: object) -> frozenset[str]:
