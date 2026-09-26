@@ -3,7 +3,6 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import pytest
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
@@ -73,7 +72,6 @@ def sse_events(text: str) -> tuple[tuple[str, dict[str, object]], ...]:
     )
 
 
-@pytest.mark.covers("other.provider_wire.anthropic.claude_code_native_request_survives_and_streams_back")
 def test_claude_code_streaming_request_reaches_anthropic_intact_and_streams_back(gateway: Gateway) -> None:
     identity: Final = f"msg_cc_{uuid.uuid4().hex}"
     fixture: Final = _JSON_OBJECT.validate_json(_FIXTURE.read_bytes())
