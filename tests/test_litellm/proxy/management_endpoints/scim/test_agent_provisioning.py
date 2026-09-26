@@ -349,6 +349,18 @@ async def test_profile_put_cannot_reenable_native_user_when_active_is_omitted() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("username", [None, ""])
+async def test_native_profile_update_rejects_blank_username_without_writing(username: str | None) -> None:
+    service, tx, row = provisioning_fixture()
+    request: Final = SCIMUser.model_validate({**agent_user().model_dump(by_alias=True), "userName": username})
+    with pytest.raises(HTTPException) as failure:
+        await service.update_user(row.id, request)
+    assert failure.value.status_code == 400
+    assert failure.value.detail == "userName is required"
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_deleted_registration_is_not_recreated_by_directory_replay() -> None:
     from fastapi import HTTPException
 
