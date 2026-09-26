@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
+import queue
 import sys
+import threading
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Final, Iterator
 
 import pytest
+import vcr
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _REPO_ROOT not in sys.path:
@@ -384,3 +392,71 @@ def test_before_record_request_is_idempotent_on_the_same_request_object():
     _before_record_request(req)
     assert req.headers[KEY_FINGERPRINT_HEADER] == fp_after_first
     assert fp_after_first != "no-key"
+
+
+@pytest.fixture
+def local_upstream() -> Iterator[tuple[str, "queue.Queue[str]"]]:
+    served_paths: Final = queue.Queue[str]()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            served_paths.put(self.path)
+            payload: Final = json.dumps({"served_by": "live server"}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/moderations", served_paths
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _recorder_with_repo_matchers(cassette_dir: Path) -> vcr.VCR:
+    recorder: Final = vcr.VCR(cassette_library_dir=str(cassette_dir))
+    recorder.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
+    recorder.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
+    recorder.register_matcher(TOLERANT_QUERY_MATCHER_NAME, _tolerant_query_matcher)
+    recorder.register_matcher(TOLERANT_PATH_MATCHER_NAME, _tolerant_path_matcher)
+    return recorder
+
+
+def _fetch_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return json.loads(response.read())
+
+
+def _paths_served(served_paths: "queue.Queue[str]", expected: int) -> tuple[str, ...]:
+    def pull() -> Iterator[str]:
+        for _ in range(expected):
+            try:
+                yield served_paths.get(timeout=5)
+            except queue.Empty:
+                return
+
+    return tuple(pull())
+
+
+def test_config_never_records_or_replays_a_test_owned_local_upstream(
+    tmp_path: Path, local_upstream: tuple[str, "queue.Queue[str]"]
+):
+    url, served_paths = local_upstream
+    recorder: Final = _recorder_with_repo_matchers(tmp_path)
+
+    with recorder.use_cassette("local_upstream.yaml", **vcr_config_dict()) as first_session:
+        first_body: Final = _fetch_json(url)
+    with recorder.use_cassette("local_upstream.yaml", **vcr_config_dict()) as second_session:
+        second_body: Final = _fetch_json(url)
+
+    assert _paths_served(served_paths, expected=2) == ("/v1/moderations", "/v1/moderations")
+    assert first_body == second_body == {"served_by": "live server"}
+    assert (first_session.play_count, second_session.play_count) == (0, 0)
+    assert not (tmp_path / "local_upstream.yaml").exists()
