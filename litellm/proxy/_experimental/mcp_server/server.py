@@ -100,6 +100,7 @@ _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS: Final = 30 * 60
 # the cap is still hit (every session in flight), the new `initialize` is
 # rejected with 429.
 _MAX_STATEFUL_SESSIONS_PER_OWNER: Final = 100
+_MAX_CLIENT_TERMINATED_SESSIONS: Final = 10000
 # Maximum bytes to peek when sniffing the JSON-RPC method on a POST.
 # An `initialize` envelope is a few hundred bytes; capping the peek
 # prevents an authenticated client from forcing the proxy to buffer an
@@ -625,6 +626,7 @@ if MCP_AVAILABLE:
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
     _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
     _terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: explicitly closed id -> last replay
+    _client_terminated_session_owners: Final[dict[str, str]] = {}
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -1318,8 +1320,10 @@ if MCP_AVAILABLE:
             session_id
             for session_id, last_replayed in _terminated_session_ids.items()
             if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+            and not _stateful_session_active_request_counts.get(session_id)
         ]:
             del _terminated_session_ids[session_id]
+            _client_terminated_session_owners.pop(session_id, None)
 
     def _is_terminated_session_id(session_id: str, now: float) -> bool:
         last_replayed: Final = _terminated_session_ids.get(session_id)
@@ -1327,6 +1331,7 @@ if MCP_AVAILABLE:
             return False
         if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS:
             del _terminated_session_ids[session_id]
+            _client_terminated_session_owners.pop(session_id, None)
             return False
         _terminated_session_ids[session_id] = now
         return True
@@ -2213,6 +2218,10 @@ if MCP_AVAILABLE:
                 _increment_active_request_session(initialized_session_id)
 
             async def _dispatch() -> None:
+                # Another DELETE may have completed while this request waited for the lock.
+                if use_stateful and session_id and scope.get("method") == "DELETE":
+                    if await _handle_stale_mcp_session(scope, receive, send, target_manager):
+                        return
                 _otel_publish_transport_span_on_scope(scope)
                 _otel_publish_request_destinations_on_scope(scope)
                 auth_user: Final = _set_or_update_auth_context(
@@ -2237,22 +2246,45 @@ if MCP_AVAILABLE:
                         client_info=_extract_initialize_client_info(body),
                     )
 
-                async with _gateway_initialize_instructions_request_scope(
-                    user_api_key_auth,
-                    mcp_servers,
-                    _client_ip,
-                    scoped_server_endpoint=scoped_server_endpoint,
-                    is_initialize=is_initialize,
-                ):
-                    await target_manager.handle_request(scope, receive, local_send)
+                deleting_session: Final = session_id if use_stateful and scope.get("method") == "DELETE" else None
+                if deleting_session:
+                    _forget_expired_terminated_session_ids(time.monotonic())
+                    delete_owner: Final = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
                     if (
-                        use_stateful
-                        and session_id
-                        and scope.get("method") == "DELETE"
-                        and session_id not in _stateful_server_instances()
+                        len(_client_terminated_session_owners) >= _MAX_CLIENT_TERMINATED_SESSIONS
+                        or sum(owner == delete_owner for owner in _client_terminated_session_owners.values())
+                        >= _MAX_STATEFUL_SESSIONS_PER_OWNER
                     ):
-                        _terminated_session_ids[session_id] = time.monotonic()
-                        _remove_stateful_session_tracking(session_id)
+                        delete_capacity_response: Final = JSONResponse(
+                            status_code=429,
+                            content={
+                                "error": "Too Many Requests",
+                                "details": "Too many recently terminated MCP sessions. Retry after idle records expire.",
+                            },
+                        )
+                        await delete_capacity_response(scope, receive, local_send)
+                        return
+                    # Reserve before yielding so concurrent DELETEs cannot exceed the cap.
+                    # Never evict fresh records: that would allow terminated IDs to replay.
+                    _client_terminated_session_owners[deleting_session] = delete_owner
+                    _terminated_session_ids[deleting_session] = time.monotonic()
+                try:
+                    async with _gateway_initialize_instructions_request_scope(
+                        user_api_key_auth,
+                        mcp_servers,
+                        _client_ip,
+                        scoped_server_endpoint=scoped_server_endpoint,
+                        is_initialize=is_initialize,
+                    ):
+                        await target_manager.handle_request(scope, receive, local_send)
+                finally:
+                    if deleting_session:
+                        if deleting_session in _stateful_server_instances():
+                            _client_terminated_session_owners.pop(deleting_session, None)
+                            _terminated_session_ids.pop(deleting_session, None)
+                        else:
+                            _terminated_session_ids[deleting_session] = time.monotonic()
+                            _remove_stateful_session_tracking(deleting_session)
 
             try:
                 if session_lock is not None:
