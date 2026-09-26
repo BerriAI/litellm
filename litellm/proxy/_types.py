@@ -707,6 +707,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
             "/user/daily/activity/aggregated/search",
+            "/user/daily/activity/cache_leakage",
             # team
             "/team/new",
             "/team/update",
@@ -915,6 +916,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
         "/user/daily/activity/aggregated/search",
+        "/user/daily/activity/cache_leakage",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",

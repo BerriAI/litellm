@@ -118,6 +118,35 @@ class SpendAnalyticsPaginatedResponse(BaseModel):
     metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
 
 
+class CacheLeakageKeyRow(BaseModel):
+    api_key: str
+    key_alias: str | None = None
+    team_id: str | None = None
+    prompt_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    uncached_prompt_tokens: int = Field(
+        description="max(0, prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens)"
+    )
+    cache_hit_ratio: float = Field(description="cache_read_input_tokens / prompt_tokens, 0 when prompt_tokens is 0")
+    prompt_caching_savings_spend: float
+
+
+class CacheLeakageMetadata(BaseModel):
+    total_api_keys: int = Field(description="Distinct keys ranked, before the limit")
+    limit: int
+    total_cached_tokens: int = Field(
+        description="cache_read_input_tokens + cache_creation_input_tokens over every ranked key, "
+        "not only the returned rows"
+    )
+    total_prompt_caching_savings_spend: float = Field(description="Realized caching savings over every ranked key")
+
+
+class CacheLeakageResponse(BaseModel):
+    results: list[CacheLeakageKeyRow]
+    metadata: CacheLeakageMetadata
+
+
 class LiteLLM_DailyUserSpend(BaseModel):
     id: str
     user_id: str

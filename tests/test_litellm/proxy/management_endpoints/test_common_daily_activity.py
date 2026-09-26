@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_daily_activity_cache_leakage,
     get_daily_activity_export_rows,
     global_rollup_reconciled_through,
     update_metrics,
@@ -3190,3 +3191,149 @@ async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
     header: Final = _team_export_csv("daily", rows).splitlines()[0]
     assert "Flat Cost" not in header
     assert "Total Cost" not in header
+
+
+def _seed_daily_user_spend_cache(conn: psycopg.Connection, rows: Sequence[tuple[object, ...]]) -> None:
+    with conn.cursor() as cur:
+        cur.execute(_DAILY_USER_SPEND_DDL)
+        cur.executemany(
+            """
+            INSERT INTO "LiteLLM_DailyUserSpend"
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 endpoint, prompt_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+                 prompt_caching_savings_spend, spend, api_requests, successful_requests)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            rows,
+        )
+    conn.commit()
+
+
+def _cache_row(
+    row_id: str,
+    user_id: str,
+    api_key: str,
+    *,
+    prompt_tokens: int,
+    cache_read: int = 0,
+    cache_creation: int = 0,
+    caching_savings: float = 0.0,
+    spend: float,
+    date: str = "2026-06-01",
+) -> tuple[object, ...]:
+    return (
+        row_id,
+        user_id,
+        date,
+        api_key,
+        "gpt-5",
+        "",
+        "openai",
+        "/v1/chat/completions",
+        prompt_tokens,
+        cache_read,
+        cache_creation,
+        caching_savings,
+        spend,
+        1,
+        1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cache_leakage_ranks_every_key_by_uncached_prompt_tokens_not_spend(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 3
+    _seed_daily_user_spend_cache(
+        _aggregated_postgresql,
+        [
+            *(
+                _cache_row(
+                    f"row-{i:03d}",
+                    "user-1",
+                    f"key-{i:03d}",
+                    prompt_tokens=1000,
+                    cache_read=1000,
+                    caching_savings=1.0,
+                    spend=float(i + 10),
+                )
+                for i in range(n_keys)
+            ),
+            _cache_row("row-leaky", "user-1", "key-leaky", prompt_tokens=50000, spend=0.01),
+            _cache_row(
+                "row-ptu",
+                "user-1",
+                PTU_SENTINEL_API_KEY,
+                prompt_tokens=9_000_000,
+                caching_savings=400.0,
+                spend=0.0,
+            ),
+        ],
+    )
+
+    prisma = _export_prisma(
+        _aggregated_postgresql,
+        (SimpleNamespace(token="key-leaky", key_alias="leaky", team_id="team-x", user_id=None),),
+    )
+
+    result = await get_daily_activity_cache_leakage(
+        prisma_client=prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        limit=3,
+    )
+
+    assert len(result.results) == 3
+    leaky = result.results[0]
+    assert leaky.api_key == "key-leaky", (
+        "a lowest-spend key with the most uncached prompt tokens must rank first"
+    )
+    assert leaky.uncached_prompt_tokens == 50000
+    assert leaky.cache_hit_ratio == 0.0
+    assert leaky.key_alias == "leaky"
+    assert leaky.team_id == "team-x"
+
+    cached = result.results[1]
+    assert cached.api_key == "key-000"
+    assert cached.uncached_prompt_tokens == 0
+    assert cached.cache_hit_ratio == 1.0
+
+    assert PTU_SENTINEL_API_KEY not in {row.api_key for row in result.results}
+    assert result.metadata.total_api_keys == n_keys + 1
+    assert result.metadata.limit == 3
+    assert result.metadata.total_cached_tokens == n_keys * 1000
+    assert result.metadata.total_prompt_caching_savings_spend == pytest.approx(n_keys * 1.0)
+
+
+@pytest.mark.asyncio
+async def test_cache_leakage_scopes_to_the_entity_filter(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    _seed_daily_user_spend_cache(
+        _aggregated_postgresql,
+        [
+            _cache_row("row-a1", "user-a", "key-a-leaky", prompt_tokens=20000, spend=1.0),
+            _cache_row("row-a2", "user-a", "key-a-cached", prompt_tokens=100, cache_read=100, spend=2.0),
+            _cache_row("row-b1", "user-b", "key-b-leaky", prompt_tokens=90000, spend=3.0),
+            _cache_row("row-b2", "user-b", "key-b-cached", prompt_tokens=50, cache_read=50, spend=4.0),
+        ],
+    )
+
+    result = await get_daily_activity_cache_leakage(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id="user-a",
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        limit=10,
+    )
+
+    assert {row.api_key for row in result.results} == {"key-a-leaky", "key-a-cached"}
+    assert result.results[0].api_key == "key-a-leaky"
+    assert result.metadata.total_api_keys == 2
+    assert result.metadata.total_cached_tokens == 100

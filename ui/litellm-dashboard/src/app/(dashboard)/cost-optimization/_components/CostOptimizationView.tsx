@@ -7,6 +7,7 @@ import useCan from "@/app/(dashboard)/hooks/useCan";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { spendScopeUserId } from "@/utils/roles";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
@@ -100,7 +101,11 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
               <PromptCompressionTab accessToken={accessToken} />
             </TabsContent>
             <TabsContent value="caching" keepMounted={visitedTabs.includes("caching")}>
-              <PromptCachingTab accessToken={accessToken} activity={activity} />
+              <PromptCachingTab
+                accessToken={accessToken}
+                activity={activity}
+                scopeUserId={spendScopeUserId(userRole, userId)}
+              />
             </TabsContent>
             <TabsContent value="autorouter-usage" keepMounted={visitedTabs.includes("autorouter-usage")}>
               <AutoRouterBenchmarksTab accessToken={accessToken} activity={activity} />

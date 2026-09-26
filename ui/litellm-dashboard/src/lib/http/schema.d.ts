@@ -17424,6 +17424,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/daily/activity/cache_leakage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Daily Activity Cache Leakage
+         * @description Rank a user's keys by uncached prompt tokens over the whole visible key set, so a
+         *     low-spend key leaking the most input still surfaces. The aggregated route caps its
+         *     per-key breakdown at the highest-spend keys, which is the cap this route exists to
+         *     lift for the cache-leakage view.
+         */
+        get: operations["get_user_daily_activity_cache_leakage_user_daily_activity_cache_leakage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/delete": {
         parameters: {
             query?: never;
@@ -26549,6 +26572,59 @@ export interface components {
              * @constant
              */
             source: "provider_usage";
+        };
+        /** CacheLeakageKeyRow */
+        CacheLeakageKeyRow: {
+            /** Api Key */
+            api_key: string;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /**
+             * Cache Hit Ratio
+             * @description cache_read_input_tokens / prompt_tokens, 0 when prompt_tokens is 0
+             */
+            cache_hit_ratio: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Prompt Caching Savings Spend */
+            prompt_caching_savings_spend: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Team Id */
+            team_id?: string | null;
+            /**
+             * Uncached Prompt Tokens
+             * @description max(0, prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens)
+             */
+            uncached_prompt_tokens: number;
+        };
+        /** CacheLeakageMetadata */
+        CacheLeakageMetadata: {
+            /** Limit */
+            limit: number;
+            /**
+             * Total Api Keys
+             * @description Distinct keys ranked, before the limit
+             */
+            total_api_keys: number;
+            /**
+             * Total Cached Tokens
+             * @description cache_read_input_tokens + cache_creation_input_tokens over every ranked key, not only the returned rows
+             */
+            total_cached_tokens: number;
+            /**
+             * Total Prompt Caching Savings Spend
+             * @description Realized caching savings over every ranked key
+             */
+            total_prompt_caching_savings_spend: number;
+        };
+        /** CacheLeakageResponse */
+        CacheLeakageResponse: {
+            metadata: components["schemas"]["CacheLeakageMetadata"];
+            /** Results */
+            results: components["schemas"]["CacheLeakageKeyRow"][];
         };
         /** CachePingResponse */
         CachePingResponse: {
@@ -69263,6 +69339,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_cache_leakage_user_daily_activity_cache_leakage_get: {
+        parameters: {
+            query?: {
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+                /** @description Keys returned, ranked by uncached prompt tokens */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CacheLeakageResponse"];
                 };
             };
             /** @description Validation Error */

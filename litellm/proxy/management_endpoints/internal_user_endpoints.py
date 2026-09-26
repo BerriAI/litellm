@@ -28,7 +28,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+from litellm.constants import USAGE_CACHE_LEAKAGE_KEYS_LIMIT, USAGE_TOP_API_KEYS_LIMIT
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -56,6 +56,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_daily_activity_cache_leakage,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
@@ -88,6 +89,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    CacheLeakageResponse,
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
@@ -3215,6 +3217,93 @@ async def search_user_daily_activity_keys(
         raise
     except Exception as e:
         verbose_proxy_logger.exception("/user/daily/activity/aggregated/search: Exception occured - %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {e}"},  # mutable-ok: FastAPI detail payload shape
+        )
+
+
+@router.get(
+    "/user/daily/activity/cache_leakage",
+    tags=["Budget & Spend Tracking", "Internal User management"],  # mutable-ok: FastAPI route tags shape
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route dependencies shape
+    response_model=CacheLeakageResponse,
+)
+@management_endpoint_wrapper
+async def get_user_daily_activity_cache_leakage(
+    start_date: str | None = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: str | None = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    user_id: str | None = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
+    timezone: int | None = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
+    limit: int = fastapi.Query(
+        default=min(USAGE_CACHE_LEAKAGE_KEYS_LIMIT, USAGE_TOP_API_KEYS_LIMIT),
+        ge=1,
+        le=USAGE_TOP_API_KEYS_LIMIT,
+        description="Keys returned, ranked by uncached prompt tokens",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+) -> CacheLeakageResponse:
+    """
+    Rank a user's keys by uncached prompt tokens over the whole visible key set, so a
+    low-spend key leaking the most input still surfaces. The aggregated route caps its
+    per-key breakdown at the highest-spend keys, which is the cap this route exists to
+    lift for the cache-leakage view.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: FastAPI detail payload shape
+                "error": CommonProxyErrors.db_not_connected_error.value
+            },
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},  # mutable-ok: FastAPI detail payload shape
+        )
+
+    try:
+        entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
+
+        return await get_daily_activity_cache_leakage(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            start_date=start_date,
+            end_date=end_date,
+            timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
+            limit=limit,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("/user/daily/activity/cache_leakage: Exception occured - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},  # mutable-ok: FastAPI detail payload shape
