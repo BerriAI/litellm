@@ -607,9 +607,33 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     }
     result: VertexFunctionCall = _gemini_tool_call_invoke_helper(function_call)
     print(result)
-    assert result["args"] == {
-        "type": "object",
-    }
+    assert result["args"] == {}
+
+
+def test_gemini_missing_arguments_maps_to_empty_object():
+    """When `arguments` key is absent, the helper should yield an empty object (see #43156)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        VertexFunctionCall,
+        _gemini_tool_call_invoke_helper,
+    )
+
+    result: VertexFunctionCall = _gemini_tool_call_invoke_helper(
+        {"name": "no_args"}
+    )
+    assert result["args"] == {}
+
+
+def test_gemini_nonempty_arguments_is_parsed():
+    """Non-empty arguments string should still be JSON-decoded as before."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        VertexFunctionCall,
+        _gemini_tool_call_invoke_helper,
+    )
+
+    result: VertexFunctionCall = _gemini_tool_call_invoke_helper(
+        {"name": "get", "arguments": '{"x": 1}'}
+    )
+    assert result["args"] == {"x": 1}
 
 
 @pytest.mark.asyncio
