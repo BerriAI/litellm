@@ -1070,6 +1070,14 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
         default=False,
         description="Return rejected request error message as a string to the user. Default behaviour is to raise an exception.",
     )
+    fail_on_error: bool = Field(
+        default=True,
+        description="Reject the request when the detection itself errors. Set to False to let the request through instead.",
+    )
+    skip_unscannable_attachments: bool = Field(
+        default=False,
+        description="Let audio, video and non-text file parts through unscanned instead of rejecting the request.",
+    )
 
     @model_validator(mode="before")
     @classmethod

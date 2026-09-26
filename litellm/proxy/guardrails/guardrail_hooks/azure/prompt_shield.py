@@ -4,11 +4,15 @@ Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 """
 
 import math
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, cast
+from dataclasses import dataclass
+from functools import reduce
+from itertools import chain, zip_longest
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -19,24 +23,31 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT,
     azure_prompt_shield_guardrail_cost,
 )
+from litellm.llms.base_llm.guardrail_translation.attachments import content_attachments, request_attachments
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
+    AzurePromptShieldGuardrailRequestBody,
+    AzurePromptShieldGuardrailResponse,
+)
 from litellm.types.utils import (
     CallTypesLiteral,
     GenericGuardrailAPIInputs,
     GuardrailTracingDetail,
 )
 
-from .base import AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH, AzureGuardrailBase
+from .base import (
+    AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH,
+    AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import LitellmParams
     from litellm.types.llms.openai import AllMessageValues
-    from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
-        AzurePromptShieldGuardrailResponse,
-    )
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
@@ -46,6 +57,146 @@ if TYPE_CHECKING:
 _billing_usage_stash: Final[ContextVar[dict[str, int] | None]] = ContextVar(  # mutable-ok: task-local stash
     "azure_prompt_shield_billing_usage", default=None
 )
+
+AZURE_PROMPT_SHIELD_MAX_DOCUMENTS: Final = 5
+TOOL_OUTPUT_ROLES: Final = frozenset({"tool", "function"})
+TOOL_RESULT_PART_TYPE: Final = "tool_result"
+
+_CONTENT_PARTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+@dataclass(frozen=True, slots=True)
+class _ShieldRequest:
+    user_prompt: str | None
+    documents: tuple[str, ...]
+
+    @property
+    def texts(self) -> tuple[str, ...]:
+        return (*(() if self.user_prompt is None else (self.user_prompt,)), *self.documents)
+
+    def body(self) -> AzurePromptShieldGuardrailRequestBody:
+        if self.user_prompt is None:
+            return AzurePromptShieldGuardrailRequestBody(documents=self.documents)
+        return AzurePromptShieldGuardrailRequestBody(userPrompt=self.user_prompt, documents=self.documents)
+
+
+def _parts(content: object) -> tuple[Mapping[str, object], ...]:
+    if content is None or isinstance(content, str):
+        return ()
+    try:
+        return _CONTENT_PARTS.validate_python(content)
+    except ValidationError:
+        return ()
+
+
+def _is_tool_result(part: Mapping[str, object]) -> bool:
+    return part.get("type") == TOOL_RESULT_PART_TYPE
+
+
+def _is_user_turn(message: Mapping[str, object]) -> bool:
+    if message.get("role") != "user":
+        return False
+    content: Final = message.get("content")
+    return isinstance(content, str) or any(not _is_tool_result(part) for part in _parts(content))
+
+
+def _current_turn_start(messages: Sequence[Mapping[str, object]]) -> int | None:
+    return next((index for index in reversed(range(len(messages))) if _is_user_turn(messages[index])), None)
+
+
+def _tool_output_nodes(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    role: Final = message.get("role")
+    if role in TOOL_OUTPUT_ROLES:
+        return (message,)
+    if role != "user":
+        return ()
+    return tuple(part for part in _parts(message.get("content")) if _is_tool_result(part))
+
+
+def _tool_output_documents(node: Mapping[str, object]) -> tuple[str, ...]:
+    text: Final = "\n".join(message_slot_texts(node))
+    attachments: Final = content_attachments(node.get("content")).texts
+    return (*(() if not text else (text,)), *(attachment.text for attachment in attachments))
+
+
+def _prompt_and_documents(messages: Sequence[Mapping[str, object]]) -> tuple[str, tuple[str, ...]]:
+    start: Final = _current_turn_start(messages)
+    user_message: Final = None if start is None else messages[start]
+    user_prompt: Final = "" if user_message is None else "\n".join(message_slot_texts(user_message))
+    own_parts: Final = () if user_message is None else _parts(user_message.get("content"))
+    own_attachments: Final = content_attachments(tuple(part for part in own_parts if not _is_tool_result(part))).texts
+    tool_nodes: Final = chain.from_iterable(map(_tool_output_nodes, messages[start or 0 :]))
+    tool_documents: Final = chain.from_iterable(map(_tool_output_documents, tool_nodes))
+    return user_prompt, (*(attachment.text for attachment in own_attachments), *tool_documents)
+
+
+def _fits(batch: tuple[str, ...], piece: str) -> bool:
+    within_count: Final = len(batch) < AZURE_PROMPT_SHIELD_MAX_DOCUMENTS
+    within_length: Final = sum(map(len, batch)) + len(piece) <= AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
+    return within_count and within_length
+
+
+def _with_piece(batches: tuple[tuple[str, ...], ...], piece: str) -> tuple[tuple[str, ...], ...]:
+    if batches and _fits(batches[-1], piece):
+        return (*batches[:-1], (*batches[-1], piece))
+    return (*batches, (piece,))
+
+
+def _document_batches(documents: Sequence[str]) -> tuple[tuple[str, ...], ...]:
+    non_empty: Final = (document for document in documents if document)
+    pieces: Final = chain.from_iterable(
+        AzureGuardrailBase.split_text_by_words(document, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH) for document in non_empty
+    )
+    empty: Final[tuple[tuple[str, ...], ...]] = ()
+    return reduce(_with_piece, pieces, empty)
+
+
+def _shield_requests(user_prompt: str, documents: Sequence[str]) -> tuple[_ShieldRequest, ...]:
+    prompt_chunks: Final = (
+        tuple(AzureGuardrailBase.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH))
+        if user_prompt
+        else ()
+    )
+    return tuple(
+        _ShieldRequest(user_prompt=chunk, documents=batch or ())
+        for chunk, batch in zip_longest(prompt_chunks, _document_batches(documents), fillvalue=None)
+    )
+
+
+def _add_usage(usage_accumulator: MutableMapping[str, int], texts: Sequence[str]) -> None:  # mutable-ok: accumulator
+    text_records: Final = sum(math.ceil(len(text) / AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH) for text in texts)
+    usage_accumulator.update(
+        (
+            ("requests", usage_accumulator.get("requests", 0) + 1),
+            ("input_characters", usage_accumulator.get("input_characters", 0) + sum(map(len, texts))),
+            (
+                AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT,
+                usage_accumulator.get(AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT, 0) + text_records,
+            ),
+        )
+    )
+
+
+def _require_complete_analysis(response: AzurePromptShieldGuardrailResponse, request: _ShieldRequest) -> None:
+    if request.user_prompt is not None and response.userPromptAnalysis is None:
+        raise ValueError("Azure Prompt Shield: response carries no userPromptAnalysis for the submitted user prompt")
+    if len(response.documentsAnalysis) < len(request.documents):
+        raise ValueError(
+            f"Azure Prompt Shield: response analyzed {len(response.documentsAnalysis)} of "
+            f"{len(request.documents)} submitted documents"
+        )
+
+
+def _detection_message(response: AzurePromptShieldGuardrailResponse) -> str | None:
+    if response.userPromptAnalysis is not None and response.userPromptAnalysis.attackDetected:
+        return f"Attack detected in user prompt: {response.userPromptAnalysis.model_dump()}"
+    document_attack: Final = next(
+        (analysis for analysis in response.documentsAnalysis if analysis.attackDetected),
+        None,
+    )
+    if document_attack is None:
+        return None
+    return f"Attack detected in a document (attachment or tool output): {document_attack.model_dump()}"
 
 
 def _resolved_secret_value(value: object) -> object:
@@ -158,61 +309,53 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         self,
         user_prompt: str,
         usage_accumulator: MutableMapping[str, int],  # mutable-ok: callee-filled accumulator
-    ) -> "AzurePromptShieldGuardrailResponse":
+        documents: Sequence[str] = (),
+    ) -> AzurePromptShieldGuardrailResponse:
         """
-        Make a request to the Azure Prompt Shield API.
+        Scan a user prompt and its documents (attachments and tool outputs) with
+        the Azure Prompt Shield API.
 
-        Long prompts are automatically split at word boundaries into chunks
-        that respect the Azure Content Safety 10 000-character limit.  Each
-        chunk is analysed independently; an attack in *any* chunk raises
-        an HTTPException immediately.
+        The prompt is split at word boundaries into chunks within the Azure
+        Content Safety text limit; each document is split the same way and the
+        pieces are packed into batches within Azure's per-request document count
+        and total length limits. Request ``i`` carries prompt chunk ``i`` and
+        document batch ``i`` when they exist. An attack in any chunk or document
+        raises an HTTPException immediately.
 
-        ``usage_accumulator`` collects billable usage per SUBMITTED chunk:
-        ``requests`` (Azure API calls), ``input_characters``, and
-        ``text_records`` (ceil(chunk_chars / 1000), Azure's billing unit).
-        A chunk that triggers an intervention was still submitted and billed,
-        so it is counted before the block is raised; chunks after it are
-        never submitted and never counted.
+        ``usage_accumulator`` collects billable usage per SUBMITTED request:
+        ``requests`` (Azure API calls), ``input_characters`` (prompt and document
+        characters), and ``text_records`` (ceil(chars / 1000) per submitted text,
+        Azure's billing unit). A request that triggers an intervention was still
+        submitted and billed, so it is counted before the block is raised; requests
+        after it are never submitted and never counted.
         """
-        from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
-            AzurePromptShieldGuardrailRequestBody,
-            AzurePromptShieldGuardrailResponse,
+        requests: Final = _shield_requests(user_prompt, documents)
+        responses: Final = tuple([await self._scan(request, usage_accumulator) for request in requests])
+        return responses[-1] if responses else AzurePromptShieldGuardrailResponse()
+
+    async def _scan(
+        self,
+        request: _ShieldRequest,
+        usage_accumulator: MutableMapping[str, int],  # mutable-ok: callee-filled accumulator
+    ) -> AzurePromptShieldGuardrailResponse:
+        response_json: Final = await self._post_to_content_safety(
+            "text:shieldPrompt",
+            dict(request.body()),  # mutable-ok: _post_to_content_safety takes the JSON body as a dict
         )
-
-        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
-
-        chunks: Final = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
-
-        last_response: AzurePromptShieldGuardrailResponse | None = None
-
-        for chunk in chunks:
-            request_body = AzurePromptShieldGuardrailRequestBody(documents=[], userPrompt=chunk)
-            response_json = await self._post_to_content_safety("text:shieldPrompt", cast(dict, request_body))
-
-            last_response = cast(AzurePromptShieldGuardrailResponse, response_json)
-
-            usage_accumulator["requests"] = usage_accumulator.get("requests", 0) + 1
-            usage_accumulator["input_characters"] = usage_accumulator.get("input_characters", 0) + len(chunk)
-            usage_accumulator[AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT] = usage_accumulator.get(
-                AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT, 0
-            ) + math.ceil(len(chunk) / AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH)
-
-            if last_response["userPromptAnalysis"].get("attackDetected"):
-                verbose_proxy_logger.warning(
-                    "Azure Prompt Shield: Attack detected in chunk of length %d",
-                    len(chunk),
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Violated Azure Prompt Shield guardrail policy",
-                        "detection_message": f"Attack detected: {last_response['userPromptAnalysis']}",
-                    },
-                )
-
-        # chunks is always non-empty (split_text_by_words guarantees ≥1 element)
-        assert last_response is not None
-        return last_response
+        _add_usage(usage_accumulator, request.texts)
+        response: Final = AzurePromptShieldGuardrailResponse.model_validate(response_json)
+        _require_complete_analysis(response, request)
+        detection: Final = _detection_message(response)
+        if detection is None:
+            return response
+        verbose_proxy_logger.warning("Azure Prompt Shield: %s", detection)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated Azure Prompt Shield guardrail policy",
+                "detection_message": detection,
+            },
+        )
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -223,11 +366,18 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         _billing_usage_stash.set(None)
+        texts: Final = tuple(text for text in inputs.get("texts") or () if text)
+        attachments: Final = request_attachments(request_data).texts if input_type == "request" else ()
+        documents: Final = tuple(attachment.text for attachment in attachments)
+        scans: Final = tuple(zip_longest(texts, (documents,) if documents else (), fillvalue=None))
         usage: Final[dict[str, int]] = {}  # mutable-ok: per-invocation billing accumulator
         try:
-            for text in inputs.get("texts") or ():
-                if text:
-                    await self.async_make_request(user_prompt=text, usage_accumulator=usage)
+            for text, scan_documents in scans:
+                await self.async_make_request(
+                    user_prompt=text or "",
+                    usage_accumulator=usage,
+                    documents=scan_documents or (),
+                )
         finally:
             self._record_billing_usage(usage)
         return inputs
@@ -241,7 +391,8 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         call_type: CallTypesLiteral,
     ) -> dict[str, Any] | None:
         """
-        Pre-call hook to scan user prompts before sending to LLM.
+        Pre-call hook to scan the current turn (the user's prompt, its attachments,
+        and the tool outputs that follow it) before sending to the LLM.
 
         Raises HTTPException if content should be blocked.
         """
@@ -254,20 +405,22 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         if new_messages is None:
             verbose_proxy_logger.warning("Azure Prompt Shield: not running guardrail. No messages in data")
             return data
-        user_prompt: Final = self.get_user_prompt(new_messages)
-
-        if user_prompt:
-            verbose_proxy_logger.debug("Azure Prompt Shield: User prompt: %s", user_prompt)
-            usage: Final[dict[str, int]] = {}  # mutable-ok: per-invocation billing accumulator
-            try:
-                await self.async_make_request(
-                    user_prompt=user_prompt,
-                    usage_accumulator=usage,
-                )
-            finally:
-                self._record_billing_usage(usage)
-        else:
+        user_prompt, documents = _prompt_and_documents(new_messages)
+        if not user_prompt and not documents:
             verbose_proxy_logger.warning("Azure Prompt Shield: No user prompt found")
+            return None
+        verbose_proxy_logger.debug(
+            "Azure Prompt Shield: User prompt: %s, with %d documents", user_prompt, len(documents)
+        )
+        usage: Final[dict[str, int]] = {}  # mutable-ok: per-invocation billing accumulator
+        try:
+            await self.async_make_request(
+                user_prompt=user_prompt,
+                usage_accumulator=usage,
+                documents=documents,
+            )
+        finally:
+            self._record_billing_usage(usage)
         return None
 
     def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | dict") -> None:  # mutable-ok: DB dict

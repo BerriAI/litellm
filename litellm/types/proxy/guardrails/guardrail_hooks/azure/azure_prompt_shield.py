@@ -1,7 +1,7 @@
-from typing import Any
+from collections.abc import Sequence
 
-from pydantic import Field
-from typing_extensions import TypedDict
+from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
@@ -9,21 +9,27 @@ from .base import AzureContentSafetyConfigModel
 
 
 class AzurePromptShieldGuardrailRequestBody(TypedDict):
-    """Configuration parameters for the Azure Prompt Shield guardrail"""
+    """Body of one ``text:shieldPrompt`` request: the user's own text plus the
+    documents (attachments and tool outputs) Azure analyzes for injected instructions"""
 
-    userPrompt: str
-    documents: list[str]
-
-
-class UserPromptAnalysis(TypedDict, total=False):
-    attackDetected: bool
+    userPrompt: NotRequired[ReadOnly[str]]
+    documents: NotRequired[ReadOnly[Sequence[str]]]
 
 
-class AzurePromptShieldGuardrailResponse(TypedDict):
-    """Configuration parameters for the Azure Prompt Shield guardrail"""
+class AzurePromptShieldAnalysis(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-    userPromptAnalysis: UserPromptAnalysis
-    documentsAnalysis: list[dict[str, Any]]
+    attackDetected: bool = False
+
+
+class AzurePromptShieldGuardrailResponse(BaseModel):
+    """Parsed ``text:shieldPrompt`` response; ``documentsAnalysis`` follows the order
+    of the submitted documents"""
+
+    model_config = ConfigDict(frozen=True)
+
+    userPromptAnalysis: AzurePromptShieldAnalysis | None = None
+    documentsAnalysis: tuple[AzurePromptShieldAnalysis, ...] = ()
 
 
 class AzurePromptShieldGuardrailConfigModel(
