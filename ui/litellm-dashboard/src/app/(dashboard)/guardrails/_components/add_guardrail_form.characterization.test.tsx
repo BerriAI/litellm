@@ -88,6 +88,23 @@ describe("AddGuardrailForm create payload characterization", () => {
     });
   });
 
+  it("sends stream_scope when a mode is restricted to streaming requests", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    await chooseSelectOption(user, screen.getByLabelText("pre_call applies to"), "Streaming only");
+    await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()).toMatchObject({
+      litellm_params: { stream_scope: "streaming" },
+    });
+  });
+
   it("switches mode from the seeded string to an array once the user touches the multi select", async () => {
     const user = userEvent.setup({ delay: null });
     renderForm();

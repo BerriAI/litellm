@@ -272,6 +272,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "guardrail_scan_ids",
     "guardrail_scan_metadata",
     "routing_decision",
+    "is_streaming_request",
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     "pillar_response_headers",
     "_guardrail_pipelines",

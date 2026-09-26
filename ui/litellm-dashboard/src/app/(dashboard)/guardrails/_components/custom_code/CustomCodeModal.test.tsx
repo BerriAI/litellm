@@ -111,8 +111,7 @@ describe("CustomCodeModal", () => {
 
     expect(await screen.findByDisplayValue(/async def apply_guardrail/)).toBeInTheDocument();
 
-    const comboboxes = screen.getAllByRole("combobox");
-    await user.click(comboboxes[comboboxes.length - 1]);
+    await user.click(screen.getByRole("combobox", { name: "Template" }));
     const options = await screen.findAllByText("Block SSN");
     await user.click(options[options.length - 1]);
 

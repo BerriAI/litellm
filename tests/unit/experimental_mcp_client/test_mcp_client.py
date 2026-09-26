@@ -2848,8 +2848,11 @@ async def test_cancellation_delivers_termination_over_tcp(
 
     listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port: Final = listener.sockets[0].getsockname()[1]
+    client_timeout: Final = 2 if cancel_mode == "read_timeout" else 30
     client: Final = MCPClient(
-        server_url=f"http://127.0.0.1:{port}/mcp", protocol_version=protocol_version, timeout=2 if cancel_mode == "read_timeout" else 30
+        server_url=f"http://127.0.0.1:{port}/mcp",
+        protocol_version=protocol_version,
+        timeout=client_timeout,
     )
 
     async def calls():
