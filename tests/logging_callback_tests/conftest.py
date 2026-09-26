@@ -11,6 +11,7 @@
 import asyncio
 import importlib
 import os
+from collections.abc import AsyncIterator
 from typing import Final
 
 import pytest
@@ -179,7 +180,7 @@ LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUT
 
 
 @pytest_asyncio.fixture(loop_scope="function", autouse=True)
-async def drain_logging_worker(isolate_litellm_state):
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
     yield
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
