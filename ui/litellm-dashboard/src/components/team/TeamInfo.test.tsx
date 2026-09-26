@@ -2338,6 +2338,103 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(wireBody(payload)).toStrictEqual(expected);
   });
 
+  const openEditorWithMemberBudgetAlerts = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        team_member_budget_table: { max_budget: 42 },
+        metadata: { team_member_max_budget_alert_emails: { "50": [], "100": ["finance@test.com"] } },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const memberBudgetAlertEmails = (payload: Record<string, unknown>) =>
+    (wireBody(payload).metadata as Record<string, unknown>).team_member_max_budget_alert_emails;
+
+  it("resends the stored team member budget alert thresholds when the section stays closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toStrictEqual({ "50": [], "100": ["finance@test.com"] });
+  });
+
+  it("sends the edited team member budget alert thresholds as a percent to recipients map", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const thresholds = screen.getAllByPlaceholderText("% of budget");
+    const recipients = screen.getAllByPlaceholderText(/Additional recipients/);
+    expect(thresholds.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["50", "100"]);
+    expect(recipients.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["", "finance@test.com"]);
+
+    fireEvent.change(thresholds[0], { target: { value: "75" } });
+    fireEvent.change(recipients[0], { target: { value: " lead@test.com, finance@test.com " } });
+    await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+    fireEvent.change(screen.getAllByPlaceholderText("% of budget")[2], { target: { value: "90" } });
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toStrictEqual({
+      "75": ["lead@test.com", "finance@test.com"],
+      "100": ["finance@test.com"],
+      "90": [],
+    });
+  });
+
+  it("drops the team member budget alert thresholds key once every row is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const removeButtons = screen.getAllByRole("button", { name: "Remove budget alert threshold" });
+    await user.click(removeButtons[1]);
+    await user.click(removeButtons[0]);
+
+    const payload = await save(user);
+
+    expect(memberBudgetAlertEmails(payload)).toBeUndefined();
+  });
+
+  it("blocks the save when a team member budget alert threshold is above 100", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const threshold = screen.getAllByPlaceholderText("% of budget")[0] as HTMLInputElement;
+    fireEvent.change(threshold, { target: { value: "150" } });
+    expect(threshold.validity.rangeOverflow).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).not.toHaveBeenCalled());
+  });
+
+  it("refuses to save a team member budget alert row with no threshold", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithMemberBudgetAlerts(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findByText("Enter a whole number from 1 to 100");
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+  });
+
   it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
