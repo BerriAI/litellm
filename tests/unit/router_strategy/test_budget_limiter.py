@@ -6,13 +6,16 @@ anthropic_messages, embedding and rerank surfaces leave it unset, which used to 
 the callback raise before any spend was recorded, so those budgets never moved.
 """
 
-from typing import Final, Literal
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final, Literal, assert_never
 
 import pytest
 
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import BudgetConfig
 
 
@@ -160,38 +163,73 @@ def _blocked_debug(scope: _Scope, spend: float, cap: float | None) -> str:
     return f"Exceeded budget for tag='prod', tag_spend={spend}, tag_budget_limit={cap}\n"
 
 
-def _filter_one(
-    scope: _Scope,
-    config: BudgetConfig,
+def _apply_budget_filter(
+    *,
+    provider_budget: Mapping[str, BudgetConfig] | None,
+    deployment_budget: Mapping[str, BudgetConfig] | None,
+    tag_budget: Mapping[str, BudgetConfig] | None,
+    provider_configs: Mapping[str, BudgetConfig],
+    deployment_configs: Mapping[str, BudgetConfig],
+    deployment_providers: Sequence[str | None],
+    request_tags: Sequence[str],
+    spend_key: str,
     spend: float,
-) -> tuple[list[dict[str, object]], str]:
+):
     limiter: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=None)
-    provider_configs: dict[str, BudgetConfig] = {}
-    deployment_configs: dict[str, BudgetConfig] = {}
-    deployment_providers: list[str | None] = []
-    request_tags: list[str] = []
-    spend_key: str = f"provider_spend:openai:{_DURATION}"
-    if scope == "provider":
-        limiter.provider_budget_config = {"openai": config}
-        provider_configs = {"openai": config}
-        deployment_providers = ["openai"]
-    elif scope == "deployment":
-        limiter.deployment_budget_config = {_MODEL_ID: config}
-        deployment_configs = {_MODEL_ID: config}
-        spend_key = f"deployment_spend:{_MODEL_ID}:{_DURATION}"
-    else:
-        limiter.tag_budget_config = {"prod": config}
-        request_tags = ["prod"]
-        spend_key = f"tag_spend:prod:{_DURATION}"
+    limiter.provider_budget_config = provider_budget
+    limiter.deployment_budget_config = deployment_budget
+    limiter.tag_budget_config = tag_budget
     return limiter._filter_out_deployments_above_budget(
-        potential_deployments=[],
-        healthy_deployments=[_DEPLOYMENT],
+        potential_deployments=[],  # mutable-ok: the filter appends each deployment it keeps
+        healthy_deployments=(_DEPLOYMENT,),
         provider_configs=provider_configs,
         deployment_configs=deployment_configs,
         deployment_providers=deployment_providers,
-        spend_map={spend_key: spend},
+        spend_map=MappingProxyType({spend_key: spend}),
         request_tags=request_tags,
     )
+
+
+def _filter_one(scope: _Scope, config: BudgetConfig, spend: float):
+    match scope:
+        case "provider":
+            return _apply_budget_filter(
+                provider_budget=MappingProxyType({"openai": config}),
+                deployment_budget=None,
+                tag_budget=None,
+                provider_configs=MappingProxyType({"openai": config}),
+                deployment_configs=MappingProxyType({}),
+                deployment_providers=("openai",),
+                request_tags=(),
+                spend_key=f"provider_spend:openai:{_DURATION}",
+                spend=spend,
+            )
+        case "deployment":
+            return _apply_budget_filter(
+                provider_budget=None,
+                deployment_budget=MappingProxyType({_MODEL_ID: config}),
+                tag_budget=None,
+                provider_configs=MappingProxyType({}),
+                deployment_configs=MappingProxyType({_MODEL_ID: config}),
+                deployment_providers=(),
+                request_tags=(),
+                spend_key=f"deployment_spend:{_MODEL_ID}:{_DURATION}",
+                spend=spend,
+            )
+        case "tag":
+            return _apply_budget_filter(
+                provider_budget=None,
+                deployment_budget=None,
+                tag_budget=MappingProxyType({"prod": config}),
+                provider_configs=MappingProxyType({}),
+                deployment_configs=MappingProxyType({}),
+                deployment_providers=(),
+                request_tags=("prod",),
+                spend_key=f"tag_spend:prod:{_DURATION}",
+                spend=spend,
+            )
+        case _:
+            assert_never(scope)
 
 
 @pytest.mark.asyncio
@@ -250,12 +288,13 @@ async def test_unset_provider_cap_still_enforces_a_zero_deployment_cap(disable_b
     assert debug_info == _blocked_debug("deployment", 0.0, deployment_cap.max_budget)
 
 
-def _router_deployment(model_name: str, model: str, model_id: str, *, weight: int = 0) -> dict[str, object]:
-    return {
+def _router_deployment(model_name: str, model: str, model_id: str, *, weight: int = 0) -> DeploymentTypedDict:
+    deployment: Final[DeploymentTypedDict] = {
         "model_name": model_name,
         "litellm_params": {"model": model, "api_key": "sk-fake", "weight": weight},
         "model_info": {"id": model_id},
     }
+    return deployment
 
 
 @pytest.mark.asyncio
