@@ -40,7 +40,7 @@ def _uv_sync_invocations(dockerfile_text: str) -> tuple[str, ...]:
         part
         for line in CONTINUED_LINE_RE.finditer(dockerfile_text)
         for part in UV_SYNC_BOUNDARY_RE.split(line.group(0))
-        if part.startswith("uv sync")
+        if part.startswith("uv sync") and not re.match(r"uv sync --project liteadmin(?:\s|$)", part)
     )
 
 

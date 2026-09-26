@@ -49,6 +49,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra saml \
         --python python3.13
 
+COPY liteadmin/pyproject.toml liteadmin/uv.lock liteadmin/
+RUN UV_PROJECT_ENVIRONMENT=/app/.liteadmin-venv uv sync --project liteadmin --frozen --no-default-groups --python python3.13
+
 # Stage 2 — copy source and install the project + workspace members.
 COPY . .
 
@@ -84,6 +87,8 @@ RUN for i in 1 2 3; do \
 # /home/nonroot. We run the backend as that user
 WORKDIR /app
 ENV HOME=/home/nonroot \
+    LITEADMIN_PYTHON=/app/.liteadmin-venv/bin/python \
+    LITEADMIN_RUNTIME=/app/liteadmin \
     PATH="/app/.venv/bin:${PATH}" \
     PYTHONPATH="/app" \
     PYTHONDONTWRITEBYTECODE=1 \

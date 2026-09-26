@@ -20,6 +20,8 @@ Reverse proxies must allow WebSocket upgrades on `/liteadmin/chat`. Credentials 
 
 Management calls default to HTTP on the gateway's loopback port. Set `LITEADMIN_GATEWAY_URL` to a trusted internal gateway URL for TLS-only listeners, mounted path prefixes, or deployments without a loopback TCP listener
 
+In a split deployment, `/liteadmin/chat` runs on the backend component, whose image includes the runtime. Set `LITELLM_UI_API_DOC_BASE_URL` to the inference gateway URL because the backend does not serve model requests. Management calls stay on the backend's loopback listener unless `LITEADMIN_GATEWAY_URL` overrides it
+
 ## Execution and permissions
 
 Only gateway administrators can start a turn. Tool calls use the existing authenticated management endpoints, so changes to keys, roles, and access still apply. The model only receives the 29 named admin tools, with validated arguments and bounded, redacted results. It has no shell or file tools
