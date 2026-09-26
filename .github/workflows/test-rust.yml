@@ -108,7 +108,7 @@ jobs:
       - name: Install Python dependencies for the bridge tests
         working-directory: .
         run: |
-          uv sync --frozen --no-install-project
+          uv sync --frozen --no-install-project --extra proxy
           echo "PYTHONPATH=$PWD/.venv/lib/$(ls .venv/lib)/site-packages" >> "$GITHUB_ENV"
 
       - run: rustup toolchain install --no-self-update
