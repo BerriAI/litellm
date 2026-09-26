@@ -275,7 +275,6 @@ from litellm.constants import (
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
     CLI_SSO_SESSION_TTL_SECONDS,
-    DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -756,9 +755,6 @@ from litellm.proxy.shutdown.scheduled_jobs import (
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
     release_unbound_budget_reservation,
-)
-from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
-    run_scheduled_daily_global_spend_reconcile,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
@@ -10457,12 +10453,6 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
-        cls._initialize_daily_global_spend_reconcile_job(
-            scheduler=scheduler,
-            proxy_logging_obj=proxy_logging_obj,
-            prisma_client=prisma_client,
-        )
-
         cls._initialize_spend_capture_rate_check_job(
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
@@ -10810,39 +10800,6 @@ class ProxyStartupEvent:
                 "Expired UI session key cleanup disabled (set "
                 "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
-
-    @classmethod
-    def _initialize_daily_global_spend_reconcile_job(
-        cls,
-        scheduler: AsyncIOScheduler,
-        proxy_logging_obj: ProxyLogging,
-        prisma_client: PrismaClient,
-    ) -> None:
-        async def alert(message: str) -> None:
-            await proxy_logging_obj.alerting_handler(
-                message=message,
-                level="High",
-                alert_type=AlertType.failed_tracking_spend,
-            )
-
-        async def reconcile() -> None:
-            await run_scheduled_daily_global_spend_reconcile(
-                prisma_client,
-                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
-                alert=alert,
-            )
-
-        scheduler.add_job(
-            reconcile,
-            "cron",
-            hour=0,
-            minute=30,
-            timezone="UTC",
-            id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
-        )
 
     @classmethod
     def _initialize_spend_capture_rate_check_job(
