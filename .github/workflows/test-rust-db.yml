@@ -91,8 +91,8 @@ jobs:
         run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres
 
       - name: Check the committed .sqlx against the migrated schema
-        working-directory: litellm-rust
-        run: cargo sqlx prepare --workspace --check -- -p litellm-db --all-targets --features postgres-tests
+        working-directory: litellm-rust/crates/db
+        run: cargo sqlx prepare --check -- --all-targets --features postgres-tests
 
       - name: Lint the database tests
         working-directory: litellm-rust
