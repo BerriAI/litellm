@@ -235,8 +235,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 max_queue_size=self.s3_max_queue_size,
             )
             self.log_queue: list[s3BatchLoggingElement] = []
-            self._requeued_count: int = 0
-            self._flush_retries: int = 0
+            self._requeued_count = 0
+            self._flush_retries = 0
             self._flush_dropped: dict[int, s3BatchLoggingElement] = {}
 
             # Call BaseAWSLLM's __init__
