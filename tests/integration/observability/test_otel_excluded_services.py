@@ -296,12 +296,7 @@ def test_valid_config_excluded_services_tolerates_bogus_env(
     langfuse_vars: dict[str, JsonValue],
     tmp_path: Path,
 ) -> None:
-    def with_langfuse_otel(config: dict) -> None:
-        config["litellm_settings"]["callbacks"] = ["otel", "langfuse_otel"]
-
-    config: Final = _config_with(
-        tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=with_langfuse_otel
-    )
+    config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]})
     with owned_proxy(
         gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth"}, config=config, workers=2
     ) as candidate:
@@ -316,6 +311,28 @@ def test_valid_config_excluded_services_tolerates_bogus_env(
         assert "postgresql" not in _db_systems(all_tenant), (
             f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
         )
+
+
+def test_bogus_excluded_services_env_fails_proxy_start_with_preset_alongside_otel(
+    gateway: Gateway, otel_audit_config: AuditConfigWriter, tmp_path: Path
+) -> None:
+    def with_langfuse_otel(config: dict) -> None:
+        config["litellm_settings"]["callbacks"] = ["otel", "langfuse_otel"]
+
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=with_langfuse_otel
+    )
+    log_dir: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(tmp_path)))
+    before: Final = frozenset(log_dir.glob("owned-proxy-*.log"))
+    with pytest.raises(AssertionError, match="readiness"):
+        with owned_proxy_process(
+            gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth"}, config=config, workers=2
+        ):
+            pass
+    logs: Final = [path.read_text() for path in frozenset(log_dir.glob("owned-proxy-*.log")) - before]
+    assert logs, "no owned proxy log written"
+    text: Final = "\n".join(logs)
+    assert "'auth' is not a datastore service" in text, text[-3000:]
 
 
 def test_bogus_excluded_services_env_fails_proxy_start_without_otel_callback(

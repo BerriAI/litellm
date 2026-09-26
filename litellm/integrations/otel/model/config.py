@@ -377,7 +377,8 @@ def validate_otel_v2_excluded_services_env(settings: object) -> None:
     init errors, so a bogus value would otherwise degrade to the legacy callback
     silently. Splitting and normalizing here raises the same ``ValueError`` the
     field raises. An explicit ``callback_settings.otel.excluded_services`` wins
-    over the env var, so a bad env value is inert then and must not block boot.
+    over the env var, so the caller skips this check only when no V2 preset
+    callback that would still parse the env is configured.
     """
     if not is_otel_v2_enabled():
         return
