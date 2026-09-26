@@ -158,7 +158,12 @@ async def test_rebinding_during_authentication_does_not_mark_new_identity_verifi
     result: Final = await store.record_authentication(context)
     assert isinstance(result, AgentIdentityFailure)
     assert "changed" in result.message
-    assert identities.update_many.call_args.kwargs["where"] == {"agent_id": "agent-one", "revision": "old-revision"}
+    assert identities.update_many.call_args.kwargs["where"] == {
+        "agent_id": "agent-one",
+        "revision": "old-revision",
+        "active": True,
+        "agent": {"is": {"enabled": True, "identity_managed": True}},
+    }
 
 
 @pytest.mark.asyncio
@@ -379,3 +384,19 @@ async def test_resolver_preserves_unconfigured_and_unrelated_authentication() ->
     store, _, identities, _ = setup_store()
     identities.find_unique.return_value = None
     assert await store.resolve_verified_claims(CLAIMS) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registered", [True, False])
+async def test_application_and_unregistered_clients_do_not_depend_on_human_subject_storage(registered: bool) -> None:
+    store, _, identities, humans = setup_store()
+    identities.find_unique.return_value = BINDING if registered else None
+    humans.find_unique.side_effect = RuntimeError("subject database unavailable")
+    result: Final = await store.resolve_verified_claims(CLAIMS)
+    if registered:
+        assert isinstance(result, ManagedAgentContext)
+        assert result.mode == "autonomous"
+        assert result.user_id is None
+    else:
+        assert result is None
+    humans.find_unique.assert_not_awaited()
