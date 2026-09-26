@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LiteLLM_UserTable
-from litellm.proxy.management_endpoints.scim.scim_v2 import apply_scim_user_patch, patch_user
+from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMPatchOp,
     SCIMPatchOperation,
@@ -355,7 +355,7 @@ def test_apply_patch_ops_replace_entitlements_writes_canonical_key():
         ]
     )
 
-    update_data, _ = apply_scim_user_patch(
+    update_data, _ = _apply_patch_ops(
         existing_user=_user_with_metadata({}), patch_ops=patch_ops
     )
 
@@ -373,7 +373,7 @@ def test_apply_patch_ops_add_roles_appends_to_existing():
         ]
     )
 
-    update_data, _ = apply_scim_user_patch(
+    update_data, _ = _apply_patch_ops(
         existing_user=_user_with_metadata({"scim_roles": [{"value": "viewer"}]}),
         patch_ops=patch_ops,
     )
@@ -389,7 +389,7 @@ def test_apply_patch_ops_remove_entitlements_clears_canonical_key():
         Operations=[SCIMPatchOperation(op="remove", path="entitlements")]
     )
 
-    update_data, _ = apply_scim_user_patch(
+    update_data, _ = _apply_patch_ops(
         existing_user=_user_with_metadata(
             {"scim_entitlements": [{"value": "jira-software"}]}
         ),
@@ -409,7 +409,7 @@ def test_apply_patch_ops_pathless_value_dict_handles_roles():
         ]
     )
 
-    update_data, _ = apply_scim_user_patch(
+    update_data, _ = _apply_patch_ops(
         existing_user=_user_with_metadata({}), patch_ops=patch_ops
     )
 
@@ -428,7 +428,7 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        apply_scim_user_patch(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
 
@@ -442,7 +442,7 @@ def test_apply_patch_ops_replace_entitlements_without_value_member_is_stored_as_
         ]
     )
 
-    update_data, _ = apply_scim_user_patch(
+    update_data, _ = _apply_patch_ops(
         existing_user=_user_with_metadata({}), patch_ops=patch_ops
     )
 
@@ -455,7 +455,7 @@ def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        apply_scim_user_patch(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
     assert "value" in str(exc_info.value.detail)
@@ -473,7 +473,7 @@ def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        apply_scim_user_patch(
+        _apply_patch_ops(
             existing_user=_user_with_metadata(
                 {"scim_roles": [{"value": "engineering-admin"}]}
             ),
@@ -496,7 +496,7 @@ def test_apply_patch_ops_remove_group_filtered_path_without_value():
         Operations=[SCIMPatchOperation(op="remove", path='groups[value eq "team-1"]')]
     )
 
-    _, final_team_set = apply_scim_user_patch(existing_user=user, patch_ops=patch_ops)
+    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == {"team-2"}
 
@@ -513,7 +513,7 @@ def test_apply_patch_ops_add_group_filtered_path_without_value():
         Operations=[SCIMPatchOperation(op="add", path="groups[value eq 'team-3']")]
     )
 
-    _, final_team_set = apply_scim_user_patch(existing_user=user, patch_ops=patch_ops)
+    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == {"team-1", "team-3"}
 
@@ -533,6 +533,6 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
         ]
     )
 
-    _, final_team_set = apply_scim_user_patch(existing_user=user, patch_ops=patch_ops)
+    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
     assert final_team_set == set()
