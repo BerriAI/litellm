@@ -12,8 +12,18 @@ class BedrockTextContent(TypedDict, total=False):
     qualifiers: list[BedrockGuardrailQualifier]
 
 
+class BedrockImageSource(TypedDict):
+    bytes: str
+
+
+class BedrockImageContent(TypedDict):
+    format: Literal["png", "jpeg"]
+    source: BedrockImageSource
+
+
 class BedrockContentItem(TypedDict, total=False):
     text: BedrockTextContent
+    image: BedrockImageContent
 
 
 class BedrockRequest(TypedDict, total=False):

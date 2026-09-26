@@ -9,7 +9,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from fastapi import HTTPException
 
@@ -43,6 +43,13 @@ if TYPE_CHECKING:
 A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
+
+
+@runtime_checkable
+class RequestAttachmentScanner(Protocol):
+    """A guardrail that scans the raw request's attachments before its text is extracted."""
+
+    async def async_scan_request_attachments(self, data: dict, call_type: CallTypesLiteral) -> None: ...
 
 
 class _EndpointTranslation(Protocol):
@@ -227,6 +234,11 @@ class UnifiedLLMGuardrails(CustomLogger):
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
+
+        if isinstance(guardrail_to_apply, RequestAttachmentScanner) and hasattr(
+            type(guardrail_to_apply), "async_scan_request_attachments"
+        ):
+            await guardrail_to_apply.async_scan_request_attachments(data=data, call_type=call_type)
 
         data = await endpoint_translation.process_input_messages(
             data=data,
