@@ -149,6 +149,10 @@ class _CreateOrgRateLimitDescriptors(Protocol):
     ) -> "Sequence[RateLimitDescriptor]": ...
 
 
+class _GetProxyHook(Protocol):
+    def __call__(self, hook: str) -> object: ...
+
+
 class _ShouldRateLimit(Protocol):
     def __call__(
         self,
@@ -525,7 +529,8 @@ async def _check_summary_model_rate_limit(
     except Exception:
         return True
 
-    limiter: Final[object] = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+    get_proxy_hook: Final[_GetProxyHook | None] = getattr(proxy_logging_obj, "get_proxy_hook", None)
+    limiter: Final[object] = get_proxy_hook("parallel_request_limiter") if get_proxy_hook is not None else None
     should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
     create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
         limiter, "_create_rate_limit_descriptors", None

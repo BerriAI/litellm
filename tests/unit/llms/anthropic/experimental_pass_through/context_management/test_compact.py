@@ -1767,6 +1767,18 @@ async def test_summary_model_allowed_when_within_model_budget():
     assert not result.applied_edits[0].get("error")
 
 
+class _LegacyLimiter:
+    async def async_pre_call_hook(self, **kwargs):
+        return None
+
+
+def _proxy_logging_like_the_live_proxy(active_limiter: object) -> MagicMock:
+    proxy_logging = MagicMock()
+    proxy_logging.max_parallel_request_limiter = _LegacyLimiter()
+    proxy_logging.get_proxy_hook = lambda hook: active_limiter if hook == "parallel_request_limiter" else None
+    return proxy_logging
+
+
 class _FakeRateLimiter:
     """Minimal stand-in for ``_PROXY_MaxParallelRequestsHandler_v3`` exposing
     just the descriptor-build + read-only check surface the editor consults."""
@@ -1818,8 +1830,7 @@ async def test_summary_model_rate_limit_check_errors(limiter_error, summary_call
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
     limiter = _FakeRateLimiter("OK", raises=limiter_error)
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = limiter
+    proxy_logging = _proxy_logging_like_the_live_proxy(limiter)
 
     with (
         patch(
@@ -1861,8 +1872,7 @@ async def test_summary_model_denied_when_over_rate_limit():
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
     limiter = _FakeRateLimiter("OVER_LIMIT")
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = limiter
+    proxy_logging = _proxy_logging_like_the_live_proxy(limiter)
 
     with (
         patch(
@@ -1898,8 +1908,7 @@ async def test_summary_model_allowed_when_within_rate_limit():
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
     limiter = _FakeRateLimiter("OK")
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = limiter
+    proxy_logging = _proxy_logging_like_the_live_proxy(limiter)
 
     with (
         patch(
@@ -1936,12 +1945,7 @@ async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
 
-    class _LegacyLimiter:
-        async def async_pre_call_hook(self, **kwargs):
-            return None
-
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = _LegacyLimiter()
+    proxy_logging = _proxy_logging_like_the_live_proxy(_LegacyLimiter())
 
     with (
         patch(
