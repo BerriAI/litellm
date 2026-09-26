@@ -312,7 +312,7 @@ class DualCache(BaseCache):
                 else:
                     self.last_redis_batch_access_time[key] = previous_time
 
-    async def _prepare_batch_get(self, keys: list, local_only: bool, **kwargs) -> PendingBatchRead:
+    async def _prepare_batch_get(self, keys: list[str], local_only: bool, **kwargs: object) -> PendingBatchRead:
         result: list[object | None] = [None] * len(keys)
         if self.in_memory_cache is not None:
             in_memory_result: Final = await self.in_memory_cache.async_batch_get_cache(keys, **kwargs)
@@ -329,22 +329,19 @@ class DualCache(BaseCache):
         )
 
     async def _apply_batch_get(
-        self, pending: PendingBatchRead, redis_result: dict | None, **kwargs
+        self, pending: PendingBatchRead, redis_result: dict[str, object] | None, **kwargs: object
     ) -> list[object | None]:
-        # Short-circuit if redis_result is None or contains only None values
         if redis_result is None or all(v is None for v in redis_result.values()):
             return pending.result
 
-        # Pre-compute key-to-index mapping for O(1) lookup
-        key_to_index: Final = {key: i for i, key in enumerate(pending.keys)}
-
-        # Update both result and in-memory cache in a single loop
-        for key, value in redis_result.items():
-            pending.result[key_to_index[key]] = value
-
-            if value is not None and self.in_memory_cache is not None:
-                await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
-        return pending.result
+        merged: Final[list[object | None]] = [
+            redis_result.get(key, value) for key, value in zip(pending.keys, pending.result)
+        ]
+        if self.in_memory_cache is not None:
+            for key, value in redis_result.items():
+                if value is not None:
+                    await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
+        return merged
 
     async def async_batch_get_cache(
         self,
