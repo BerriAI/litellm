@@ -1175,41 +1175,6 @@ def test_count_content_list_rejects_unknown_type():
 
 
 @pytest.mark.parametrize(
-    "block_type",
-    [
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
-        "code_execution_tool_result",
-        "mcp_tool_use",
-        "mcp_tool_result",
-        "container_upload",
-    ],
-)
-def test_count_content_list_counts_anthropic_server_tool_blocks(block_type):
-    from litellm.litellm_core_utils.token_counter import _count_content_list
-
-    def count(block):
-        return _count_content_list(
-            count_function=len, content_list=[block], use_default_image_token_count=False, default_token_count=None
-        )
-
-    short = count({"type": block_type, "id": "srvtoolu_1", "input": {"query": "paris"}})
-    longer = count({"type": block_type, "id": "srvtoolu_1", "input": {"query": "paris weather tomorrow"}})
-    other_metadata = count(
-        {
-            "type": block_type,
-            "id": "srvtoolu_with_a_much_longer_id",
-            "cache_control": {"type": "ephemeral"},
-            "input": {"query": "paris"},
-        }
-    )
-
-    assert 0 < short < longer
-    assert other_metadata == short
-
-
-@pytest.mark.parametrize(
     "source",
     [
         {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},

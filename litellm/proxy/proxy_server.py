@@ -13498,7 +13498,7 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
-from litellm.litellm_core_utils.token_counter import contents_as_chat_messages
+from litellm.litellm_core_utils.token_counter import contents_as_chat_messages, countable_messages
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
@@ -13731,7 +13731,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     system_message: Final = _system_message(system)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        messages if messages is not None else contents_as_chat_messages(contents),
+        countable_messages(messages) if messages is not None else contents_as_chat_messages(contents),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)

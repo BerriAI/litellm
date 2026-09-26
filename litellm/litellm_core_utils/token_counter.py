@@ -868,44 +868,6 @@ def _count_anthropic_content(
     return tokens
 
 
-_ANTHROPIC_SERVER_TOOL_BLOCK_TYPES: Final = frozenset(
-    {
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
-        "code_execution_tool_result",
-        "mcp_tool_use",
-        "mcp_tool_result",
-        "container_upload",
-    }
-)
-_UNCOUNTED_BLOCK_KEYS: Final = frozenset({"type", "id", "tool_use_id", "cache_control", "signature"})
-_NAMED_BLOCK_TYPES: Final = (
-    frozenset({"thinking", "redacted_thinking", "tool_reference"}) | _ANTHROPIC_SERVER_TOOL_BLOCK_TYPES
-)
-
-
-def _count_named_block(block: Mapping[str, object], count_function: TokenCounterFunction) -> int:
-    if block["type"] in ("thinking", "redacted_thinking"):
-        # Claude extended thinking content block
-        # Count the thinking text and skip the opaque blobs (signature, redacted data)
-        thinking_text: Final = str(block.get("thinking", ""))
-        return count_function(thinking_text) if thinking_text else 0
-    if block["type"] == "tool_reference":
-        # Anthropic tool-search reference block: a lightweight pointer to
-        # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
-        # The full tool definition is counted via the `tools` param, so we
-        # only count the referenced name here. Without this branch,
-        # token_counter raises on tool-search traffic; on the streaming
-        # anthropic_messages path that nulls response_cost and causes the
-        # proxy to drop the SpendLogs row entirely (silent cost undercount).
-        tool_name: Final = str(block.get("tool_name") or "")
-        return count_function(tool_name) if tool_name else 0
-    return count_function(
-        _serialize_part({key: value for key, value in block.items() if key not in _UNCOUNTED_BLOCK_KEYS})
-    )
-
-
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -957,15 +919,30 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] in _NAMED_BLOCK_TYPES:
-                num_tokens += _count_named_block(c, count_function)
+            elif c["type"] in ("thinking", "redacted_thinking"):
+                # Claude extended thinking content block
+                # Count the thinking text and skip the opaque blobs (signature, redacted data)
+                thinking_text = str(c.get("thinking", ""))
+                if thinking_text:
+                    num_tokens += count_function(thinking_text)
+            elif c["type"] == "tool_reference":
+                # Anthropic tool-search reference block: a lightweight pointer to
+                # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
+                # The full tool definition is counted via the `tools` param, so we
+                # only count the referenced name here. Without this branch,
+                # token_counter raises on tool-search traffic; on the streaming
+                # anthropic_messages path that nulls response_cost and causes the
+                # proxy to drop the SpendLogs row entirely (silent cost undercount).
+                tool_name = str(c.get("tool_name") or "")
+                if tool_name:
+                    num_tokens += count_function(tool_name)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference, {', '.join(sorted(_ANTHROPIC_SERVER_TOOL_BLOCK_TYPES))})."
+                    f"tool_reference)."
                 )
         return num_tokens
     except Exception as e:
@@ -1076,6 +1053,58 @@ def _elide_data_key(obj: Mapping[str, object]) -> Mapping[str, object]:
 
 def _serialize_part(part: object) -> str:
     return json.dumps(json.loads(json.dumps(part, default=str), object_hook=_elide_data_key), default=str)
+
+
+_LOCALLY_COUNTABLE_BLOCK_TYPES: Final = frozenset(
+    {
+        "text",
+        "image_url",
+        "image",
+        "document",
+        "file",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "redacted_thinking",
+        "tool_reference",
+    }
+)
+_OPAQUE_BLOCK_KEYS: Final = frozenset(
+    {"id", "tool_use_id", "cache_control", "signature", "encrypted_content", "encrypted_index"}
+)
+
+
+def _countable_json_node(obj: Mapping[str, object]) -> Mapping[str, object]:
+    return _elide_data_key({key: value for key, value in obj.items() if key not in _OPAQUE_BLOCK_KEYS})
+
+
+def _countable_block(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return block
+    if block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+        return {
+            **block,
+            "content": [_countable_block(item) for item in block["content"]],
+        }
+    if block.get("type") in _LOCALLY_COUNTABLE_BLOCK_TYPES:
+        return block
+    return {
+        "type": "text",
+        "text": json.dumps(json.loads(json.dumps(block, default=str), object_hook=_countable_json_node), default=str),
+    }
+
+
+def _countable_message(message: object) -> object:
+    if not isinstance(message, Mapping) or not isinstance(message.get("content"), list):
+        return message
+    return {
+        **message,
+        "content": [_countable_block(block) for block in message["content"]],
+    }
+
+
+def countable_messages(messages: Sequence[object]) -> tuple[object, ...]:
+    return tuple(_countable_message(message) for message in messages)
 
 
 def _part_to_text(part: object) -> str:
