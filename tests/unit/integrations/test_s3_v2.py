@@ -3608,6 +3608,43 @@ async def test_failed_direct_upload_returns_false() -> None:
     assert len(put.calls) == 3
 
 
+@pytest.mark.asyncio
+async def test_terminal_drop_of_one_element_does_not_drop_a_sibling_with_the_same_key() -> None:
+    class _TerminalForMarkerPut:
+        def __init__(self) -> None:
+            self.calls: tuple[str | None, ...] = ()
+
+        async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+            self.calls = (*self.calls, data)
+            if data is not None and "terminal-marker" in data:
+                return _terminal_failure_response()
+            return _transient_failure_response()
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_drop_on_terminal_error=True,
+    )
+
+    put = _TerminalForMarkerPut()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+
+    shared_key = "2025-09-14/shared.json"
+    dropped = s3BatchLoggingElement(
+        s3_object_key=shared_key, payload={"m": "terminal-marker"}, s3_object_download_filename="shared.json"
+    )
+    sibling = s3BatchLoggingElement(
+        s3_object_key=shared_key, payload={"m": "healthy"}, s3_object_download_filename="shared.json"
+    )
+
+    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
+        assert await logger._upload_bounded(dropped) == "dropped"
+        assert await logger._upload_bounded(sibling) == "retry"
+
+
 def test_upload_semaphore_alias_is_the_limiter() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",

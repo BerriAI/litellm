@@ -231,7 +231,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             self.log_queue: list[s3BatchLoggingElement] = []
             self._requeued_count: int = 0
             self._flush_retries: int = 0
-            self._flush_dropped_keys: set[str] = set()
+            self._flush_dropped: list[s3BatchLoggingElement] = []
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
@@ -592,7 +592,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     batch_logging_element.s3_object_key,
                     e.response.status_code,
                 )
-                self._flush_dropped_keys.add(batch_logging_element.s3_object_key)
+                self._flush_dropped.append(batch_logging_element)
             return False
         return True
 
@@ -615,7 +615,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
         self._flush_retries = 0
-        self._flush_dropped_keys = set()  # mutable-ok: per-flush drop marks read back by _upload_bounded
+        self._flush_dropped = []  # mutable-ok: per-flush drop marks read back by _upload_bounded
         stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
         order: Final = (*range(stale, len(uploads)), *range(stale))
         ordered: Final = await asyncio.gather(*(self._upload_bounded(uploads[i]) for i in order))
@@ -688,7 +688,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> UploadOutcome:
         if await self.async_upload_data_to_s3(element):
             return "delivered"
-        if element.s3_object_key in self._flush_dropped_keys:
+        if any(dropped is element for dropped in self._flush_dropped):
             return "dropped"
         return "retry"
 
