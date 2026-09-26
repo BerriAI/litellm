@@ -75,6 +75,7 @@ SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 
 _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
+_SESSION_HEAD_WALK_ROWS: Final = 10000
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
@@ -3065,16 +3066,18 @@ async def _fetch_session_representatives(
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
     """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
     rep_query: Final = f"""
-        SELECT * FROM (
-            SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                {_SPEND_LOG_LIST_COLUMNS}
+        SELECT rep.*
+        FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[]) AS requested(session_key, key)
+        CROSS JOIN LATERAL (
+            SELECT {_SPEND_LOG_LIST_COLUMNS}
             FROM "LiteLLM_SpendLogs"
             WHERE {where_clause}
-              AND ({_SESSION_GROUP_KEY_SQL}) IN (
-                  SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
-              )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
-        ) AS session_representatives
+              AND (request_id = requested.session_key OR session_id = requested.session_key)
+              AND api_key = requested.key
+              AND {_SESSION_KEY_EXPR} = requested.session_key
+            ORDER BY call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+            LIMIT 1
+        ) AS rep
     """
     rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
         prisma_client,
@@ -3087,6 +3090,79 @@ async def _fetch_session_representatives(
         {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
     )
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
+
+
+def _session_head_walk_sql(where_clause: str, keyset_clause: str, limit_index: int) -> str:
+    newer_than_head: Final = f"""newer.api_key = head.api_key
+                  AND {where_clause}
+                  AND (newer."startTime" > head."startTime"
+                       OR (newer."startTime" = head."startTime" AND newer.request_id > head.request_id))"""
+    return f"""
+        SELECT head.session_key, head.api_key, head."startTime"::text AS last_activity
+        FROM (
+            SELECT {_SESSION_KEY_EXPR} AS session_key, request_id, api_key, "startTime"
+            FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+              {keyset_clause}
+            ORDER BY "startTime" DESC, {_SESSION_KEY_EXPR} DESC, api_key DESC
+            LIMIT {_SESSION_HEAD_WALK_ROWS}
+        ) AS head
+        LEFT JOIN LATERAL (
+            SELECT 1 AS hit
+            FROM (
+                (SELECT 1
+                FROM "LiteLLM_SpendLogs" AS newer
+                WHERE newer.session_id = head.session_key
+                  AND {newer_than_head}
+                LIMIT 1)
+                UNION ALL
+                (SELECT 1
+                FROM "LiteLLM_SpendLogs" AS newer
+                WHERE newer.request_id = head.session_key
+                  AND NULLIF(newer.session_id, '') IS NULL
+                  AND {newer_than_head})
+            ) AS newer_rows
+            LIMIT 1
+        ) AS newer_hit ON TRUE
+        WHERE newer_hit.hit IS NULL
+        ORDER BY head."startTime" DESC, head.session_key DESC, head.api_key DESC
+        LIMIT ${limit_index}
+    """
+
+
+async def _window_fits_the_head_walk(
+    prisma_client: "PrismaClient", where_clause: str, keyset_clause: str, params: Sequence[object]
+) -> bool:
+    count_query: Final = f"""
+        SELECT COUNT(*) AS total_count
+        FROM (
+            SELECT 1
+            FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+              {keyset_clause}
+            LIMIT ${len(params) + 1}
+        ) AS walked_rows
+    """
+    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
+        prisma_client, count_query, *params, _SESSION_HEAD_WALK_ROWS
+    )
+    return bool(count_rows) and int(count_rows[0]["total_count"]) < _SESSION_HEAD_WALK_ROWS
+
+
+def _grouped_session_page_sql(
+    where_clause: str, having_clause: str, direction: str, limit_index: int, offset_clause: str
+) -> str:
+    return f"""
+        SELECT {_SESSION_KEY_EXPR} AS session_key,
+               api_key,
+               MAX("startTime")::text AS last_activity
+        FROM "LiteLLM_SpendLogs"
+        WHERE {where_clause}
+        GROUP BY {_SESSION_GROUP_KEY_SQL}
+        {having_clause}
+        ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
+        LIMIT ${limit_index} {offset_clause}
+    """
 
 
 async def _count_grouped_sessions(
@@ -3134,7 +3210,11 @@ async def _ui_session_grouped_spend_logs(
     next ``page_size`` sessions ordered by ``(MAX(startTime), session_key,
     api_key)``, resumed from the ``session_cursor`` keyset
     ``'<last_activity>|<api_key>|<session_key>'`` instead of an OFFSET, so
-    page depth does not degrade the query plan. A request for ``page > 1``
+    page depth does not degrade the query plan. A newest-first page walks the
+    window newest first and keeps each session's newest row, so it stops after
+    ``page_size + 1`` sessions instead of grouping the whole window; ascending
+    and OFFSET pages, and walks that run past ``_SESSION_HEAD_WALK_ROWS`` rows
+    without filling the page, group the window instead. A request for ``page > 1``
     without a cursor (the UI jumping straight to the last page, or back to a
     page it never walked through) falls back to ``OFFSET (page - 1) *
     page_size``, trimmed to the end of the ``SPEND_LOGS_PAGINATION_COUNT_CAP``
@@ -3153,11 +3233,10 @@ async def _ui_session_grouped_spend_logs(
     direction: Final = "DESC" if sort_desc else "ASC"
 
     cursor: Final = _parse_session_cursor(session_cursor)
+    cursor_bounds: Final = f"(${next_param_index}::timestamp, ${next_param_index + 1}, ${next_param_index + 2})"
+    keyset_clause: Final = f'AND ("startTime", {_SESSION_KEY_EXPR}, api_key) < {cursor_bounds}' if cursor else ""
     having_clause: Final = (
-        f'HAVING (MAX("startTime"), {_SESSION_GROUP_KEY_SQL}) {cmp_op} '
-        f"(${next_param_index}::timestamp, ${next_param_index + 1}, ${next_param_index + 2})"
-        if cursor
-        else ""
+        f'HAVING (MAX("startTime"), {_SESSION_GROUP_KEY_SQL}) {cmp_op} {cursor_bounds}' if cursor else ""
     )
     cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
     limit_index: Final = next_param_index + len(cursor_params)
@@ -3166,21 +3245,26 @@ async def _ui_session_grouped_spend_logs(
     offset_params: Final[tuple[int, ...]] = (offset,) if offset and page_limit > 0 else ()
     offset_clause: Final = f"OFFSET ${limit_index + 1}" if offset_params else ""
 
-    page_query: Final = f"""
-        SELECT {_SESSION_KEY_EXPR} AS session_key,
-               api_key,
-               MAX("startTime")::text AS last_activity
-        FROM "LiteLLM_SpendLogs"
-        WHERE {where_clause}
-        GROUP BY {_SESSION_GROUP_KEY_SQL}
-        {having_clause}
-        ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
-        LIMIT ${limit_index} {offset_clause}
-    """
+    page_params: Final = (*sql_params, *cursor_params, page_limit + 1)
+    walks_heads: Final = sort_desc and offset == 0 and page_limit > 0
+    walked_rows: Final[Sequence[_SessionPageRow]] = (
+        await _query_raw(prisma_client, _session_head_walk_sql(where_clause, keyset_clause, limit_index), *page_params)
+        if walks_heads
+        else ()
+    )
+    walk_is_complete: Final = walks_heads and (
+        len(walked_rows) > page_limit
+        or await _window_fits_the_head_walk(prisma_client, where_clause, keyset_clause, (*sql_params, *cursor_params))
+    )
     page_rows: Final[Sequence[_SessionPageRow]] = (
-        ()
-        if page_limit <= 0
-        else await _query_raw(prisma_client, page_query, *sql_params, *cursor_params, page_limit + 1, *offset_params)
+        walked_rows
+        if walk_is_complete or page_limit <= 0
+        else await _query_raw(
+            prisma_client,
+            _grouped_session_page_sql(where_clause, having_clause, direction, limit_index, offset_clause),
+            *page_params,
+            *offset_params,
+        )
     )
 
     has_more: Final = len(page_rows) > page_limit

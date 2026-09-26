@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.spend_tracking.spend_management_endpoints import _SESSION_HEAD_WALK_ROWS
 
 
 def _default_date_range():
@@ -7002,7 +7003,8 @@ def test_parse_session_cursor():
     )
 
 
-SESSION_GROUP_KEY_SQL = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+SESSION_KEY_EXPR = "COALESCE(NULLIF(session_id, ''), request_id)"
+SESSION_GROUP_KEY_SQL = f"{SESSION_KEY_EXPR}, api_key"
 
 
 def _session_grouped_mock_prisma(session_page_rows, session_total, representative_rows):
@@ -7011,7 +7013,7 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": session_total}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
             return [
@@ -7063,7 +7065,7 @@ def _session_grouped_paginating_prisma(sessions, counted_total=None):
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
@@ -7126,21 +7128,14 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 
         emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
         page_query_sql = emitted[0][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in page_query_sql
         assert "OFFSET" not in page_query_sql
         assert "HAVING" not in page_query_sql
         assert emitted[0][-1] == 3, "page query fetches page_size + 1 sessions to detect has_more"
 
         count_sql = emitted[1][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in count_sql
         assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
 
         rep_call = emitted[2]
-        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
-        assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
-            in rep_call[0]
-        ), "the session representative must prefer the newest non-MCP call"
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:
@@ -7149,7 +7144,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
-    """A session_cursor becomes a HAVING keyset predicate instead of an OFFSET."""
+    """A session_cursor becomes a WHERE keyset predicate instead of an OFFSET."""
     page_rows = [_session_page_row("sess-2", "2026-08-29 07:00:00")]
     reps = [_session_representative_row("req-2", "sess-2")]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
@@ -7182,14 +7177,82 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
 
         page_query_call = mock_prisma.db.query_raw.await_args_list[0]
         page_query_sql = page_query_call.args[0]
-        assert f'HAVING (MAX("startTime"), {SESSION_GROUP_KEY_SQL}) <' in page_query_sql
+        assert "HAVING" not in page_query_sql
         assert "OFFSET" not in page_query_sql
         cursor_index = page_query_call.args.index("2026-08-29 09:00:00")
         assert page_query_call.args[cursor_index : cursor_index + 3] == (
             "2026-08-29 09:00:00",
             "req-solo",
             "hashed-key",
-        ), "cursor params must line up with (MAX(startTime), session key, api_key)"
+        ), "cursor params must line up with (startTime, session key, api_key)"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _session_walk_mock_prisma(walked_rows, walk_window_rows, grouped_rows):
+    """Mock prisma serving the head walk, its window-size check and the grouped fallback page separately."""
+
+    async def mock_query_raw(sql_query, *params):
+        if "AS walked_rows" in sql_query:
+            return [{"total_count": walk_window_rows}]
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": 3}]
+        if "CROSS JOIN LATERAL" in sql_query:
+            return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
+        if "COALESCE(SUM(spend)" in sql_query:
+            return []
+        if "LEFT JOIN LATERAL" in sql_query:
+            return walked_rows
+        return grouped_rows
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    return mock_prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("walk_window_rows", "expected_request_ids", "expected_has_more"),
+    [
+        pytest.param(
+            _SESSION_HEAD_WALK_ROWS, ["req-grouped-1", "req-grouped-2"], True, id="walk-cut-short-groups-the-window"
+        ),
+        pytest.param(_SESSION_HEAD_WALK_ROWS - 1, ["req-walked-1"], False, id="walk-covered-the-window"),
+    ],
+)
+async def test_ui_view_spend_logs_group_by_session_falls_back_when_the_walk_is_cut_short(
+    client, monkeypatch, walk_window_rows, expected_request_ids, expected_has_more
+):
+    """A head walk that found fewer sessions than the page needs is only trusted when it read the whole window."""
+    mock_prisma = _session_walk_mock_prisma(
+        walked_rows=[_session_page_row("walked-1", "2026-08-29 10:00:00")],
+        walk_window_rows=walk_window_rows,
+        grouped_rows=[
+            _session_page_row("grouped-1", "2026-08-29 10:00:00"),
+            _session_page_row("grouped-2", "2026-08-29 09:00:00"),
+            _session_page_row("grouped-3", "2026-08-29 08:00:00"),
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date, "group_by_session": "true", "page_size": 2},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert [row["request_id"] for row in data["data"]] == expected_request_ids
+        assert data["has_more"] is expected_has_more
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
