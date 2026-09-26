@@ -134,27 +134,35 @@ def test_omitted_tool_arguments_reach_the_upstream(gateway: Gateway) -> None:
     from mcp.client.streamable_http import streamable_http_client
     from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult
 
-    async def invoke(url: str, name: str, key: str | None = None) -> CallToolResult:
+    async def invoke(
+        url: str, name: str, key: str | None = None, arguments: dict[str, int] | None = None
+    ) -> CallToolResult:
         async with httpx.AsyncClient(headers={"Authorization": f"Bearer {key}"} if key else {}) as http:
             async with streamable_http_client(url, http_client=http) as streams:
                 async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
                     return await session.send_request(
-                        CallToolRequest(params=CallToolRequestParams(name=name)), CallToolResult
+                        CallToolRequest(params=CallToolRequestParams(name=name, arguments=arguments)), CallToolResult
                     )
 
-    with mcp_peer() as reference, gateway.scenario() as scenario:
+    with mcp_peer() as reference, mcp_peer() as other, gateway.scenario() as scenario:
         alias: Final = "optional" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, reference, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         direct: Final = asyncio.run(invoke(reference.url, "fail"))
-        assert direct.is_error is True and "synthetic tool failure" in direct.content[0].text, direct
+        assert direct.is_error is True and direct.content[0].text == "Error executing tool fail", direct
         reference.drain()
         endpoint: Final = str(gateway.client.base_url).rstrip("/") + f"/{alias}/mcp"
         forwarded: Final = asyncio.run(invoke(endpoint, f"{alias}-fail", key))
-        assert forwarded.is_error is True and "synthetic tool failure" in forwarded.content[0].text, forwarded
-        assert len(tool_calls(reference.drain())) == 1, "Omitted arguments never reached the upstream"
-        denied_key: Final = scenario.key(object_permission={"mcp_servers": []})
+        assert forwarded.is_error is True and forwarded.content == direct.content, forwarded
+        forwarded_calls: Final = tool_calls(reference.drain())
+        assert len(forwarded_calls) == 1, "Omitted arguments never reached the upstream"
+        assert forwarded_calls[0]["body"]["params"]["arguments"] == {}
+        explicit: Final = asyncio.run(invoke(endpoint, f"{alias}-add", key, {"a": 3, "b": 4}))
+        assert explicit.is_error is False and explicit.content[0].text == "7", explicit
+        assert tool_calls(reference.drain())[0]["body"]["params"]["arguments"] == {"a": 3, "b": 4}
+        other_identity: Final = register_mcp(scenario, other, "other" + uuid.uuid4().hex[:8])
+        denied_key: Final = scenario.key(object_permission={"mcp_servers": [other_identity]})
         aggregate: Final = str(gateway.client.base_url).rstrip("/") + "/mcp"
         denied: Final = asyncio.run(invoke(aggregate, f"{alias}-fail", denied_key))
         assert denied.is_error is True and "not allowed" in denied.content[0].text.lower(), denied
