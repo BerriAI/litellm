@@ -432,7 +432,7 @@ def _to_dict(value: object) -> dict[str, Any]:
 
 def _guardrail_litellm_params(g: "_DbOrConfigGuardrail") -> Mapping[str, object]:
     value: Final = _get_guardrail_field(g, "litellm_params")
-    if isinstance(value, dict):
+    if isinstance(value, (dict, str)):
         return decrypt_stored_json_object(value)
     return _to_dict(value)
 

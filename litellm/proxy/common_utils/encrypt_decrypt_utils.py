@@ -292,30 +292,26 @@ def _encrypted_string(value: str, new_encryption_key: str | None) -> str:
 
 def encrypt_json_strings(value: JsonValue, new_encryption_key: str | None = None, depth: int = 0) -> JsonValue:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        return value
-    match value:
-        case str():
-            return _encrypted_string(value, new_encryption_key)
-        case list():
-            return [encrypt_json_strings(item, new_encryption_key, depth + 1) for item in value]
-        case dict():
-            return {key: encrypt_json_strings(item, new_encryption_key, depth + 1) for key, item in value.items()}
-        case _:
-            return value
+        raise ValueError(f"cannot encrypt a value nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
+    if isinstance(value, str):
+        return _encrypted_string(value, new_encryption_key)
+    if isinstance(value, list):
+        return [encrypt_json_strings(item, new_encryption_key, depth + 1) for item in value]
+    if isinstance(value, dict):
+        return {key: encrypt_json_strings(item, new_encryption_key, depth + 1) for key, item in value.items()}
+    return value
 
 
 def decrypt_json_strings(value: JsonValue, signing_key: str | None = None, depth: int = 0) -> JsonValue:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return value
-    match value:
-        case str():
-            return _plaintext_of(value, signing_key)
-        case list():
-            return [decrypt_json_strings(item, signing_key, depth + 1) for item in value]
-        case dict():
-            return {key: decrypt_json_strings(item, signing_key, depth + 1) for key, item in value.items()}
-        case _:
-            return value
+    if isinstance(value, str):
+        return _plaintext_of(value, signing_key)
+    if isinstance(value, list):
+        return [decrypt_json_strings(item, signing_key, depth + 1) for item in value]
+    if isinstance(value, dict):
+        return {key: decrypt_json_strings(item, signing_key, depth + 1) for key, item in value.items()}
+    return value
 
 
 def parse_stored_json_object(value: object) -> dict[str, JsonValue] | None:

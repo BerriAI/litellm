@@ -185,7 +185,8 @@ async def test_detail_db_row_still_resolves():
 
 
 @pytest.mark.asyncio
-async def test_detail_encrypted_db_row_resolves_its_provider(monkeypatch):
+@pytest.mark.parametrize("stored_as_json_text", [False, True])
+async def test_detail_encrypted_db_row_resolves_its_provider(monkeypatch, stored_as_json_text: bool):
     import json
 
     from litellm.proxy import proxy_server
@@ -194,8 +195,9 @@ async def test_detail_encrypted_db_row_resolves_its_provider(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-usage-salt-1234")
     monkeypatch.setattr(proxy_server, "general_settings", {})
     row = _db_row(guardrail_id="db-encrypted", provider="aim")
-    row.litellm_params = json.loads(encrypted_guardrail_litellm_params({"guardrail": "aim", "mode": "pre_call"}))
-    assert row.litellm_params["guardrail"] != "aim"
+    stored = encrypted_guardrail_litellm_params({"guardrail": "aim", "mode": "pre_call"})
+    assert json.loads(stored)["guardrail"] != "aim"
+    row.litellm_params = stored if stored_as_json_text else json.loads(stored)
     prisma = _prisma(find_unique=row)
     handler = _config_handler()
     p1, p2 = _patches(prisma, handler)

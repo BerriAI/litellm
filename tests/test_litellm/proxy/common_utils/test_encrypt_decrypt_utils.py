@@ -308,18 +308,28 @@ def test_encrypt_json_strings_without_any_key_stores_the_value_as_sent(monkeypat
     assert decrypt_json_strings(_NESTED_PARAMS) == _NESTED_PARAMS
 
 
-def test_encrypt_json_strings_stops_descending_past_the_recursion_cap():
-    leaf = {"secret": "deep-secret"}
-    value = leaf
+def test_encrypt_json_strings_refuses_a_value_nested_past_the_recursion_cap():
+    value = {"secret": "deep-secret"}
     for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        value = {"child": value}
+
+    with pytest.raises(ValueError, match=f"nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels"):
+        encrypt_json_strings(value)
+    assert decrypt_json_strings(value) == value
+
+
+def test_encrypt_json_strings_encrypts_a_value_nested_at_the_recursion_cap():
+    value = "deep-secret"
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH):
         value = {"child": value}
 
     stored = encrypt_json_strings(value)
 
     deepest = stored
-    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH):
         deepest = deepest["child"]
-    assert deepest == leaf
+    assert deepest != "deep-secret"
+    assert decrypt_json_strings(stored) == value
 
 
 def test_json_value_coerces_non_json_containers():
@@ -339,7 +349,11 @@ def test_decrypt_stored_json_object_reads_json_text_and_parsed_rows_alike():
 
 
 def test_encrypt_config_section_encrypts_router_settings_string_leaves_only():
-    router_settings = {"redis_password": "redis-pw", "num_retries": 2, "fallbacks": [{"gpt-5.5-mini": ["gpt-5.4-mini"]}]}
+    router_settings = {
+        "redis_password": "redis-pw",
+        "num_retries": 2,
+        "fallbacks": [{"gpt-5.5-mini": ["gpt-5.4-mini"]}],
+    }
 
     stored = encrypt_config_section("router_settings", router_settings)
 

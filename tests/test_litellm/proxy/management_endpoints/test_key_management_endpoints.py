@@ -21226,6 +21226,37 @@ async def test_rotate_master_key_reports_rows_that_are_not_json_objects_without_
 
 
 @pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
+async def test_rotate_master_key_skips_rows_nested_past_the_recursion_cap(mock_rotate_mcp, monkeypatch, caplog):
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    caplog.set_level(logging.ERROR, logger=verbose_proxy_logger.name)
+    too_deep: dict[str, object] = {"secret": "vendor-secret"}
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        too_deep = {"child": too_deep}
+    mock_prisma_client = _rotation_prisma_client(too_deep, too_deep)
+    mock_rotate_mcp.return_value = None
+
+    await _rotate_to_new_master_key(mock_prisma_client, monkeypatch)
+
+    skipped: Final = sorted(
+        record.getMessage() for record in caplog.records if record.getMessage().startswith("Master key rotation skipped")
+    )
+    reason: Final = f"cannot encrypt a value nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels"
+    assert skipped == [
+        f"Master key rotation skipped config router_settings: {reason}",
+        f"Master key rotation skipped guardrail guardrail-1: {reason}",
+    ]
+    assert "vendor-secret" not in caplog.text
+    mock_prisma_client.db.litellm_config.update.assert_not_called()
+    mock_prisma_client.db.litellm_guardrailstable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_guardrail_rows_treats_only_a_missing_table_as_empty():
     from prisma.errors import TableNotFoundError
 

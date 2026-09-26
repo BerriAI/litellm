@@ -5243,11 +5243,13 @@ async def _rekey_config_section(
             "Master key rotation skipped config %s: stored value is not a JSON object", param_name
         )
         return
+    try:
+        rekeyed: Final = encrypt_config_section(param_name, section, new_encryption_key=new_master_key)
+    except ValueError as too_deep:
+        verbose_proxy_logger.error("Master key rotation skipped config %s: %s", param_name, too_deep)
+        return
     await _config_table(prisma_client).update(
-        where={"param_name": param_name},
-        data={
-            "param_value": prisma.Json(encrypt_config_section(param_name, section, new_encryption_key=new_master_key))
-        },
+        where={"param_name": param_name}, data={"param_value": prisma.Json(rekeyed)}
     )
 
 
@@ -5256,7 +5258,11 @@ async def _rekey_guardrail_row(
 ) -> None:
     import prisma
 
-    rekeyed: Final = encrypt_stored_json_object(guardrail_row.litellm_params, new_encryption_key=new_master_key)
+    try:
+        rekeyed: Final = encrypt_stored_json_object(guardrail_row.litellm_params, new_encryption_key=new_master_key)
+    except ValueError as too_deep:
+        verbose_proxy_logger.error("Master key rotation skipped guardrail %s: %s", guardrail_row.guardrail_id, too_deep)
+        return
     if rekeyed is None:
         verbose_proxy_logger.error(
             "Master key rotation skipped guardrail %s: litellm_params is not a JSON object", guardrail_row.guardrail_id
