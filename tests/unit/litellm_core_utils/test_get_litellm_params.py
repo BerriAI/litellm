@@ -155,6 +155,7 @@ def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, obje
         pytest.param(10**18, "1000000000000000000", id="19_digit_int"),
         pytest.param("1" + "0" * 18, "'1000000000000000000'", id="19_digit_string"),
         pytest.param("9" * 5000, "'999999999999...9999999999999'", id="5000_digit_string"),
+        pytest.param("0" * 18 + "1", "'0000000000000000001'", id="19_digit_string_with_leading_zeros"),
         (64.0, "64.0"),
         (True, "True"),
         (0, "0"),
@@ -172,6 +173,10 @@ def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(r
 @pytest.mark.parametrize("raw", [10**18 - 1, "9" * 18], ids=["int", "digit_string"])
 def test_control_options_accept_the_largest_18_digit_value(raw: object) -> None:
     assert parse_control_options({"stream_chunk_size": raw}) == ControlOptions(stream_chunk_size=10**18 - 1)
+
+
+def test_control_options_accept_an_18_digit_string_with_leading_zeros() -> None:
+    assert parse_control_options({"stream_chunk_size": "0" * 17 + "1"}) == ControlOptions(stream_chunk_size=1)
 
 
 @pytest.mark.parametrize("raw", [0, -1, "sixty-four", 64.0, True])

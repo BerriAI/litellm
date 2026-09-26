@@ -244,7 +244,7 @@ MAX_CONTROL_INT_DIGITS: Final = 18
 
 
 def _int_from_decimal_string(value: object) -> object:
-    if isinstance(value, str) and value.isascii() and value.isdecimal():
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= MAX_CONTROL_INT_DIGITS:
         return int(value)
     return value
 
