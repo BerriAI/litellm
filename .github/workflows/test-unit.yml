@@ -88,7 +88,7 @@ jobs:
 
           - shard: Vertex AI
             artifact-name: llm-vertex-ai
-            test-path: "tests/test_litellm/llms/vertex_ai"
+            test-path: ""
             unit-flag: llm-vertex-ai
             workers: 1
             reruns: 2
@@ -97,7 +97,7 @@ jobs:
 
           - shard: All Other Providers
             artifact-name: llm-other-providers
-            test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+            test-path: ""
             unit-flag: llm-other-providers
             workers: 2
             reruns: 2
@@ -107,9 +107,6 @@ jobs:
           - shard: misc
             artifact-name: misc
             test-path: >-
-              tests/test_litellm/interactions
-              tests/test_litellm/ocr
-              tests/test_litellm/passthrough
               tests/test_litellm/test_*.py
             unit-flag: misc
             workers: 2
