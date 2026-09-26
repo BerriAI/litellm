@@ -14,7 +14,7 @@ GROUPS: Final = MappingProxyType(
         "management": ("management", "authorization", "configuration"),
         "accounting": ("pricing", "spend"),
         "database": ("database",),
-        "providers": ("providers", "routing", "streaming"),
+        "providers": ("providers", "routing", "streaming", "messages_endpoint"),
         "extensions": ("observability", "compatibility"),
         "mcp": ("mcp",),
         "sdk": ("sdk",),
@@ -37,7 +37,7 @@ def main() -> int:
     group_files: Final = tuple(
         str(path.relative_to(root))
         for folder in GROUPS[options.group]
-        for path in sorted((root / "tests/integration" / folder).glob("test_*.py"))
+        for path in sorted((root / "tests/integration" / folder).rglob("test_*.py"))
     )
     if options.list:
         print("\n".join(group_files))
