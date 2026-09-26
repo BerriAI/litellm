@@ -6,6 +6,7 @@ This is currently in development and not yet ready for production.
 
 import asyncio
 import binascii
+import itertools
 import logging
 import os
 import uuid
@@ -26,7 +27,7 @@ from typing import (
 )
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
@@ -122,10 +123,26 @@ RATE_LIMIT_UNVERIFIABLE_MESSAGE: Final = (
 )
 
 
+_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
+
+
+def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING)
+    try:
+        return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING,
+            raw_value,
+        )
+        return False
+
+
 def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
-    return general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING) is True
+    return fail_closed_rate_limit_enforcement_enabled(general_settings)
 
 
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
@@ -171,6 +188,8 @@ end
 
 return results
 """
+
+BATCH_COUNTER_READ_SCRIPT: Final = "return redis.call('MGET', unpack(KEYS))"
 
 CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 -- Atomic check-and-increment-by-N across one or more descriptors.
@@ -695,6 +714,7 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     batch_rate_limiter_script: _AsyncLuaScript | None
+    batch_counter_read_script: _AsyncLuaScript | None
     token_increment_script: _AsyncLuaScript | None
     check_and_increment_by_n_script: _AsyncLuaScript | None
     window_guarded_token_increment_script: _AsyncLuaScript | None
@@ -719,6 +739,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
             )
+            self.batch_counter_read_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                BATCH_COUNTER_READ_SCRIPT
+            )
             self.token_increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 TOKEN_INCREMENT_SCRIPT
             )
@@ -741,6 +764,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         else:
             self.batch_rate_limiter_script = None
+            self.batch_counter_read_script = None
             self.token_increment_script = None
             self.check_and_increment_by_n_script = None
             self.window_guarded_token_increment_script = None
@@ -1330,6 +1354,38 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             local_only=True,
         )
 
+    async def _read_counter_values_from_redis(self, keys: list[str]) -> CacheCounterValues:
+        read_script: Final = self.batch_counter_read_script
+        if read_script is None:
+            return []
+        key_groups: Final = self._group_keys_by_hash_tag(keys)
+        group_values: Final[Sequence[CacheCounterValues]] = [
+            await read_script(keys=group_keys, args=[]) for group_keys in key_groups.values()
+        ]
+        values_by_key: Final = dict(
+            zip(
+                itertools.chain.from_iterable(key_groups.values()),
+                itertools.chain.from_iterable(group_values),
+            )
+        )
+        return [values_by_key.get(key) for key in keys]
+
+    async def _read_counter_values_without_incrementing(
+        self,
+        keys: list[str],
+        parent_otel_span: Span | None,
+    ) -> CacheCounterValues | None:
+        if self.batch_counter_read_script is None:
+            return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=False)
+        try:
+            return await self._read_counter_values_from_redis(keys)
+        except Exception as e:  # noqa: BLE001  # any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
+            self._reject_if_rate_limit_unverifiable("batch_counter_read_script", e)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "batch_counter_read_script failed, using local mirror", e
+            )
+            return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
+
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: Exception) -> None:
         if not self._fail_closed_resolver():
             return
@@ -1363,10 +1419,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self.batch_rate_limiter_script is None:
             return []
 
-        key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
+        key_groups: Final = list(self._group_keys_by_hash_tag(keys_to_fetch).items())
         all_cache_values: Final[list[CacheCounterValue | None]] = []
 
-        for hash_tag, group_keys in key_groups.items():
+        for index, (hash_tag, group_keys) in enumerate(key_groups):
             try:
                 group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
                     keys=group_keys,
@@ -1374,6 +1430,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
+                if self._fail_closed_resolver():
+                    applied_counter_keys = itertools.chain.from_iterable(
+                        applied_keys[1::2] for _tag, applied_keys in key_groups[:index]
+                    )
+                    await self._refund_counter_increments([(key, 1) for key in applied_counter_keys])
                 self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 log_redis_failure(
                     verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
@@ -1449,10 +1510,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ## IF under limit in-memory, check Redis
             if read_only:
                 # READ-ONLY MODE: Just read current values without incrementing
-                cache_values = await self._batch_get_counter_values(  # rebind-ok: read-only mode replaces the in-memory snapshot with Redis values
+                cache_values = await self._read_counter_values_without_incrementing(  # rebind-ok: read-only mode replaces the in-memory snapshot with Redis values
                     keys=keys_to_fetch,
                     parent_otel_span=parent_otel_span,
-                    local_only=False,  # Check Redis too
                 )
 
                 # For keys that don't exist yet, set them to 0
@@ -1624,7 +1684,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         args=[PARALLEL_REQUEST_SLOT_TTL_SECONDS for _ in gauges],
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
-                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
+                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
+                    self._reject_if_rate_limit_unverifiable("parallel_count_script", e)
                     log_redis_failure(
                         verbose_proxy_logger, logging.WARNING, "parallel_count_script failed, using local mirror", e
                     )
@@ -2034,25 +2095,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Best-effort: refund failures are logged but not raised — the original
         OVER_LIMIT / fallback decision is what matters to the caller.
         """
-        if not applied:
-            return
+        await self._refund_counter_increments(
+            [(entry["counter_key"], entry["increment"]) for entry in itertools.chain.from_iterable(applied)]
+        )
+
+    async def _refund_counter_increments(self, refunds: Sequence[tuple[str, int]]) -> None:
         redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
         if redis_cache is None:
             return
-        for group_meta in applied:
-            for entry in group_meta:
-                try:
-                    await redis_cache.async_increment(
-                        key=entry["counter_key"],
-                        value=-entry["increment"],
-                    )
-                except Exception as e:
-                    log_redis_failure(
-                        verbose_proxy_logger,
-                        logging.WARNING,
-                        f"Failed to refund {entry['counter_key']} on cross-descriptor rollback",
-                        e,
-                    )
+        for counter_key, increment in refunds:
+            try:
+                await redis_cache.async_increment(key=counter_key, value=-increment)
+            except Exception as e:  # noqa: BLE001  # best-effort rollback, the rejection already decided the request
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    f"Failed to refund {counter_key} on rollback",
+                    e,
+                )
 
     def _build_atomic_response(
         self,

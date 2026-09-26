@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
@@ -1769,8 +1770,9 @@ class _FakeRateLimiter:
     """Minimal stand-in for ``_PROXY_MaxParallelRequestsHandler_v3`` exposing
     just the descriptor-build + read-only check surface the editor consults."""
 
-    def __init__(self, overall_code: str):
+    def __init__(self, overall_code: str, raises: Exception | None = None):
         self._overall_code = overall_code
+        self._raises = raises
         self.read_only_checked = False
 
     def _create_rate_limit_descriptors(self, **kwargs):
@@ -1793,7 +1795,60 @@ class _FakeRateLimiter:
 
     async def should_rate_limit(self, **kwargs):
         self.read_only_checked = kwargs.get("read_only") is True
+        if self._raises is not None:
+            raise self._raises
         return {"overall_code": self._overall_code}
+
+
+@pytest.mark.parametrize(
+    "limiter_error, summary_called",
+    [
+        (HTTPException(status_code=503, detail={"error": "fail_closed_rate_limit_enforcement rejected"}), False),
+        (RuntimeError("descriptor build exploded"), True),
+    ],
+    ids=["fail_closed_rejection_denies", "internal_error_allows"],
+)
+async def test_summary_model_rate_limit_check_errors(limiter_error, summary_called):
+    """The limiter's fail-closed 503 is a verdict and skips the summary call the
+    way OVER_LIMIT does; any other error keeps failing open."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
+    limiter = _FakeRateLimiter("OK", raises=limiter_error)
+    proxy_logging = MagicMock()
+    proxy_logging.max_parallel_request_limiter = limiter
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    assert limiter.read_only_checked is True
+    if summary_called:
+        mock_call.assert_awaited_once()
+        assert result.compaction_block is not None
+        assert not result.applied_edits[0].get("error")
+        return
+    mock_call.assert_not_awaited()
+    assert result.compaction_block is None
+    assert result.applied_edits[0].get("error") == "summary_model_rate_limit_exceeded"
 
 
 async def test_summary_model_denied_when_over_rate_limit():

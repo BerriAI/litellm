@@ -544,7 +544,7 @@ from litellm.proxy.health_endpoints._health_endpoints import router as health_ro
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING
+from litellm.proxy.hooks.parallel_request_limiter_v3 import fail_closed_rate_limit_enforcement_enabled
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
@@ -1473,7 +1473,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         prisma_client=prisma_client,
     )
     ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
-        fail_closed_rate_limit_enforcement=general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING) is True,
+        fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
         redis_usage_cache=redis_usage_cache,
     )
 

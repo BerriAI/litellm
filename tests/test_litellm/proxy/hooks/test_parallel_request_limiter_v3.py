@@ -6727,10 +6727,23 @@ class _UnreachableRedis:
 
 
 class _ScriptedRedis:
-    def __init__(self, failing_script: str | None = None):
+    def __init__(
+        self,
+        failing_script: str | None = None,
+        failing_batch_call: int | None = None,
+        stored_counter_value: int = 0,
+    ):
         self.failing_script = failing_script
+        self.failing_batch_call = failing_batch_call
+        self.stored_counter_value = stored_counter_value
         self.released_slots: list[tuple[list[str], list[str]]] = []
         self.batch_calls = 0
+        self.batch_call_keys: list[list[str]] = []
+        self.increments: list[tuple[str, float]] = []
+
+    async def async_increment(self, key: str, value: float, **kwargs):
+        self.increments.append((key, value))
+        return value
 
     def async_register_script(self, script: str):
         from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
@@ -6740,7 +6753,14 @@ class _ScriptedRedis:
                 raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
             if script == v3.BATCH_RATE_LIMITER_SCRIPT:
                 self.batch_calls += 1
+                self.batch_call_keys.append(list(keys))
+                if self.batch_calls == self.failing_batch_call:
+                    raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
                 return [args[0], self.batch_calls] * (len(keys) // 2)
+            if script == v3.BATCH_COUNTER_READ_SCRIPT:
+                return [int(time.time()) if key.endswith(":window") else self.stored_counter_value for key in keys]
+            if script == v3.PARALLEL_COUNT_SCRIPT:
+                return [0 for _ in keys]
             if script == v3.PARALLEL_ACQUIRE_SCRIPT:
                 return [0, *[1 for _ in keys]]
             if script == v3.PARALLEL_RELEASE_SCRIPT:
@@ -6768,6 +6788,17 @@ async def _admit(handler, auth, data=None):
         data=data if data is not None else {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
         call_type="acompletion",
     )
+
+
+async def _read_only_check(handler, auth):
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=auth,
+        data={"model": "test-model"},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    return await handler.should_rate_limit(descriptors=descriptors, read_only=True)
 
 
 @pytest.mark.parametrize(
@@ -6850,6 +6881,85 @@ async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(
 
     monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement")
     await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+
+
+@pytest.mark.parametrize(
+    "configured_value, rejects",
+    [(True, True), ("true", True), (False, False), ("false", False), ("sometimes", False)],
+    ids=["bool_true", "string_true", "bool_false", "string_false", "not_a_boolean"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_rate_limit_enforcement_coerces_the_general_settings_value(
+    monkeypatch, configured_value, rejects
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-coerced"), rpm_limit=2)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", configured_value)
+
+    if not rejects:
+        await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+        return
+    with pytest.raises(HTTPException) as exc:
+        await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [{"rpm_limit": 2}, {"max_parallel_requests": 1}],
+    ids=["rpm_window", "parallel_gauge"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_read_only_check_rejects_with_503_when_redis_counters_are_unreachable(limits):
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-read-only"), **limits)
+
+    with pytest.raises(HTTPException) as exc:
+        await _read_only_check(_handler_with_redis(_UnreachableRedis(), fail_closed=True), auth)
+    assert exc.value.status_code == 503
+
+    response = await _read_only_check(_handler_with_redis(_UnreachableRedis(), fail_closed=False), auth)
+    assert response["overall_code"] == "OK"
+
+
+@pytest.mark.parametrize("stored_counter_value, expected_code", [(1, "OK"), (3, "OVER_LIMIT")])
+@pytest.mark.asyncio
+async def test_read_only_check_reports_the_redis_counters_without_incrementing_them(
+    stored_counter_value, expected_code
+):
+    redis = _ScriptedRedis(stored_counter_value=stored_counter_value)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-read-only-counters"), rpm_limit=2)
+
+    response = await _read_only_check(_handler_with_redis(redis, fail_closed=True), auth)
+
+    assert response["overall_code"] == expected_code
+    assert redis.batch_calls == 0
+    assert redis.increments == []
+
+
+@pytest.mark.parametrize("fail_closed", [True, False], ids=["fail_closed", "fail_open"])
+@pytest.mark.asyncio
+async def test_batch_increment_refunds_counters_already_applied_when_a_later_cluster_slot_fails(fail_closed):
+    from unittest.mock import patch
+
+    redis = _ScriptedRedis(failing_batch_call=2)
+    handler = _handler_with_redis(redis, fail_closed=fail_closed)
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-cluster-partial"), rpm_limit=5, user_id="cluster-user", user_rpm_limit=5
+    )
+
+    with patch.object(handler, "_is_redis_cluster", return_value=True):
+        if fail_closed:
+            with pytest.raises(HTTPException) as exc:
+                await _admit(handler, auth)
+            assert exc.value.status_code == 503
+        else:
+            await _admit(handler, auth)
+
+    assert len(redis.batch_call_keys) == 2
+    applied_counter_keys = redis.batch_call_keys[0][1::2]
+    assert applied_counter_keys
+    assert redis.increments == ([(key, -1) for key in applied_counter_keys] if fail_closed else [])
 
 
 @pytest.mark.parametrize(
