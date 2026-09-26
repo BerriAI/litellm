@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPResponseEncodingError, HTTPResponseLimitError
+from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
@@ -1200,13 +1200,6 @@ class TestFileUrlUploadControls:
 
         detail = await self._expect_rejection(fetch_url, "file_too_large")
         assert str(MAX_UPLOAD_SIZE_BYTES) in detail["error"]
-
-    async def test_compressed_url_response_is_refused_without_calling_it_too_large(self):
-        async def fetch_url(url: str) -> httpx.Response:
-            raise HTTPResponseEncodingError("Response size limits require an uncompressed response")
-
-        detail = await self._expect_rejection(fetch_url, None)
-        assert "uncompressed" in detail["error"]
 
     @pytest.mark.parametrize("status_code", [301, 403, 404, 500])
     async def test_non_2xx_fetch_is_a_client_error_naming_the_status(self, status_code):

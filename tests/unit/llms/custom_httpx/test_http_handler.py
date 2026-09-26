@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import gzip
 import io
 import os
 import pathlib
@@ -21,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     AsyncHTTPHandler,
     HTTPHandler,
+    HTTPResponseLimitError,
     MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
@@ -1771,6 +1773,40 @@ async def test_bounded_get_stops_redirect_loops(respx_mock, monkeypatch):
     finally:
         await handler.close()
     assert route.call_count == 11
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_decodes_a_compressed_body_and_reports_the_decoded_length(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document = b"benign document text\n" * 40
+    compressed = gzip.compress(document)
+    respx_mock.get("https://cdn.example/notes.txt").respond(
+        200, content=compressed, headers={"content-encoding": "gzip", "content-length": str(len(compressed))}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document))
+    finally:
+        await handler.close()
+    assert response.content == document
+    assert "content-encoding" not in response.headers
+    assert response.headers["content-length"] == str(len(document))
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_caps_the_decoded_size_of_a_compressed_body(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    compressed = gzip.compress(b"0" * 200_000)
+    assert len(compressed) < 50_000
+    respx_mock.get("https://cdn.example/bomb.txt").respond(
+        200, content=compressed, headers={"content-encoding": "gzip", "content-length": str(len(compressed))}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/bomb.txt", max_response_bytes=50_000)
+    finally:
+        await handler.close()
 
 
 @pytest.mark.asyncio

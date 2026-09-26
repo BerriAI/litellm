@@ -553,8 +553,7 @@ class HTTPResponseLimitError(ValueError):
     pass
 
 
-class HTTPResponseEncodingError(HTTPResponseLimitError):
-    pass
+_WIRE_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length"})
 
 
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
@@ -607,6 +606,12 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.message = message
         self.text = text
         self.status_code = original_error.response.status_code
+
+
+def _headers_of_the_decoded_body(headers: httpx.Headers) -> httpx.Headers:
+    return httpx.Headers(
+        tuple((name, value) for name, value in headers.multi_items() if name not in _WIRE_BODY_HEADERS)
+    )
 
 
 class AsyncHTTPHandler:
@@ -784,8 +789,6 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
-                raise HTTPResponseEncodingError("Response size limits require an uncompressed response")
             if int(response.headers.get("content-length", "0")) > max_bytes:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             with BytesIO() as body:
@@ -794,7 +797,10 @@ class AsyncHTTPHandler:
                         raise HTTPResponseLimitError("Response exceeds the configured size limit")
                     body.write(chunk)
                 return httpx.Response(
-                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
+                    response.status_code,
+                    headers=_headers_of_the_decoded_body(response.headers),
+                    content=body.getvalue(),
+                    request=response.request,
                 )
         finally:
             await response.aclose()

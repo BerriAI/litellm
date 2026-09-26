@@ -27,7 +27,6 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
-    HTTPResponseEncodingError,
     HTTPResponseLimitError,
     get_async_httpx_client,
 )
@@ -420,8 +419,6 @@ async def fetch_file_url(url: str) -> httpx.Response:
 async def _download_file_url(file_url: str, fetch_url: UrlFetcher) -> bytes:
     try:
         response: Final = await fetch_url(file_url)
-    except HTTPResponseEncodingError as e:
-        raise HTTPException(status_code=400, detail={"error": f"Could not fetch file_url: {e}"}) from e
     except HTTPResponseLimitError as e:
         raise HTTPException(
             status_code=400,
