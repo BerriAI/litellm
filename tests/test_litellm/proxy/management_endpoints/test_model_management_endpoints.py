@@ -7614,7 +7614,13 @@ class TestTeamMemberAutoRouterWrites:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
     @pytest.mark.parametrize("member", [False, True])
-    async def test_decision_model_switch_back_preserves_each_provider_connection(self, endpoint: str, member: bool) -> None:
+    @pytest.mark.parametrize("serialized", [False, True])
+    async def test_decision_model_switch_back_preserves_each_provider_connection(
+        self, endpoint: str, member: bool, serialized: bool
+    ) -> None:
+        from fastapi.encoders import jsonable_encoder
+
+        from litellm.litellm_core_utils.secret_redaction import REDACTED
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
         transport: Final = {
@@ -7634,6 +7640,9 @@ class TestTeamMemberAutoRouterWrites:
         async def save(row: LiteLLM_ProxyModelTable, provider: str, model: str) -> LiteLLM_ProxyModelTable:
             allowed_models: Final = ["allowed", "typesafe/jev-latest", "laya/multilingual"]
             database: Final = self._database(self._team().model_copy(update={"models": allowed_models}), row)
+            database.db.litellm_proxymodeltable.update.return_value = (
+                row.model_copy(update={"litellm_params": json.dumps(row.litellm_params)}) if serialized else row
+            )
             request: Final = updateDeployment(
                 litellm_params=updateLiteLLMParams(complexity_router_config={
                     "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
@@ -7646,10 +7655,19 @@ class TestTeamMemberAutoRouterWrites:
                 if member else UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
             )
             with self._environment(database, row):
-                if endpoint == "patch":
-                    await patch_model(row.model_id, request, actor)
-                else:
-                    await update_model(request, actor)
+                response: Final = await (
+                    patch_model(row.model_id, request, actor)
+                    if endpoint == "patch" else update_model(request, actor)
+                )
+            if member:
+                encoded_params: Final = jsonable_encoder(response)["litellm_params"]
+                assert isinstance(encoded_params, str) is serialized
+                response_params: Final = json.loads(encoded_params) if serialized else encoded_params
+                visible_classifier: Final = response_params["complexity_router_config"]["jev_classifier_config"]
+                assert visible_classifier["api_key"] == REDACTED
+                assert visible_classifier["laya_api_key"] == REDACTED
+                assert visible_classifier["api_base"] == transport["api_base"]
+                assert visible_classifier["laya_api_base"] == transport["laya_api_base"]
             written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
             params: Final = json.loads(written["litellm_params"])
             assert params["complexity_router_config"]["jev_classifier_config"] == {

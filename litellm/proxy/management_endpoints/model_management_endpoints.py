@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     SEARCH_CONTEXT_SIZES,
     ptu_config_error,
 )
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -442,6 +443,27 @@ def _effective_complexity_router_config(
             **supplied,
         },
     }
+
+
+def _member_auto_router_update_response(
+    row: _ProxyModelRow | None, member_write: MemberAutoRouterWrite | None
+) -> _ProxyModelRow | Mapping[str, object] | None:
+    if row is None or member_write is None:
+        return row
+    payload: Final = TypeAdapter(dict[str, object]).validate_json(row.model_dump_json())
+    stored_params: Final = payload["litellm_params"]
+    params: Final = (
+        TypeAdapter(dict[str, object]).validate_json(stored_params)
+        if isinstance(stored_params, str)
+        else TypeAdapter(dict[str, object]).validate_python(stored_params)
+    )
+    redacted: Final = redact_credentials_in_payload(params)
+    return MappingProxyType(
+        {
+            **payload,
+            "litellm_params": json.dumps(redacted) if isinstance(stored_params, str) else redacted,
+        }
+    )
 
 
 def _effective_model(
@@ -1311,7 +1333,7 @@ async def patch_model(
             live_after=reload_outcome.live_after,
         )
 
-        return updated_model
+        return _member_auto_router_update_response(updated_model, member_write)
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in patch_model: %s", e)
@@ -2772,7 +2794,7 @@ async def update_model(
                 live_after=reload_outcome.live_after,
             )
 
-            return model_response
+            return _member_auto_router_update_response(model_response, member_write)
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
