@@ -4768,7 +4768,9 @@ def _init_custom_logger_compatible_class(
                         return callback
                 otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
                 otel_logger_v2: Final = build_otel_v2_logger(
-                    config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings
+                    config=OpenTelemetryV2Config(**otel_settings),
+                    callback_name=logging_integration,
+                    settings=otel_settings,
                 )
                 _in_memory_loggers.append(otel_logger_v2)
                 _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
