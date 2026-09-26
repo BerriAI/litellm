@@ -32,7 +32,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=int(os.environ.get("INTEGRATION_WORKERS", "1")))
     parser.add_argument("--list", action="store_true", help="print the group's test files and exit")
     parser.add_argument("files", nargs="*", help="run only these files of the group")
-    options: Final = parser.parse_args()
+    options: Final = parser.parse_intermixed_args()
     root: Final = Path(__file__).resolve().parents[2]
     group_files: Final = tuple(
         str(path.relative_to(root))
