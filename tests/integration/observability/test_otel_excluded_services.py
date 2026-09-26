@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -248,7 +249,8 @@ def test_bogus_excluded_service_fails_proxy_start(
     with pytest.raises(AssertionError, match="readiness"):
         with owned_proxy_process(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2):
             pass
-    logs: Final = [path.read_text() for path in tmp_path.glob("owned-proxy-*.log")]
+    log_dir: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(tmp_path)))
+    logs: Final = [path.read_text() for path in log_dir.glob("owned-proxy-*.log")]
     assert logs, "no owned proxy log written"
     text: Final = "\n".join(logs)
     assert "'auth' is not a datastore service" in text, text[-3000:]
