@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use litellm_auth::SecretValue;
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
@@ -5,30 +8,51 @@ use litellm_core_utils::{
     settings::Lookup,
 };
 use litellm_llms::{
-    anthropic::experimental_pass_through::messages::handler::shape_anthropic_messages_request,
-    base_llm::anthropic_messages::transformation::{
-        BaseAnthropicMessagesConfig, MessagesTransformContext,
+    anthropic::messages::handler::shape_anthropic_messages_request,
+    base_llm::{
+        anthropic_messages::transformation::MessagesTransformContext,
+        auth::{ValidatedEnvironment, with_default_headers},
     },
 };
+use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
-use serde_json::{Map, Value};
 
 use super::{
-    Error,
-    common_utils::{messages_provider_config, string_headers},
+    Error, MessagesCall,
+    common_utils::{MessagesProvider, string_headers},
+    types::invalid_request,
 };
-use crate::messages::types::{MessagesRequest, ProviderMessagesRequest};
 
-pub(super) struct ResolvedProvider<'a> {
-    pub(super) model: &'a str,
-    pub(super) provider: &'a str,
-    pub(super) config: &'static dyn BaseAnthropicMessagesConfig,
+struct ResolvedProvider {
+    model: String,
+    provider: MessagesProvider,
 }
 
-pub(super) fn resolve_provider<'a>(
-    model: &'a str,
-    custom_llm_provider: Option<&'a str>,
-) -> Result<ResolvedProvider<'a>, Error> {
+pub(super) struct ProviderMessagesRequest {
+    pub(super) provider: MessagesProvider,
+    pub(super) url: String,
+    pub(super) body: AnthropicMessagesRequest,
+    pub(super) environment: ValidatedEnvironment,
+    pub(super) timeout: Option<Duration>,
+    /// The caller's own credential, reported to the host beside the wire request.
+    pub(super) api_key: Option<SecretValue>,
+}
+
+pub(super) async fn prepare(
+    call: MessagesCall,
+    secrets: &dyn SecretSource,
+) -> Result<ProviderMessagesRequest, Error> {
+    let resolved = resolve_provider(&call.body.model, call.custom_llm_provider.as_deref())?;
+    let secrets = secrets
+        .resolve(resolved.provider.config().secret_names())
+        .await?;
+    prepare_provider_request(call, resolved, secrets.as_ref())
+}
+
+fn resolve_provider(
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> Result<ResolvedProvider, Error> {
     let CustomLlmProvider {
         model,
         custom_llm_provider: provider,
@@ -44,80 +68,77 @@ pub(super) fn resolve_provider<'a>(
                 "unable to resolve custom_llm_provider for messages request".to_string(),
             )
         })?;
-    let config = messages_provider_config(provider)
-        .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
+    let provider = provider
+        .parse()
+        .map_err(|_| Error::InvalidProvider(provider.to_string()))?;
     Ok(ResolvedProvider {
-        model,
+        model: model.to_string(),
         provider,
-        config,
     })
 }
 
-pub(super) fn prepare_provider_request(
-    request: MessagesRequest<'_>,
-    resolved: ResolvedProvider<'_>,
+fn prepare_provider_request(
+    call: MessagesCall,
+    resolved: ResolvedProvider,
     secrets: &dyn Lookup,
 ) -> Result<ProviderMessagesRequest, Error> {
-    let ResolvedProvider {
-        model,
-        provider,
-        config,
-    } = resolved;
-    let model = model.to_string();
+    let ResolvedProvider { model, provider } = resolved;
+    let MessagesCall {
+        body,
+        api_key,
+        api_base,
+        extra_headers,
+        provider_specific_header,
+        timeout,
+        shaping,
+        ..
+    } = call;
+    let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
-    let typed_request: AnthropicMessagesRequest =
-        serde_json::from_value(request.body).map_err(invalid_request)?;
     let sanitized = shape_anthropic_messages_request(
-        AnthropicMessagesRequest {
-            model: model.clone(),
-            ..typed_request
-        },
-        request.shaping.reasoning_auto_summary,
+        AnthropicMessagesRequest { model, ..body },
+        shaping.reasoning_auto_summary,
     )?;
-    let trimmed =
-        without_additional_drop_params(sanitized, &request.shaping.additional_drop_params)?;
+    let trimmed = without_additional_drop_params(sanitized, &shaping.additional_drop_params)?;
     let transformed = config.transform_anthropic_messages_request(
         trimmed,
-        &MessagesTransformContext::new(request.shaping.capabilities, request.shaping.drop_params),
+        &MessagesTransformContext::new(shaping.capabilities, shaping.drop_params),
     )?;
 
-    let scoped = get_provider_specific_headers(request.provider_specific_header.as_ref(), provider);
+    let scoped =
+        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
     let forwarded = string_headers(Some(
-        request
-            .extra_headers
-            .into_iter()
-            .flatten()
-            .chain(scoped)
-            .collect(),
+        extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let authenticated = config.authenticate(forwarded, request.api_key, &env_lookup)?;
-    let headers = config.request_headers(
-        with_default_headers(authenticated, config.default_headers()),
-        &transformed,
-    );
+    let validated = config.validate_environment(
+        forwarded,
+        api_key.as_deref(),
+        &transformed.model,
+        &env_lookup,
+    )?;
+    let environment = ValidatedEnvironment {
+        headers: config.request_headers(
+            with_default_headers(validated.headers, config.default_headers()),
+            &transformed,
+        ),
+        auth: validated.auth,
+    };
 
-    let body = serde_json::to_value(transformed).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize Anthropic messages request: {err}"
-        ))
-    })?;
-
-    let url = config.get_complete_url(request.api_base, &model, &env_lookup)?;
+    let url = if transformed.params.stream == Some(true) {
+        config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+    } else {
+        config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+    };
 
     Ok(ProviderMessagesRequest {
-        provider: provider.to_string(),
-        model,
-        config,
+        provider,
         url,
-        body,
-        upstream_headers: headers,
-        timeout: request.timeout,
+        body: transformed,
+        environment,
+        timeout,
+        api_key: api_key.map(SecretValue::new),
     })
-}
-
-fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
 }
 
 fn without_additional_drop_params(
@@ -127,64 +148,59 @@ fn without_additional_drop_params(
     if paths.is_empty() {
         return Ok(request);
     }
-    let Value::Object(fields) = serde_json::to_value(request).map_err(invalid_request)? else {
-        return Err(Error::InvalidRequest(
-            "Anthropic messages request did not serialize to an object".to_string(),
-        ));
-    };
-    let (required, optional): (Map<String, Value>, Map<String, Value>) = fields
-        .into_iter()
-        .partition(|(key, _)| matches!(key.as_str(), "model" | "messages"));
-    let trimmed = paths.iter().fold(Value::Object(optional), |body, path| {
-        delete_nested_value(body, path)
-    });
-    let merged: Map<String, Value> = required
-        .into_iter()
-        .chain(trimmed.as_object().cloned().unwrap_or_default())
-        .collect();
-    serde_json::from_value(Value::Object(merged)).map_err(invalid_request)
-}
-
-fn with_default_headers(
-    headers: Vec<(String, String)>,
-    defaults: &[(&str, &str)],
-) -> Vec<(String, String)> {
-    let missing: Vec<(String, String)> = defaults
+    let params = serde_json::to_value(request.params).map_err(invalid_request)?;
+    let trimmed = paths
         .iter()
-        .filter(|(name, _)| {
-            !headers
-                .iter()
-                .any(|(header, _)| header.eq_ignore_ascii_case(name))
-        })
-        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-        .collect();
-    headers.into_iter().chain(missing).collect()
+        .fold(params, |params, path| delete_nested_value(params, path));
+    Ok(AnthropicMessagesRequest {
+        params: serde_json::from_value(trimmed).map_err(invalid_request)?,
+        ..request
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_llms::base_llm::auth::resolve_auth;
     use litellm_types::utils::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
-    use serde_json::json;
+    use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::messages::types::MessagesShaping;
+    use crate::messages::MessagesShaping;
 
     #[fixture]
     fn shaping() -> MessagesShaping {
         MessagesShaping::default()
     }
 
-    fn prepare(request: MessagesRequest<'_>) -> Result<ProviderMessagesRequest, Error> {
-        prepare_with_secrets(request, &|_: &str| None)
+    fn body(value: Value) -> AnthropicMessagesRequest {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn prepare(call: MessagesCall) -> Result<ProviderMessagesRequest, Error> {
+        prepare_with_secrets(call, &|_: &str| None)
     }
 
     fn prepare_with_secrets(
-        request: MessagesRequest<'_>,
+        call: MessagesCall,
         secrets: &dyn Lookup,
     ) -> Result<ProviderMessagesRequest, Error> {
-        let resolved = resolve_provider(request.model, request.custom_llm_provider)?;
-        prepare_provider_request(request, resolved, secrets)
+        let resolved = resolve_provider(&call.body.model, call.custom_llm_provider.as_deref())?;
+        prepare_provider_request(call, resolved, secrets)
+    }
+
+    /// The headers as they go on the wire, credential applied.
+    fn wire_headers(prepared: &ProviderMessagesRequest) -> Vec<(String, String)> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(resolve_auth(
+                &litellm_auth::AuthServices::default(),
+                prepared.environment.clone(),
+                &|_| None,
+            ))
+            .unwrap()
+            .headers
     }
 
     #[rstest]
@@ -221,12 +237,13 @@ mod tests {
                 .map(|(_, value)| value.to_string())
         };
         let prepared = prepare_with_secrets(
-            MessagesRequest {
-                model: "claude-test",
-                body: json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            MessagesCall {
+                body: body(
+                    json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+                ),
                 api_key: None,
                 api_base: None,
-                custom_llm_provider: Some("anthropic"),
+                custom_llm_provider: Some("anthropic".into()),
                 extra_headers: None,
                 provider_specific_header: None,
                 timeout: None,
@@ -235,8 +252,8 @@ mod tests {
             &lookup,
         )
         .unwrap();
-        let auth: Vec<(&str, &str)> = prepared
-            .upstream_headers
+        let headers = wire_headers(&prepared);
+        let auth: Vec<(&str, &str)> = headers
             .iter()
             .filter(|(name, _)| matches!(name.as_str(), "x-api-key" | "authorization"))
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -247,48 +264,18 @@ mod tests {
         );
     }
 
-    fn prepared_body(body: Value, shaping: MessagesShaping) -> Result<Value, Error> {
-        prepare(MessagesRequest {
-            model: "anthropic/claude-test",
-            body,
-            api_key: Some("sk-test"),
-            api_base: Some("https://anthropic.test"),
-            custom_llm_provider: Some("anthropic"),
+    fn prepared_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {
+        prepare(MessagesCall {
+            body: body(fields),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://anthropic.test".into()),
+            custom_llm_provider: Some("anthropic".into()),
             extra_headers: None,
             provider_specific_header: None,
             timeout: None,
             shaping,
         })
-        .map(|prepared| prepared.body)
-    }
-
-    #[rstest]
-    #[case::nothing_forwarded(
-        &[],
-        &[("x-version", "1"), ("content-type", "application/json")],
-        &[("x-version", "1"), ("content-type", "application/json")],
-    )]
-    #[case::forwarded_header_wins_in_any_case(
-        &[("X-Version", "custom"), ("x-api-key", "k")],
-        &[("x-version", "1"), ("content-type", "application/json")],
-        &[("X-Version", "custom"), ("x-api-key", "k"), ("content-type", "application/json")],
-    )]
-    #[case::no_defaults(&[("x-api-key", "k")], &[], &[("x-api-key", "k")])]
-    fn default_headers_fill_only_missing_names(
-        #[case] forwarded: &[(&str, &str)],
-        #[case] defaults: &[(&str, &str)],
-        #[case] expected: &[(&str, &str)],
-    ) {
-        let owned = |headers: &[(&str, &str)]| -> Vec<(String, String)> {
-            headers
-                .iter()
-                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-                .collect()
-        };
-        assert_eq!(
-            with_default_headers(owned(forwarded), defaults),
-            owned(expected)
-        );
+        .map(|prepared| serde_json::to_value(prepared.body).unwrap())
     }
 
     #[rstest]
@@ -380,20 +367,22 @@ mod tests {
             {"custom_llm_provider": "anthropic", "extra_headers": {"x-scoped": "anthropic", "x-priority": "scoped"}}
         ]))
         .unwrap();
-        let prepared = prepare(MessagesRequest {
-            model,
-            body: json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
-            api_key: Some("sk-test"),
-            api_base: Some("https://resource.services.ai.azure.com"),
-            custom_llm_provider,
-            extra_headers: Some(serde_json::from_value(json!({"x-priority": "extra"})).unwrap()),
+        let prepared = prepare(MessagesCall {
+            body: body(
+                json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://resource.services.ai.azure.com".into()),
+            custom_llm_provider: custom_llm_provider.map(Into::into),
+            extra_headers: Some(Map::from_iter([("x-priority".into(), json!("extra"))])),
             provider_specific_header: Some(configured),
             timeout: None,
             shaping,
         })
         .unwrap();
         let caller_headers: Vec<(&str, &str)> = prepared
-            .upstream_headers
+            .environment
+            .headers
             .iter()
             .filter(|(name, _)| matches!(name.as_str(), "x-priority" | "x-scoped"))
             .map(|(name, value)| (name.as_str(), value.as_str()))
