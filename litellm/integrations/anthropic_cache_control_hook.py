@@ -706,7 +706,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         return (
             AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
-            + AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs)
+            + AnthropicCacheControlHook.count_external_cache_breakpoints_on_messages_route(
+                tools, cache_control, request_kwargs
+            )
         ) > 0
 
     @staticmethod
