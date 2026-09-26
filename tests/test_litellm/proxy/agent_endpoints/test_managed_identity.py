@@ -121,7 +121,7 @@ def test_empty_required_scopes_allow_valid_delegated_scope(mode: AgentExecutionM
     assert result == AgentSubject(kind="delegated_subject", oid=HUMAN, mode="delegated")
 
 
-@pytest.mark.parametrize("scope", [None, "", 42])
+@pytest.mark.parametrize("scope", [None, "", " \t ", 42])
 def test_empty_requirements_do_not_make_a_scope_less_human_token_valid(scope: object) -> None:
     binding: Final = BINDING.model_copy(update={"required_scopes": ()})
     result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp=scope), "both")
