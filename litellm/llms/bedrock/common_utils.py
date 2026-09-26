@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
+# Families with no invoke transformation; unmapped ids default to converse.
+_CONVERSE_ONLY_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])(minimax|nvidia|writer|zai|google|xai)\.")
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -1219,6 +1221,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
             return "converse"
         if _OPENAI_FAMILY_MODEL_RE.search(base_model):
+            return "converse"
+        if _CONVERSE_ONLY_FAMILY_MODEL_RE.search(base_model):
             return "converse"
         return "invoke"
 
