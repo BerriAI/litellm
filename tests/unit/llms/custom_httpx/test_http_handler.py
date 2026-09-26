@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     HTTPResponseLimitError,
     MaskedHTTPStatusError,
+    _BrotliDecoder,
     _get_httpx_client,
     get_ssl_configuration,
 )
@@ -1932,6 +1933,27 @@ async def test_bounded_get_decodes_a_compressed_body_under_the_cap_and_rejects_a
             await handler.get("https://cdn.example/cut", max_response_bytes=len(document))
     finally:
         await handler.close()
+
+
+def test_brotli_decoder_stops_draining_when_process_returns_empty():
+    pieces: Final = iter((b"notes", b" more", b""))
+    calls: Final = []
+
+    class Inflate:
+        def process(self, data: bytes, output_buffer_limit: int) -> bytes:
+            calls.append(data)
+            if len(calls) > 8:
+                raise AssertionError("brotli drain loop did not stop after an empty process()")
+            return next(pieces, b"")
+
+        def can_accept_more_data(self) -> bool:
+            return False
+
+        def is_finished(self) -> bool:
+            return True
+
+    assert _BrotliDecoder(Inflate()).decode(b"wire", max_output=1024) == b"notes more"
+    assert calls == [b"wire", b"", b""]
 
 
 @pytest.mark.asyncio
