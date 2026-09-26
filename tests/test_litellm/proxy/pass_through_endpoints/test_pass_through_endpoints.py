@@ -8331,3 +8331,88 @@ async def test_passthrough_upstream_failure_reporter_redacts_only_the_bounded_pr
     assert len(logged_details) == 1, logged_details
     assert "REDACTED-KEY" in logged_details[0], logged_details[0]
     assert marker_key not in logged_details[0], logged_details[0]
+
+
+@pytest.mark.asyncio
+async def test_passthrough_upstream_failure_reporter_masks_a_pem_block_straddling_the_redact_window():
+    """A PEM block that starts inside the logged prefix but ends past the redact
+    window must not leak its head into warnings or the failure hook."""
+    json_prefix: Final = '{"error":{"message":"downstream provider failed: '
+    key_body: Final = "Ab3dEf7gHi9jKl0mN" * 1250
+    preview: Final = (
+        json_prefix + '", "detail": "' + "-----BEGIN PRIVATE KEY-----\n" + key_body + "\n-----END PRIVATE KEY-----"
+    ).encode()
+
+    logged_details: list[str] = []
+
+    def recording_warning(fmt, *args, **kwargs):
+        if str(fmt).startswith("pass_through_endpoint: upstream"):
+            logged_details.append(str(fmt % args))
+
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "application/json"},
+        request=httpx.Request("POST", "http://target-api.com/v1/chat/completions"),
+        content=b"{}",
+    )
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+    proxy_logging: Final = MagicMock()
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    report: Final = _passthrough_upstream_failure_reporter(
+        response=upstream_response,
+        user_api_key_dict=MagicMock(),
+        request_payload={},
+        logging_obj=logging_obj,
+        proxy_logging=proxy_logging,
+        log_warning=recording_warning,
+    )
+    await report(preview)
+    assert len(logged_details) == 1, logged_details
+    hook_exception: Final = proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    rendered: Final = logged_details[0] + str(hook_exception)
+    key_head_slice: Final = key_body[200:240]
+    assert key_head_slice not in rendered, rendered
+    assert "-----BEGIN" not in rendered, rendered
+    assert "downstream provider failed" in rendered, rendered
+
+
+@pytest.mark.asyncio
+async def test_passthrough_upstream_failure_reporter_keeps_text_after_a_complete_pem_block():
+    """A complete PEM inside the window is redacted whole, and content after its
+    END marker still reaches the log: the dangling mask must not over-cut."""
+    pem: Final = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        + "MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQshortkey==\n"
+        + "-----END PRIVATE KEY-----"
+    )
+    preview: Final = ('{"error":{"detail":"' + pem + '","status":"INTERNAL","code":500}}').encode()
+
+    logged_details: list[str] = []
+
+    def recording_warning(fmt, *args, **kwargs):
+        if str(fmt).startswith("pass_through_endpoint: upstream"):
+            logged_details.append(str(fmt % args))
+
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "application/json"},
+        request=httpx.Request("POST", "http://target-api.com/v1/chat/completions"),
+        content=b"{}",
+    )
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+    proxy_logging: Final = MagicMock()
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    report: Final = _passthrough_upstream_failure_reporter(
+        response=upstream_response,
+        user_api_key_dict=MagicMock(),
+        request_payload={},
+        logging_obj=logging_obj,
+        proxy_logging=proxy_logging,
+        log_warning=recording_warning,
+    )
+    await report(preview)
+    assert len(logged_details) == 1, logged_details
+    assert "MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQshortkey==" not in logged_details[0], logged_details[0]
+    assert "INTERNAL" in logged_details[0], logged_details[0]

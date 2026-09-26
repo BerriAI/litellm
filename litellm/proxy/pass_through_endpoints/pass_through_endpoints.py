@@ -3,6 +3,7 @@ import asyncio
 import copy
 import json
 import posixpath
+import re
 import traceback
 from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -63,6 +64,7 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.secret_redaction import REDACTED
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
@@ -947,6 +949,14 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
+_DANGLING_PRIVATE_KEY: Final = re.compile(r"-----BEGIN[A-Z \-]*PRIVATE KEY-----")
+
+
+def _mask_dangling_private_key(text: str) -> str:
+    match: Final = _DANGLING_PRIVATE_KEY.search(text)
+    return text if match is None else text[: match.start()] + REDACTED
+
+
 def _passthrough_upstream_failure_reporter(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -965,7 +975,9 @@ def _passthrough_upstream_failure_reporter(
         upstream_error_body: Final = (
             REDACTED_BY_LITELLM
             if should_redact_message_logging(logging_obj.model_call_details)
-            else _truncate_upstream_error_body(_sanitize_upstream_error_body(redact(preview_text)))
+            else _truncate_upstream_error_body(
+                _sanitize_upstream_error_body(_mask_dangling_private_key(redact(preview_text)))
+            )
         )
         log_warning(
             "pass_through_endpoint: upstream %s %s returned %s: %s",
