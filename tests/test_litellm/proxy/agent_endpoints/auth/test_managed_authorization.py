@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -112,6 +113,11 @@ def test_matching_identity_revision_and_execution_mode_pass_admission(mode: str,
         ("/v1/realtime/client_secrets", "POST", False),
         ("/mcp/tools/call", "POST", True),
         ("/a2a/target/message/send", "POST", True),
+        ("/v1/a2a/target/message/send", "POST", True),
+        ("/v1/videos", "POST", False),
+        ("/v1/videos/other-video", "GET", False),
+        ("/v1/search", "POST", False),
+        ("/search", "POST", False),
         ("/v1/agents/target", "PATCH", False),
         ("/v1/responses/other-response", "GET", False),
         ("/v1/files", "GET", False),
@@ -142,7 +148,14 @@ def test_managed_route_scope_excludes_provider_resources(route: str, method: str
         ("/v1beta/models/path:countTokens", {"model": "body"}, {"completion_model": "text"}, "cli", "path", "path"),
     ],
 )
-def test_managed_inference_resolves_dispatch_precedence(route, body, settings, cli_model, path_model, expected):
+def test_managed_inference_resolves_dispatch_precedence(
+    route: str,
+    body: Mapping[str, object],
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    path_model: str | None,
+    expected: str | None,
+) -> None:
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
 
     assert managed_inference_request(route, body, settings, cli_model, path_model).get("model") == expected

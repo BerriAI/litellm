@@ -569,6 +569,7 @@ class LiteLLMRoutes(enum.Enum):
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
+        "/v1/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
     )
