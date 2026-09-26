@@ -17,21 +17,32 @@ PASS_THROUGH_MISSING_AUTH_WARNING: Final = (
     "A future release will treat a missing `auth` as `auth: true`."
 )
 
+PASS_THROUGH_INVALID_AUTH_WARNING: Final = (
+    "pass_through_endpoints entry %r sets `auth: %s`, which is not a boolean, "
+    "so any valid LiteLLM key may call it. "
+    "Set `auth: true` to restrict it to keys granted `allowed_passthrough_routes`, "
+    "or `auth: false` to serve it without a key."
+)
 
-@lru_cache(maxsize=32)
-def _warn_once_per_process(paths: tuple[str, ...]) -> None:
-    for path in paths:
+
+@lru_cache(maxsize=256)
+def _warn_once_per_process(path: str, auth: str | None) -> None:
+    if auth is None:
         verbose_proxy_logger.warning(PASS_THROUGH_MISSING_AUTH_WARNING, path)
+        return
+    verbose_proxy_logger.warning(PASS_THROUGH_INVALID_AUTH_WARNING, path, auth)
+
+
+def _unenforced_auth(entry: Mapping[str, object]) -> tuple[str, str | None] | None:
+    auth: Final = entry.get("auth")
+    if pass_through_auth_mode(auth) is not PassThroughAuthMode.ANY_KEY:
+        return None
+    return (str(entry.get("path")), None if auth is None else repr(auth))
 
 
 def warn_pass_through_entries_without_auth(entries: Iterable[Mapping[str, object]]) -> None:
-    paths: Final = tuple(
-        str(entry.get("path"))
-        for entry in entries
-        if pass_through_auth_mode(entry.get("auth")) is PassThroughAuthMode.ANY_KEY
-    )
-    if paths:
-        _warn_once_per_process(paths)
+    for path, auth in filter(None, map(_unenforced_auth, entries)):
+        _warn_once_per_process(path, auth)
 
 
 def get_litellm_virtual_key(request: Request) -> str:

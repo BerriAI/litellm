@@ -314,22 +314,25 @@ def test_yaml_load_warns_once_per_process_per_entry_without_auth(caplog: pytest.
 
     _warn_once_per_process.cache_clear()
     original: Final = proxy_server_module.config_passthrough_endpoints
-    config: Final = {
-        "general_settings": {
-            "pass_through_endpoints": [
-                _config_entry("/no-auth-key", _OMITTED),
-                _config_entry("/granted", True),
-                _config_entry("/public", False),
-                _config_entry("/also-no-auth-key", None),
-            ]
-        }
-    }
+    entries: Final = [
+        _config_entry("/no-auth-key", _OMITTED),
+        _config_entry("/granted", True),
+        _config_entry("/public", False),
+        _config_entry("/also-no-auth-key", None),
+        _config_entry("/typo", "maybe"),
+    ]
+    reloaded: Final = [*reversed(entries), _config_entry("/added-later", _OMITTED)]
     try:
         with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            proxy_server_module.ProxyConfig()._load_yaml_settings_stores(config)
-            proxy_server_module.ProxyConfig()._load_yaml_settings_stores(config)
+            proxy_server_module.ProxyConfig()._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": entries}})
+            proxy_server_module.ProxyConfig()._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": entries}})
+            proxy_server_module.ProxyConfig()._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": reloaded}})
     finally:
         proxy_server_module.config_passthrough_endpoints = original
-    warned: Final = [record.getMessage() for record in caplog.records if "sets no `auth`" in record.getMessage()]
-    assert [message.split("'")[1] for message in warned] == ["/no-auth-key", "/also-no-auth-key"]
-    assert all("`auth: false`" in message and "`auth: true`" in message for message in warned)
+    warnings: Final = [record.getMessage() for record in caplog.records if "pass_through_endpoints entry" in record.getMessage()]
+    missing: Final = [message.split("'")[1] for message in warnings if "sets no `auth`" in message]
+    invalid: Final = [message for message in warnings if "is not a boolean" in message]
+    assert missing == ["/no-auth-key", "/also-no-auth-key", "/added-later"]
+    assert [message.split("'")[1] for message in invalid] == ["/typo"]
+    assert "`auth: 'maybe'`" in invalid[0]
+    assert all("`auth: false`" in message and "`auth: true`" in message for message in warnings)
