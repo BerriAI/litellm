@@ -360,10 +360,10 @@ def _assert_remote_images_inlined(content):
 
 
 def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.llms.bedrock.chat.chat_completions.transformation as native_cc
+    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
 
     monkeypatch.setattr(
-        native_cc, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
+        image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
     )
     body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
         model="us.xai.grok-4.6",

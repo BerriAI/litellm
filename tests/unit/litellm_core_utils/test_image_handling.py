@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     async_inline_remote_media,
     convert_url_to_base64,
+    inline_remote_media,
 )
 from litellm.litellm_core_utils.url_utils import SSRFError
 
@@ -317,6 +318,50 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
         {"type": "document", "source": {"type": "file", "file_id": "file_abc"}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([image_url, pdf_url])
+    assert messages == snapshot
+
+
+def test_inline_remote_media_inlines_every_remote_part_shape(monkeypatch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
+    fetched = []
+
+    def fake_convert(url):
+        fetched.append(url)
+        return f"data:image/png;base64,{url}"
+
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", fake_convert)
+    messages = [
+        {"role": "system", "content": "be terse"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this?"},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "low"}},
+                {"type": "image_url", "image_url": image_url},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                {"type": "image_url", "image_url": {"url": "s3://bucket/key.png"}},
+                {"type": "file", "file": {"file_id": pdf_url}},
+                {"type": "document", "source": {"type": "url", "url": pdf_url}, "title": "the doc"},
+            ],
+        },
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    inlined = inline_remote_media(messages, should_inline=image_handling.inline_remote_image_urls)
+
+    data_url = f"data:image/png;base64,{image_url}"
+    assert inlined[0] == {"role": "system", "content": "be terse"}
+    assert inlined[1]["content"] == [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": data_url, "detail": "low"}},
+        {"type": "image_url", "image_url": data_url},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        {"type": "image_url", "image_url": {"url": "s3://bucket/key.png"}},
+        {"type": "file", "file": {"file_id": pdf_url}},
+        {"type": "document", "source": {"type": "url", "url": pdf_url}, "title": "the doc"},
+    ]
+    assert fetched == [image_url]
     assert messages == snapshot
 
 
