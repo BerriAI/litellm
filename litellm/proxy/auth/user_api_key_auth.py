@@ -652,6 +652,8 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     # never reaches the fallback.
     synthetic_scope: Final[dict[str, Any]] = {
         "type": "http",
+        "method": "GET",
+        "query_string": ws_scope.get("query_string", b""),
         "headers": scope_headers,
         "path": ws_scope.get("path", ""),
         "state": ws_scope.setdefault("state", {}),  # mutable-ok: Starlette's socket state, shared with the request
@@ -1652,6 +1654,13 @@ async def _user_api_key_auth_builder(
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)
+
+                    from litellm.proxy.agent_endpoints.identity_store import resolve_managed_agent
+
+                    if jwt_claims and await resolve_managed_agent(jwt_claims, prisma_client) is not None:
+                        raise HTTPException(
+                            403, "Managed agents require direct JWT authentication without virtual-key mapping"
+                        )
 
                     resolve_result: Final = await _resolve_jwt_to_virtual_key(
                         jwt_claims=jwt_claims,
@@ -3123,7 +3132,10 @@ async def _reserve_budget_after_common_checks(
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-            fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
+            fail_closed_budget_enforcement=(
+                general_settings.get("fail_closed_budget_enforcement") is True
+                or user_api_key_auth_obj.billing_agent_policy is not None
+            ),
             raw_body=await read_raw_json_body(request=request),
         )
     if request is not None:
@@ -3197,10 +3209,48 @@ async def _authorize_authenticated_request(
     # admin-only-route / model-access / budget checks) surface as
     # ProxyException consistently with pre-refactor behavior.
     try:
+        from litellm.proxy.agent_endpoints.auth.managed_authorization import (
+            admit_managed_actor,
+            invocation_target,
+            managed_agent_route_allowed,
+            managed_inference_request,
+            prepare_agent_invocation,
+        )
+        from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+        from litellm.proxy.proxy_server import general_settings, prisma_client, user_model
+
+        store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
+        if user_api_key_auth_obj.agent_id is not None:
+            await admit_managed_actor(user_api_key_auth_obj, store)
+        if user_api_key_auth_obj.managed_agent_policy is not None and not managed_agent_route_allowed(
+            route, request.method
+        ):
+            raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
+        authorized_data: Final = (
+            managed_inference_request(
+                route,
+                request_data,
+                general_settings,
+                user_model,
+                request.path_params.get("model") or request.path_params.get("model_name"),
+                request.query_params.get("model"),
+            )
+            if user_api_key_auth_obj.managed_agent_policy is not None
+            else request_data
+        )
+        target_name: Final = invocation_target(route, authorized_data)
+        if target_name is not None:
+            await prepare_agent_invocation(
+                user_api_key_auth_obj,
+                target_name,
+                store,
+                billable=request_data.get("method")
+                in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
+            )
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,
-            request_data=request_data,
+            request_data=authorized_data,
             route=route,
         )
     except Exception as e:
