@@ -10048,6 +10048,48 @@ async def test_authoritative_access_group_outage_does_not_use_cached_grants() ->
 
 
 @pytest.mark.asyncio
+async def test_authoritative_team_permission_outage_cannot_drop_the_teams_restrictions() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    row: Final = LiteLLM_TeamTable(team_id="team-policy-outage", object_permission_id="team-permission")
+    client: Final = MagicMock()
+    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=row)
+    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(side_effect=RuntimeError("unavailable"))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock()
+    cache.async_set_cache = AsyncMock()
+    with pytest.raises(HTTPException) as failure:
+        await get_team_object(row.team_id, client, cache, check_db_only=True)
+    assert failure.value.status_code == 404
+    client.writer_db.litellm_objectpermissiontable.find_unique.assert_awaited_once()
+    cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [True, False])
+@pytest.mark.parametrize("missing", [True, False])
+async def test_referenced_permission_failures_preserve_legacy_behavior_and_deny_strict_reads(strict, missing):
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_object_permission
+
+    client = MagicMock()
+    lookup = AsyncMock(return_value=None, side_effect=None if missing else RuntimeError("unavailable"))
+    client.writer_db.litellm_objectpermissiontable.find_unique = lookup
+    client.db.litellm_objectpermissiontable.find_unique = lookup
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    if strict:
+        with pytest.raises(HTTPException if missing else RuntimeError):
+            await get_object_permission("referenced", client, cache, check_db_only=True)
+        cache.async_get_cache.assert_not_awaited()
+    else:
+        assert await get_object_permission("referenced", client, cache) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "models,key_aliases,team_aliases,allowed",
     [
