@@ -1796,7 +1796,11 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
 
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        configured_timeout: Final = params.get("timeout")
+        handler_params: Final = {
+            **{k: v for k, v in params.items() if k not in ("disable_aiohttp_transport", "timeout")},
+            "timeout": configured_timeout if configured_timeout is not None else _default_cached_client_timeout(),
+        }
         _new_client = HTTPHandler(**handler_params)
     else:
         _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
