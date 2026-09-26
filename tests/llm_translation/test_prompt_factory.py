@@ -1890,7 +1890,7 @@ def test_convert_to_anthropic_tool_invoke_expands_distinct_concatenated_argument
         },
         {
             "type": "tool_use",
-            "id": "toolu_01ABC123_1",
+            "id": "toolu_01ABC123__concat_1",
             "name": "move",
             "input": {"args": json.dumps({"box": "A", "limit": 50})},
         },

@@ -238,9 +238,9 @@ def test_split_concatenated_json_empty_string():
 
 
 def test_split_concatenated_json_non_dict_value():
-    """Non-dict JSON values (e.g. arrays, strings) are replaced with {}."""
+    """Non-dict JSON values (e.g. arrays, strings) are skipped, not wrapped as {}."""
     result = split_concatenated_json_objects("[1, 2, 3]")
-    assert result == [{}]
+    assert result == []
 
 
 def test_split_concatenated_json_wholly_invalid_returns_empty():
@@ -260,6 +260,18 @@ def test_split_concatenated_json_malformed_object_returns_empty():
     empty list rather than raising `Expecting ',' delimiter`.
     """
     assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
+
+
+def test_split_concatenated_json_skips_leading_non_object_before_dict():
+    """A leading non-object must not become an empty tool-call dict (e.g. ``0{"x":1}``)."""
+    result = split_concatenated_json_objects('0{"x": 1}')
+    assert result == [{"x": 1}]
+
+
+def test_parse_tool_call_arguments_skips_non_object_before_dict():
+    """Salvage used by parse_tool_call_arguments keeps only dict objects."""
+    result = parse_tool_call_arguments('0{"x": 1}', tool_name="move", context="chat completions")
+    assert result == {"x": 1}
 
 
 def test_split_concatenated_json_salvages_prefix_before_truncated_tail():

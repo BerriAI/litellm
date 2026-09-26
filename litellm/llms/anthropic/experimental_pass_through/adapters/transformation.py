@@ -118,6 +118,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_image_source_to_openai_url,
+    allocate_concat_tool_call_id,
     concatenated_tool_argument_objects,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
@@ -1349,6 +1350,13 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         new_content: Final[list[dict[str, Any]]] = []
+        reserved_ids: Final[set[str]] = set()  # mutable-ok: batch-unique concat tool id allocator
+        for choice in choices:
+            tool_calls = choice.message.tool_calls if choice.message.tool_calls is not None else ()
+            for tool_call in tool_calls:
+                raw_tool_id = tool_call.id or ""
+                if raw_tool_id:
+                    reserved_ids.add(normalize_anthropic_tool_use_id(raw_tool_id))
         for choice, compaction_blocks in (
             (choice, _compaction_blocks(_optional_attr(choice.message, "provider_specific_fields")))
             for choice in choices
@@ -1426,7 +1434,11 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
                     argument_inputs = expanded_arguments if expanded_arguments is not None else (parsed_arguments,)
                     for index, tool_input in enumerate(argument_inputs):
-                        block_id = normalized_id if index == 0 or not raw_id else f"{normalized_id}_{index}"
+                        block_id = (
+                            allocate_concat_tool_call_id(normalized_id, index, reserved_ids)
+                            if raw_id
+                            else normalized_id
+                        )
                         tool_use_block = AnthropicResponseContentBlockToolUse(
                             type="tool_use",
                             id=block_id,

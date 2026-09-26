@@ -1180,7 +1180,7 @@ def test_translate_openai_content_to_anthropic_expands_concatenated_tool_argumen
         },
         {
             "type": "tool_use",
-            "id": "call_move_1",
+            "id": "call_move__concat_1",
             "name": "move",
             "input": {"args": json.dumps({"box": "A", "limit": 50})},
         },

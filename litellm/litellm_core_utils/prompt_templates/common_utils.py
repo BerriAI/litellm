@@ -2471,7 +2471,7 @@ def _salvaged_concatenated_tool_arguments(
 def concatenated_tool_argument_objects(
     parsed: object,
     raw_arguments: str | None = None,
-) -> list[dict[str, object]] | None:
+) -> tuple[dict[str, object], ...] | None:
     """Return distinct concatenated argument objects that callers should expand.
 
     ``parse_tool_call_arguments`` returns a list of dicts for that salvage.
@@ -2480,11 +2480,11 @@ def concatenated_tool_argument_objects(
     """
     if not isinstance(parsed, list) or not parsed:
         return None
-    objects: list[dict[str, object]] = []
-    for item in parsed:
-        if not isinstance(item, dict):
-            return None
-        objects.append(cast("dict[str, object]", item))  # cast-ok: narrowed by isinstance
+    if any(not isinstance(item, dict) for item in parsed):
+        return None
+    objects: Final = tuple(
+        cast("dict[str, object]", item) for item in parsed
+    )  # cast-ok: narrowed by isinstance check above
     if raw_arguments is not None:
         try:
             json.loads(raw_arguments)
@@ -2492,6 +2492,25 @@ def concatenated_tool_argument_objects(
             return objects
         return None
     return objects
+
+
+def allocate_concat_tool_call_id(
+    base_id: str,
+    index: int,
+    reserved: set[str],  # mutable-ok: batch-unique concat tool id allocator
+) -> str:
+    """Keep ``base_id`` on index 0; later use ``{base_id}__concat_{n}`` until free in ``reserved``."""
+    if index == 0:
+        if base_id:
+            reserved.add(base_id)
+        return base_id
+    n = index
+    while True:
+        candidate = f"{base_id}__concat_{n}"
+        if candidate not in reserved:
+            reserved.add(candidate)
+            return candidate
+        n += 1
 
 
 def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
@@ -2554,10 +2573,6 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
             break
         if isinstance(obj, dict):
             results.append(obj)
-        else:
-            # Non-dict JSON value – wrap in empty dict (Bedrock requires
-            # toolUse.input to be an object).
-            results.append({})
         idx = end_idx
 
     return results

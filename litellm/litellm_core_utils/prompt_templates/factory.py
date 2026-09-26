@@ -47,6 +47,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    allocate_concat_tool_call_id,
     concatenated_tool_argument_objects,
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
@@ -947,11 +948,11 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
             parsed_args, tool_arguments if isinstance(tool_arguments, str) else None
         )
         argument_values = expanded_args if expanded_args is not None else (parsed_args,)
-        for args in argument_values:
-            if isinstance(args, dict):
-                parameters = "".join(f"<{param}>{val}</{param}>\n" for param, val in args.items())
+        for arg_value in argument_values:
+            if isinstance(arg_value, dict):
+                parameters = "".join(f"<{param}>{val}</{param}>\n" for param, val in arg_value.items())
             else:
-                parameters = f"<result>{args}</result>\n"
+                parameters = f"<result>{arg_value}</result>\n"
             invokes += (
                 f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
             )
@@ -1798,6 +1799,11 @@ def convert_to_anthropic_tool_invoke(
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
     anthropic_tool_invoke: Final[list[AnthropicMessagesToolUseParam | dict[str, object]]] = []
+    reserved_ids: Final[set[str]] = {  # mutable-ok: batch-unique concat tool id allocator
+        tid
+        for tid in (get_attribute_or_key(tool, "id") for tool in tool_calls)
+        if isinstance(tid, str) and tid
+    }
 
     for tool in tool_calls:
         if get_attribute_or_key(tool, "type") != "function":
@@ -1817,11 +1823,26 @@ def convert_to_anthropic_tool_invoke(
         expanded_inputs = concatenated_tool_argument_objects(
             tool_input, raw_arguments if isinstance(raw_arguments, str) else None
         )
-        tool_inputs = expanded_inputs if expanded_inputs is not None else (tool_input,)
+        # Server tool ids must stay paired with a single result; do not expand.
+        if tool_id.startswith("srvtoolu_"):
+            if expanded_inputs is not None:
+                first_input: object = expanded_inputs[0]
+            elif isinstance(tool_input, list) and tool_input:
+                first_input = tool_input[0]
+            else:
+                first_input = tool_input
+            tool_inputs = (first_input,)
+        elif expanded_inputs is not None:
+            tool_inputs = expanded_inputs
+        else:
+            tool_inputs = (tool_input,)
 
         for obj_idx, obj_input in enumerate(tool_inputs):
-            # Only a non-empty string id grows a suffix; the first block keeps the original id.
-            block_id = tool_id if obj_idx == 0 or not tool_id else f"{tool_id}_{obj_idx}"
+            block_id = (
+                allocate_concat_tool_call_id(tool_id, obj_idx, reserved_ids)
+                if tool_id
+                else tool_id
+            )
             server_tool_result = (
                 _find_server_tool_result(tool_id, web_search_results, tool_results)
                 if obj_idx == 0 and tool_id.startswith("srvtoolu_")
@@ -1846,14 +1867,13 @@ def convert_to_anthropic_tool_invoke(
                     input=obj_input,
                 )
 
-                if obj_idx == 0:
-                    _content_element = add_cache_control_to_content(
-                        anthropic_content_element=_anthropic_tool_use_param,
-                        original_content_element=dict(tool),
-                    )
+                _content_element = add_cache_control_to_content(
+                    anthropic_content_element=_anthropic_tool_use_param,
+                    original_content_element=dict(tool),
+                )
 
-                    if "cache_control" in _content_element:
-                        _anthropic_tool_use_param["cache_control"] = _content_element["cache_control"]
+                if "cache_control" in _content_element:
+                    _anthropic_tool_use_param["cache_control"] = _content_element["cache_control"]
 
                 anthropic_tool_invoke.append(_anthropic_tool_use_param)
 
@@ -3679,6 +3699,13 @@ def _convert_to_bedrock_tool_call_invoke(
 
     try:
         _parts_list: Final[list[BedrockContentBlock]] = []
+        reserved_ids: Final[set[str]] = set()  # mutable-ok: batch-unique concat tool id allocator
+        for tool in tool_calls:
+            if not isinstance(tool, dict):
+                continue
+            tid = tool.get("id")
+            if isinstance(tid, str) and tid:
+                reserved_ids.add(tid)
         for tool in tool_calls:
             if "function" in tool:
                 tool_id = tool["id"]
@@ -3704,10 +3731,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         # Fixes: https://github.com/BerriAI/litellm/issues/20543
                         parsed_objects = split_concatenated_json_objects(arguments)
                         if parsed_objects:
-                            # First object keeps the original tool id.
                             for obj_idx, obj in enumerate(parsed_objects):
                                 block_id = _sanitize_bedrock_tool_use_id(
-                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
+                                    allocate_concat_tool_call_id(tool_id, obj_idx, reserved_ids)
                                 )
                                 bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
                                 _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
@@ -5402,26 +5428,24 @@ class NormalizedToolCall(TypedDict):
     arguments: dict[str, object]
 
 
-def _tool_call_id_at_index(tool_id: object, index: int) -> str | None:
-    """Keep the original id on the first object; later objects use ``{id}_{index}``."""
-    if index == 0:
-        return cast("str | None", tool_id)  # cast-ok: index 0 preserves the id already on the tool call
-    if isinstance(tool_id, str) and tool_id:
-        return f"{tool_id}_{index}"
-    return None
-
-
 def _extend_normalized_tool_calls(
     result: list[NormalizedToolCall],
     tool_id: object,
     name: str | None,
-    arguments: dict[str, object] | list[dict[str, object]],
+    arguments: dict[str, object] | list[dict[str, object]] | tuple[dict[str, object], ...],
+    reserved_ids: set[str],  # mutable-ok: batch-unique concat tool id allocator
 ) -> None:
-    parsed_arguments = arguments if isinstance(arguments, list) else (arguments,)
+    parsed_arguments: Final = (
+        arguments if isinstance(arguments, (list, tuple)) else (arguments,)
+    )
+    base_id: Final = tool_id if isinstance(tool_id, str) else ""
     for index, item in enumerate(parsed_arguments):
+        allocated: Final = (
+            allocate_concat_tool_call_id(base_id, index, reserved_ids) if base_id else None
+        )
         result.append(
             NormalizedToolCall(
-                id=_tool_call_id_at_index(tool_id, index),
+                id=allocated,
                 name=name,
                 arguments=item,
             )
@@ -5430,7 +5454,7 @@ def _extend_normalized_tool_calls(
 
 def _parse_tool_call_arguments(
     raw: object, tool_name: str | None, context: str
-) -> dict[str, object] | list[dict[str, object]]:
+) -> dict[str, object] | list[dict[str, object]] | tuple[dict[str, object], ...]:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.
@@ -5464,6 +5488,11 @@ def _tool_calls_from_chat_completion_response(
         choice_tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
         if isinstance(choice_tool_calls, list):
             tool_calls.extend(choice_tool_calls)
+    reserved_ids: Final[set[str]] = {  # mutable-ok: batch-unique concat tool id allocator
+        tid
+        for tid in (get_attribute_or_key(tc, "id") for tc in tool_calls)
+        if isinstance(tid, str) and tid
+    }
     result: Final[list[NormalizedToolCall]] = []
     for tc in tool_calls:
         fn = get_attribute_or_key(tc, "function", None)
@@ -5479,6 +5508,7 @@ def _tool_calls_from_chat_completion_response(
                 tool_name=name,
                 context="chat completions",
             ),
+            reserved_ids,
         )
     return result
 
@@ -5487,6 +5517,13 @@ def _tool_calls_from_responses_api_response(response: object) -> list[Normalized
     output: Final = get_attribute_or_key(response, "output", None)
     if not isinstance(output, list):
         return []
+    reserved_ids: Final[set[str]] = set()  # mutable-ok: batch-unique concat tool id allocator
+    for item in output:
+        if get_attribute_or_key(item, "type") != "function_call":
+            continue
+        tid = get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id")
+        if isinstance(tid, str) and tid:
+            reserved_ids.add(tid)
     result: Final[list[NormalizedToolCall]] = []
     for item in output:
         if get_attribute_or_key(item, "type") != "function_call":
@@ -5501,6 +5538,7 @@ def _tool_calls_from_responses_api_response(response: object) -> list[Normalized
                 tool_name=name,
                 context="responses API",
             ),
+            reserved_ids,
         )
     return result
 

@@ -2370,13 +2370,13 @@ def test_bedrock_tool_call_invoke_concatenated_json():
     }
 
     # Subsequent blocks get suffixed ids
-    assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_1"
+    assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN__concat_1"
     assert result[1]["toolUse"]["name"] == "shell"
     assert result[1]["toolUse"]["input"] == {
         "command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]
     }
 
-    assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_2"
+    assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN__concat_2"
     assert result[2]["toolUse"]["name"] == "shell"
     assert result[2]["toolUse"]["input"] == {
         "command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]
@@ -3565,7 +3565,7 @@ def test_get_tool_calls_from_response_expands_distinct_concatenated_arguments():
         {"id": "call_keep", "name": "look", "arguments": {"x": 1}},
         {"id": "call_move", "name": "move", "arguments": {"args": json.dumps({"flag": True})}},
         {
-            "id": "call_move_1",
+            "id": "call_move__concat_1",
             "name": "move",
             "arguments": {"args": json.dumps({"box": "A", "limit": 50})},
         },
@@ -3619,11 +3619,132 @@ def test_get_tool_calls_from_response_expands_responses_api_concatenated_argumen
     assert get_tool_calls_from_response(response) == [
         {"id": "call_resp", "name": "move", "arguments": {"args": json.dumps({"flag": True})}},
         {
-            "id": "call_resp_1",
+            "id": "call_resp__concat_1",
             "name": "move",
             "arguments": {"args": json.dumps({"box": "A", "limit": 50})},
         },
     ]
+
+
+
+def test_get_tool_calls_from_response_avoids_concat_id_collision():
+    """Synthetic concat ids must not collide with a real sibling tool call id."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call",
+                            "function": {
+                                "name": "move",
+                                "arguments": _concatenated_tool_arguments({"flag": True}, {"box": "A"}),
+                            },
+                        },
+                        {
+                            "id": "call_1",
+                            "function": {"name": "look", "arguments": '{"x": 1}'},
+                        },
+                    ]
+                }
+            }
+        ]
+    }
+
+    tool_calls = get_tool_calls_from_response(response)
+    ids = [tc["id"] for tc in tool_calls]
+    assert ids == ["call", "call__concat_1", "call_1"]
+    assert tool_calls[1]["arguments"] == {"args": json.dumps({"box": "A"})}
+
+
+def test_convert_to_anthropic_tool_invoke_collapses_srvtoolu_concatenated_arguments():
+    """srvtoolu_ calls must not expand; server_tool_use stays paired with one result."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    raw = json.dumps({"query": "a"}) + json.dumps({"query": "b"})
+    server_result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01Concat",
+        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Ex"}],
+    }
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Concat",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": raw},
+            }
+        ],
+        web_search_results=[server_result],
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Concat",
+            "name": "web_search",
+            "input": {"query": "a"},
+        },
+        server_result,
+    ]
+
+
+def test_convert_to_anthropic_tool_invoke_propagates_cache_control_on_expanded_blocks():
+    """cache_control on a concatenated tool call is copied onto every expanded tool_use."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    raw = json.dumps({"a": 1}) + json.dumps({"b": 2})
+    result = convert_to_anthropic_tool_invoke(
+        [
+            {
+                "id": "toolu_cache",
+                "type": "function",
+                "cache_control": {"type": "ephemeral"},
+                "function": {"name": "move", "arguments": raw},
+            }
+        ]
+    )
+
+    assert len(result) == 2
+    assert result[0]["id"] == "toolu_cache"
+    assert result[1]["id"] == "toolu_cache__concat_1"
+    assert result[0]["cache_control"] == {"type": "ephemeral"}
+    assert result[1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_convert_to_anthropic_tool_invoke_avoids_concat_id_collision():
+    """Expanded tool_use ids must not collide with a sibling tool call id in the same batch."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    raw = json.dumps({"a": 1}) + json.dumps({"b": 2})
+    result = convert_to_anthropic_tool_invoke(
+        [
+            {
+                "id": "call",
+                "type": "function",
+                "function": {"name": "move", "arguments": raw},
+            },
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "look", "arguments": '{"x": 1}'},
+            },
+        ]
+    )
+
+    ids = [block["id"] for block in result]
+    assert ids == ["call", "call__concat_1", "call_1"]
 
 
 def test_get_tool_calls_from_response_does_not_expand_a_valid_json_array():
