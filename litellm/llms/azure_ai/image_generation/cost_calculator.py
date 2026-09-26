@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     resolve_image_model_info,
 )
-from litellm.litellm_core_utils.token_counter import get_image_type, image_dimensions_from_bytes
+from litellm.litellm_core_utils.token_counter import get_image_type, image_pixels_from_bytes
 from litellm.llms.azure_ai.image_generation.flux_transformation import AzureFoundryFluxImageGenerationConfig
 from litellm.types.utils import ImageResponse, ModelInfo
 
@@ -28,8 +28,8 @@ _REFERENCE_PIXELS: Final = TypeAdapter(tuple[Annotated[int, Field(strict=True, g
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Flux2MegapixelPrices:
-    first: float
-    megapixel: float
+    first_megapixel: float
+    additional_megapixel: float
 
 
 def _price(resolved: ModelInfo, cost_key: str) -> float | None:
@@ -62,11 +62,11 @@ def _flux2_prices(resolved: ModelInfo, deployment: ModelInfo | None) -> _Flux2Me
     deployment_megapixel_rate: Final = None if deployment_pixel_rate is None else deployment_pixel_rate * MEGAPIXEL
     match (deployment_image_price, deployment_megapixel_rate):
         case (float() as image_price, float() as megapixel_rate):
-            return _Flux2MegapixelPrices(first=image_price, megapixel=megapixel_rate)
+            return _Flux2MegapixelPrices(first_megapixel=image_price, additional_megapixel=megapixel_rate)
         case (float() as image_price, None):
-            return _Flux2MegapixelPrices(first=image_price, megapixel=0.0)
+            return _Flux2MegapixelPrices(first_megapixel=image_price, additional_megapixel=0.0)
         case (None, float() as megapixel_rate):
-            return _Flux2MegapixelPrices(first=megapixel_rate, megapixel=megapixel_rate)
+            return _Flux2MegapixelPrices(first_megapixel=megapixel_rate, additional_megapixel=megapixel_rate)
         case _:
             return _catalog_flux2_prices(resolved)
 
@@ -75,8 +75,8 @@ def _catalog_flux2_prices(resolved: ModelInfo) -> _Flux2MegapixelPrices:
     catalog_megapixel_rate: Final = _pixel_rate(resolved) * MEGAPIXEL
     catalog_first_megapixel: Final = _price(resolved, "output_cost_per_image")
     return _Flux2MegapixelPrices(
-        first=catalog_megapixel_rate if catalog_first_megapixel is None else catalog_first_megapixel,
-        megapixel=catalog_megapixel_rate,
+        first_megapixel=catalog_megapixel_rate if catalog_first_megapixel is None else catalog_first_megapixel,
+        additional_megapixel=catalog_megapixel_rate,
     )
 
 
@@ -114,14 +114,14 @@ def _reference_cost(model: str, prices: _Flux2MegapixelPrices, image_response: I
     except ValidationError:
         verbose_logger.warning("Ignoring malformed FLUX.2 reference pixel counts: %r", reported_pixels)
         return 0.0
-    return prices.megapixel * _billable_reference_megapixels(model, reference_pixels)
+    return prices.additional_megapixel * _billable_reference_megapixels(model, reference_pixels)
 
 
 def _flux2_generated_cost(
     model: str, prices: _Flux2MegapixelPrices, image_response: ImageResponse, requested_pixels: int, n: int | None
 ) -> float:
     return sum(
-        prices.first + prices.megapixel * (_billable_megapixels(pixels) - 1)
+        prices.first_megapixel + prices.additional_megapixel * (_billable_megapixels(pixels) - 1)
         for pixels in _generated_pixels(model, image_response, requested_pixels, n)
     )
 
@@ -150,10 +150,10 @@ def _billed_output_pixels(model: str, b64_json: str | None, requested_pixels: in
 def base64_image_pixels(encoded_image: str, start: int = 0) -> int | None:
     header_end: Final = start + IMAGE_HEADER_BASE64_PREFIX_CHARS
     header_bytes: Final = _decoded(encoded_image[start:header_end])
-    header_pixels: Final = _pixels(header_bytes)
+    header_pixels: Final = image_pixels_from_bytes(header_bytes)
     if header_pixels is not None or len(encoded_image) <= header_end or get_image_type(header_bytes) != "jpeg":
         return header_pixels
-    return _pixels(_decoded(encoded_image[start : start + JPEG_HEADER_BASE64_PREFIX_CHARS]))
+    return image_pixels_from_bytes(_decoded(encoded_image[start : start + JPEG_HEADER_BASE64_PREFIX_CHARS]))
 
 
 def _decoded(encoded_image: str) -> bytes:
@@ -161,11 +161,6 @@ def _decoded(encoded_image: str) -> bytes:
         return base64.b64decode(encoded_image)
     except ValueError:
         return b""
-
-
-def _pixels(image_bytes: bytes) -> int | None:
-    dimensions: Final = image_dimensions_from_bytes(image_bytes)
-    return None if dimensions is None else dimensions[0] * dimensions[1] or None
 
 
 def cost_calculator(

@@ -575,6 +575,16 @@ def _jpeg_b64(width: int, height: int) -> str:
             1,
             id="unused-reference-slots-are-not-references",
         ),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), "input_image_1": _jpeg_b64(1024, 1024), "input_image_11": "x"},
+            1,
+            id="fields-flux-2-does-not-define-are-not-references",
+        ),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), "input_image_10": _jpeg_b64(1024, 1024)},
+            2,
+            id="tenth-reference-field-is-a-reference",
+        ),
     ),
 )
 def test_flux_2_relay_through_the_provider_route_bills_the_references_in_the_request(

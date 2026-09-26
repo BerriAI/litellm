@@ -390,7 +390,7 @@ def test_flux2_image_edit_rejects_a_text_mode_upload_with_a_clear_error(tmp_path
     path: Final = tmp_path / "reference.png"
     path.write_bytes(_png(1024, 1024))
 
-    with path.open("r", encoding="latin-1") as text_upload, pytest.raises(TypeError, match="binary mode"):
+    with path.open("r", encoding="latin-1") as text_upload, pytest.raises(litellm.BadRequestError, match=r"TextIOWrapper\.read\(\) returned str"):
         AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
             model="FLUX.2-flex",
             prompt="Make it a watercolor",
@@ -553,10 +553,52 @@ def test_flux2_image_edit_refuses_to_resend_a_consumed_stream_that_cannot_seek(t
 
     with os.fdopen(read_end, "rb") as pipe:
         edit(pipe)
-        with pytest.raises(Exception, match="is empty"):
+        with pytest.raises(litellm.BadRequestError, match="is empty"):
             edit(pipe)
 
     assert sent_images == [base64.b64encode(reference).decode()]
+
+
+class _CountingReads(io.BytesIO):
+    reads: int = 0
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.reads += 1
+        return super().read(size)
+
+
+async def test_flux2_router_does_not_retry_an_edit_whose_reference_image_is_empty(monkeypatch: pytest.MonkeyPatch):
+    sent_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return _edit_ok(request)
+
+    mock_client: Final = AsyncHTTPHandler()
+    mock_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(llm_http_handler_module, "get_async_httpx_client", lambda **_kwargs: mock_client)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux2-flex-deployment",
+                "litellm_params": {
+                    "model": "azure_ai/FLUX.2-flex",
+                    "api_base": "https://example.services.ai.azure.com",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+    empty_upload: Final = _CountingReads(b"")
+
+    with pytest.raises(litellm.BadRequestError, match="is empty") as raised:
+        await router.aimage_edit(model="flux2-flex-deployment", prompt="Make it a watercolor", image=[empty_upload])
+
+    assert raised.value.status_code == 400
+    assert empty_upload.reads == 1
+    assert sent_requests == []
 
 
 def test_flux2_pro_image_edit_bills_references_at_the_pro_megapixel_rate():

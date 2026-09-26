@@ -260,8 +260,13 @@ def get_image_dimensions(
 def image_dimensions_from_bytes(img_data: bytes) -> tuple[int, int] | None:
     try:
         return _header_dimensions(img_data)
-    except (struct.error, TypeError):
+    except struct.error:
         return None
+
+
+def image_pixels_from_bytes(img_data: bytes) -> int | None:
+    dimensions: Final = image_dimensions_from_bytes(img_data)
+    return None if dimensions is None else dimensions[0] * dimensions[1] or None
 
 
 def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
@@ -296,8 +301,7 @@ def _jpeg_dimensions(img_data: bytes) -> tuple[int, int] | None:
     position = 2  # rebind-ok: the scan advances one segment per iteration
     for _ in range(MAX_JPEG_HEADER_SEGMENTS):
         marker_offset = _next_jpeg_marker_offset(img_data, position)
-        marker = ord(img_data[marker_offset : marker_offset + 1])
-        segment_length = _unpack_ints(">H", img_data[marker_offset + 1 : marker_offset + 3])[0]
+        marker, segment_length = _unpack_ints(">BH", img_data[marker_offset : marker_offset + 3])
         if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
             h, w = _unpack_ints(">HH", img_data[marker_offset + 4 : marker_offset + 8])
             return w, h

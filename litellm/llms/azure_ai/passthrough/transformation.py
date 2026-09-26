@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -14,6 +13,7 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.image_edit.flux2_transformation import FLUX2_REFERENCE_IMAGE_FIELDS
 from litellm.llms.azure_ai.image_generation.cost_calculator import base64_image_pixels, record_reference_pixels
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.passthrough.transformation import (
@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 
 
 EMPTY_QUERY: Final[Mapping[str, object]] = MappingProxyType({})
-_REFERENCE_IMAGE_FIELD: Final = re.compile(r"input_image(?:_\d+)?")
 _DATA_URL_HEADER_MAX_CHARS: Final = 256
 
 
@@ -214,15 +213,10 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
 
 
 def _record_relayed_reference_pixels(image_response: ImageResponse, request_data: Mapping[str, object]) -> None:
-    reference_pixels: Final = tuple(
-        _relayed_image_pixels(value) for key, value in request_data.items() if _is_relayed_reference(key, value)
-    )
+    references: Final = tuple(request_data.get(field) for field in FLUX2_REFERENCE_IMAGE_FIELDS)
+    reference_pixels: Final = tuple(_relayed_image_pixels(value) for value in references if value not in (None, ""))
     if reference_pixels:
         record_reference_pixels(image_response, reference_pixels)
-
-
-def _is_relayed_reference(key: str, value: object) -> bool:
-    return _REFERENCE_IMAGE_FIELD.fullmatch(key) is not None and value not in (None, "")
 
 
 def _relayed_image_pixels(value: object) -> int | None:

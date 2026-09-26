@@ -511,6 +511,7 @@ def test_flux2_pro_bills_the_requested_size_for_a_returned_jpeg_whose_frame_head
     ("returned_image", "warns"),
     (
         pytest.param(ImageObject(b64_json="aW1n"), True, id="unreadable-image"),
+        pytest.param(ImageObject(b64_json=_png_b64(0, 1024)), True, id="zero-width-image"),
         pytest.param(ImageObject(b64_json=_png_b64(1024, 1024)), False, id="measured-image"),
         pytest.param(ImageObject(url="https://example.com/image.png"), False, id="url-only-image"),
     ),
