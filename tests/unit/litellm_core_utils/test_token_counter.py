@@ -1466,10 +1466,14 @@ def handle(request):
     headers = {"content-length": str(len(payload)), "etag": '"fixture"', "x-repo-commit": "a" * 40}
     return httpx.Response(200, headers=headers, content=payload if request.method == "GET" else b"")
 huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
+litellm.cohere_models = {"command-r-v1"}
+litellm.anthropic_models = {"claude-2"}
 custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
 print(json.dumps({
     "llama2": litellm.token_counter(model="meta-llama/Llama-2-7b-chat", text=text),
     "llama3": litellm.token_counter(model="meta-llama/llama-3-70b-instruct", text=text),
+    "cohere": litellm.token_counter(model="command-r-v1", text=text),
+    "anthropic": litellm.token_counter(model="claude-2", text=text),
     "custom": litellm.token_counter(custom_tokenizer=custom, text=text),
     "requested": sorted(set(requested)),
 }))
@@ -1482,17 +1486,17 @@ def _word_level_tokenizer_json(pre_tokenizer: pre_tokenizers.PreTokenizer) -> st
     return tokenizer.to_str()
 
 
-def test_token_counter_uses_the_hub_tokenizer_of_each_llama_family_and_of_a_custom_tokenizer(
-    tmp_path: Path,
-) -> None:
-    sample: Final = "Hellö World, this is my input string! My name is ishaan CTO"
+def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_tokenizer(tmp_path: Path) -> None:
+    sample: Final = "Tokenizers disagree: anthropic, tiktoken; llama-2 & llama-3!"
     served: Final = {
         "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()),
         "Xenova/llama-3-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Split(Regex("."), "isolated")),
+        "Xenova/c4ai-command-r-v01-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Whitespace()),
     }
     expected: Final = {repo: len(Tokenizer.from_str(payload).encode(sample).ids) for repo, payload in served.items()}
+    anthropic_count: Final = len(Tokenizer.from_str(claude_json_str).encode(sample).ids)
     tiktoken_count: Final = litellm.token_counter(model="gpt-3.5-turbo", text=sample)
-    assert len({*expected.values(), tiktoken_count}) == len(expected) + 1
+    assert len({*expected.values(), anthropic_count, tiktoken_count}) == len(expected) + 2
 
     result: Final = subprocess.run(
         [
@@ -1522,6 +1526,8 @@ def test_token_counter_uses_the_hub_tokenizer_of_each_llama_family_and_of_a_cust
     assert counts == {
         "llama2": expected["hf-internal-testing/llama-tokenizer"],
         "llama3": expected["Xenova/llama-3-tokenizer"],
+        "cohere": expected["Xenova/c4ai-command-r-v01-tokenizer"],
+        "anthropic": anthropic_count,
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
