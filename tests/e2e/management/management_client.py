@@ -566,6 +566,16 @@ class ManagementClient:
             headers=self.proxy.management_headers(),
         )
 
+    def delete_orgs_status(self, organization_ids: list[str]) -> ProbeResult:
+        """DELETE /organization/delete judged by HTTP outcome only, for requests
+        the test expects the route to reject."""
+        return self.proxy.transport.probe(
+            "/organization/delete",
+            method="DELETE",
+            json=OrgDeleteBody(organization_ids=organization_ids),
+            headers=self.proxy.management_headers(),
+        )
+
     def create_tag(self, body: TagNewBody) -> None:
         _ = unwrap(
             self.proxy.transport.post(
