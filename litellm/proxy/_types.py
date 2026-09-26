@@ -4076,6 +4076,11 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    actor_agent_id: ReadOnly[NotRequired[str | None]]
+    target_agent_id: ReadOnly[NotRequired[str | None]]
+    billing_agent_id: ReadOnly[NotRequired[str | None]]
+    agent_execution_mode: ReadOnly[NotRequired[str | None]]
+    verified_human_user_id: ReadOnly[NotRequired[str | None]]
     autorouter_baseline_observation: ReadOnly[str | None]
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -4139,6 +4144,7 @@ class SpendLogsPayload(TypedDict):
     model_id: str | None
     model_group: str | None
     mcp_namespaced_tool_name: str | None
+    billing_agent_id: ReadOnly[NotRequired[str | None]]
     agent_id: str | None
     api_base: str
     user: str
@@ -5061,6 +5067,7 @@ class JWTAuthBuilderResult(TypedDict):
     org_id: str | None
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
+    managed_agent_context: ReadOnly[NotRequired[ManagedAgentContext | None]]
     agent_id: ReadOnly[str | None]
 
 
