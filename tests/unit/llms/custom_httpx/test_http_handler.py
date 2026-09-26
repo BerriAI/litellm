@@ -741,6 +741,18 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         assert client.timeout.read == 300.0
 
+    def test_cached_sync_client_with_none_timeout_uses_explicit_request_timeout(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.caching.llm_caching_handler import LLMClientCache
+
+        monkeypatch.setattr(litellm, "request_timeout", 300)
+        monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
+        litellm.in_memory_llm_clients_cache = LLMClientCache()
+
+        client = _get_httpx_client(params={"timeout": None})
+        request = client.client.build_request("GET", "https://example.com")
+
+        assert request.extensions["timeout"]["read"] == 300.0
+
 
 async def _read_http_request(reader: asyncio.StreamReader) -> None:
     raw = b""
