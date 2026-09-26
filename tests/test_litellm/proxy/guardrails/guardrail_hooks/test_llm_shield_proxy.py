@@ -957,6 +957,20 @@ class TestVaultIsolation:
                 {"prediction": {"type": "content", "content": [{"type": "text", "text": "U"}]}, "instructions": "S"},
                 id="prediction-parts",
             ),
+            pytest.param(
+                {
+                    "messages": [{"role": "user", "content": "U"}],
+                    "web_search_options": {"user_location": {"type": "approximate", "approximate": {"city": "S"}}},
+                },
+                id="chat-web-search-location",
+            ),
+            pytest.param(
+                {
+                    "input": "U",
+                    "tools": [{"type": "web_search", "user_location": {"type": "approximate", "region": "S"}}],
+                },
+                id="responses-web-search-location",
+            ),
             pytest.param({"messages": [{"role": "user", "content": "U"}], "user": "S"}, id="end-user-id"),
             pytest.param({"input": "U", "safety_identifier": "S"}, id="safety-identifier"),
         ],

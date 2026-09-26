@@ -432,6 +432,26 @@ def _collect_output_contracts(data: MutableRequest, slots: _SlotSink, privileged
             _collect_schema_text(wrapper.get("schema"), slots, privileged)
 
 
+def _collect_user_locations(data: MutableRequest, privileged: _SlotSink) -> None:
+    """Web search forwards the user's approximate location, whose `city` and `region`
+    are free text and can hold a street address.
+
+    Chat carries it in `web_search_options.user_location.approximate`; the Responses
+    and Anthropic web-search tools carry it flat on the tool's `user_location`. Nothing
+    restores it from a reply, hence the privileged sink.
+    """
+    options: Final = data.get("web_search_options")
+    tools: Final = data.get("tools")
+    for holder in (options, *(tools if isinstance(tools, list) else ())):
+        location = holder.get("user_location") if isinstance(holder, dict) else None
+        if not isinstance(location, dict):
+            continue
+        approximate = location.get("approximate")
+        for container in (location, approximate) if isinstance(approximate, dict) else (location,):
+            _collect(container, "city", privileged)
+            _collect(container, "region", privileged)
+
+
 def _collect_end_user_ids(data: MutableRequest, privileged: _SlotSink) -> None:
     """`user` and `safety_identifier` are forwarded to the provider and often hold an email.
 
@@ -1023,6 +1043,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         _collect_system(data, privileged)
         _collect_tool_definitions(data, slots, privileged)
         _collect_output_contracts(data, slots, privileged)
+        _collect_user_locations(data, privileged)
         _collect_end_user_ids(data, privileged)
         return tuple(slots), tuple(privileged)
 
