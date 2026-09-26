@@ -171,6 +171,7 @@ class ConfigSyncSubscriber:
         "_monotonic",
         "_redis_cache",
         "_resync_callbacks",
+        "_resync_required",
         "_rng",
         "_sleep",
         "_task",
@@ -201,6 +202,7 @@ class ConfigSyncSubscriber:
         self._monotonic = monotonic
         self._task: asyncio.Task[None] | None = None
         self._last_resync_at: float | None = None
+        self._resync_required = False
 
     def start(self) -> None:
         if self._task is not None:
@@ -226,6 +228,9 @@ class ConfigSyncSubscriber:
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
+                    if self._resync_required:
+                        await self._debounce_and_resync(pubsub)
+                        self._resync_required = False
                     backoff_seconds = self._backoff_initial_seconds
                     await self._consume(pubsub)
                 finally:
@@ -233,6 +238,7 @@ class ConfigSyncSubscriber:
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001  # any redis failure falls through to backoff and reconnect
+                self._resync_required = True
                 verbose_proxy_logger.warning(
                     "config sync subscriber redis error: %s; reconnecting in %.0fs",
                     e,
@@ -246,11 +252,14 @@ class ConfigSyncSubscriber:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
-            await self._sleep(self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds))
-            await self._wait_for_min_resync_interval()
-            await self._drain_pending(pubsub)
-            await self._run_resync_callbacks()
-            self._last_resync_at = self._monotonic()
+            await self._debounce_and_resync(pubsub)
+
+    async def _debounce_and_resync(self, pubsub: _ConfigSyncPubSub) -> None:
+        await self._sleep(self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds))
+        await self._wait_for_min_resync_interval()
+        await self._drain_pending(pubsub)
+        await self._run_resync_callbacks()
+        self._last_resync_at = self._monotonic()
 
     async def _wait_for_min_resync_interval(self) -> None:
         if self._last_resync_at is None:
