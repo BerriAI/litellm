@@ -51,7 +51,7 @@ Setup:
 
 Run with:
     cd /path/to/litellm
-    python tests/test_litellm/llms/databricks/test_databricks_e2e.py
+    python tests/llm_translation/test_databricks_e2e.py
 
 Config Options:
     TEST_AUTH_METHOD=oauth  # Test OAuth M2M authentication
@@ -69,12 +69,12 @@ import pytest
 # These are E2E tests that require real Databricks credentials
 pytestmark = pytest.mark.skip(
     reason="E2E tests require real Databricks credentials. Run directly with: "
-    "python tests/test_litellm/llms/databricks/test_databricks_e2e.py"
+    "python tests/llm_translation/test_databricks_e2e.py"
 )
 
 # Add the litellm package to path
 sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 )
 
 # Config file path - can be overridden with DATABRICKS_TEST_CONFIG env var
