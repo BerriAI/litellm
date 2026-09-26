@@ -645,8 +645,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 parent_otel_span=parent_otel_span,
             )
         except Exception:
-            stash.dynamic_reservation_settled = False
-            stash.dynamic_reservation_settled_tokens = 0
+            if stash.dynamic_reservation_settled_tokens == actual_tokens:
+                stash.dynamic_reservation_settled = False
+                stash.dynamic_reservation_settled_tokens = 0
             raise
         return True
 
@@ -673,7 +674,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 parent_otel_span=parent_otel_span,
             )
         except Exception:
-            stash.dynamic_reservation_settled_tokens = previous
+            if stash.dynamic_reservation_settled_tokens == actual_tokens:
+                stash.dynamic_reservation_settled_tokens = previous
             raise
 
     def _queue_weights(self, model_group_info: ModelGroupInfo, fairness: FairnessSettings) -> Mapping[str, float]:

@@ -2785,3 +2785,63 @@ async def test_success_racing_an_inflight_settlement_bills_only_the_uncounted_to
     assert len(second_ops) == 1
     for op in second_ops:
         assert op["increment_value"] == 4
+
+
+@pytest.mark.asyncio
+async def test_failed_settlement_write_keeps_the_record_of_a_concurrent_billing(monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-failed-settle-race-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    settle_gate = asyncio.Event()
+    first_call_seen = asyncio.Event()
+    calls: list[tuple] = []
+
+    async def gated_increment(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            first_call_seen.set()
+            await settle_gate.wait()
+            raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(handler.v3_limiter, "async_increment_reservation_aware_tokens", gated_increment)
+    monkeypatch.setattr(handler.v3_limiter, "recovered_partial_usage_tokens", lambda *args, **kwargs: (6, 0, 0))
+    data = {"model": model, "litellm_call_id": "failed-settle-race"}
+
+    async def run_race() -> tuple[bool, int]:
+        stash = get_or_create_request_stash()
+        stash.dynamic_reserved_tokens = 40
+        stash.dynamic_token_scopes = frozenset({("model_saturation_check", model)})
+
+        failure_task = asyncio.create_task(
+            handler.async_post_call_failure_hook(
+                request_data=data,
+                original_exception=Exception("post-call guardrail rejected"),
+                user_api_key_dict=_prod_user(),
+            )
+        )
+        await asyncio.wait_for(first_call_seen.wait(), timeout=5)
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, "failed-settle-race", "prod"),
+            response_obj=ModelResponse(
+                model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+            ),
+            start_time=None,
+            end_time=None,
+        )
+        settle_gate.set()
+        await failure_task
+        return stash.dynamic_reservation_settled, stash.dynamic_reservation_settled_tokens
+
+    settled, settled_tokens = await asyncio.create_task(run_race())
+    assert len(calls) == 2
+    assert settled
+    assert settled_tokens == 10
