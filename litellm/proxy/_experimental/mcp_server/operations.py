@@ -2785,7 +2785,7 @@ async def _execute_mcp_server_tool_call(
             return virtual_tool_result
 
         # Create a body date for logging
-        body_data: Final = {"name": params.name, "arguments": params.arguments}  # mutable-ok: logging payload
+        body_data: Final = {"name": params.name, "arguments": params.arguments or {}}  # mutable-ok: logging payload
         # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
         chain_id: Final = get_chain_id_from_headers(raw_headers)
         if chain_id:
