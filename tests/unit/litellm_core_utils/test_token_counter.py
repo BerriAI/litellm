@@ -3,16 +3,22 @@
 import asyncio
 import base64
 import importlib
+import json
+import os
+import subprocess
+import sys
 import threading
 import time
 import traceback
 from concurrent.futures import Future, wait
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock
 
 import anyio.to_thread
 import pytest
 import tiktoken
+from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
 from unittest.mock import AsyncMock, patch
 
@@ -1439,3 +1445,89 @@ def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int,
 def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
     assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
+
+
+HUB_TOKENIZER_SCRIPT: Final = """
+import json
+import sys
+sys.path.insert(0, sys.argv[1])
+import httpx
+import huggingface_hub
+import litellm
+served = json.loads(sys.argv[2])
+text = sys.argv[3]
+requested = []
+def handle(request):
+    repo = request.url.path.lstrip("/").split("/resolve/")[0]
+    if repo not in served or not request.url.path.endswith("/tokenizer.json"):
+        return httpx.Response(404)
+    requested.append(repo)
+    payload = served[repo].encode()
+    headers = {"content-length": str(len(payload)), "etag": '"fixture"', "x-repo-commit": "a" * 40}
+    return httpx.Response(200, headers=headers, content=payload if request.method == "GET" else b"")
+huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
+litellm.cohere_models = {"command-r-v1"}
+litellm.anthropic_models = {"claude-2"}
+custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
+print(json.dumps({
+    "llama2": litellm.token_counter(model="meta-llama/Llama-2-7b-chat", text=text),
+    "llama3": litellm.token_counter(model="meta-llama/llama-3-70b-instruct", text=text),
+    "cohere": litellm.token_counter(model="command-r-v1", text=text),
+    "anthropic": litellm.token_counter(model="claude-2", text=text),
+    "custom": litellm.token_counter(custom_tokenizer=custom, text=text),
+    "requested": sorted(set(requested)),
+}))
+"""
+
+
+def _word_level_tokenizer_json(pre_tokenizer: pre_tokenizers.PreTokenizer) -> str:
+    tokenizer: Final = Tokenizer(models.WordLevel(vocab={"[UNK]": 0}, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizer
+    return tokenizer.to_str()
+
+
+def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_tokenizer(tmp_path: Path) -> None:
+    sample: Final = "Tokenizers disagree: anthropic, tiktoken; llama-2 & llama-3!"
+    served: Final = {
+        "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()),
+        "Xenova/llama-3-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Split(Regex("."), "isolated")),
+        "Xenova/c4ai-command-r-v01-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Whitespace()),
+    }
+    expected: Final = {repo: len(Tokenizer.from_str(payload).encode(sample).ids) for repo, payload in served.items()}
+    anthropic_count: Final = len(Tokenizer.from_str(claude_json_str).encode(sample).ids)
+    tiktoken_count: Final = litellm.token_counter(model="gpt-3.5-turbo", text=sample)
+    assert len({*expected.values(), anthropic_count, tiktoken_count}) == len(expected) + 2
+
+    result: Final = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            HUB_TOKENIZER_SCRIPT,
+            str(Path(litellm.__file__).parent.parent),
+            json.dumps(served),
+            sample,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "HF_HOME": str(tmp_path / "home"),
+            "HF_HUB_CACHE": str(tmp_path / "cache"),
+            "HF_ENDPOINT": "http://127.0.0.1:9",
+            "HF_HUB_OFFLINE": "0",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    counts: Final = json.loads(result.stdout.strip().splitlines()[-1])
+    assert counts == {
+        "llama2": expected["hf-internal-testing/llama-tokenizer"],
+        "llama3": expected["Xenova/llama-3-tokenizer"],
+        "cohere": expected["Xenova/c4ai-command-r-v01-tokenizer"],
+        "anthropic": anthropic_count,
+        "custom": expected["Xenova/llama-3-tokenizer"],
+        "requested": sorted(served),
+    }
