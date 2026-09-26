@@ -65,9 +65,7 @@ async def test_vLLM_token_counting():
 
     print("response: ", response)
 
-    assert (
-        response.tokenizer_type == "openai_tokenizer"
-    )  # SHOULD use the default tokenizer
+    assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the default tokenizer
     assert response.model_used == "wolfram/miquliz-120b-v2.0"
 
 
@@ -100,9 +98,7 @@ async def test_token_counting_model_not_in_model_list():
 
     print("response: ", response)
 
-    assert (
-        response.tokenizer_type == "openai_tokenizer"
-    )  # SHOULD use the OpenAI tokenizer
+    assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
     assert response.model_used == "special-alias"
 
 
@@ -135,9 +131,7 @@ async def test_gpt_token_counting():
 
     print("response: ", response)
 
-    assert (
-        response.tokenizer_type == "openai_tokenizer"
-    )  # SHOULD use the OpenAI tokenizer
+    assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
     assert response.request_model == "gpt-4"
 
 
@@ -176,9 +170,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     # Mock the internal token_counter function to return a controlled response
     async def mock_token_counter(request, call_endpoint=False):
-        assert (
-            call_endpoint == True
-        ), "Should be called with call_endpoint=True for Anthropic endpoint"
+        assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
 
@@ -285,9 +277,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     # Mock the internal token_counter function to return a controlled response
     async def mock_token_counter(request, call_endpoint=True):
-        assert (
-            call_endpoint == True
-        ), "Should be called with call_endpoint=True for Anthropic endpoint"
+        assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
         assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
 
@@ -448,9 +438,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
 
     # Mock the global handler instance in token_counter module
     mock_handler = MagicMock()
-    mock_handler.handle_count_tokens_request = AsyncMock(
-        return_value={"input_tokens": 42}
-    )
+    mock_handler.handle_count_tokens_request = AsyncMock(return_value={"input_tokens": 42})
 
     with patch(
         "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
@@ -507,9 +495,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
 
     # Mock the global handler instance in token_counter module
     mock_handler = MagicMock()
-    mock_handler.handle_count_tokens_request = AsyncMock(
-        return_value={"input_tokens": 42}
-    )
+    mock_handler.handle_count_tokens_request = AsyncMock(return_value={"input_tokens": 42})
 
     with patch(
         "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
@@ -568,9 +554,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
 
     # Mock the global handler instance in token_counter module
     mock_handler = MagicMock()
-    mock_handler.handle_count_tokens_request = AsyncMock(
-        return_value={"input_tokens": 42}
-    )
+    mock_handler.handle_count_tokens_request = AsyncMock(return_value={"input_tokens": 42})
 
     with patch(
         "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
@@ -585,9 +569,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                 mock_router.model_list = [
                     {
                         "model_name": "claude-3-5-sonnet",
-                        "litellm_params": {
-                            "model": "anthropic/claude-3-5-sonnet-20241022"
-                        },
+                        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"},
                         "model_info": {},
                     }
                 ]
@@ -596,9 +578,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                 mock_router.async_get_available_deployment = AsyncMock(
                     return_value={
                         "model_name": "claude-3-5-sonnet",
-                        "litellm_params": {
-                            "model": "anthropic/claude-3-5-sonnet-20241022"
-                        },
+                        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"},
                         "model_info": {},
                     }
                 )
@@ -633,9 +613,7 @@ async def test_factory_registration():
     assert counter is not None
 
     # Create test deployments
-    anthropic_deployment = {
-        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"}
-    }
+    anthropic_deployment = {"litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"}}
 
     non_anthropic_deployment = {"litellm_params": {"model": "openai/gpt-4"}}
 
@@ -671,9 +649,7 @@ async def test_bedrock_count_tokens_endpoint():
         model_list=[
             {
                 "model_name": "claude-bedrock",
-                "litellm_params": {
-                    "model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
-                },
+                "litellm_params": {"model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"},
             }
         ]
     )
@@ -687,9 +663,7 @@ async def test_bedrock_count_tokens_endpoint():
     }
 
     # Test the mock handler directly to verify correct parameter extraction
-    await mock_count_tokens_handler(
-        request_data, {}, "anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    await mock_count_tokens_handler(request_data, {}, "anthropic.claude-3-sonnet-20240229-v1:0")
 
 
 @pytest.mark.asyncio
@@ -751,10 +725,7 @@ async def test_vertex_ai_anthropic_token_counting():
         assert call_args is not None
         assert call_args.kwargs["model"] == "claude-3-5-sonnet-20241022"
         assert "messages" in call_args.kwargs["request_data"]
-        assert (
-            call_args.kwargs["request_data"]["messages"][0]["content"]
-            == "Hello Claude on Vertex AI! How are you?"
-        )
+        assert call_args.kwargs["request_data"]["messages"][0]["content"] == "Hello Claude on Vertex AI! How are you?"
 
         # Validate response structure
         assert response.model_used == "claude-3-5-sonnet-20241022"
@@ -787,9 +758,7 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
     if vertex_location == "global":
         assert endpoint.startswith("https://aiplatform.googleapis.com")
     else:
-        assert endpoint.startswith(
-            f"https://{vertex_location}-aiplatform.googleapis.com"
-        )
+        assert endpoint.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
 
 
 @pytest.mark.asyncio
@@ -801,13 +770,9 @@ async def test_bedrock_token_counter_error_propagation_bedrock_error():
     counter = BedrockTokenCounter()
 
     # Mock the handler to raise BedrockError with specific status code
-    with patch.object(
-        counter, "count_tokens", wraps=counter.count_tokens
-    ) as mock_count:
+    with patch.object(counter, "count_tokens", wraps=counter.count_tokens) as mock_count:
         # We need to patch at the handler level
-        with patch(
-            "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
-        ) as MockHandler:
+        with patch("litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler") as MockHandler:
             mock_handler_instance = MockHandler.return_value
             mock_handler_instance.handle_count_tokens_request = AsyncMock(
                 side_effect=BedrockError(status_code=429, message="Rate limit exceeded")
@@ -836,13 +801,9 @@ async def test_bedrock_token_counter_error_propagation_generic_exception():
     """
     counter = BedrockTokenCounter()
 
-    with patch(
-        "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
-    ) as MockHandler:
+    with patch("litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler") as MockHandler:
         mock_handler_instance = MockHandler.return_value
-        mock_handler_instance.handle_count_tokens_request = AsyncMock(
-            side_effect=Exception("Unexpected error")
-        )
+        mock_handler_instance.handle_count_tokens_request = AsyncMock(side_effect=Exception("Unexpected error"))
 
         result = await counter.count_tokens(
             model_to_use="anthropic.claude-3-sonnet",
@@ -879,20 +840,14 @@ async def test_bedrock_handler_httpx_error_status_code_propagation():
 
     with patch.object(handler, "validate_count_tokens_request"):
         with patch.object(handler, "_get_aws_region_name", return_value="us-west-2"):
-            with patch.object(
-                handler, "transform_anthropic_to_bedrock_count_tokens", return_value={}
-            ):
+            with patch.object(handler, "transform_anthropic_to_bedrock_count_tokens", return_value={}):
                 with patch.object(
                     handler,
                     "get_bedrock_count_tokens_endpoint",
                     return_value="https://example.com",
                 ):
-                    with patch.object(
-                        handler, "_sign_request", return_value=({}, "{}")
-                    ):
-                        with patch(
-                            "litellm.llms.bedrock.count_tokens.handler.get_async_httpx_client"
-                        ) as mock_client:
+                    with patch.object(handler, "_sign_request", return_value=({}, "{}")):
+                        with patch("litellm.llms.bedrock.count_tokens.handler.get_async_httpx_client") as mock_client:
                             mock_async_client = AsyncMock()
                             mock_async_client.post = AsyncMock(side_effect=http_error)
                             mock_client.return_value = mock_async_client
@@ -901,9 +856,7 @@ async def test_bedrock_handler_httpx_error_status_code_propagation():
                                 await handler.handle_count_tokens_request(
                                     request_data={
                                         "model": "test",
-                                        "messages": [
-                                            {"role": "user", "content": "hello"}
-                                        ],
+                                        "messages": [{"role": "user", "content": "hello"}],
                                     },
                                     litellm_params={},
                                     resolved_model="anthropic.claude-3-sonnet",
@@ -911,10 +864,7 @@ async def test_bedrock_handler_httpx_error_status_code_propagation():
 
                             assert exc_info.value.status_code == 403
                             # Message should be the raw response text
-                            assert (
-                                exc_info.value.message
-                                == "Forbidden - Invalid credentials"
-                            )
+                            assert exc_info.value.message == "Forbidden - Invalid credentials"
 
 
 @pytest.mark.asyncio
@@ -942,9 +892,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
     mock_counter.count_tokens = AsyncMock(side_effect=http_error)
 
     # Save originals
-    original_get_provider_token_counter = (
-        litellm.proxy.proxy_server._get_provider_token_counter
-    )
+    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
     original_router = litellm.proxy.proxy_server.llm_router
 
     try:
@@ -952,9 +900,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
         def mock_get_provider_token_counter(deployment, model_to_use):
             return (mock_counter, "claude-4-6-sonnet", "vertex_ai")
 
-        litellm.proxy.proxy_server._get_provider_token_counter = (
-            mock_get_provider_token_counter
-        )
+        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
 
         mock_router = MagicMock()
         mock_router.async_get_available_deployment = AsyncMock(
@@ -982,9 +928,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
         assert exc_info.value.type == "token_counting_error"
         assert exc_info.value.param == "model"
     finally:
-        litellm.proxy.proxy_server._get_provider_token_counter = (
-            original_get_provider_token_counter
-        )
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
         litellm.proxy.proxy_server.llm_router = original_router
 
 
@@ -1122,6 +1066,22 @@ async def test_local_token_count_estimates_server_tool_history_without_counting_
 
 
 @pytest.mark.asyncio
+async def test_local_token_count_includes_gemini_system_instruction(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    contents = [{"role": "user", "parts": [{"text": "hello"}]}]
+
+    async def count(system: object) -> int:
+        result = await token_counter(request=TokenCountRequest(model="gpt-4o", contents=contents, system=system))
+        return result.total_tokens
+
+    without_system = await count(None)
+    short_system = await count({"parts": [{"text": "be terse"}]})
+    long_system = await count({"parts": [{"text": "be terse, answer in French, and cite every source you use"}]})
+
+    assert without_system < short_system < long_system
+
+
+@pytest.mark.asyncio
 async def test_proxy_token_counter_error_raises_exception_when_disabled():
     """
     Test that proxy token_counter raises ProxyException when disable_token_counter=True
@@ -1153,9 +1113,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
 
     # Save original value and function
     original_disable = litellm.disable_token_counter
-    original_get_provider_token_counter = (
-        litellm.proxy.proxy_server._get_provider_token_counter
-    )
+    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
 
     try:
         litellm.disable_token_counter = True
@@ -1169,9 +1127,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
         def mock_get_provider_token_counter(deployment, model_to_use):
             return (mock_counter, "anthropic.claude-3-sonnet", "bedrock")
 
-        litellm.proxy.proxy_server._get_provider_token_counter = (
-            mock_get_provider_token_counter
-        )
+        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
 
         with pytest.raises(ProxyException) as exc_info:
             await token_counter(
@@ -1186,9 +1142,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
         assert "Rate limit exceeded" in exc_info.value.message
     finally:
         litellm.disable_token_counter = original_disable
-        litellm.proxy.proxy_server._get_provider_token_counter = (
-            original_get_provider_token_counter
-        )
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
 
 
 @pytest.mark.asyncio
@@ -1223,9 +1177,7 @@ async def test_proxy_token_counter_error_falls_back_when_enabled():
 
     # Save original value and function
     original_disable = litellm.disable_token_counter
-    original_get_provider_token_counter = (
-        litellm.proxy.proxy_server._get_provider_token_counter
-    )
+    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
 
     try:
         litellm.disable_token_counter = False
@@ -1239,9 +1191,7 @@ async def test_proxy_token_counter_error_falls_back_when_enabled():
         def mock_get_provider_token_counter(deployment, model_to_use):
             return (mock_counter, "anthropic.claude-3-sonnet", "bedrock")
 
-        litellm.proxy.proxy_server._get_provider_token_counter = (
-            mock_get_provider_token_counter
-        )
+        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
 
         # Should not raise, should fall back to local tokenizer
         result = await token_counter(
@@ -1258,9 +1208,7 @@ async def test_proxy_token_counter_error_falls_back_when_enabled():
         assert result.tokenizer_type != "bedrock_api"
     finally:
         litellm.disable_token_counter = original_disable
-        litellm.proxy.proxy_server._get_provider_token_counter = (
-            original_get_provider_token_counter
-        )
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
 
 
 @pytest.mark.asyncio

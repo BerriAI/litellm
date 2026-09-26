@@ -73,9 +73,7 @@ _ANTHROPIC_PART_TYPES: Final = frozenset(
     }
 )
 
-_ANTHROPIC_TOOL_TYPE_NAMES: Final = frozenset(
-    {"web_search", "web_fetch", "code_execution", "computer", "text_editor", "bash", "mcp_toolset"}
-)
+_ANTHROPIC_TOOL_TYPE_NAMES: Final = frozenset({"mcp_toolset"})
 _ANTHROPIC_DATED_TOOL_TYPE_RE: Final = re.compile(
     r"^(web_search|web_fetch|code_execution|computer|text_editor|bash|mcp_toolset)_\d{8}$"
 )

@@ -386,6 +386,27 @@ _CHAT_REQUESTS: Final = (
         },
         id="tool-calls-results-and-data-url-image",
     ),
+    pytest.param(
+        {
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "18C"},
+            ],
+            "tools": [{"type": "web_search"}, _WEATHER_OPENAI],
+        },
+        id="openai-web-search-tool-with-tool-call-history",
+    ),
 )
 
 

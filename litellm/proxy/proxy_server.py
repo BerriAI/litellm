@@ -13498,7 +13498,11 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
-from litellm.litellm_core_utils.token_counter import contents_as_chat_messages, countable_messages
+from litellm.litellm_core_utils.token_counter import (
+    content_parts_text,
+    contents_as_chat_messages,
+    countable_messages,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
@@ -13622,9 +13626,10 @@ def _raise_or_fall_back_to_local_count(message: str, status_code: int) -> None:
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
-    if not isinstance(system, (str, list)) or not system:
+    content: Final = content_parts_text(system) if isinstance(system, Mapping) else system
+    if not isinstance(content, (str, list)) or not content:
         return None
-    message: Final[ChatCompletionSystemMessage] = {"role": "system", "content": system}
+    message: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content}
     return message
 
 

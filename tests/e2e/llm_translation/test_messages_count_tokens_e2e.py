@@ -36,7 +36,7 @@ class _ProviderTokenCount(BaseModel):
     original_response: _GeminiCountTokensUpstream
 
 
-BACKEND_MODEL = "gemini/gemini-2.5-flash"
+BACKEND_MODEL = "gemini/gemini-2.5-flash"  # listed in model_prices_and_context_window.json on 2026-09-26
 GEMINI_API_KEY = "os.environ/GEMINI_API_KEY"
 
 WEATHER_TOOL = AnthropicCustomTool(

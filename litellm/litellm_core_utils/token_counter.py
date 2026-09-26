@@ -1119,6 +1119,10 @@ def _content_parts(content: Mapping[str, object]) -> tuple[object, ...]:
     return (content,)
 
 
+def content_parts_text(content: Mapping[str, object]) -> str:
+    return "\n".join(_part_to_text(part) for part in _content_parts(content))
+
+
 class _LocalCountMessage(TypedDict):
     role: ReadOnly[str]
     content: ReadOnly[str]
@@ -1136,7 +1140,7 @@ def contents_as_chat_messages(contents: object) -> tuple[Mapping[str, object], .
         messages: Final = tuple(
             _local_count_message(
                 role="assistant" if content.get("role") == "model" else "user",
-                content="\n".join(_part_to_text(part) for part in _content_parts(content)),
+                content=content_parts_text(content),
             )
             for content in contents
             if isinstance(content, Mapping)
