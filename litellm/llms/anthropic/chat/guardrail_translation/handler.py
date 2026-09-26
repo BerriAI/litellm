@@ -952,10 +952,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         role: Final = str(message.get("role") or "")
         if role == "system":
             if scan_only_tool_results:
-                return EMPTY_EXTRACTED_INPUT
+                return cls._scoped_out_container_attachments(message) if scan_attachments else EMPTY_EXTRACTED_INPUT
             return cls._extract_midturn_system_text(message=message, msg_idx=msg_idx)
         if skip_tool_message and role.lower() == "tool":
-            return EMPTY_EXTRACTED_INPUT
+            return cls._scoped_out_container_attachments(message) if scan_attachments else EMPTY_EXTRACTED_INPUT
 
         content: Final = message.get("content", None)
         if isinstance(content, str):
@@ -1011,7 +1011,9 @@ class AnthropicMessagesHandler(BaseTranslation):
     ) -> ExtractedInput:
         if content_item.get("type") == "tool_result":
             if skip_tool_message:
-                return EMPTY_EXTRACTED_INPUT
+                return (
+                    cls._scoped_out_container_attachments(content_item) if scan_attachments else EMPTY_EXTRACTED_INPUT
+                )
             return cls._extract_tool_result(
                 content_item=content_item,
                 msg_idx=msg_idx,
@@ -1020,7 +1022,13 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
         if scan_only_tool_results:
-            return EMPTY_EXTRACTED_INPUT
+            if not scan_attachments:
+                return EMPTY_EXTRACTED_INPUT
+            return ExtractedInput(
+                scanned=(),
+                images=(),
+                files=cls._scoped_out_block_file_refs(content_item),
+            )
 
         text_str: Final[str | None] = content_item.get("text")
         return ExtractedInput(
@@ -1079,6 +1087,34 @@ class AnthropicMessagesHandler(BaseTranslation):
                     for _, block in blocks
                     if scan_attachments and block.get("type") == "document"
                 )
+            ),
+        )
+
+    @classmethod
+    def _scoped_out_block_file_refs(cls, block: Mapping[str, object]) -> tuple[str, ...]:
+        """The unscannable refs a scoped-out block still contributes so the guardrail can refuse them."""
+        block_type: Final = block.get("type")
+        if block_type == "document":
+            return cls._document_sources(block)
+        if block_type == "image":
+            return tuple(ref for ref in cls._image_sources(block, scan_attachments=True) if not ref.startswith("data:"))
+        return ()
+
+    @classmethod
+    def _scoped_out_container_attachments(cls, container: Mapping[str, object]) -> ExtractedInput:
+        """Attachment refs nested inside a scoped-out message or tool_result; text and inline images stay unscanned."""
+        inner: Final = container.get("content")
+        return ExtractedInput(
+            scanned=(),
+            images=(),
+            files=(
+                tuple(
+                    chain.from_iterable(
+                        cls._scoped_out_block_file_refs(block) for block in inner if isinstance(block, dict)
+                    )
+                )
+                if isinstance(inner, list)
+                else ()
             ),
         )
 

@@ -437,3 +437,77 @@ class TestExtractInputsBaseSignatureCompatibility:
         assert _HeadSignatureRecordingExtractInputsHandler.seen_files_to_check_is_not_none is True
         assert guardrail.inputs is not None
         assert guardrail.inputs["files"]
+
+
+class TestScopedOutMessageAttachments:
+    """A message scoped out by a skip flag still contributes its unscannable
+    attachment refs so the guardrail can refuse them; its text and inline images
+    are never scanned."""
+
+    _PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    _PDF_FILE_PART = {
+        "type": "file",
+        "file": {"filename": "q.pdf", "file_data": "data:application/pdf;base64,AAAA"},
+    }
+
+    @staticmethod
+    def _tool_message(content):
+        return {"role": "tool", "tool_call_id": "call_1", "content": content}
+
+    @pytest.mark.asyncio
+    async def test_skipped_tool_message_still_contributes_file_refs(self):
+        guardrail = ScanningGuardrail()
+        guardrail.skip_tool_message_in_guardrail = True
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                self._tool_message([{"type": "text", "text": "tool said hi"}, self._PDF_FILE_PART]),
+            ],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["hello"]
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_skipped_tool_message_with_only_text_and_inline_png_never_calls_guardrail(self):
+        guardrail = ScanningGuardrail()
+        guardrail.skip_tool_message_in_guardrail = True
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                self._tool_message(
+                    [
+                        {"type": "text", "text": "tool said hi"},
+                        {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}},
+                    ]
+                ),
+            ],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_non_attachment_guardrail_keeps_base_shape_on_skipped_tool_file(self):
+        guardrail = RecordingGuardrail()
+        guardrail.skip_tool_message_in_guardrail = True
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                self._tool_message([{"type": "text", "text": "tool said hi"}, self._PDF_FILE_PART]),
+            ],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["hello"]
+        assert "files" not in guardrail.inputs

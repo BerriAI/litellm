@@ -3065,3 +3065,97 @@ class TestNestedHookBaseSignatureCompatibility:
         await _HeadNestedRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert _HeadNestedRecordingHandler.seen_scan_attachments is True
+
+
+class ScopedOutRecordingGuardrail(MockCanaryMaskingGuardrail):
+    """Records apply_guardrail call count and any files refs the handler contributed."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.seen_files: list[str] = []
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.calls += 1
+        self.seen_files.extend(inputs.get("files") or [])
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class TestScopedOutToolResultAttachments:
+    """A tool_result scoped out by skip_tool_message_in_guardrail still
+    contributes its unscannable attachment refs so the guardrail can refuse
+    them; its text and inline images are never scanned."""
+
+    def _data(self, messages):
+        return {"model": "claude-sonnet-4-5", "messages": messages}
+
+    _PDF_TOOL_RESULT = {
+        "type": "tool_result",
+        "tool_use_id": "t1",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": "QUFBQQ=="},
+            }
+        ],
+    }
+
+    @pytest.mark.asyncio
+    async def test_skipped_tool_result_document_reaches_files_not_texts(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ScopedOutRecordingGuardrail()
+        guardrail.scans_attachments = True
+        guardrail.skip_tool_message_in_guardrail = True
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+            {"role": "user", "content": [dict(self._PDF_TOOL_RESULT)]},
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.seen_texts == ["hello"]
+        assert guardrail.seen_files == ["data:application/pdf;base64,QUFBQQ=="]
+
+    @pytest.mark.asyncio
+    async def test_skipped_tool_result_with_only_text_and_inline_png_never_calls_guardrail(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ScopedOutRecordingGuardrail()
+        guardrail.scans_attachments = True
+        guardrail.skip_tool_message_in_guardrail = True
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "text": "tool said hi"},
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBOR"}},
+                        ],
+                    }
+                ],
+            },
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_non_attachment_guardrail_keeps_base_shape_on_skipped_pdf_tool_result(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ScopedOutRecordingGuardrail()
+        guardrail.skip_tool_message_in_guardrail = True
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "user", "content": [dict(self._PDF_TOOL_RESULT)]},
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.seen_texts == ["hello"]
+        assert guardrail.seen_files == []

@@ -186,10 +186,13 @@ def _converse_block_attachments(block: Mapping[str, object]) -> tuple[tuple[str,
     )
 
 
-def _converse_input_blocks(body: RequestObject, skip_tool: bool) -> tuple[Mapping[str, object], ...]:
-    """Content blocks the attachment walk covers, at the same positions
-    ``_extract_converse_texts`` scans: message content blocks and toolResult inner
-    content blocks."""
+def _converse_input_blocks(
+    body: RequestObject, skip_tool: bool
+) -> tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
+    """Content blocks the attachment walk covers, split into (in-scope, scoped-out).
+
+    In-scope blocks contribute images and files as usual; scoped-out toolUse/
+    toolResult blocks contribute only refs the guardrail must refuse."""
     top_level: Final = tuple(
         block
         for block in chain.from_iterable(
@@ -197,29 +200,40 @@ def _converse_input_blocks(body: RequestObject, skip_tool: bool) -> tuple[Mappin
             for message in body.get("messages") or ()
             if isinstance(message, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
         )
-        if isinstance(block, dict)
-        and not (  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
-            skip_tool and ("toolUse" in block or "toolResult" in block)
-        )
+        if isinstance(block, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
     )
-    tool_results: Final = chain.from_iterable(
-        tool_result.get("content") or ()
-        for tool_result in (block.get("toolResult") for block in top_level)
-        if isinstance(tool_result, dict)
-    )
+    tool_blocks: Final = tuple(block for block in top_level if "toolUse" in block or "toolResult" in block)
     nested: Final = tuple(
         inner
-        for inner in tool_results
+        for inner in chain.from_iterable(
+            tool_result.get("content") or ()
+            for tool_result in (block.get("toolResult") for block in tool_blocks)
+            if isinstance(tool_result, dict)
+        )
         if isinstance(inner, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
     )
-    return top_level + nested
+    if not skip_tool:
+        return top_level + nested, ()
+    return tuple(block for block in top_level if "toolUse" not in block and "toolResult" not in block), (
+        tool_blocks + nested
+    )
+
+
+def _converse_scoped_out_refs(image_refs: tuple[str, ...], file_refs: tuple[str, ...]) -> tuple[str, ...]:
+    """The refs a scoped-out block still contributes: file refs plus non-inline image refs."""
+    return (*file_refs, *(ref for ref in image_refs if not ref.startswith("data:")))
 
 
 def _extract_converse_attachments(body: RequestObject, skip_tool: bool) -> tuple[list[str], list[str]]:
     """Collect image and document/video references the text walk would skip."""
-    attachments: Final = tuple(_converse_block_attachments(block) for block in _converse_input_blocks(body, skip_tool))
+    in_scope, scoped_out = _converse_input_blocks(body, skip_tool)
+    attachments: Final = tuple(_converse_block_attachments(block) for block in in_scope)
     images: Final = [*chain.from_iterable(pair[0] for pair in attachments)]  # mutable-ok: inputs takes list[str]
-    files: Final = [*chain.from_iterable(pair[1] for pair in attachments)]  # mutable-ok: inputs takes list[str]
+    scoped_refs: Final = tuple(_converse_block_attachments(block) for block in scoped_out)
+    files: Final = [  # mutable-ok: inputs takes list[str]
+        *chain.from_iterable(pair[1] for pair in attachments),
+        *chain.from_iterable(_converse_scoped_out_refs(pair[0], pair[1]) for pair in scoped_refs),
+    ]
     return images, files
 
 

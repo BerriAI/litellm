@@ -1483,3 +1483,55 @@ def test_bedrock_during_call_skip_tool_message_flag_drops_tool_result_text(gatew
             assert response.status_code == 200, response.text
             eventually(lambda: policy.drain(), lambda values: len(values) == 1, seconds=10)
             assert len(upstream.drain()) == 1
+
+
+def test_bedrock_pre_call_skip_tool_message_flag_still_refuses_tool_result_document(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    with wire_server(_allow) as policy, wire_server(_anthropic_reply) as upstream:
+        bedrock_params: Final = _bedrock_policy(policy.url)
+        bedrock_params["skip_tool_message_in_guardrail"] = True
+        path: Final = _guardrail_config(tmp_path, identity, bedrock_params, "bedrock-skip-tool-pre.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=upstream.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 16,
+                    "messages": [
+                        {"role": "user", "content": "hello"},
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "tool_use", "id": "toolu_01A", "name": "lookup", "input": {}}],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_01A",
+                                    "content": [
+                                        {
+                                            "type": "document",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": "application/pdf",
+                                                "data": PDF_BASE64,
+                                            },
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                },
+            )
+            assert response.status_code == 400, response.text
+            assert "document/file attachment(s) cannot be scanned" in response.text, response.text
+            assert policy.drain() == upstream.drain() == ()

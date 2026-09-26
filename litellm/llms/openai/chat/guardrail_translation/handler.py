@@ -127,6 +127,22 @@ def _attachment_part_refs(content_item: Mapping[str, object], scan_attachments: 
     return image_ref, None
 
 
+def _scoped_out_attachment_refs(content: object) -> tuple[str, ...]:
+    """The unscannable refs a scoped-out message still contributes so the guardrail can refuse them."""
+    if not isinstance(content, list):
+        return ()
+    refs: list[str] = []  # mutable-ok: collected per part, then frozen
+    for part in content:
+        if not isinstance(part, Mapping):
+            continue
+        image_ref, file_ref = _attachment_part_refs(part, True)
+        if file_ref is not None:
+            refs.append(file_ref)
+        if image_ref is not None and not image_ref.startswith("data:"):
+            refs.append(image_ref)
+    return tuple(refs)
+
+
 class OpenAIChatCompletionsHandler(BaseTranslation):
     """
     Handler for processing OpenAI chat completions messages with guardrails.
@@ -382,6 +398,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             skip_tool_message=skip_tool_message,
             scan_only_tool_results=scan_only_tool_results,
         ):
+            if scan_attachments and files_to_check is not None:
+                for scoped_out_ref in _scoped_out_attachment_refs(message.get("content")):
+                    files_to_check.append(scoped_out_ref)
             return
 
         content: Final = message.get("content", None)
