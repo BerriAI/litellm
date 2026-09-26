@@ -512,16 +512,15 @@ async def _check_summary_model_rate_limit(
     Returns True (allow) outside the proxy, when the active limiter does not
     expose the read-only descriptor check (legacy limiter), or when the
     descriptor set cannot be built — the deny signals are a definitive
-    ``OVER_LIMIT`` response and the limiter's own fail-closed rejection (an
-    ``HTTPException`` raised when ``fail_closed_rate_limit_enforcement`` is on
-    and the counters could not be verified), so any other internal error here
+    ``OVER_LIMIT`` response and the limiter's own fail-closed rejection
+    (``RateLimitUnverifiableError``, raised when ``fail_closed_rate_limit_enforcement``
+    is on and the counters could not be verified), so any other internal error here
     forwards the request uncompacted rather than blocking every summary.
     """
     if user_api_key_auth is None:
         return True
     try:
-        from fastapi import HTTPException
-
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
         from litellm.proxy.proxy_server import proxy_logging_obj
     except Exception:
         return True
@@ -579,7 +578,7 @@ async def _check_summary_model_rate_limit(
             parent_otel_span=parent_otel_span,
             read_only=True,
         )
-    except HTTPException as e:
+    except RateLimitUnverifiableError as e:
         verbose_logger.warning(
             "compact_20260112: rate-limit counters for summary_model=%s could not be verified; denying: %s",
             summary_model,

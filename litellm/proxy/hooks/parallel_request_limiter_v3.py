@@ -123,6 +123,14 @@ RATE_LIMIT_UNVERIFIABLE_MESSAGE: Final = (
 )
 
 
+class RateLimitUnverifiableError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
+        )
+
+
 _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
 
 
@@ -620,6 +628,14 @@ class RequestRateLimiterStash:
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+
+
+@dataclass(frozen=True, slots=True)
+class CounterRefund:
+    window_key: str
+    counter_key: str
+    window_start: str
+    increment: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1396,10 +1412,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             "counters against Redis",
             error,
         )
-        raise HTTPException(
-            status_code=HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
-        )
+        raise RateLimitUnverifiableError()
 
     async def _execute_redis_batch_rate_limiter_script(
         self,
@@ -1431,10 +1444,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
                 if self._fail_closed_resolver():
-                    applied_counter_keys = itertools.chain.from_iterable(
-                        applied_keys[1::2] for _tag, applied_keys in key_groups[:index]
+                    applied_keys = tuple(itertools.chain.from_iterable(keys for _tag, keys in key_groups[:index]))
+                    await self._refund_counter_increments(
+                        self._counter_refunds_from_batch_values(applied_keys, all_cache_values)
                     )
-                    await self._refund_counter_increments([(key, 1) for key in applied_counter_keys])
                 self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 log_redis_failure(
                     verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
@@ -2037,7 +2050,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 overall_code="OK",
                 statuses=[],  # mutable-ok: response contract requires a status list
             )
-        applied: Final[list[list[AtomicCounterMeta]]] = []
+        applied: Final[list[tuple[CounterRefund, ...]]] = []
         statuses: Final[list[RateLimitStatus]] = []
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
@@ -2076,7 +2089,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return response
             if len(descriptor_groups) == 1:
                 return response
-            applied.append(meta)
+            applied.append(self._counter_refunds_from_atomic_response(raw, meta))
             statuses.extend(response["statuses"])
             reservation_windows.update(response.get("reservation_windows", frozenset()))
 
@@ -2088,29 +2101,61 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _refund_applied_descriptor_groups(
         self,
-        applied: list[list[AtomicCounterMeta]],
+        applied: Sequence[Sequence[CounterRefund]],
     ) -> None:
         """
         Decrement counters for descriptor groups already applied via Lua.
         Best-effort: refund failures are logged but not raised — the original
         OVER_LIMIT / fallback decision is what matters to the caller.
         """
-        await self._refund_counter_increments(
-            [(entry["counter_key"], entry["increment"]) for entry in itertools.chain.from_iterable(applied)]
+        await self._refund_counter_increments(tuple(itertools.chain.from_iterable(applied)))
+
+    @staticmethod
+    def _counter_refunds_from_atomic_response(
+        raw: Sequence[CacheCounterValue],
+        per_counter_meta: Sequence[AtomicCounterMeta],
+    ) -> tuple[CounterRefund, ...]:
+        return tuple(
+            CounterRefund(
+                window_key=meta["window_key"],
+                counter_key=meta["counter_key"],
+                window_start=str(int(raw[2 + index * 2])),
+                increment=meta["increment"],
+            )
+            for index, meta in enumerate(per_counter_meta)
         )
 
-    async def _refund_counter_increments(self, refunds: Sequence[tuple[str, int]]) -> None:
-        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
-        if redis_cache is None:
+    @staticmethod
+    def _counter_refunds_from_batch_values(
+        applied_keys: Sequence[str],
+        applied_values: Sequence[CacheCounterValue | None],
+    ) -> tuple[CounterRefund, ...]:
+        pairs: Final = tuple(zip(range(0, len(applied_keys), 2), applied_values[::2]))
+        return tuple(
+            CounterRefund(
+                window_key=applied_keys[offset],
+                counter_key=applied_keys[offset + 1],
+                window_start=str(int(window_start)),
+                increment=1,
+            )
+            for offset, window_start in pairs
+            if window_start is not None
+        )
+
+    async def _refund_counter_increments(self, refunds: Sequence[CounterRefund]) -> None:
+        if self.window_guarded_token_increment_script is None:
             return
-        for counter_key, increment in refunds:
+        for refund in refunds:
             try:
-                await redis_cache.async_increment(key=counter_key, value=-increment)
+                await self.window_guarded_token_increment_script(
+                    keys=[refund.window_key, refund.counter_key],  # mutable-ok: Redis script API takes a list
+                    args=[refund.window_start, -refund.increment, 0],  # mutable-ok: Redis script API takes a list
+                )
             except Exception as e:  # noqa: BLE001  # best-effort rollback, the rejection already decided the request
                 log_redis_failure(
                     verbose_proxy_logger,
                     logging.WARNING,
-                    f"Failed to refund {counter_key} on rollback",
+                    f"Failed to refund {refund.counter_key} on rollback",
                     e,
                 )
 

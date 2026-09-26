@@ -37,6 +37,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management.editors
 from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
     PolyfillResult,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
 
 MODEL = "openai/gpt-4o"
 
@@ -1803,10 +1804,11 @@ class _FakeRateLimiter:
 @pytest.mark.parametrize(
     "limiter_error, summary_called",
     [
-        (HTTPException(status_code=503, detail={"error": "fail_closed_rate_limit_enforcement rejected"}), False),
+        (RateLimitUnverifiableError(), False),
+        (HTTPException(status_code=500, detail="unrelated proxy error"), True),
         (RuntimeError("descriptor build exploded"), True),
     ],
-    ids=["fail_closed_rejection_denies", "internal_error_allows"],
+    ids=["fail_closed_rejection_denies", "other_http_error_allows", "internal_error_allows"],
 )
 async def test_summary_model_rate_limit_check_errors(limiter_error, summary_called):
     """The limiter's fail-closed 503 is a verdict and skips the summary call the

@@ -6739,7 +6739,9 @@ class _ScriptedRedis:
         self.released_slots: list[tuple[list[str], list[str]]] = []
         self.batch_calls = 0
         self.batch_call_keys: list[list[str]] = []
+        self.batch_call_args: list[list[object]] = []
         self.increments: list[tuple[str, float]] = []
+        self.guarded_increments: list[tuple[list[str], list[object]]] = []
 
     async def async_increment(self, key: str, value: float, **kwargs):
         self.increments.append((key, value))
@@ -6751,9 +6753,13 @@ class _ScriptedRedis:
         async def run(keys, args):
             if script == self.failing_script:
                 raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
+            if script == v3.WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT:
+                self.guarded_increments.append((list(keys), list(args)))
+                return [1, 0] * (len(keys) // 2)
             if script == v3.BATCH_RATE_LIMITER_SCRIPT:
                 self.batch_calls += 1
                 self.batch_call_keys.append(list(keys))
+                self.batch_call_args.append(list(args))
                 if self.batch_calls == self.failing_batch_call:
                     raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
                 return [args[0], self.batch_calls] * (len(keys) // 2)
@@ -6957,9 +6963,15 @@ async def test_batch_increment_refunds_counters_already_applied_when_a_later_clu
             await _admit(handler, auth)
 
     assert len(redis.batch_call_keys) == 2
-    applied_counter_keys = redis.batch_call_keys[0][1::2]
-    assert applied_counter_keys
-    assert redis.increments == ([(key, -1) for key in applied_counter_keys] if fail_closed else [])
+    applied_keys = redis.batch_call_keys[0]
+    assert applied_keys
+    window_start_at_increment = str(redis.batch_call_args[0][0])
+    expected_refunds = [
+        ([applied_keys[offset], applied_keys[offset + 1]], [window_start_at_increment, -1, 0])
+        for offset in range(0, len(applied_keys), 2)
+    ]
+    assert redis.guarded_increments == (expected_refunds if fail_closed else [])
+    assert redis.increments == []
 
 
 @pytest.mark.parametrize(
