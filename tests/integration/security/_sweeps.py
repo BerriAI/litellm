@@ -34,8 +34,7 @@ API:
   is still swept. ``record_route_sweep(routes, node)`` appends the report to
   ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact). With ``since``,
   unpaginated list routes (``SCENARIO_SCOPED_LIST_ROUTES``, today ``/spend/logs``) are called
-  with this scenario's request id, user id and a date window (row by row and summarized) instead
-  of unfiltered.
+  with this scenario's request id, user id and a summarized date window instead of unfiltered.
 - ``sweep_responses(responses, canaries) -> tuple[Hit, ...]`` (S3): body and headers of every
   client-facing response the scenario received.
 - ``sweep_sink(name, requests, canaries, *, own_header=None) -> tuple[Hit, ...]`` (S4): every
@@ -243,7 +242,6 @@ def _spend_logs_queries(ids: Mapping[str, str], day: date) -> tuple[Mapping[str,
     return (
         *(({"request_id": ids["request_id"]},) if "request_id" in ids else ()),
         *(({"user_id": ids["user_id"]},) if "user_id" in ids else ()),
-        {"summarize": "false", **window},
         window,
     )
 
@@ -326,8 +324,8 @@ def sweep_routes(
     """S2: call every GET route as each caller (label -> bearer key; default the master key).
 
     With ``since``, the unpaginated list routes in ``SCENARIO_SCOPED_LIST_ROUTES`` are called with
-    this scenario's filters (its request id, its user, and a date window from ``since``, row by
-    row and summarized) instead of unfiltered, which on a shared database returns every row ever written.
+    this scenario's filters (its request id, its user, and a summarized date window from
+    ``since``) instead of unfiltered, which on a shared database returns every row ever written.
     """
     routes: Final = tuple(route for route in get_routes() if route_denied(route) is None)
     targets: Final = tuple(
