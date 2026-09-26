@@ -20079,6 +20079,7 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
             while True:
                 chunk = await body_queue.get()
                 if chunk is None:
+                    await handler_task
                     break
                 yield chunk
         finally:
