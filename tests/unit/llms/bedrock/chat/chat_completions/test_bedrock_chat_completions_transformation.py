@@ -258,11 +258,13 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
     assert BedrockModelInfo.get_bedrock_route(model, {"guardrailConfig": None}) == "chat_completions"
 
 
-@pytest.mark.parametrize("model", ["openai.gpt-oss-20b-1:0", "us.xai.grok-4.6"])
+@pytest.mark.parametrize(
+    "model", ["openai.gpt-oss-20b-1:0", "us.xai.grok-4.6", "global.openai.gpt-5.6-sol"]
+)
 @pytest.mark.parametrize(
     "request_params",
-    [{"additionalModelRequestFields": {"reasoning_effort": "high"}}, {"top_k": 40}],
-    ids=["additionalModelRequestFields", "top_k"],
+    [{"additionalModelRequestFields": {"reasoning_effort": "high"}}, {"top_k": 40}, {"stop": ["END"]}],
+    ids=["additionalModelRequestFields", "top_k", "stop"],
 )
 def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, request_params):
     assert bedrock_request_needs_converse(model, request_params) is True
@@ -329,6 +331,69 @@ def test_map_openai_params_sends_max_tokens_as_max_completion_tokens():
         drop_params=False,
     )
     assert mapped == {"max_completion_tokens": 64, "temperature": 0.1}
+
+
+HTTPS_IMAGE_URL = "https://example.com/cat.png"
+IMAGE_MESSAGES = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what is this"},
+            {"type": "image_url", "image_url": HTTPS_IMAGE_URL},
+            {"type": "image_url", "image_url": {"url": HTTPS_IMAGE_URL, "detail": "high"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+            {"type": "image_url", "image_url": {"url": "s3://bucket/key.png"}},
+        ],
+    }
+]
+
+
+def _assert_remote_images_inlined(content):
+    assert content[0] == {"type": "text", "text": "what is this"}
+    assert content[1]["image_url"]["url"] == f"data:image/png;base64,{HTTPS_IMAGE_URL}"
+    assert content[2] == {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{HTTPS_IMAGE_URL}", "detail": "high"},
+    }
+    assert content[3]["image_url"]["url"] == "data:image/png;base64,AAA"
+    assert content[4]["image_url"]["url"] == "s3://bucket/key.png"
+
+
+def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
+    import litellm.llms.bedrock.chat.chat_completions.transformation as native_cc
+
+    monkeypatch.setattr(
+        native_cc, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
+    )
+    body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
+        model="us.xai.grok-4.6",
+        messages=IMAGE_MESSAGES,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_remote_images_inlined(body["messages"][0]["content"])
+
+
+async def test_async_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
+    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+
+    async def fake_convert(url):
+        return f"data:image/png;base64,{url}"
+
+    monkeypatch.setattr(image_handling, "async_convert_url_to_base64", fake_convert)
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    assert cfg.uses_async_transform_request is True
+    body = await cfg.async_transform_request(
+        model="us.xai.grok-4.6",
+        messages=IMAGE_MESSAGES,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_remote_images_inlined(body["messages"][0]["content"])
 
 
 def test_map_openai_params_keeps_explicit_max_completion_tokens():
@@ -398,8 +463,8 @@ def test_supported_params_include_reasoning_effort_for_gpt56(local_cost_map):
     [
         (
             "bedrock/global.openai.gpt-5.6-sol",
-            ("frequency_penalty", "presence_penalty", "stop", "logprobs", "top_logprobs", "n"),
-            ("temperature", "top_p", "logit_bias", "reasoning_effort", "tools", "functions"),
+            ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs", "n"),
+            ("temperature", "top_p", "logit_bias", "reasoning_effort", "tools", "functions", "stop"),
         ),
         (
             "us.xai.grok-4.6",

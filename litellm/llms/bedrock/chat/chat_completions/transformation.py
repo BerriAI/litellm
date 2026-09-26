@@ -22,6 +22,11 @@ import httpx
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    convert_url_to_base64,
+    inline_remote_image_urls,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError, split_bedrock_region_path
@@ -40,7 +45,7 @@ REASONING_CLOSE_TAG: Final = "</reasoning>"
 
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
     {
-        "openai.gpt-5": frozenset(("frequency_penalty", "presence_penalty", "stop", "logprobs", "top_logprobs")),
+        "openai.gpt-5": frozenset(("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs")),
         "openai.gpt-oss": frozenset(("logit_bias",)),
         "xai.": frozenset(("frequency_penalty", "presence_penalty")),
     }
@@ -167,6 +172,48 @@ def split_reasoning_tag(content: str) -> tuple[str | None, str]:
     return reasoning or None, body
 
 
+def _remote_http_url(candidate: object) -> str | None:
+    return candidate if isinstance(candidate, str) and candidate.startswith(("http://", "https://")) else None
+
+
+def _inlined_image_url_part(part: object) -> object:
+    fields: Final = part if isinstance(part, Mapping) else None
+    if fields is None or fields.get("type") != "image_url":
+        return part
+    image_url: Final = fields.get("image_url")
+    image_url_fields: Final = image_url if isinstance(image_url, Mapping) else None
+    url: Final = _remote_http_url(image_url_fields.get("url") if image_url_fields is not None else image_url)
+    if url is None:
+        return part
+    data_url: Final = convert_url_to_base64(url)
+    inlined: Final = {**image_url_fields, "url": data_url} if image_url_fields is not None else data_url
+    return {**fields, "image_url": inlined}  # mutable-ok: json-serialized message part
+
+
+def _inlined_image_url_message(message: AllMessageValues) -> AllMessageValues:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    inlined_message: Final = {  # mutable-ok: json-serialized message
+        **message,
+        "content": [_inlined_image_url_part(part) for part in content],
+    }
+    return inlined_message  # pyright: ignore[reportReturnType]  # the same message with remote image parts inlined
+
+
+def _with_inlined_remote_image_urls(
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:  # mutable-ok: transform_request takes a list
+    """Inline every remote ``image_url`` so AWS never sees the ``http(s)://`` URLs it rejects.
+
+    AWS's native surface only takes inline ``data:`` URLs and S3 URLs where Converse downloaded
+    remote images itself, so the bytes are fetched and inlined here exactly like Converse did.
+    """
+    return [  # mutable-ok: transform_request takes a list
+        _inlined_image_url_message(message) for message in messages
+    ]
+
+
 class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamingHandler):
     """OpenAI chunk parsing plus the ``<reasoning>`` split, tracked per choice index."""
 
@@ -221,6 +268,10 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
 
     def get_error_class(
         self,
@@ -325,7 +376,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
     ) -> dict:  # mutable-ok: BaseConfig signature
         return super().transform_request(
             model=split_bedrock_region_path(model)[1],
-            messages=messages,
+            messages=_with_inlined_remote_image_urls(messages),
             optional_params=self._inference_params(optional_params),
             litellm_params=litellm_params,
             headers=headers,
@@ -341,7 +392,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
     ) -> dict:  # mutable-ok: BaseConfig signature
         return await super().async_transform_request(
             model=split_bedrock_region_path(model)[1],
-            messages=messages,
+            messages=await async_inline_remote_media(messages, should_inline=inline_remote_image_urls),
             optional_params=self._inference_params(optional_params),
             litellm_params=litellm_params,
             headers=headers,
