@@ -7,6 +7,7 @@ import pytest
 import datetime
 
 import litellm
+from litellm._internal_context import in_post_response_phase
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.llms.anthropic.experimental_pass_through.messages import handler
@@ -276,6 +277,33 @@ class _HeldBackStream:
 
     async def __anext__(self) -> bytes:
         raise StopAsyncIteration
+
+
+@pytest.mark.asyncio
+async def test_stream_cache_write_runs_in_post_response_phase(request_kwargs, monkeypatch):
+    """Every event, message_stop included, is already with the client when the stream write
+    runs, so the redis span it logs must detach from the request trace like the chat
+    completions write does. The marker must not leak past the write into the stream close."""
+    phases: list[bool] = []
+
+    class _PhaseRecordingCache:
+        supported_call_types = ["anthropic_messages"]
+        cache = None
+
+        async def async_add_cache(self, result, dynamic_cache_object=None, **kwargs):
+            phases.append(in_post_response_phase())
+
+    monkeypatch.setattr(litellm, "cache", _PhaseRecordingCache())
+    caching_handler = LLMCachingHandler(
+        original_function=handler.anthropic_messages,
+        request_kwargs=dict(request_kwargs),
+        start_time=datetime.datetime.now(),
+    )
+    writer = AnthropicMessagesStreamCacheWriter(stream=_byte_stream(STREAM_EVENTS), caching_handler=caching_handler)
+
+    assert await _collect(writer) == STREAM_EVENTS
+    assert phases == [True], "async_add_cache must observe the post-response phase"
+    assert in_post_response_phase() is False, "the phase must not leak into the stream consumer"
 
 
 def test_cache_writer_forwards_has_buffered_provider_output(request_kwargs):
