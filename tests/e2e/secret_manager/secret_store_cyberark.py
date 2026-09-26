@@ -85,7 +85,7 @@ class Conjur:
         )
         if result.status_code != 409 or attempt + 1 == _POLICY_LOAD_ATTEMPTS:
             return result
-        time.sleep(_POLICY_LOAD_RETRY_DELAY_SECONDS * 2**attempt)
+        time.sleep(_POLICY_LOAD_RETRY_DELAY_SECONDS * (1 << attempt))
         return self._load_root_policy(method, policy, attempt + 1)
 
     def _update_root_policy(self, method: Literal["POST", "PATCH"], policy: str, action: str) -> None:

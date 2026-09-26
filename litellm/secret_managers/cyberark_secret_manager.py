@@ -161,7 +161,7 @@ class CyberArkSecretManager(BaseSecretManager):
         )
         if resp.status_code != 409 or attempt + 1 == CYBERARK_POLICY_LOAD_ATTEMPTS:
             return resp
-        time.sleep(CYBERARK_POLICY_LOAD_RETRY_DELAY_SECONDS * 2**attempt)
+        time.sleep(CYBERARK_POLICY_LOAD_RETRY_DELAY_SECONDS * (1 << attempt))
         return self._load_variable_policy(policy_url, policy_yaml, attempt + 1)
 
     def get_url(self, secret_name: str) -> str:
