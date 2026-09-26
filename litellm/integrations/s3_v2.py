@@ -556,13 +556,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 except httpx.HTTPStatusError as error:
                     return error.response
 
-            prepared: _PreparedPut | None = None  # rebind-ok: built once inside the first slot, reused across retries
             max_retries: Final = 3
             for attempt in range(max_retries):
                 async with slot:
-                    if prepared is None:
-                        prepared = self._prepare_put(batch_logging_element)
-                    response = await self._recorded_put(partial(signed_put, prepared))
+                    response = await self._recorded_put(partial(signed_put, self._prepare_put(batch_logging_element)))
                 if (
                     response.status_code in _RETRYABLE_STATUSES
                     and not _is_terminal(response)

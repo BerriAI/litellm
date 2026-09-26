@@ -3369,6 +3369,16 @@ async def test_unlisted_status_gets_one_put_and_stays_queued(status: int, code: 
     assert len(logger.log_queue) == 4
 
 
+class _SyncRecordingClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self.response: Final = response
+        self.put_calls: list = []  # mutable-ok: call log appended once per PUT
+
+    def put(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.put_calls.append(url)
+        return self.response
+
+
 def test_sync_upload_404_is_single_attempt_without_sleep() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
@@ -3377,16 +3387,15 @@ def test_sync_upload_404_is_single_attempt_without_sleep() -> None:
         s3_region_name="us-east-1",
     )
 
-    mock_sync_client = MagicMock()
-    mock_sync_client.put = MagicMock(return_value=_coded_failure_response(404, "NoSuchKey"))
+    sync_client: Final = _SyncRecordingClient(_coded_failure_response(404, "NoSuchKey"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(_element({"id": "sync-404"}, "sync-404"))
 
-    assert mock_sync_client.put.call_count == 1
+    assert len(sync_client.put_calls) == 1
     mock_sleep.assert_not_called()
 
 
@@ -3408,16 +3417,15 @@ def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, exp
         s3_region_name="us-east-1",
     )
 
-    mock_sync_client = MagicMock()
-    mock_sync_client.put = MagicMock(return_value=_coded_failure_response(status, "SlowDown"))
+    sync_client: Final = _SyncRecordingClient(_coded_failure_response(status, "SlowDown"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(_element({"id": "sync"}, "sync"))
 
-    assert mock_sync_client.put.call_count == expected_puts
+    assert len(sync_client.put_calls) == expected_puts
     assert mock_sleep.call_args_list == expected_sleeps
 
 
@@ -3511,8 +3519,10 @@ class _SlowFailOncePerKeyPut:
         self.failed: set[str] = set()
         self.dumps_count = dumps_count
         self.first_completed: int | None = None
+        self.calls: tuple[str, ...] = ()
 
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.calls = (*self.calls, url)
         await _real_sleep(0)
         if self.first_completed is None:
             self.first_completed = self.dumps_count()
@@ -3553,7 +3563,39 @@ async def test_peak_serialized_bodies_bounded_by_upload_width() -> None:
 
     assert put.first_completed is not None
     assert put.first_completed <= logger.s3_max_concurrent_uploads
-    assert len(dumps_calls) == 64
+    assert len(dumps_calls) == len(put.calls) == 128
+
+
+@pytest.mark.asyncio
+async def test_retry_rebuilds_the_body_inside_the_slot() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps as real_safe_dumps
+
+    dumps_calls: list[object] = []
+
+    def counting_dumps(*args, **kwargs):
+        dumps_calls.append(args)
+        return real_safe_dumps(*args, **kwargs)
+
+    put = _FailOncePerKeyPut()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(64)]
+
+    with (
+        patch("litellm.integrations.s3_v2.safe_dumps", side_effect=counting_dumps),
+        patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))),
+    ):
+        await logger.flush_queue()
+
+    assert len(dumps_calls) == len(put.calls) == 128
     assert logger.log_queue == []
 
 
