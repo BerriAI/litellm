@@ -688,3 +688,32 @@ class TestPostCallToolCallFallback:
         tool_calls = result.choices[0].message.tool_calls
         assert tool_calls[0]["id"] == "call_A"
         assert tool_calls[1]["id"] == "call_B"
+
+
+class _SlotReplacingToolCallGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if inputs.get("tool_calls"):
+            inputs["tool_calls"][0] = {
+                "id": "call_A",
+                "type": "function",
+                "function": {"name": "first", "arguments": '{"city":"[REDACTED]"}'},
+            }
+        return GenericGuardrailAPIInputs(texts=list(inputs.get("texts") or []))
+
+
+class TestPostCallToolCallSlotReplacement:
+    @pytest.mark.asyncio
+    async def test_slot_replacement_survives_when_guardrail_returns_no_tool_calls(self):
+        result = await OpenAIChatCompletionsHandler().process_output_response(
+            response=_two_tool_call_response(),
+            guardrail_to_apply=_SlotReplacingToolCallGuardrail(),
+        )
+
+        tool_calls = result.choices[0].message.tool_calls
+        assert tool_calls[0]["function"]["arguments"] == '{"city":"[REDACTED]"}'

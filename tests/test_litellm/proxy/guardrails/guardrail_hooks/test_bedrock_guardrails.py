@@ -8206,3 +8206,39 @@ async def test_during_call_hook_input_text_then_image_per_message():
 
     mock_post.assert_called_once()
     assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi [X]"}}, _PNG_IMAGE_ITEM]
+
+
+class _ToolCallArgsEmittingGuardrail(BedrockGuardrail):
+    def get_content_items_for_message(self, message):
+        content = message.get("content")
+        if content is None and message.get("tool_calls"):
+            tool_call = message["tool_calls"][0]
+            function = tool_call.get("function", {})
+            return [QualifiedTextBlock(text=function.get("arguments", ""), qualifier=None)]
+        return super().get_content_items_for_message(message)
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_override_can_emit_text_for_none_content_tool_call_message():
+    """An override emitting text for a content-None tool_call message reaches INPUT."""
+    guardrail = _ToolCallArgsEmittingGuardrail(
+        guardrail_name="bedrock-tool-call-args",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"function": {"name": "q", "arguments": '{"q":"kill him"}'}}],
+        },
+        {"role": "user", "content": "ok"},
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hi", '{"q":"kill him"}', "ok"]

@@ -580,7 +580,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         response: "ModelResponse",
         texts_to_check: Sequence[str],
         images_to_check: Sequence[str],
-        tool_calls_to_check: Sequence[dict[str, object]],
+        tool_calls_to_check: list[dict[str, object]],
         text_task_mappings: Sequence[tuple[int, int | None]],
         tool_call_task_mappings: Sequence[tuple[int, int]],
         request_data: dict | None,
@@ -605,7 +605,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if images_to_check:
             inputs["images"] = list(images_to_check)  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         if tool_calls_to_check:
-            inputs["tool_calls"] = list(tool_calls_to_check)  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+            inputs["tool_calls"] = tool_calls_to_check
         # Include model information from the response if available
         if hasattr(response, "model") and response.model:
             inputs["model"] = response.model

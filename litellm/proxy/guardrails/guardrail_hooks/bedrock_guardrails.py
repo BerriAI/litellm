@@ -505,8 +505,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         grounding_source/query tag cannot change how input-safety policies treat content
         """
         content: Final = message.get("content")
-        if content is None:
-            return ()
         text_items: Final = tuple(
             BedrockContentItem(text=BedrockTextContent(text=block.text))
             for block in self.get_content_items_for_message(message=message) or ()
