@@ -3244,10 +3244,6 @@ def _cache_row(
 async def test_cache_leakage_ranks_every_key_by_uncached_prompt_tokens_not_spend(
     _aggregated_postgresql: psycopg.Connection,
 ):
-    """The aggregated card can only rank the USAGE_TOP_API_KEYS_LIMIT highest-spend
-    keys, so a key outside that set with the most uncached input never reaches it.
-    The cache-leakage query must rank every key by uncached prompt tokens, report
-    totals over the full set, and keep the PTU sentinel out."""
     n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 3
     _seed_daily_user_spend_cache(
         _aggregated_postgresql,
@@ -3317,8 +3313,6 @@ async def test_cache_leakage_ranks_every_key_by_uncached_prompt_tokens_not_spend
 async def test_cache_leakage_scopes_to_the_entity_filter(
     _aggregated_postgresql: psycopg.Connection,
 ):
-    """entity_id must bound both the ranked rows and the window totals, exactly
-    like the WHERE clause shared with the aggregated arm."""
     _seed_daily_user_spend_cache(
         _aggregated_postgresql,
         [

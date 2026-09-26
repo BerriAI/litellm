@@ -5141,8 +5141,6 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
 
 @pytest.mark.asyncio
 async def test_cache_leakage_non_admin_scoped_to_caller(monkeypatch):
-    """Same scoping contract as the aggregated route: a non-admin with no user_id
-    is scoped to their own rows, and any other user_id is a 403."""
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import HTTPException
