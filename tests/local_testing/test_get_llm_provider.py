@@ -1,5 +1,7 @@
 import os
 import traceback
+from typing import Final
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -133,6 +135,12 @@ def test_get_llm_provider_azure_o1():
     assert model == "o1-mini"
 
 
+def _api_base_labels(api_base: str) -> frozenset[str]:
+    parsed: Final = urlparse(api_base)
+    path_segments: Final = frozenset(parsed.path.split("/")) - {"", "openai"}
+    return frozenset((*(parsed.hostname or "").split("."), *path_segments))
+
+
 def test_default_api_base():
     from litellm.litellm_core_utils.get_llm_provider_logic import (
         _get_openai_compatible_provider_info,
@@ -170,7 +178,21 @@ def test_default_api_base():
                         and other_provider.value == "dashscope"
                     ):
                         continue
-                    assert other_provider.value not in api_base.replace("/openai", "")
+                    assert other_provider.value not in _api_base_labels(api_base)
+
+
+@pytest.mark.parametrize(
+    "provider_name, api_base, expected",
+    [
+        ("sail", "https://api.parasail.io/v1", False),
+        ("parasail", "https://api.parasail.io/v1", True),
+        ("groq", "https://api.groq.com/openai/v1", True),
+        ("openai", "https://api.groq.com/openai/v1", False),
+        ("anthropic", "https://gateway.example.com/anthropic/v1", True),
+    ],
+)
+def test_api_base_labels_match_whole_tokens(provider_name: str, api_base: str, expected: bool):
+    assert (provider_name in _api_base_labels(api_base)) is expected
 
 
 def test_hosted_vllm_default_api_key():
