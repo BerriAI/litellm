@@ -15,6 +15,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
@@ -55,23 +56,16 @@ def _process_image_response(response: Response, url: str) -> str:
 
     base64_image: Final = base64.b64encode(image_bytes).decode("utf-8")
 
-    image_type: Final = response.headers.get("Content-Type")
-    if image_type is None:
-        img_type = url.split(".")[-1].lower()
-        _img_type: Final = {
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "png": "image/png",
-            "gif": "image/gif",
-            "webp": "image/webp",
-        }.get(img_type)
-        if _img_type is None:
-            raise Exception(
-                f"Error: Unsupported image format. Format={_img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-            )
-        img_type = _img_type
-    else:
-        img_type = image_type
+    try:
+        img_type: Final = infer_content_type_from_url_and_content(
+            url=url,
+            content=bytes(image_bytes),
+            current_content_type=response.headers.get("Content-Type"),
+        )
+    except ValueError as e:
+        raise litellm.ImageFetchError(
+            f"Error: Unable to determine image content type from the server's headers, the URL, or the image bytes. url={url}"
+        ) from e
 
     result: Final = f"data:{img_type};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)

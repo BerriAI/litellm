@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import time
 import uuid
@@ -257,6 +258,54 @@ async def test_async_data_url_is_returned_unchanged_without_fetch(monkeypatch):
     data_url = "data:image/png;base64,iVBORw0KGgo="
 
     assert await async_convert_url_to_base64(data_url) == data_url
+
+
+REAL_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _stub_image_client(content, content_type):
+    class _Client:
+        def get(self, url, follow_redirects=True):
+            headers = {} if content_type is None else {"Content-Type": content_type}
+            return Response(200, content=content, headers=headers, request=Request("GET", url))
+
+    return _Client()
+
+
+def test_convert_url_to_base64_infers_the_type_when_the_server_sends_octet_stream(monkeypatch):
+    monkeypatch.setattr(
+        litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "application/octet-stream")
+    )
+
+    result = convert_url_to_base64(f"http://img.example/{uuid.uuid4()}")
+
+    assert result.startswith("data:image/png;base64,")
+
+
+def test_convert_url_to_base64_keeps_a_real_content_type(monkeypatch):
+    monkeypatch.setattr(
+        litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "image/jpeg")
+    )
+
+    result = convert_url_to_base64(f"http://img.example/{uuid.uuid4()}.png")
+
+    assert result.startswith("data:image/jpeg;base64,")
+
+
+def test_convert_url_to_base64_raises_when_no_content_type_is_determinable(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        _stub_image_client(b"\x00\x01\x02\x03not-an-image", "application/octet-stream"),
+    )
+    url = f"http://img.example/{uuid.uuid4()}"
+
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        convert_url_to_base64(url)
+
+    assert url in str(excinfo.value)
 
 
 def test_image_size_limit_disabled(monkeypatch):
