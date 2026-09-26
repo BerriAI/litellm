@@ -11,9 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     anthropic::{
         ANTHROPIC_OAUTH_TOKEN_PREFIX,
-        experimental_pass_through::messages::transformation::{
-            complete_anthropic_url, resolve_anthropic_api_key,
-        },
+        messages::transformation::{complete_anthropic_url, resolve_anthropic_api_key},
     },
     base_llm::chat::transformation::{
         BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,

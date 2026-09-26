@@ -6,7 +6,7 @@ use litellm_types::llms::anthropic_messages::{
 };
 
 use crate::{
-    anthropic::experimental_pass_through::messages::transformation::{
+    anthropic::messages::transformation::{
         ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
     },
     base_llm::{
