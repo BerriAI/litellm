@@ -891,6 +891,7 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         self._budget_crossed = False
         self._completed = False
         self._aborted = False
+        self._abandoned = False
         self._report_task: asyncio.Task[None] | None = None
 
     def dispatch(self) -> asyncio.Task[None]:
@@ -901,7 +902,12 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         return self._report_task
 
     async def _run_report(self) -> None:
-        if not self._completed and not self._budget_crossed and not self._aborted:
+        if self._abandoned:
+            self._log_warning(
+                "pass_through_endpoint: upstream error response abandoned before reaching the client after %d preview bytes",
+                sum(len(part) for part in self._collected),
+            )
+        elif not self._completed and not self._budget_crossed and not self._aborted:
             self._log_warning(
                 "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body",
                 sum(len(part) for part in self._collected),
@@ -910,6 +916,11 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
 
     async def report_collected(self) -> None:
         await asyncio.shield(self.dispatch())
+
+    async def abandon(self) -> None:
+        self._abandoned = True
+        self.dispatch()
+        await self._upstream.aclose()
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
@@ -1037,7 +1048,7 @@ def _passthrough_upstream_failure_reporter(
 class _UpstreamRelay:
     response: httpx.Response
     background: BackgroundTask | None
-    dispatch: Callable[[], object] | None
+    abandon: Callable[[], Awaitable[None]] | None
 
 
 async def _log_passthrough_upstream_failure(
@@ -1047,7 +1058,7 @@ async def _log_passthrough_upstream_failure(
     logging_obj: LiteLLMLoggingObj,
 ) -> _UpstreamRelay:
     if response.status_code < 400:
-        return _UpstreamRelay(response=response, background=None, dispatch=None)
+        return _UpstreamRelay(response=response, background=None, abandon=None)
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     log_warning: Final = verbose_proxy_logger.warning
@@ -1056,7 +1067,7 @@ async def _log_passthrough_upstream_failure(
     )
     if response.is_stream_consumed:
         await report(response.content)
-        return _UpstreamRelay(response=response, background=None, dispatch=None)
+        return _UpstreamRelay(response=response, background=None, abandon=None)
     stream: Final = _PreviewReportingStream(
         upstream=response,
         report=report,
@@ -1071,7 +1082,7 @@ async def _log_passthrough_upstream_failure(
             extensions=response.extensions,
         ),
         background=BackgroundTask(stream.report_collected),
-        dispatch=stream.dispatch,
+        abandon=stream.abandon,
     )
 
 
@@ -1564,8 +1575,8 @@ async def pass_through_request(
                     background=relay.background,
                 )
             except BaseException:  # noqa: BLE001  # the relay owns the report until the response takes it over
-                if relay.dispatch is not None:
-                    relay.dispatch()
+                if relay.abandon is not None:
+                    await relay.abandon()
                 raise
 
         if state_raw_body is not None:
@@ -1662,8 +1673,8 @@ async def pass_through_request(
                     background=detected_relay.background,
                 )
             except BaseException:  # noqa: BLE001  # the relay owns the report until the response takes it over
-                if detected_relay.dispatch is not None:
-                    detected_relay.dispatch()
+                if detected_relay.abandon is not None:
+                    await detected_relay.abandon()
                 raise
 
         if not _should_buffer_passthrough_response(response):
