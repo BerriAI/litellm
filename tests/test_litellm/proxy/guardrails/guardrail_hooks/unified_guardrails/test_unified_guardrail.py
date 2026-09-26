@@ -1,6 +1,8 @@
 """Tests for unified guardrail."""
 
 import logging
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final, Literal
 
 import pytest
 
@@ -11,7 +13,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms import discover_guardrail_translation_mappings, load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -19,14 +21,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_messages_without_system,
     openai_messages_without_tool,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
+from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
-from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
@@ -39,7 +41,10 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import CallTypes, Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class RecordingGuardrail(CustomGuardrail):
@@ -59,6 +64,18 @@ class RecordingGuardrail(CustomGuardrail):
         return {"texts": inputs.get("texts", [])}
 
 
+class RewritingGuardrail(RecordingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        recorded: Final = await super().apply_guardrail(inputs, request_data, input_type, logging_obj=logging_obj)
+        return GenericGuardrailAPIInputs(texts=[f"{text} [GUARDRAILED]" for text in recorded["texts"]])
+
+
 class _NoopTranslation(BaseTranslation):
     """Test translation handler that simply echoes input/output."""
 
@@ -75,19 +92,29 @@ class _NoopTranslation(BaseTranslation):
         return response
 
 
+def _patch_translation_mappings(monkeypatch, mappings):
+    """Point the unified guardrail at ``mappings`` for one test, restored by pytest.
+
+    Every override goes through this one seam: competing writers to the same state
+    are what leaked a stale handler map into unrelated test files (LIT-6834).
+    """
+    monkeypatch.setattr(unified_module, "load_guardrail_translation_mappings", lambda: mappings)
+
+
 @pytest.fixture(autouse=True)
-def _inject_mcp_handler_mapping():
+def _inject_mcp_handler_mapping(monkeypatch):
     """Inject MCP handler mapping so the unified guardrail can run inside tests."""
-    unified_module.endpoint_guardrail_translation_mappings = {
-        CallTypes.call_mcp_tool: MCPGuardrailTranslationHandler,
-        CallTypes.anthropic_messages: _NoopTranslation,
-        CallTypes.ocr: OCRHandler,
-        CallTypes.aocr: OCRHandler,
-        CallTypes.responses: OpenAIResponsesHandler,
-        CallTypes.aresponses: OpenAIResponsesHandler,
-    }
-    yield
-    unified_module.endpoint_guardrail_translation_mappings = None
+    _patch_translation_mappings(
+        monkeypatch,
+        {
+            CallTypes.call_mcp_tool: MCPGuardrailTranslationHandler,
+            CallTypes.anthropic_messages: _NoopTranslation,
+            CallTypes.ocr: OCRHandler,
+            CallTypes.aocr: OCRHandler,
+            CallTypes.responses: OpenAIResponsesHandler,
+            CallTypes.aresponses: OpenAIResponsesHandler,
+        },
+    )
 
 
 class TestUnifiedLLMGuardrails:
@@ -103,9 +130,7 @@ class TestUnifiedLLMGuardrails:
             assert msgs[0]["content"] == "sys"
 
         def test_effective_skip_respects_per_guardrail_over_global(self, monkeypatch):
-            monkeypatch.setattr(
-                litellm, "skip_system_message_in_guardrail", True, raising=False
-            )
+            monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", True, raising=False)
 
             class G:
                 skip_system_message_in_guardrail = False
@@ -118,21 +143,15 @@ class TestUnifiedLLMGuardrails:
             assert effective_skip_system_message_for_guardrail(G2()) is True
 
         @pytest.mark.asyncio
-        async def test_openai_handler_skips_system_in_guardrail_inputs(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_system_message_in_guardrail", True, raising=False
-            )
+        async def test_openai_handler_skips_system_in_guardrail_inputs(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_system_message_in_guardrail = None
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -157,21 +176,15 @@ class TestUnifiedLLMGuardrails:
             assert data["messages"][0]["content"] == "secret system"
 
         @pytest.mark.asyncio
-        async def test_openai_handler_per_guardrail_skip_false_overrides_global(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_system_message_in_guardrail", True, raising=False
-            )
+        async def test_openai_handler_per_guardrail_skip_false_overrides_global(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_system_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_system_message_in_guardrail = False
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -189,10 +202,7 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert "sys" in captured["inputs"]["texts"]
-            roles = {
-                m.get("role")
-                for m in (captured["inputs"].get("structured_messages") or [])
-            }
+            roles = {m.get("role") for m in (captured["inputs"].get("structured_messages") or [])}
             assert "system" in roles
 
     class TestSkipToolMessageForChatCompletions:
@@ -217,12 +227,8 @@ class TestUnifiedLLMGuardrails:
             assert all(m["role"] != "tool" for m in out)
             assert msgs[2]["content"] == "tool result"
 
-        def test_effective_skip_tool_respects_per_guardrail_over_global(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_tool_message_in_guardrail", True, raising=False
-            )
+        def test_effective_skip_tool_respects_per_guardrail_over_global(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True, raising=False)
 
             class G:
                 skip_tool_message_in_guardrail = False
@@ -236,18 +242,14 @@ class TestUnifiedLLMGuardrails:
 
         @pytest.mark.asyncio
         async def test_openai_handler_skips_tool_in_guardrail_inputs(self, monkeypatch):
-            monkeypatch.setattr(
-                litellm, "skip_tool_message_in_guardrail", True, raising=False
-            )
+            monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_tool_message_in_guardrail = None
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -287,21 +289,15 @@ class TestUnifiedLLMGuardrails:
             assert data["messages"][2]["content"] == "secret tool result"
 
         @pytest.mark.asyncio
-        async def test_openai_handler_per_guardrail_skip_tool_false_overrides_global(
-            self, monkeypatch
-        ):
-            monkeypatch.setattr(
-                litellm, "skip_tool_message_in_guardrail", True, raising=False
-            )
+        async def test_openai_handler_per_guardrail_skip_tool_false_overrides_global(self, monkeypatch):
+            monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True, raising=False)
 
             captured = {}
 
             class MockGuardrail:
                 skip_tool_message_in_guardrail = False
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, logging_obj=None
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
                     captured["inputs"] = inputs
                     return inputs
 
@@ -319,10 +315,7 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert "tr" in captured["inputs"]["texts"]
-            roles = {
-                m.get("role")
-                for m in (captured["inputs"].get("structured_messages") or [])
-            }
+            roles = {m.get("role") for m in (captured["inputs"].get("structured_messages") or [])}
             assert "tool" in roles
 
     class TestAsyncPreCallHook:
@@ -347,6 +340,38 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert guardrail.event_history == [GuardrailEventHooks.pre_mcp_call]
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize(
+            "call_type",
+            ["avideo_generation", "acreate_video", "avideo_remix", "avideo_edit", "avideo_extension"],
+        )
+        async def test_video_routes_scan_prompt_and_keep_rewrite(self, monkeypatch, call_type: str) -> None:
+            """LIT-6685: /v1/videos dispatches call_type="avideo_generation", which the
+            hook once swallowed as an unknown CallTypes value and returned unscanned.
+            Runs against the discovered handler map so the video package must really exist."""
+            _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+            handler = UnifiedLLMGuardrails()
+            guardrail = RewritingGuardrail()
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "veo-3.1-fast",
+                "prompt": "a paper boat on a stream",
+                "seconds": "4",
+            }
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.pre_call]
+            assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == [["a paper boat on a stream"]]
+            assert guardrail.apply_calls[0]["inputs"]["model"] == "veo-3.1-fast"
+            assert result["prompt"] == "a paper boat on a stream [GUARDRAILED]"
+            assert result["seconds"] == "4"
 
     class TestAsyncModerationHook:
         @pytest.mark.asyncio
@@ -396,7 +421,7 @@ class TestUnifiedLLMGuardrails:
 
     class TestAsyncPostCallStreamingIteratorHook:
         @pytest.mark.asyncio
-        async def test_streaming_content_not_lost_on_sampled_chunks(self):
+        async def test_streaming_content_not_lost_on_sampled_chunks(self, monkeypatch):
             """
             Verify that every chunk's content is preserved in the output stream.
 
@@ -412,7 +437,9 @@ class TestUnifiedLLMGuardrails:
                 async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
                     return data
 
-                async def process_output_response(self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None):  # type: ignore[override]
+                async def process_output_response(
+                    self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None
+                ):  # type: ignore[override]
                     return response
 
                 async def process_output_streaming_response(
@@ -442,10 +469,7 @@ class TestUnifiedLLMGuardrails:
 
                     return responses_so_far
 
-            # Override the mapping to use our content-clearing translation
-            unified_module.endpoint_guardrail_translation_mappings = {
-                CallTypes.acompletion: _ContentClearingTranslation,
-            }
+            _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: _ContentClearingTranslation})
 
             handler = UnifiedLLMGuardrails()
             guardrail = RecordingGuardrail()
@@ -484,9 +508,7 @@ class TestUnifiedLLMGuardrails:
                 response=mock_stream(),
                 request_data=request_data,
             ):
-                content = (
-                    item.choices[0].delta.content if item.choices[0].delta else None
-                )
+                content = item.choices[0].delta.content if item.choices[0].delta else None
                 yielded_contents.append(content)
 
             # Every chunk should have non-empty content
@@ -537,23 +559,18 @@ class TestUnifiedLLMGuardrails:
             ],
         )
         @pytest.mark.asyncio
-        async def test_post_call_scans_output_on_every_registered_alias(
-            self, request_route: str
-        ) -> None:
+        async def test_post_call_scans_output_on_every_registered_alias(self, request_route: str) -> None:
             handler = UnifiedLLMGuardrails()
             guardrail = RecordingGuardrail()
 
             await handler.async_post_call_success_hook(
                 data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="test-key", request_route=request_route
-                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route=request_route),
                 response=self._responses_api_response(),
             )
 
             assert guardrail.apply_calls, (
-                f"guardrail never ran for request_route={request_route!r}; model "
-                f"output reached the client unscanned"
+                f"guardrail never ran for request_route={request_route!r}; model output reached the client unscanned"
             )
             assert guardrail.apply_calls[0]["input_type"] == "response"
             assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Paris"]
@@ -583,18 +600,14 @@ class TestUnifiedLLMGuardrails:
             assert CallTypes.responses in mappings
 
         @pytest.mark.asyncio
-        async def test_unresolvable_route_skips_scanning_and_says_so(
-            self, caplog: pytest.LogCaptureFixture
-        ) -> None:
+        async def test_unresolvable_route_skips_scanning_and_says_so(self, caplog: pytest.LogCaptureFixture) -> None:
             handler = UnifiedLLMGuardrails()
             guardrail = RecordingGuardrail()
 
             with caplog.at_level(logging.WARNING):
                 result = await handler.async_post_call_success_hook(
                     data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
-                    user_api_key_dict=UserAPIKeyAuth(
-                        api_key="test-key", request_route="/cursor/chat/completions"
-                    ),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/cursor/chat/completions"),
                     response=self._responses_api_response(),
                 )
 
@@ -613,9 +626,7 @@ class TestUnifiedLLMGuardrails:
             with caplog.at_level(logging.WARNING):
                 await handler.async_post_call_success_hook(
                     data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
-                    user_api_key_dict=UserAPIKeyAuth(
-                        api_key="test-key", request_route="/v1/chat/completions"
-                    ),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
                     response=self._responses_api_response(),
                 )
 
@@ -636,6 +647,64 @@ class TestUnifiedLLMGuardrails:
 
     class TestOCRGuardrailE2E:
         """End-to-end tests: UnifiedLLMGuardrails -> OCRHandler."""
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize("call_type", [CallTypes.ocr, CallTypes.aocr, CallTypes.aresponses])
+        async def test_post_call_logging_fallback_is_limited_to_ocr(self, call_type: CallTypes) -> None:
+            guardrail: Final = RecordingGuardrail()
+            response: Final = (
+                TestUnifiedLLMGuardrails.TestResponsesRouteAliases._responses_api_response()
+                if call_type == CallTypes.aresponses
+                else OCRResponse(model="mistral-ocr-latest", pages=[OCRPage(index=0, markdown="Scan this page")])
+            )
+
+            result: Final = await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data={
+                    "guardrail_to_apply": guardrail,
+                    "litellm_logging_obj": SimpleNamespace(call_type=call_type.value),
+                },
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+            assert result is response
+            if call_type in (CallTypes.ocr, CallTypes.aocr):
+                assert len(guardrail.apply_calls) == 1
+                assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Scan this page"]
+            else:
+                assert guardrail.apply_calls == []
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize("request_route", [None, "/v1/chat/completions"])
+        async def test_ocr_logging_fallback_preserves_route_and_response_precedence(
+            self, request_route: str | None, monkeypatch: pytest.MonkeyPatch
+        ) -> None:
+            from litellm.types.utils import ModelResponse
+
+            _patch_translation_mappings(
+                monkeypatch,
+                {
+                    CallTypes.completion: OpenAIChatCompletionsHandler,
+                    CallTypes.acompletion: OpenAIChatCompletionsHandler,
+                    CallTypes.aocr: OCRHandler,
+                },
+            )
+            guardrail: Final = RecordingGuardrail()
+            response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Chat output"}}])
+
+            result: Final = await guardrail.async_post_call_success_deployment_hook(
+                request_data={
+                    "guardrails": [guardrail.guardrail_name],
+                    "user_api_key_request_route": request_route,
+                    "litellm_logging_obj": SimpleNamespace(call_type=CallTypes.aocr.value),
+                },
+                response=response,
+                call_type=CallTypes.aocr,
+            )
+
+            assert result is response
+            assert len(guardrail.apply_calls) == 1
+            assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Chat output"]
 
         @pytest.mark.asyncio
         async def test_pre_call_hook_invokes_ocr_handler_for_input(self):
@@ -667,15 +736,10 @@ class TestUnifiedLLMGuardrails:
             assert guardrail.event_history == [GuardrailEventHooks.pre_call]
             assert len(guardrail.apply_calls) == 1
             assert guardrail.apply_calls[0]["input_type"] == "request"
-            assert (
-                "https://arxiv.org/pdf/2201.04234"
-                in guardrail.apply_calls[0]["inputs"]["texts"]
-            )
+            assert "https://arxiv.org/pdf/2201.04234" in guardrail.apply_calls[0]["inputs"]["texts"]
 
             # Data should be returned with document intact
-            assert (
-                result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
-            )
+            assert result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
 
         @pytest.mark.asyncio
         async def test_moderation_hook_invokes_ocr_handler(self):
@@ -703,10 +767,7 @@ class TestUnifiedLLMGuardrails:
 
             assert guardrail.event_history == [GuardrailEventHooks.during_call]
             assert len(guardrail.apply_calls) == 1
-            assert (
-                "https://example.com/scan.png"
-                in guardrail.apply_calls[0]["inputs"]["texts"]
-            )
+            assert "https://example.com/scan.png" in guardrail.apply_calls[0]["inputs"]["texts"]
 
         @pytest.mark.asyncio
         async def test_post_call_success_hook_guardrails_ocr_output(self):
@@ -722,9 +783,7 @@ class TestUnifiedLLMGuardrails:
                 def should_run_guardrail(self, data, event_type):  # type: ignore[override]
                     return True
 
-                async def apply_guardrail(
-                    self, inputs, request_data, input_type, **kwargs
-                ):
+                async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
                     texts = inputs.get("texts", [])
                     return {"texts": [t.replace("SECRET", "[REDACTED]") for t in texts]}
 
@@ -885,12 +944,8 @@ class TestStreamingTransform:
     completions streaming surface."""
 
     @pytest.fixture(autouse=True)
-    def _use_openai_handler_mapping(self):
-        unified_module.endpoint_guardrail_translation_mappings = {
-            CallTypes.acompletion: OpenAIChatCompletionsHandler,
-        }
-        yield
-        unified_module.endpoint_guardrail_translation_mappings = None
+    def _use_openai_handler_mapping(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
 
     @pytest.mark.asyncio
     async def test_block_only_drops_text_rewrites(self):
@@ -948,19 +1003,24 @@ class TestStreamingTransform:
         assert streamed == "ABCDEFGHIJ"
 
     @pytest.mark.asyncio
-    async def test_incremental_diff_underflow_raises(self):
+    async def test_incremental_diff_underflow_emits_error_frame(self):
         """A transform shorter than what was already streamed cannot retract
-        bytes: it raises HTTPException(stream_transform_underflow)."""
+        bytes. Chunks have already been flushed by then, so the underflow
+        surfaces as the in-stream error frame, not an unraisable HTTPException."""
+        import json as _json
+
         # First sample emits "ABCDEF" (6 chars); second sample shrinks to 3.
         guardrail = _StreamingTextGuardrail(shrink_to="ABC", shrink_after=1)
 
         chunks = [_stream_chunk("abcdef"), _stream_chunk("ghij")]
 
-        with pytest.raises(unified_module.HTTPException) as exc_info:
-            await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
 
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["error"] == "stream_transform_underflow"
+        frame = out[-1]
+        assert isinstance(frame, bytes)
+        payload = _json.loads(frame.decode()[len("data: ") :])
+        assert payload["error"]["message"] == "stream_transform_underflow"
+        assert payload["error"]["code"] == "400"
 
     @pytest.mark.asyncio
     async def test_incremental_diff_final_chunk_preserves_finish_reason(self):
@@ -1026,7 +1086,7 @@ class TestStreamingTransform:
         )
 
         emitted = []
-        async for item in handler._emit_streaming_http_error(
+        async for item in handler.emit_streaming_http_error(
             exc,
             call_type=CallTypes.asend_message.value,
             responses_so_far=[{"id": "req-1"}],
@@ -1051,6 +1111,7 @@ class TestStreamingTransform:
             emitted_text_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={0: "stop", 1: "length"},
+            held_chars_per_choice={},
             is_final=True,
         )
 
@@ -1089,6 +1150,7 @@ class TestStreamingTransform:
             emitted_text_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={},
+            held_chars_per_choice={},
             is_final=False,
         )
 
@@ -1111,6 +1173,7 @@ class TestStreamingTransform:
                 emitted_text_per_choice={0: "My SSN is 123"},
                 holdback_per_choice={},
                 finish_reason_per_choice={},
+                held_chars_per_choice={},
                 is_final=False,
             )
 
@@ -1243,6 +1306,65 @@ class TestStreamingTransform:
         assert _delta_text(out[0]) == "LET ME CHECK "
         assert out[1].choices[0].delta.tool_calls
         assert out[1].choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_held_text_flushes_before_tool_call_finish_reason(self):
+        """Text still held back when a separate terminal tool-call chunk arrives is
+        delivered before the stream's finish_reason, not after it."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[100, 100, 100])
+
+        tool_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+        chunks = [_stream_chunk("let me check "), tool_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        finished_at = [i for i, item in enumerate(out) if item.choices[0].finish_reason is not None]
+        assert finished_at == [len(out) - 1]
+        assert out[-1].choices[0].finish_reason == "tool_calls"
+        assert "".join(_delta_text(i) for i in out) == "LET ME CHECK "
+        assert any(item.choices[0].delta.tool_calls for item in out)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "usage_choices",
+        [[], [StreamingChoices(index=0, delta=Delta(), finish_reason=None)]],
+        ids=["choiceless", "empty-delta"],
+    )
+    async def test_usage_chunk_is_forwarded_after_final_text(self, usage_choices):
+        """A trailing usage chunk (stream_options.include_usage) is delivered after
+        the transformed text instead of being swallowed, whether it arrives with
+        no choices or, as CustomStreamWrapper emits it, with one empty delta."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[100, 100, 100])
+        usage_chunk = ModelResponseStream(
+            choices=usage_choices,
+            usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        )
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop"), usage_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert "".join(_delta_text(i) for i in out) == "HELLO WORLD"
+        assert out[-1].usage.total_tokens == 5
+        assert not _delta_text(out[-1])
+        assert out[-2].choices[0].finish_reason == "stop"
 
     @pytest.mark.asyncio
     async def test_tool_call_blocking_guardrail_is_enforced(self):
@@ -1408,9 +1530,7 @@ class TestStreamingTransform:
         # And the redacted text ("SECRET") reached the wire on some non-tool
         # chunk (i.e. the text terminator).
         transformed = "".join(
-            item.choices[0].delta.content or ""
-            for item in out
-            if item.choices and not item.choices[0].delta.tool_calls
+            item.choices[0].delta.content or "" for item in out if item.choices and not item.choices[0].delta.tool_calls
         )
         assert "SECRET" in transformed
         assert "secret" not in transformed
@@ -1555,7 +1675,9 @@ class TestStreamingTransform:
             _stream_chunk("went home."),
             ModelResponseStream(
                 choices=[
-                    StreamingChoices(index=0, delta=Delta(content=None, role="assistant", tool_calls=None), finish_reason=None),
+                    StreamingChoices(
+                        index=0, delta=Delta(content=None, role="assistant", tool_calls=None), finish_reason=None
+                    ),
                     StreamingChoices(
                         index=1,
                         delta=Delta(
@@ -1714,6 +1836,10 @@ class TestAppliedGuardrailsReflectsExecution:
     decision and marks itself only when it actually ran (LIT-4650). Ordinary
     guardrails are still auto-marked by the hook after dispatch."""
 
+    @pytest.fixture(autouse=True)
+    def _use_texts_only_mapping(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.pass_through: _TextsOnlyTranslation})
+
     @staticmethod
     def _data(guardrail):
         return {
@@ -1723,7 +1849,6 @@ class TestAppliedGuardrailsReflectsExecution:
         }
 
     async def _run(self, guardrail):
-        unified_module.endpoint_guardrail_translation_mappings = {CallTypes.pass_through: _TextsOnlyTranslation}
         data = self._data(guardrail)
         await UnifiedLLMGuardrails().async_pre_call_hook(
             user_api_key_dict=None,
@@ -1747,3 +1872,526 @@ class TestAppliedGuardrailsReflectsExecution:
     async def test_ordinary_guardrail_is_auto_marked_applied(self):
         data = await self._run(_AutoLoggingGuardrail())
         assert "auto-logging" in _applied_guardrails(data)
+
+
+class _EosHttpBlockingGuardrail(CustomGuardrail):
+    """Raises the bedrock-shaped block HTTPException at end-of-stream scan time."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="eos-http-block")
+        self.streaming_end_of_stream_only = True
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        raise unified_module.HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "BLOCKED_TOPIC",
+            },
+        )
+
+
+def _anthropic_sse_event(event_type, data):
+    import json as _json
+
+    return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n".encode()
+
+
+def _anthropic_message_chunks(texts):
+    head = [
+        _anthropic_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        _anthropic_sse_event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+    ]
+    deltas = [
+        _anthropic_sse_event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        )
+        for text in texts
+    ]
+    tail = [
+        _anthropic_sse_event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 5},
+            },
+        ),
+        _anthropic_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    return head + deltas + tail
+
+
+class TestStreamingHttpErrorFrames:
+    """A post-flush end-of-stream guardrail block (HTTPException) must surface as
+    the endpoint's in-stream error frame instead of an unhandled raise that
+    silently truncates the SSE stream (PR #38722 defect 1)."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @pytest.mark.asyncio
+    async def test_chat_eos_block_emits_data_error_frame(self):
+        import json as _json
+
+        guardrail = _EosHttpBlockingGuardrail()
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert out[0] == chunks[0]
+        assert chunks[1] not in out
+        frame = out[-1]
+        assert isinstance(frame, bytes)
+        text = frame.decode()
+        assert text.startswith("data: ")
+        payload = _json.loads(text[len("data: ") :])
+        assert payload["error"]["message"] == "Violated guardrail policy"
+        assert payload["error"]["code"] == "400"
+
+    @pytest.mark.asyncio
+    async def test_messages_eos_block_emits_anthropic_error_event(self):
+        guardrail = _EosHttpBlockingGuardrail()
+        chunks = _anthropic_message_chunks(["hello ", "world"])
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/messages")
+
+        raw = b"".join(c for c in out if isinstance(c, bytes)).decode()
+        assert "hello " in raw
+        assert "event: error" in raw
+        assert "Violated guardrail policy" in raw
+        assert "guardrail_error" in raw
+
+    @pytest.mark.asyncio
+    async def test_responses_eos_block_emits_error_event_with_next_sequence(self):
+        guardrail = _EosHttpBlockingGuardrail()
+        chunks = [
+            {"type": "response.created", "sequence_number": 0},
+            {"type": "response.output_text.delta", "sequence_number": 1, "delta": "hello"},
+            {
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": {
+                    "model": "gpt-4",
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}],
+                },
+            },
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+
+        assert chunks[0] in out and chunks[1] in out
+        assert chunks[2] not in out
+        error_event = out[-1]
+        assert error_event.type == "error"
+        assert error_event.sequence_number == 2
+        assert error_event.error.message == "Violated guardrail policy"
+        assert error_event.error.code == "400"
+        assert error_event.error.type == "guardrail_error"
+
+    @pytest.mark.asyncio
+    async def test_pre_flush_block_still_raises_http_exception(self):
+        guardrail = _EosHttpBlockingGuardrail()
+        guardrail.streaming_buffer_until_moderated = True
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        with pytest.raises(unified_module.HTTPException) as exc_info:
+            await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "Violated guardrail policy"
+
+
+class _AuditRecordingGuardrail(CustomGuardrail):
+    """Successful scan that records guardrail_information, like a flags-on audit."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="audit-recorder")
+        self.streaming_end_of_stream_only = True
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"action": "NONE"},
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        return inputs
+
+
+class TestStreamingGuardrailInformationBucket:
+    """guardrail_information written during a chat streaming end-of-stream scan
+    must land in the request's ``metadata`` bucket that spend logging snapshots.
+    Regression for PR #38722 defect 2: the chat handler used to plant a
+    ``litellm_metadata`` key first, flipping the bucket so every later
+    guardrail_information write was diverted and /spend/logs showed null."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @pytest.mark.asyncio
+    async def test_chat_eos_scan_writes_guardrail_information_to_metadata(self):
+        guardrail = _AuditRecordingGuardrail()
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        async def _mock_stream():
+            for chunk in chunks:
+                yield chunk
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", user_id="user-1", request_route="/v1/chat/completions")
+        request_data = {"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}}
+
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=_mock_stream(),
+            request_data=request_data,
+        ):
+            out.append(item)
+
+        assert "litellm_metadata" not in request_data
+        recorded = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(recorded) == 1
+        assert recorded[0]["guardrail_name"] == "audit-recorder"
+        assert recorded[0]["guardrail_status"] == "success"
+        assert request_data["metadata"]["user_api_key_user_id"] == "user-1"
+
+
+class _ScanCountingGuardrail(CustomGuardrail):
+    """Pass-through guardrail that records every response-side scan payload."""
+
+    def __init__(self, *, sampling_rate=5, end_of_stream_only=False, buffer_until_moderated=False):
+        super().__init__(guardrail_name="scan-counter")
+        self.streaming_sampling_rate = sampling_rate
+        self.streaming_end_of_stream_only = end_of_stream_only
+        self.streaming_buffer_until_moderated = buffer_until_moderated
+        self.guardrail_config = {}
+        self.scans: tuple[dict[str, object], ...] = ()
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.scans = (
+            *self.scans,
+            {
+                "texts": list(inputs.get("texts") or []),
+                "tool_calls": list(inputs.get("tool_calls") or []),
+                "model": inputs.get("model"),
+            },
+        )
+        return inputs
+
+
+def _responses_delta(sequence_number, text):
+    return {
+        "type": "response.output_text.delta",
+        "sequence_number": sequence_number,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": text,
+    }
+
+
+def _responses_tail(sequence_number, text):
+    return [
+        {
+            "type": "response.output_text.done",
+            "sequence_number": sequence_number,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "text": text,
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": sequence_number + 1,
+            "response": {
+                "model": "gpt-5.6",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
+            },
+        },
+    ]
+
+
+class TestStreamingScanDedup:
+    """A sampled round whose scan payload matches the previous round (or carries
+    no text yet) is skipped, so a stream is never re-scanned for output the
+    guardrail already cleared. Regression for LIT-6692."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @pytest.mark.asyncio
+    async def test_chat_terminal_chunk_on_sampled_index_is_scanned_once(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=3)
+        chunks = [_stream_chunk("a"), _stream_chunk("b"), _stream_chunk("c", finish_reason="stop")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert len(out) == 3
+        assert [scan["texts"] for scan in guardrail.scans] == [["abc"]]
+
+    @pytest.mark.asyncio
+    async def test_chat_round_with_unchanged_text_is_skipped(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=3)
+        chunks = [
+            _stream_chunk("a"),
+            _stream_chunk("b"),
+            _stream_chunk("c"),
+            _stream_chunk(None),
+            _stream_chunk(None),
+            _stream_chunk(None),
+            _stream_chunk("d", finish_reason="stop"),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert len(out) == 7
+        assert [scan["texts"] for scan in guardrail.scans] == [["abc"], ["abcd"]]
+
+    @pytest.mark.asyncio
+    async def test_chat_finish_chunk_right_after_a_sampled_round_is_not_rescanned(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=3)
+        chunks = [_stream_chunk("a"), _stream_chunk("b"), _stream_chunk("c"), _stream_chunk(None, finish_reason="stop")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert len(out) == 4
+        assert [scan["texts"] for scan in guardrail.scans] == [["abc"]]
+
+    @pytest.mark.asyncio
+    async def test_chat_finish_chunk_carrying_tool_calls_is_still_scanned(self):
+        from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        guardrail = _ScanCountingGuardrail(sampling_rate=3)
+        tool_call = ChatCompletionDeltaToolCall(
+            id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Paris"}')
+        )
+        finish = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[tool_call]), finish_reason="tool_calls")
+            ]
+        )
+        chunks = [_stream_chunk("a"), _stream_chunk("b"), _stream_chunk("c"), finish]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert len(out) == 4
+        assert [scan["texts"] for scan in guardrail.scans] == [["abc"], ["abc"]]
+        assert [call["function"]["name"] for call in guardrail.scans[1]["tool_calls"]] == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_chat_second_choice_finishing_later_still_gets_the_end_scan(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=3)
+        chunks = [
+            _stream_chunk("a", index=0),
+            _stream_chunk("x", index=1),
+            _stream_chunk("b", finish_reason="stop", index=0),
+            _stream_chunk("y", index=1),
+            _stream_chunk("z", finish_reason="stop", index=1),
+        ]
+
+        await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert len(guardrail.scans) == 2
+        assert any("yz" in text for text in guardrail.scans[-1]["texts"])
+
+    @pytest.mark.asyncio
+    async def test_responses_completed_event_on_sampled_index_is_scanned_once(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=5)
+        deltas = [_responses_delta(i, f"t{i}") for i in range(8)]
+        full_text = "".join(f"t{i}" for i in range(8))
+        chunks = deltas + _responses_tail(8, full_text)
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+
+        assert len(out) == 10
+        assert [scan["texts"] for scan in guardrail.scans] == [["t0t1t2t3t4"], [full_text]]
+        assert guardrail.scans[-1]["model"] == "gpt-5.6"
+
+    @pytest.mark.asyncio
+    async def test_responses_completed_right_after_a_sampled_round_is_not_rescanned(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=5)
+        deltas = [_responses_delta(i, f"t{i}") for i in range(5)]
+        chunks = deltas + _responses_tail(5, "t0t1t2t3t4")
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+
+        assert len(out) == 7
+        assert [scan["texts"] for scan in guardrail.scans] == [["t0t1t2t3t4"]]
+
+    @pytest.mark.asyncio
+    async def test_responses_completed_carrying_a_function_call_is_still_scanned(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=5)
+        deltas = [_responses_delta(i, f"t{i}") for i in range(5)]
+        completed = {
+            "type": "response.completed",
+            "sequence_number": 5,
+            "response": {
+                "model": "gpt-5.6",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "t0t1t2t3t4"}]},
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                        "arguments": '{"city": "Paris"}',
+                        "status": "completed",
+                    },
+                ],
+            },
+        }
+        chunks = deltas + [completed]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+
+        assert len(out) == 6
+        assert [scan["texts"] for scan in guardrail.scans] == [["t0t1t2t3t4"], ["t0t1t2t3t4"]]
+        assert [call["function"]["name"] for call in guardrail.scans[1]["tool_calls"]] == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_responses_round_with_unchanged_text_is_skipped(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=5)
+        deltas = [_responses_delta(i, f"t{i}") for i in range(5)]
+        quiet = [{"type": "response.in_progress", "sequence_number": i} for i in range(5, 10)]
+        chunks = deltas + quiet + _responses_tail(10, "t0t1t2t3t4")
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+
+        assert len(out) == 12
+        assert guardrail.scans == ({"texts": ["t0t1t2t3t4"], "tool_calls": [], "model": None},)
+
+    @pytest.mark.asyncio
+    async def test_responses_tool_call_done_event_is_still_scanned(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=2)
+        tool_call_done = {
+            "type": "response.output_item.done",
+            "sequence_number": 1,
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        }
+        chunks = [_responses_delta(0, "hi"), tool_call_done] + _responses_tail(2, "hi")
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+
+        assert len(out) == 4
+        assert len(guardrail.scans) == 2
+        assert [call["function"]["name"] for call in guardrail.scans[0]["tool_calls"]] == ["get_weather"]
+        assert guardrail.scans[1]["texts"] == ["hi"]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_skips_empty_round_and_terminal_duplicate(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=2)
+        chunks = _anthropic_message_chunks(["hello ", "world"])
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/messages")
+
+        assert out == chunks
+        assert [scan["texts"] for scan in guardrail.scans] == [["hello world"]]
+
+    @pytest.mark.asyncio
+    async def test_end_of_stream_only_still_scans_exactly_once(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=2, end_of_stream_only=True)
+        chunks = _anthropic_message_chunks(["hello ", "world"])
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/messages")
+
+        assert out == chunks
+        assert [scan["texts"] for scan in guardrail.scans] == [["hello world"]]
+
+    @pytest.mark.asyncio
+    async def test_buffer_until_moderated_still_scans_exactly_once_and_releases_every_chunk(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=1, buffer_until_moderated=True)
+        chunks = [_stream_chunk("a"), _stream_chunk("b"), _stream_chunk("c", finish_reason="stop")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert out == chunks
+        assert [scan["texts"] for scan in guardrail.scans] == [["abc"]]
+
+
+class TestTranslationMappingsAreReadLive:
+    """The hooks must read the handler map on every call, never memoize it on the module.
+
+    A second module-level cache is what let one test's handler map outlive its own
+    teardown and decide how unrelated files translated their streams (LIT-6834).
+    """
+
+    @staticmethod
+    def _ocr_request(guardrail):
+        return {
+            "guardrail_to_apply": guardrail,
+            "model": "mistral/mistral-ocr-latest",
+            "document": {
+                "type": "document_url",
+                "document_url": "https://arxiv.org/pdf/2201.04234",
+            },
+        }
+
+    async def _run_pre_call(self, guardrail):
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=self._ocr_request(guardrail),
+            call_type=CallTypes.aocr.value,
+        )
+
+    @pytest.mark.asyncio
+    async def test_remapping_between_calls_changes_which_handler_runs(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.completion: _NoopTranslation})
+        unmapped = RecordingGuardrail()
+        await self._run_pre_call(unmapped)
+        assert unmapped.apply_calls == []
+
+        _patch_translation_mappings(monkeypatch, {CallTypes.aocr: OCRHandler})
+        mapped = RecordingGuardrail()
+        await self._run_pre_call(mapped)
+        assert [call["input_type"] for call in mapped.apply_calls] == ["request"]
+
+    @pytest.mark.asyncio
+    async def test_module_exposes_no_second_assignable_handler_map(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aocr: OCRHandler})
+        guardrail = RecordingGuardrail()
+        await self._run_pre_call(guardrail)
+
+        assert len(guardrail.apply_calls) == 1
+        assert not [
+            name for name, value in vars(unified_module).items() if isinstance(value, dict) and CallTypes.aocr in value
+        ]

@@ -259,6 +259,13 @@
         "ui_name": "Tracing Environment",
         "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
         "required": false
+      },
+      "langfuse_span_scope": {
+        "type": "select",
+        "ui_name": "Span Scope",
+        "description": "full sends the whole request trace, llm_only sends just the model-call spans",
+        "options": ["full", "llm_only"],
+        "required": false
       }
     },
     "description": "Langfuse v3 OTEL Logging Integration"
@@ -356,14 +363,87 @@
         "description": "OpenTelemetry collector endpoint URL",
         "required": true
       },
+      "otel_traces_endpoint": {
+        "type": "text",
+        "ui_name": "Traces Endpoint URL",
+        "description": "Complete trace export URL used verbatim when the collector does not serve /v1/traces (OTel v2 only)",
+        "required": false
+      },
       "otel_headers": {
         "type": "text",
         "ui_name": "Headers",
         "description": "Headers for OTEL exporter (e.g., x-honeycomb-team=YOUR_API_KEY)",
         "required": false
+      },
+      "otel_exporter_otlp_protocol": {
+        "type": "select",
+        "ui_name": "Export Protocol",
+        "description": "OTLP wire format for trace exports. Use http/json for collectors that cannot decode protobuf",
+        "options": ["http/protobuf", "http/json"],
+        "required": false
       }
     },
     "description": "OpenTelemetry Logging Integration"
+  },
+  {
+    "id": "pointfive",
+    "displayName": "PointFive",
+    "logo": "pointfive.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "POINTFIVE_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "PointFive API key, used to request an upload url for each batch of logs",
+        "required": true
+      },
+      "POINTFIVE_API_URL": {
+        "type": "text",
+        "ui_name": "API URL",
+        "description": "PointFive API endpoint. Leave blank to use https://api.pointfive.co/api/v1/ingestion",
+        "required": false
+      }
+    },
+    "description": "PointFive Logging Integration"
+  },
+  {
+    "id": "zerobus",
+    "displayName": "Databricks Zerobus",
+    "logo": "databricks.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "ZEROBUS_WORKSPACE_URL": {
+        "type": "text",
+        "ui_name": "Workspace URL",
+        "description": "Databricks workspace URL, e.g. https://dbc-a1b2c3d4-e5f6.cloud.databricks.com",
+        "required": true
+      },
+      "ZEROBUS_SERVER_ENDPOINT": {
+        "type": "text",
+        "ui_name": "Zerobus Endpoint",
+        "description": "Zerobus ingest endpoint, e.g. https://<workspace-id>.zerobus.<region>.cloud.databricks.com",
+        "required": true
+      },
+      "ZEROBUS_CLIENT_ID": {
+        "type": "text",
+        "ui_name": "Service Principal Client ID",
+        "description": "OAuth client id of a service principal with USE CATALOG, USE SCHEMA, SELECT and MODIFY on the table",
+        "required": true
+      },
+      "ZEROBUS_CLIENT_SECRET": {
+        "type": "password",
+        "ui_name": "Service Principal Client Secret",
+        "description": "OAuth client secret of the service principal",
+        "required": true
+      },
+      "ZEROBUS_TABLE_NAME": {
+        "type": "text",
+        "ui_name": "Table",
+        "description": "Fully qualified Unity Catalog table, catalog.schema.table, created with the LiteLLM trace schema",
+        "required": true
+      }
+    },
+    "description": "Databricks Zerobus Ingest Logging Integration"
   },
   {
     "id": "s3",
@@ -411,6 +491,12 @@
         "type": "text",
         "ui_name": "S3 Path Prefix",
         "description": "Path prefix within the bucket for organizing logs",
+        "required": false
+      },
+      "s3_log_prompts_only": {
+        "type": "boolean",
+        "ui_name": "Log Prompts Only",
+        "description": "Log request messages to S3 but drop the model response from each logged object",
         "required": false
       }
     },

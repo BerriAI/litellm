@@ -1,15 +1,18 @@
 import importlib
 import asyncio
+import functools
 import json
 import logging
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from pathlib import Path
+from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from respx import MockRouter
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -20,7 +23,10 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerLi
 # Add the parent directory to the path so we can import litellm
 
 
+import contextlib
+
 import httpx
+import httpx2
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
     CallToolResult,
@@ -30,8 +36,10 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
+from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -55,8 +63,144 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPAuthType
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from litellm.caching.caching import DualCache
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
+
+
+@pytest.mark.asyncio
+async def test_manager_sampling_preserves_explicit_headers_without_ambient_context():
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+
+    caller = UserAPIKeyAuth(user_id="sampling-caller")
+    upstream = MCPServer(
+        server_id="sampling-context",
+        name="sampling_context",
+        url="https://example.invalid/mcp",
+        transport=MCPTransport.http,
+        allow_sampling=True,
+    )
+    sampling = AsyncMock()
+    client = MagicMock()
+    client.call_tool = AsyncMock(return_value=CallToolResult(content=[]))
+    assert legacy_server.get_active_auth_context() is None
+    with (
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient", return_value=client) as factory,
+        patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
+    ):
+        await MCPServerManager()._call_regular_mcp_tool(
+            mcp_server=upstream,
+            original_tool_name="probe",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"x-test-caller": "sampling-caller"},
+            proxy_logging_obj=None,
+            user_api_key_auth=caller,
+        )
+        callback = factory.call_args.kwargs["sampling_callback"]
+        await callback(None, None)
+    assert sampling.await_args.kwargs["user_api_key_auth"].user_id == "sampling-caller"
+    assert sampling.await_args.kwargs["raw_headers"] == {"x-test-caller": "sampling-caller"}
+
+
+
+@pytest.mark.asyncio
+async def test_sampling_callback_keeps_creation_context_after_caller_switch():
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
+
+    token = auth_context_var.set(None)
+    recorder = AsyncMock()
+    try:
+        original = UserAPIKeyAuth(user_id="alpha", models=["alpha-model"])
+        original.mcp_admitted_user_subject = True
+        headers = {"x-caller": "alpha"}
+        legacy_server.set_auth_context(original, raw_headers=headers, client_ip="192.0.2.1")
+        callback = _create_sampling_callback()
+        original.models.append("bravo-model")
+        headers["x-caller"] = "bravo"
+        legacy_server.set_auth_context(UserAPIKeyAuth(user_id="bravo"), raw_headers={"x-caller": "bravo"})
+        with patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", recorder):
+            await callback(None, None)
+        observed = recorder.await_args.kwargs
+        assert observed["user_api_key_auth"].user_id == "alpha"
+        assert observed["user_api_key_auth"].models == ["alpha-model"]
+        assert observed["user_api_key_auth"].mcp_admitted_user_subject is True
+        assert observed["raw_headers"] == {"x-caller": "alpha"}
+        assert observed["client_ip"] == "192.0.2.1"
+    finally:
+        auth_context_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_elicitation_callback_keeps_initiating_session():
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_elicitation_callback
+
+    initiating = MagicMock()
+    replacement = MagicMock()
+    recorder = AsyncMock()
+    token = legacy_server.active_mcp_session_var.set(initiating)
+    try:
+        callback = _create_elicitation_callback()
+        legacy_server.active_mcp_session_var.set(replacement)
+        with patch("litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request", recorder):
+            await callback(None, None)
+        assert recorder.await_args.kwargs["downstream_session"] is initiating
+        assert recorder.await_args.kwargs["downstream_capabilities"] is initiating.capabilities
+    finally:
+        legacy_server.active_mcp_session_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_sampling_callbacks_isolate_callers_and_cancellation():
+    from mcp.types import ErrorData
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    observed = {}
+
+    async def record_sampling(*, user_api_key_auth, raw_headers, **kwargs):
+        label = user_api_key_auth.user_id
+        if label == "cancelled":
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        await asyncio.sleep(0)
+        observed[label] = raw_headers["x-caller"]
+        return ErrorData(code=-1, message=label)
+
+    callbacks = tuple(
+        _create_sampling_callback(UserAPIKeyAuth(user_id=label), raw_headers={"x-caller": label})
+        for label in ("alpha", "bravo", "cancelled")
+    )
+    with patch(
+        "litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", record_sampling
+    ):
+        tasks = tuple(asyncio.create_task(callback(None, None)) for callback in callbacks)
+        await asyncio.wait_for(started.wait(), timeout=2)
+        tasks[2].cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert observed == {"alpha": "alpha", "bravo": "bravo"}
+    assert [result.message for result in results[:2]] == ["alpha", "bravo"]
+    assert isinstance(results[2], asyncio.CancelledError)
+    assert cancelled.is_set()
 
 
 def _reload_mcp_manager_module():
@@ -70,7 +214,12 @@ def _reload_mcp_manager_module():
     server_module = sys.modules.get("litellm.proxy._experimental.mcp_server.server")
     if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
         server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
+    operations_module = sys.modules.get("litellm.proxy._experimental.mcp_server.operations")
+    if operations_module is not None:
+        operations_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
+
+
 
 
 @pytest.fixture(autouse=True)
@@ -127,6 +276,32 @@ class TestMCPServerManager:
         assert added_server.command == "python"
         assert added_server.args == ["-m", "server"]
         assert added_server.env == {"DEBUG": "1", "TEST": "1"}
+
+    def test_get_mcp_server_by_id_allows_internal_or_unspecified_client_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        assert manager.get_mcp_server_by_id(server.server_id) is server
+        assert manager.get_mcp_server_by_id(server.server_id, client_ip="10.0.0.1") is server
+
+    def test_get_mcp_server_by_id_rejects_private_server_for_public_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        with patch.object(manager, "_get_general_settings", return_value={}):
+            assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
 
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
@@ -382,10 +557,10 @@ class TestMCPServerManager:
         assert "gateway-client" in dump
         assert "https://org-idp.example/oauth2/token" in dump
 
-    async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
+    async def test_load_servers_from_config_warns_on_invalid_alias(self, config_only_mcp_manager_factory, caplog):
         """Invalid aliases from config should emit warnings during load."""
 
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "validserver": {
                 "alias": "bad/name",
@@ -400,10 +575,10 @@ class TestMCPServerManager:
         assert any("invalid alias 'bad/name'" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_accepts_valid_alias(self, caplog):
+    async def test_load_servers_from_config_accepts_valid_alias(self, config_only_mcp_manager_factory, caplog):
         """Valid aliases should be accepted and populate the registry."""
 
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "validserver": {
                 "alias": "friendly_alias",
@@ -433,6 +608,30 @@ class TestMCPServerManager:
         }
         base.update(overrides)
         return {"m2mserver": base}
+
+    def _id_jag_config(self):
+        return {
+            "idjag_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_id_jag,
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_exchange_endpoint": "https://idp.example.com/token",
+                "id_jag_resource_token_endpoint": "https://resource.example.com/token",
+                "id_jag_resource": "https://resource.example.com",
+            }
+        }
+
+    def _clear_sso_env(self, monkeypatch):
+        for env_var in (
+            "GOOGLE_CLIENT_ID",
+            "MICROSOFT_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(env_var, raising=False)
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
     def test_mcp_oauth_discovery_on_startup_true_values(self, value):
@@ -850,6 +1049,68 @@ class TestMCPServerManager:
         assert retry_slot.generation > old_generation
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("corrupt_column", ("static_headers", "env"))
+    async def test_database_reload_drops_cached_server_whose_secret_map_stops_decoding(
+        self, monkeypatch, caplog, corrupt_column
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_secret_map
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-reload-secret-map-salt")
+        monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
+        headers = {"Authorization": "Bearer dummy-header-secret-4f1c"}
+        env = {"UPSTREAM_TOKEN": "dummy-env-secret-9a2b"}
+        stamp = datetime.now()
+        cached = MCPServer(
+            server_id="cached-server",
+            name="cached_server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            static_headers=dict(headers),
+            env=dict(env),
+            updated_at=stamp,
+        )
+        manager = MCPServerManager()
+        manager.registry[cached.server_id] = cached
+        stored = {"static_headers": encrypt_secret_map(headers), "env": encrypt_secret_map(env)}
+        corrupted = {**stored, corrupt_column: stored[corrupt_column][:-6] + 'AAAAA"'}
+
+        def _row(server_id, maps):
+            row = MagicMock()
+            row.server_id = server_id
+            row.alias = server_id
+            row.model_dump.return_value = {
+                "server_id": server_id,
+                "alias": server_id,
+                "server_name": server_id,
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "updated_at": stamp,
+                **maps,
+            }
+            return row
+
+        table = SimpleNamespace(
+            find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
+        )
+        prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-sibling"}
+        sibling = manager.registry["healthy-sibling"]
+        assert dict(sibling.static_headers) == headers
+        assert dict(sibling.env) == env
+        logged = "\n".join(caplog.messages)
+        assert cached.server_id in logged
+        for secret in (*headers.values(), *env.values(), *stored.values(), corrupted[corrupt_column]):
+            assert secret not in logged
+
+    @pytest.mark.asyncio
     async def test_lazy_oauth_discovery_preserves_manual_authorization_url_gate(self):
         with patch.dict(os.environ, {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "false"}):
             manager = MCPServerManager()
@@ -1087,8 +1348,8 @@ class TestMCPServerManager:
         assert server.scopes == ["read"]
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_non_oauth2_needs_no_flow(self):
-        manager = MCPServerManager()
+    async def test_load_servers_from_config_non_oauth2_needs_no_flow(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
         config = {
             "apiserver": {
                 "url": "https://example.com/mcp",
@@ -1103,6 +1364,72 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.oauth2_flow is None
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_for_id_jag_with_google_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        warnings = [message for message in caplog.messages if "oauth2_id_jag" in message]
+        assert len(warnings) == 1
+        assert "idjag_server" in warnings[0]
+        assert "GENERIC_CLIENT_ID" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_warn_for_id_jag_without_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_warn_for_api_key_with_google_sso(self, config_only_mcp_manager_factory, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        manager = config_only_mcp_manager_factory()
+        config = {
+            "api_key_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.api_key,
+                "auth_value": "upstream-secret",
+            }
+        }
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(config)
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_warn_for_id_jag_with_generic_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "generic-cid")
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
+
     def _client_forwarded_config(self, auth_type, **overrides):
         base = {
             "url": "https://example.com/mcp",
@@ -1111,6 +1438,50 @@ class TestMCPServerManager:
         }
         base.update(overrides)
         return {"bridgeserver": base}
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_per_server_oauth_discovery_for_oauth2(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery=True)
+            )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.per_server_oauth_discovery is True
+        assert server.uses_per_server_oauth_relay is True
+        assert server.advertises_gateway_authorization_server is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"auth_type": MCPAuth.oauth_delegate},
+            {"oauth2_flow": "client_credentials"},
+            {"oauth2_flow": "authorization_code", "delegate_auth_to_upstream": True},
+        ],
+    )
+    async def test_load_servers_from_config_rejects_unsupported_per_server_oauth_discovery(self, config):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="per_server_oauth_discovery is only supported"),
+        ):
+            await manager.load_servers_from_config(self._oauth2_config(per_server_oauth_discovery=True, **config))
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_non_boolean_per_server_oauth_discovery(self):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="per_server_oauth_discovery.*must be a boolean"),
+        ):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery="yes")
+            )
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_rejects_dcr_bridge_on_gateway_managed_auth_type(self):
@@ -1164,9 +1535,9 @@ class TestMCPServerManager:
         assert server.is_dcr_bridge is False
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_coerces_cost_string_to_float(self):
+    async def test_load_servers_from_config_coerces_cost_string_to_float(self, config_only_mcp_manager_factory):
         """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "google_maps": {
                 "url": "https://example.com/mcp",
@@ -1190,9 +1561,9 @@ class TestMCPServerManager:
         assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self):
+    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self, config_only_mcp_manager_factory):
         """token_endpoint_auth_method from config is carried onto the MCPServer (LIT-4091)."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "basic_provider": {
                 "url": "https://example.com/mcp",
@@ -1669,7 +2040,7 @@ class TestMCPServerManager:
         with patch.object(_mgr_mod, "verbose_logger") as mock_log:
             result = await self._run_call_regular(manager, server)
 
-        assert result.isError is True
+        assert result.is_error is True
         # A genuine non-auth failure keeps operator visibility at warning level, since call_tool's
         # raise_on_error demoted the client-layer error log to debug.
         assert mock_log.warning.called
@@ -1703,7 +2074,7 @@ class TestMCPServerManager:
             proxy_logging_obj=None,
         )
 
-        assert result.isError is False
+        assert result.is_error is False
         assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is not True
 
     def _token_exchange_server(self, server_id: str) -> "MCPServer":
@@ -2270,7 +2641,9 @@ class TestMCPServerManager:
         """prompts/list on an OBO server must exchange the caller's bearer, not connect with none."""
         server = self._token_exchange_server("te-prompts")
         st = await self._capture_subject_token(
-            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_prompts_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st == "subj-jwt"
 
@@ -2279,7 +2652,9 @@ class TestMCPServerManager:
         """resources/list on an OBO server must exchange the caller's bearer."""
         server = self._token_exchange_server("te-resources")
         st = await self._capture_subject_token(
-            lambda m: m.get_resources_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_resources_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st == "subj-jwt"
 
@@ -2290,6 +2665,7 @@ class TestMCPServerManager:
         st = await self._capture_subject_token(
             lambda m: m.read_resource_from_server(
                 server=server,
+                user_api_key_auth=None,
                 url="https://up.example.com/r",
                 raw_headers={"authorization": "Bearer subj-jwt"},
             )
@@ -2307,7 +2683,9 @@ class TestMCPServerManager:
             auth_type=MCPAuth.none,
         )
         st = await self._capture_subject_token(
-            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_prompts_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st is None
 
@@ -2581,6 +2959,232 @@ class TestMCPServerManager:
 
         await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
         assert resolved == ["good-subject"]
+
+    def _id_jag_server(self, server_id: str) -> "MCPServer":
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_missing_assertion_as_a_plain_412(self):
+        """ID-JAG's missing/expired-assertion precondition must reach the client as a 412 whose body
+        names the fix, at the transport edge. Without the preflight the session opens and the caller
+        gets a 200 with an empty tool list and then 'tool not found', which is not what happened.
+        412 is a precondition, not an RFC 9728 discovery challenge, so it carries no
+        WWW-Authenticate: there is nothing for the client to discover and retry against."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        summary = (
+            "ID-JAG requires an IdP identity assertion for this user and none is stored. "
+            "Sign in through LiteLLM SSO so the gateway captures one."
+        )
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_precondition_required(summary))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-412"),
+                oauth2_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+        assert exc_info.value.status_code == 412
+        assert summary in exc_info.value.detail
+        assert not (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_assertion_store_outage_as_503(self):
+        """A store outage is the other failure the session would swallow, and it is a different
+        answer than 412: the user has nothing to fix by signing in again."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_upstream_unavailable("assertion store unreachable"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-503"),
+                oauth2_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_preflights_litellm_key_and_skips_identity_bearer(self):
+        """ID-JAG preflights when Authorization carries a LiteLLM key, but skips a caller identity
+        bearer that the session passes through unchanged."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        subjects = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                subjects.append(
+                    (
+                        subject.subject_id,
+                        subject.inbound_token.get_secret_value() if subject.inbound_token else None,
+                    )
+                )
+                return Ok(StaticHeaderAuth("Bearer minted-id-jag", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        caller = UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1")
+
+        await manager.preflight_token_exchange(
+            server=self._id_jag_server("id-jag-preflight-key"),
+            oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+            raw_headers={"authorization": "Bearer sk-litellm-virtual-key"},
+            user_api_key_auth=caller,
+        )
+        assert subjects == [("u-1", None)]
+
+        await manager.preflight_token_exchange(
+            server=self._id_jag_server("id-jag-preflight-identity"),
+            oauth2_headers={"Authorization": "Bearer caller-idp-id-token"},
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-admission-key",
+                "authorization": "Bearer caller-idp-id-token",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="u-1"),
+        )
+        assert subjects == [("u-1", None)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_fields",
+        [
+            {"auth_type": MCPAuth.none},
+            {"auth_type": MCPAuth.api_key, "authentication_token": "static-upstream-key"},
+            {"auth_type": MCPAuth.bearer_token, "authentication_token": "static-upstream-key"},
+            {
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "client_credentials",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_url": "https://idp.example.com/token",
+            },
+            {"auth_type": MCPAuth.true_passthrough},
+        ],
+    )
+    async def test_preflight_resolves_nothing_for_a_mode_that_does_not_pre_flight(self, server_fields):
+        """The manager is the only thing deciding which modes pre-flight, so it has to reject every
+        other mode itself. The single-server call site no longer tests the mode before calling, so a
+        mode that falls through here would start resolving its credential a second time, at connect,
+        for flows that never had a connect-time resolution at all."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        calls = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                calls.append(server.server_id)
+                return Error(CredError.of_misconfigured("the preflight must never get here"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="not-pre-flighted",
+            name="not-pre-flighted-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            **server_fields,
+        )
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+            is None
+        )
+        assert calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        [
+            "Bearer subj-jwt",
+            "bearer subj-jwt",
+            "BEARER subj-jwt",
+            "Bearer\tsubj-jwt",
+            "Bearer  subj-jwt",
+        ],
+    )
+    async def test_preflight_token_exchange_strips_inbound_authorization_scheme(self, authorization):
+        """The resolver posts inbound_token verbatim as subject_token."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(
+                self, subject: Subject, server: ServerSpec
+            ) -> Ok[StaticHeaderAuth, CredError]:
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server(f"te-preflight-auth-{authorization!r}")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": authorization},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["subj-jwt"]
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_preserves_authorization_without_separator(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(
+                self, subject: Subject, server: ServerSpec
+            ) -> Ok[StaticHeaderAuth, CredError]:
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-auth-no-separator")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": "Bearersubj-jwt"},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["Bearersubj-jwt"]
 
     @pytest.mark.asyncio
     async def test_preflight_token_exchange_skips_discovery_for_other_auth_modes(self):
@@ -2929,6 +3533,72 @@ class TestMCPServerManager:
         )
         assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
 
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_legacy_delegate_never_forwards_admission_key(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id="server-legacy-delegate-leak",
+            name="legacy-delegate",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        extra_headers = await self._capture_call_extra_headers(
+            server,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+            raw_headers={"authorization": "Bearer sk-litellm-key"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+        assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_legacy_delegate_forwards_separate_authorization(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id="server-legacy-delegate-dual-credential",
+            name="legacy-delegate",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        extra_headers = await self._capture_call_extra_headers(
+            server,
+            oauth2_headers={"Authorization": "Bearer upstream-token"},
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-litellm-key",
+                "authorization": "Bearer upstream-token",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+        assert extra_headers == {"Authorization": "Bearer upstream-token"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_legacy_delegate_strips_repeated_admission_key(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id="server-legacy-delegate-repeated-key",
+            name="legacy-delegate",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        extra_headers = await self._capture_call_extra_headers(
+            server,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-litellm-key",
+                "authorization": "Bearer sk-litellm-key",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+        assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
     def test_should_strip_caller_authorization_new_modes(self):
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -3247,6 +3917,7 @@ class TestMCPServerManager:
         mock_prompt = Prompt(name="hello", description="Say hi")
         mock_client = AsyncMock()
         mock_client.list_prompts = AsyncMock(return_value=[mock_prompt])
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
 
         with patch.object(
             manager,
@@ -3254,7 +3925,7 @@ class TestMCPServerManager:
             new_callable=AsyncMock,
             return_value=mock_client,
         ):
-            prompts = await manager.get_prompts_from_server(server, add_prefix=True)
+            prompts = await manager.get_prompts_from_server(server, user_api_key_auth=None, add_prefix=True)
 
         mock_client.list_prompts.assert_awaited_once()
         assert len(prompts) == 1
@@ -3289,6 +3960,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_prompt_from_server(
                 server=server,
+                user_api_key_auth=None,
                 prompt_name="hello",
                 arguments={"tone": "casual"},
             )
@@ -3317,6 +3989,7 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_resources = [Resource(name="file", uri="https://example.com/file")]
         mock_client.list_resources = AsyncMock(return_value=mock_resources)
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         prefixed_resources = [Resource(name="alias-server-file", uri="https://example.com/file")]
 
         with (
@@ -3326,14 +3999,10 @@ class TestMCPServerManager:
                 new_callable=AsyncMock,
                 return_value=mock_client,
             ) as mock_create_client,
-            patch.object(
-                manager,
-                "_create_prefixed_resources",
-                return_value=prefixed_resources,
-            ) as mock_prefix,
         ):
             result = await manager.get_resources_from_server(
                 server=server,
+                user_api_key_auth=None,
                 mcp_auth_header="auth",
                 extra_headers={"X-Test": "1"},
                 add_prefix=True,
@@ -3345,7 +4014,6 @@ class TestMCPServerManager:
         assert called_kwargs["mcp_auth_header"] == "auth"
         assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "static"}
         mock_client.list_resources.assert_awaited_once()
-        mock_prefix.assert_called_once_with(mock_resources, server, add_prefix=True)
         assert result == prefixed_resources
 
     @pytest.mark.asyncio
@@ -3369,9 +4037,10 @@ class TestMCPServerManager:
             )
         ]
         mock_client.list_resource_templates = AsyncMock(return_value=mock_templates)
-        prefixed_templates = [
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+        expected_templates = [
             ResourceTemplate(
-                name="alias-server-template",
+                name="template",
                 uriTemplate="https://example.com/{id}",
             )
         ]
@@ -3383,14 +4052,11 @@ class TestMCPServerManager:
                 new_callable=AsyncMock,
                 return_value=mock_client,
             ) as mock_create_client,
-            patch.object(
-                manager,
-                "_create_prefixed_resource_templates",
-                return_value=prefixed_templates,
-            ) as mock_prefix,
         ):
             result = await manager.get_resource_templates_from_server(
                 server=server,
+                user_api_key_auth=None,
+                raw_headers=None,
                 mcp_auth_header="auth",
                 extra_headers=None,
                 add_prefix=False,
@@ -3402,10 +4068,12 @@ class TestMCPServerManager:
             extra_headers=None,
             stdio_env=None,
             subject_token=None,
+            user_api_key_auth=None,
+            raw_headers=None,
+            client_ip=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
-        mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
-        assert result == prefixed_templates
+        assert result == expected_templates
 
     @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
@@ -3441,6 +4109,7 @@ class TestMCPServerManager:
         ) as mock_create_client:
             result = await manager.read_resource_from_server(
                 server=server,
+                user_api_key_auth=None,
                 url="https://example.com/resource",
                 mcp_auth_header="auth",
                 extra_headers={"X-Test": "1"},
@@ -4009,6 +4678,116 @@ class TestMCPServerManager:
         assert result[0].name == "github_tool_1"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+        assert result.spec_path == server.spec_path
+        assert route.call_count == 1
+        assert "authorization" not in route.calls[0].request.headers
+        assert "x-api-key" not in route.calls[0].request.headers
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("spec_path", ["/config/openapi.json", "relative/openapi.json"])
+    async def test_openapi_local_spec_health_is_unknown(self, respx_mock, auth_type, spec_path):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="local-openapi-health",
+            name="local-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=spec_path,
+            auth_type=auth_type,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        result = await manager.health_check_server(server.server_id)
+        assert result.status == "unknown"
+        assert result.health_check_error == "OpenAPI servers have no protocol-level health probe"
+        assert result.last_health_check is not None
+        assert not respx_mock.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+        assert result.status == expected_status
+        assert result.health_check_error == expected_error
+        assert result.last_health_check is not None
+        assert route.call_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel", [False, True])
+    async def test_openapi_health_timeout_and_cancellation_cleanup(self, respx_mock, monkeypatch, cancel):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_spec_health
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_load(request):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        respx_mock.get("https://93.184.216.34/slow.json").mock(side_effect=slow_load)
+        task = asyncio.create_task(_openapi_spec_health("https://93.184.216.34/slow.json", timeout=0.1))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            status, error = await task
+            assert status == "unhealthy"
+            assert error == "OpenAPI specification check timed out after 0.1 seconds"
+        assert cancelled.is_set()
+
+    @pytest.mark.asyncio
     async def test_health_check_server_healthy(self):
         """Test health check for a healthy server"""
         manager = MCPServerManager()
@@ -4494,7 +5273,8 @@ class TestMCPServerManager:
         captured: dict = {}
 
         def fake_create_tool_function(
-            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False,
+            auth_type=None, upstream_token_header=None,
         ):
             captured["headers"] = headers
             captured["server_label"] = server_label
@@ -4532,6 +5312,82 @@ class TestMCPServerManager:
         assert captured["server_label"] == "openapi-server"
         # auth_type is none here, so a 401 from this upstream must not be dressed up as a re-auth signal
         assert captured["relays_upstream_auth"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "auth_type, authentication_token, expected_authorization",
+        [
+            (MCPAuth.bearer_token, "Bearer abc", "Bearer abc"),
+            (MCPAuth.bearer_token, "abc", "Bearer abc"),
+            (MCPAuth.api_key, "ApiKey abc", "ApiKey abc"),
+            (MCPAuth.token, "token abc", "token abc"),
+            (MCPAuth.basic, "user:pass", "Basic dXNlcjpwYXNz"),
+            (MCPAuth.basic, "Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+            (MCPAuth.basic, "Basic user:pass", "Basic dXNlcjpwYXNz"),
+        ],
+    )
+    async def test_register_openapi_tools_normalizes_authentication_token(
+        self, tmp_path, monkeypatch, auth_type, authentication_token, expected_authorization
+    ):
+        manager = MCPServerManager()
+        spec_path = tmp_path / "openapi.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            server_name="openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            authentication_token=authentication_token,
+        )
+        captured: dict = {}
+
+        def fake_create_tool_function(
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False,
+            auth_type=None, upstream_token_header=None,
+        ):
+            captured["headers"] = headers
+
+            async def tool_func(**kwargs):
+                return "ok"
+
+            return tool_func
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+            fake_create_tool_function,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+            lambda *args, **kwargs: {"type": "object", "properties": {}, "required": []},
+        )
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+            lambda *args, **kwargs: None,
+        )
+        await manager._register_openapi_tools(
+            spec_path=str(spec_path),
+            server=server,
+            base_url="https://example.com",
+        )
+
+        assert captured["headers"]["Authorization"] == expected_authorization
 
     @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
@@ -4838,6 +5694,59 @@ class TestMCPServerManager:
             )
             mock_inject.assert_awaited_once()
 
+    def test_server_owning_tool_name_prefix_is_known_before_the_server_is_ever_listed(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="lazy-map-1",
+            name="lazy_map",
+            server_name="lazy_map",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        manager.registry = {server.server_id: server}
+
+        assert manager._get_mcp_server_from_tool_name("lazy_map-add") is None
+        assert manager.server_owning_tool_name_prefix("lazy_map-add") is server
+        assert manager.server_owning_tool_name_prefix("someone_else-add") is None
+
+        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+
+        assert manager._get_mcp_server_from_tool_name("lazy_map-add") is server
+
+    def test_server_exposes_tool_is_per_tool_not_per_server(self):
+        """A tool listed for the server does not make its unlisted siblings look exposed."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="lazy-map-2",
+            name="lazy_map",
+            server_name="lazy_map",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        manager.registry = {server.server_id: server}
+
+        assert manager.server_exposes_tool(server, "add") is False
+
+        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+
+        assert manager.server_exposes_tool(server, "add") is True
+        assert manager.server_exposes_tool(server, "lazy_map-add") is True
+        assert manager.server_exposes_tool(server, "multiply") is False
+
+    def test_known_prefix_to_server_keeps_the_first_registered_owner_of_a_shared_prefix(self):
+        manager = MCPServerManager()
+        first = MCPServer(server_id="first-id", name="first", server_name="first", transport=MCPTransport.http)
+        second = MCPServer(
+            server_id="second-id", name="second", server_name="second", alias="first", transport=MCPTransport.http
+        )
+        manager.registry = {"first-id": first, "second-id": second}
+
+        prefix_to_server = manager._known_prefix_to_server()
+
+        assert prefix_to_server["first"] is first
+        assert prefix_to_server["second"] is second
+        assert manager.server_owning_tool_name_prefix("first-add") is first
+
     def test_resolve_mcp_server_for_tool_call_via_prefixed_name(self):
         """Resolution succeeds when the prefixed tool name is in the mapping."""
         manager = MCPServerManager()
@@ -5076,7 +5985,7 @@ class TestMCPServerManager:
         stored = {"Authorization": "Bearer stored-user-token"}
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(return_value=stored),
         ) as mock_lookup:
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -5103,7 +6012,7 @@ class TestMCPServerManager:
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(return_value={"Authorization": "Bearer should-not-be-used"}),
         ) as mock_lookup:
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -5129,7 +6038,7 @@ class TestMCPServerManager:
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(side_effect=RuntimeError("redis down")),
         ):
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -5285,7 +6194,7 @@ class TestMCPServerManager:
         user_auth = UserAPIKeyAuth(api_key="sk-test")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(return_value={"Authorization": "Bearer x"}),
         ) as mock_lookup:
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -5381,17 +6290,17 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "allowed_tool_1"
         tool1.description = "This tool is allowed"
-        tool1.inputSchema = {}
+        tool1.input_schema = {}
 
         tool2 = MagicMock()
         tool2.name = "blocked_tool"
         tool2.description = "This tool is not allowed"
-        tool2.inputSchema = {}
+        tool2.input_schema = {}
 
         tool3 = MagicMock()
         tool3.name = "allowed_tool_2"
         tool3.description = "This tool is also allowed"
-        tool3.inputSchema = {}
+        tool3.input_schema = {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -5431,17 +6340,17 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "tool_1"
         tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1.input_schema = {}
 
         tool2 = MagicMock()
         tool2.name = "tool_2"
         tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2.input_schema = {}
 
         tool3 = MagicMock()
         tool3.name = "tool_3"
         tool3.description = "Tool 3"
-        tool3.inputSchema = {}
+        tool3.input_schema = {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -5481,12 +6390,12 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "tool_1"
         tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1.input_schema = {}
 
         tool2 = MagicMock()
         tool2.name = "tool_2"
         tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2.input_schema = {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -5822,11 +6731,11 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None):
+        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
-            result.isError = False
+            result.is_error = False
             return result
 
         mock_client.call_tool.side_effect = mock_call_tool
@@ -5857,7 +6766,7 @@ class TestMCPServerManager:
 
         # Verify the result
         assert result is not None
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) > 0
 
         # Verify the MCP client call was awaited exactly once
@@ -5872,6 +6781,7 @@ class TestMCPServerManager:
         """
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            MCPServerAccess,
         )
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
@@ -5891,19 +6801,22 @@ class TestMCPServerManager:
             object_permission_id="perm_123",
         )
 
-        # Mock MCPRequestHandler.get_allowed_mcp_servers to verify it receives user_api_key_auth
+        # Mock MCPRequestHandler.get_mcp_server_access to verify it receives user_api_key_auth
         with patch.object(
             MCPRequestHandler,
-            "get_allowed_mcp_servers",
+            "get_mcp_server_access",
             new_callable=AsyncMock,
         ) as mock_get_allowed:
             # Configure mock to return servers from object_permission
-            mock_get_allowed.return_value = ["test_server_1", "test_server_2"]
+            mock_get_allowed.return_value = MCPServerAccess(
+                server_ids=("test_server_1", "test_server_2"),
+                scope="scoped",
+            )
 
             # Call get_allowed_mcp_servers with user_api_key_auth
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
-            # Verify MCPRequestHandler.get_allowed_mcp_servers was called with user_api_key_auth
+            # Verify MCPRequestHandler.get_mcp_server_access was called with user_api_key_auth
             mock_get_allowed.assert_called_once()
             call_args = mock_get_allowed.call_args
             assert call_args[0][0] is user_api_key_auth  # First positional arg should be user_api_key_auth
@@ -6060,6 +6973,7 @@ class TestMCPServerManager:
         from litellm.proxy import proxy_server as proxy_server_module
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            MCPServerAccess,
         )
         from litellm.proxy._experimental.mcp_server.mcp_context import (
             _mcp_active_toolset_id,
@@ -6084,7 +6998,8 @@ class TestMCPServerManager:
         }
         user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
 
-        token = _mcp_active_toolset_id.set("toolset-abc")
+        user_api_key_auth.mcp_toolset_id = "toolset-abc"
+        token = _mcp_active_toolset_id.set("unrelated-ambient-toolset")
         try:
             with (
                 patch.object(proxy_server_module, "user_api_key_cache", cache),
@@ -6092,9 +7007,12 @@ class TestMCPServerManager:
                 patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
                 patch.object(
                     MCPRequestHandler,
-                    "get_allowed_mcp_servers",
+                    "get_mcp_server_access",
                     new_callable=AsyncMock,
-                    return_value=["toolset-server"],
+                    return_value=MCPServerAccess(
+                        server_ids=("toolset-server",),
+                        scope="scoped",
+                    ),
                 ),
             ):
                 result = await manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -6194,49 +7112,77 @@ class TestMCPServerManager:
         assert set(result) == {"global-server", "submitted-server"}
 
     @pytest.mark.asyncio
-    async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
-        """Anonymous delegated auth listing should only include oauth2 servers."""
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
-        )
+    @pytest.mark.parametrize(
+        "flag_enabled, via_virtual_key, resolved_server_ids, scope, submitted_server_ids, expected_server_ids",
+        [
+            (False, True, ("granted",), "scoped", (), {"granted", "public"}),
+            (True, True, ("granted",), "scoped", (), {"granted"}),
+            (True, True, ("granted", "public"), "scoped", (), {"granted", "public"}),
+            (True, True, (), "scoped", (), set()),
+            (True, True, (), "unscoped", (), {"public"}),
+            (
+                True,
+                True,
+                ("team-granted",),
+                "scoped",
+                ("submitted",),
+                {"team-granted", "submitted"},
+            ),
+            (
+                True,
+                True,
+                ("team-granted",),
+                "scoped",
+                ("public",),
+                {"team-granted", "public"},
+            ),
+            (True, False, ("granted",), "scoped", (), {"granted", "public"}),
+        ],
+        ids=(
+            "flag_off_preserves_allow_all",
+            "flag_on_scoped_key_excludes_allow_all",
+            "flag_on_keeps_allow_all_when_granted",
+            "flag_on_restricted_empty_excludes_allow_all",
+            "flag_on_unscoped_key_preserves_allow_all",
+            "flag_on_preserves_submitted_byom",
+            "flag_on_preserves_submitted_byom_when_it_is_allow_all",
+            "flag_on_non_virtual_key_preserves_allow_all",
+        ),
+    )
+    async def test_allow_all_keys_scope_flag(
+        self,
+        flag_enabled,
+        via_virtual_key,
+        resolved_server_ids,
+        scope,
+        submitted_server_ids,
+        expected_server_ids,
+    ):  # test-quality-ok: parameterized matrix covers the scope state machine
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
 
         manager = MCPServerManager()
-        oauth_delegate_server = MCPServer(
-            server_id="oauth-delegate",
-            name="oauth_delegate",
-            transport=MCPTransport.http,
-            auth_type=MCPAuth.oauth2,
-            delegate_auth_to_upstream=True,
-        )
-        api_key_delegate_server = MCPServer(
-            server_id="api-key-delegate",
-            name="api_key_delegate",
-            transport=MCPTransport.http,
-            auth_type=MCPAuth.api_key,
-            delegate_auth_to_upstream=True,
-        )
-        oauth_non_delegate_server = MCPServer(
-            server_id="oauth-non-delegate",
-            name="oauth_non_delegate",
-            transport=MCPTransport.http,
-            auth_type=MCPAuth.oauth2,
-            delegate_auth_to_upstream=False,
-        )
-        manager.registry = {
-            oauth_delegate_server.server_id: oauth_delegate_server,
-            api_key_delegate_server.server_id: api_key_delegate_server,
-            oauth_non_delegate_server.server_id: oauth_non_delegate_server,
-        }
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+        auth.via_virtual_key = via_virtual_key
+        access = MCPServerAccess(server_ids=resolved_server_ids, scope=scope)
 
-        with patch.object(
-            MCPRequestHandler,
-            "get_allowed_mcp_servers",
-            new_callable=AsyncMock,
-            return_value=[],
+        with (
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["public"]),
+            patch.object(
+                manager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new=AsyncMock(return_value=list(submitted_server_ids)),
+            ),
         ):
-            result = await manager.get_allowed_mcp_servers(None)
-
-        assert set(result) == {"oauth-delegate"}
+            assert (
+                set(
+                    await manager.get_allowed_mcp_servers(
+                        auth,
+                        access=access,
+                        general_settings={"mcp_allow_all_keys_respects_mcp_scope": flag_enabled},
+                    )
+                )
+                == expected_server_ids
+            )
 
     def test_get_mcp_server_from_tool_name_uses_server_name_not_name(self):
         """
@@ -7139,9 +8085,9 @@ class TestMCPServerTimestamps:
         assert client.timeout == 0.0
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_preserves_timeout(self):
+    async def test_load_servers_from_config_preserves_timeout(self, config_only_mcp_manager_factory):
         """timeout from proxy config is loaded into MCPServer."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "my_server": {
                 "url": "https://example.com/mcp",
@@ -7365,9 +8311,9 @@ class TestMCPServerTokenExchangeColumns:
         assert rebuilt_table.token_exchange_profile == "entra_obo"
 
 
-class TestInternalDelegatePkceWarningLog:
+class TestLegacyDelegateAuthWarningLog:
     @pytest.mark.asyncio
-    async def test_build_mcp_server_logs_on_internal_delegate_interactive(self, caplog):
+    async def test_build_mcp_server_logs_deprecation_for_internal_delegate(self, caplog):
         caplog.set_level(logging.WARNING, logger="LiteLLM")
         manager = MCPServerManager()
         table_record = LiteLLM_MCPServerTable(
@@ -7383,11 +8329,11 @@ class TestInternalDelegatePkceWarningLog:
         )
         await manager.build_mcp_server_from_table(table_record)
         combined = " ".join(r.getMessage() for r in caplog.records)
-        assert "internal-only" in combined
+        assert "deprecated auth_type=oauth2" in combined
         assert "delegate_auth_to_upstream=true" in combined
 
     @pytest.mark.asyncio
-    async def test_build_mcp_server_no_internal_delegate_log_when_public(self, caplog):
+    async def test_build_mcp_server_logs_deprecation_for_public_delegate(self, caplog):
         caplog.set_level(logging.WARNING, logger="LiteLLM")
         manager = MCPServerManager()
         table_record = LiteLLM_MCPServerTable(
@@ -7403,12 +8349,13 @@ class TestInternalDelegatePkceWarningLog:
         )
         await manager.build_mcp_server_from_table(table_record)
         combined = " ".join(r.getMessage() for r in caplog.records)
-        assert "internal-only" not in combined
+        assert "deprecated auth_type=oauth2" in combined
+        assert "auth_type=oauth_delegate" in combined
 
     def test_warn_skipped_for_client_credentials(self, caplog):
         caplog.set_level(logging.WARNING, logger="LiteLLM")
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            _warn_internal_delegate_pkce_if_applicable,
+            _warn_legacy_delegate_auth_if_applicable,
         )
 
         server = MCPServer(
@@ -7421,9 +8368,9 @@ class TestInternalDelegatePkceWarningLog:
             available_on_public_internet=False,
             delegate_auth_to_upstream=True,
         )
-        _warn_internal_delegate_pkce_if_applicable(server, source="test")
+        _warn_legacy_delegate_auth_if_applicable(server, source="test")
         combined = " ".join(r.getMessage() for r in caplog.records)
-        assert "internal-only" not in combined
+        assert "deprecated auth_type=oauth2" not in combined
 
 
 class TestHasClientCredentialsOAuth2Flow:
@@ -7553,9 +8500,9 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_clears_cache(self):
+    async def test_load_servers_from_config_clears_cache(self, config_only_mcp_manager_factory):
         """Reloading config clears any previously cached upstream instructions."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         manager._upstream_initialize_instructions_by_server_id["old"] = "stale"
         await manager.load_servers_from_config(
             mcp_servers_config={
@@ -7568,9 +8515,9 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         assert manager._upstream_initialize_instructions_by_server_id.get("old") is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_reads_instructions_from_config(self):
+    async def test_load_servers_reads_instructions_from_config(self, config_only_mcp_manager_factory):
         """instructions field from YAML config is persisted on the MCPServer."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(
             mcp_servers_config={
                 "srv_a": {
@@ -7762,6 +8709,35 @@ class TestMCPServerManagerExpandToolPermissions:
 
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["write_file"]})
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
+
+    def test_wildcard_survives_expansion_as_list_entry(self):
+        """["*"] stays in the expanded list so the caller's wildcard check
+        (``_union_tool_grants``) can read it; this function only normalizes
+        keys and never maps grants to None."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["*"]})
+        assert result == {"uuid-a": ["*"]}
+
+    def test_wildcard_unions_with_concrete_names_across_keys_for_same_server(self):
+        """An alias key carrying ["*"] unioned with an id key naming one tool
+        keeps both entries; interpretation of the wildcard belongs to the
+        caller, not the expansion."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alias-a", alias="alias-a")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["*"]})
+        assert sorted(result["uuid-a"]) == ["*", "read_file"]
+
+    def test_empty_list_stays_deny_all(self):
+        """[] is deny-all, a distinct meaning from no entry (unrestricted);
+        the key must survive expansion rather than disappear."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": []})
+        assert result == {"uuid-a": []}
 
 
 class TestOAuthDiscoverySSRFGuard:
@@ -8546,6 +9522,24 @@ class TestCreateMcpClientV2Graft:
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._mcp_auth_value is None
 
+    @pytest.mark.parametrize("auth_type", [None, MCPAuth.none])
+    async def test_none_mode_rejects_url_userinfo(self, auth_type):
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPServerManager()._create_mcp_client(
+                self._http_server(
+                    auth_type=auth_type,
+                    url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+                )
+            )
+
+        detail = str(exc_info.value.detail)
+        assert exc_info.value.status_code == 500
+        assert "Basic Auth" in detail
+        assert "auth_type: basic" in detail
+        assert "auth_value: username:password" in detail
+        assert "lit-user" not in detail
+        assert "s3cr3t" not in detail
+
     @pytest.mark.parametrize(
         "auth_type, token, expected_name, expected_value",
         [
@@ -8638,12 +9632,13 @@ class TestCreateMcpClientV2Graft:
         assert "misconfigured" in str(exc_info.value.detail)
         assert "token_url" in str(exc_info.value.detail)
 
-    async def test_static_token_missing_defers_to_v1(self):
-        client = await MCPServerManager()._create_mcp_client(
-            self._http_server(auth_type=MCPAuth.api_key, authentication_token=None)
-        )
-
-        assert client._resolved_auth is None
+    async def test_static_token_missing_rejects_before_connecting(self):
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(
+                self._http_server(auth_type=MCPAuth.api_key, authentication_token=None)
+            )
+        assert exc.value.status_code == 500
+        assert "credential" in str(exc.value.detail)
 
     async def test_stdio_migrated_auth_type_still_defers_to_v1(self):
         client = await MCPServerManager()._create_mcp_client(
@@ -9067,7 +10062,7 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
         self.attempts += 1
         if self._raises is not None:
             if raise_on_error:
@@ -9221,7 +10216,7 @@ class TestOBOCallToolRetry:
             user_api_key_auth=None,
         )
 
-        assert result.isError is True
+        assert result.is_error is True
         manager._cred_provider.invalidate_credentials.assert_not_awaited()
         manager._create_mcp_client.assert_not_awaited()
         assert first.attempts == 1
@@ -9246,7 +10241,7 @@ class TestOBOCallToolRetry:
             user_api_key_auth=None,
         )
 
-        assert result.isError is True
+        assert result.is_error is True
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
@@ -9279,7 +10274,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:
@@ -9325,7 +10320,7 @@ class TestOBOConcurrencyLimit:
 
         assert peak_while_blocked == max_concurrent
         assert inflight["current"] == 0
-        assert all(result.isError is False for result in results)
+        assert all(result.is_error is False for result in results)
 
 
 class TestOBOEndpointDiscovery:
@@ -9656,11 +10651,16 @@ def test_build_mcp_server_table_carries_oauth2_flow():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
         oauth2_flow="client_credentials",
+        client_id="client-123",
+        client_secret="secret-xyz",
+        scopes=["scope:a", "scope:b"],
+        configured_scopes=("scope:a", "scope:b"),
     )
 
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow == "client_credentials"
+    assert table.credentials == {"scopes": ["scope:a", "scope:b"]}
 
 
 def test_build_mcp_server_table_carries_null_oauth2_flow():
@@ -9682,6 +10682,226 @@ def test_build_mcp_server_table_carries_null_oauth2_flow():
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow is None
+
+
+async def _mock_oauth_discovery(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    server_url: str,
+    scopes: list[str],
+) -> None:
+    resource_metadata_url: Final[str] = "https://up.example.com/.well-known/oauth-protected-resource"
+    authorization_server_url: Final[str] = "https://up.example.com"
+    authorization_metadata_url: Final[str] = f"{authorization_server_url}/.well-known/oauth-authorization-server"
+    respx_mock.get(server_url).respond(
+        status_code=401,
+        headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata_url}"'},
+    )
+    respx_mock.get(resource_metadata_url).respond(
+        json={"authorization_servers": [authorization_server_url], "scopes_supported": scopes}
+    )
+    respx_mock.get(authorization_metadata_url).respond(
+        json={
+            "issuer": authorization_server_url,
+            "authorization_endpoint": f"{authorization_server_url}/authorize",
+            "token_endpoint": f"{authorization_server_url}/token",
+        }
+    )
+    clients: Final[LLMClientCache] = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", clients)
+    http_handler: Final[AsyncHTTPHandler] = AsyncHTTPHandler()
+    await http_handler.client.aclose()
+    http_handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respx_mock.async_handler))
+    http_handler._owns_client = True
+    cache_key: Final[str] = f"async_httpx_clienttimeout_{MCP_METADATA_TIMEOUT}{httpxSpecialProvider.MCP.value}"
+    clients.set_cache(cache_key, http_handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discovery_on_startup", [True, False])
+async def test_management_view_serves_configured_scopes_not_discovered_ones_from_db(
+    discovery_on_startup: bool,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row: Final[LiteLLM_MCPServerTable] = LiteLLM_MCPServerTable(
+        server_id="discovered-scopes-db",
+        alias="discovered_scopes_db",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url=row.url or "", scopes=["discovered.read"])
+    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"} if discovery_on_startup else {}
+    with patch.dict(os.environ, env, clear=True):
+        manager: Final[MCPServerManager] = MCPServerManager()
+        built: Final[MCPServer] = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        manager.registry[built.server_id] = built
+        resolved: Final[MCPServer] = await manager.ensure_oauth_metadata_discovered(built)
+
+    assert resolved.scopes == ["discovered.read"]
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(resolved)
+    assert view.credentials is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_scopes", "runtime_scopes"),
+    [
+        (None, ["openid"]),
+        ([], ["openid"]),
+        ([""], ["openid"]),
+        (["read", ""], ["read"]),
+        (["read", 7], ["read"]),
+        ("read", ["read"]),
+    ],
+)
+async def test_management_view_omits_invalid_or_absent_db_scopes(
+    stored_scopes: list[str | int] | str | None,
+    runtime_scopes: list[str],
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row: Final[LiteLLM_MCPServerTable] = LiteLLM_MCPServerTable.model_construct(
+        server_id="empty-scopes-db",
+        alias="empty_scopes_db",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        credentials=json.dumps({"scopes": stored_scopes}),
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url=row.url or "", scopes=["openid"])
+    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"}
+    with patch.dict(os.environ, env, clear=True):
+        manager: Final[MCPServerManager] = MCPServerManager()
+        built: Final[MCPServer] = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+    assert built.scopes == runtime_scopes
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(built)
+    assert view.credentials is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discovery_on_startup", [True, False])
+@pytest.mark.parametrize(
+    ("stored_scopes", "runtime_scopes"),
+    [
+        (["calendar.read"], ["calendar.read"]),
+        ([" "], ["discovered.read"]),
+        (["read", " "], ["read"]),
+        (["read", "read"], ["read", "read"]),
+    ],
+)
+async def test_management_view_serves_explicitly_configured_scopes_from_db(
+    stored_scopes: list[str],
+    runtime_scopes: list[str],
+    discovery_on_startup: bool,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row: Final[LiteLLM_MCPServerTable] = LiteLLM_MCPServerTable(
+        server_id="configured-scopes-db",
+        alias="configured_scopes_db",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        credentials={"scopes": stored_scopes},
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url=row.url or "", scopes=["discovered.read"])
+    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"} if discovery_on_startup else {}
+    with patch.dict(os.environ, env, clear=True):
+        manager: Final[MCPServerManager] = MCPServerManager()
+        built: Final[MCPServer] = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        manager.registry[built.server_id] = built
+        resolved: Final[MCPServer] = await manager.ensure_oauth_metadata_discovered(built)
+
+    assert resolved.scopes == runtime_scopes
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(resolved)
+    assert view.credentials == {"scopes": stored_scopes}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discovery_on_startup", [True, False])
+@pytest.mark.parametrize(
+    ("configured_scopes", "expected_view_scopes"),
+    [
+        (None, None),
+        (["calendar.read"], ["calendar.read"]),
+        ([" "], None),
+        ([""], None),
+        (["calendar.read", " "], ["calendar.read"]),
+    ],
+)
+async def test_management_view_scopes_follow_yaml_config_not_discovery(
+    configured_scopes: list[str] | None,
+    expected_view_scopes: list[str] | None,
+    discovery_on_startup: bool,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config: Final[dict[str, dict[str, object]]] = {
+        "yamlscopes": {
+            "url": "https://up.example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.oauth2,
+            "oauth2_flow": "authorization_code",
+            "client_id": "cid",
+            "client_secret": "csec",
+            **({"scopes": configured_scopes} if configured_scopes is not None else {}),
+        }
+    }
+    await _mock_oauth_discovery(
+        respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["discovered.read"]
+    )
+    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"} if discovery_on_startup else {}
+    with patch.dict(os.environ, env, clear=True):
+        manager: Final[MCPServerManager] = MCPServerManager()
+        await manager.load_servers_from_config(config)
+        server: Final[MCPServer] = next(iter(manager.config_mcp_servers.values()))
+        resolved: Final[MCPServer] = await manager.ensure_oauth_metadata_discovered(server)
+
+    assert resolved.scopes == (expected_view_scopes or ["discovered.read"])
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(resolved)
+    assert view.credentials == ({"scopes": expected_view_scopes} if expected_view_scopes else None)
+
+
+@pytest.mark.asyncio
+async def test_lazy_yaml_discovery_keeps_configured_scopes_out_of_the_management_view(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config: Final[dict[str, dict[str, object]]] = {
+        "lazyyamlscopes": {
+            "url": "https://up.example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.oauth2,
+            "oauth2_flow": "authorization_code",
+            "client_id": "cid",
+            "client_secret": "csec",
+        }
+    }
+    await _mock_oauth_discovery(
+        respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["discovered.read"]
+    )
+    with patch.dict(os.environ, {}, clear=True):
+        manager: Final[MCPServerManager] = MCPServerManager()
+        await manager.load_servers_from_config(config)
+        server: Final[MCPServer] = next(iter(manager.config_mcp_servers.values()))
+        resolved: Final[MCPServer] = await manager.ensure_oauth_metadata_discovered(server)
+
+    assert resolved.scopes == ["discovered.read"]
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(resolved)
+    assert view.credentials is None
 
 
 @pytest.mark.asyncio
@@ -10451,7 +11671,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -10468,7 +11688,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "read_wiki_contents")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -10491,7 +11711,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "petstore-list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -10514,7 +11734,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
             result = await self._call(server, registered_key, "list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -10531,7 +11751,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, "petstore-list_pets", "delete_pet")
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "not found in registry" in result.content[0].text
 
 
@@ -10949,6 +12169,30 @@ class TestResolveOpenapiToolAuth:
 
         assert "Authorization" not in (forwarded or {})
 
+    @pytest.mark.asyncio
+    async def test_none_mode_without_url_keeps_spec_path_server_unauthenticated(self):
+        server = MCPServer(
+            server_id="openapi-only",
+            name="report_api",
+            server_name="report_api",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            spec_path="https://api.example.com/openapi.json",
+        )
+
+        resolved, forwarded = await MCPServerManager().resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers=None,
+            raw_headers=None,
+            mcp_auth_header=None,
+            user_api_key_auth=None,
+            forwarded_headers={"X-Trace": "trace-id"},
+        )
+
+        assert resolved is None
+        assert forwarded == {"X-Trace": "trace-id"}
+
 
 class TestOpenApiHandlerRelaysUpstreamAuth:
     """`_call_openapi_tool_handler` must not flatten a re-auth signal into a generic message.
@@ -11004,5 +12248,2416 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
         with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
             result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {})
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "compat", "expected_structured"),
+        [
+            ('{"total": 1.10, "items": [ ]}', "legacy", {"total": 1.1, "items": []}),
+            ('{"total": 1.10, "items": [ ]}', "modern", {"total": 1.1, "items": []}),
+            ("[1, 2]", "legacy", None),
+            ("[1, 2]", "modern", [1, 2]),
+            ("plain text", "legacy", None),
+            ("plain text", "modern", None),
+        ],
+    )
+    async def test_json_bodies_keep_verbatim_text_and_gain_structured_content(self, body, compat, expected_structured):
+        """The OpenAPI arm used to stringify the response; now the text block is the upstream body
+        byte for byte, exactly once, and JSON bodies carry structuredContent when the caller's revision admits it."""
+        from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat, parse_http_body
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+
+        async def handler(**_kwargs):
+            return parse_http_body(body)
+
+        tool = MagicMock()
+        tool.handler = handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {}, WireCompat(compat))
+
+        assert result.is_error is False
+        assert [block.text for block in result.content] == [body]
+        assert result.structured_content == expected_structured
+
+
+class TestConfigServerIdPinning:
+    """config.yaml servers may pin ``server_id`` so permission grants survive connection edits."""
+
+    @staticmethod
+    def _config(**overrides: object) -> dict[str, dict[str, object]]:
+        return {
+            "docs_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                **overrides,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_derived_id_churns_when_connection_fields_change(self, config_only_mcp_manager_factory):
+        """The behavior the pin exists to escape: editing the url mints a brand-new id."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(self._config())
+        before = next(iter(manager.config_mcp_servers))
+
+        manager.config_mcp_servers.clear()
+        await manager.load_servers_from_config(self._config(url="https://prod.example.com/mcp"))
+        after = next(iter(manager.config_mcp_servers))
+
+        assert before != after
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_survives_url_transport_auth_and_alias_edits(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+        assert list(manager.config_mcp_servers) == ["docs-prod-1"]
+        assert manager.config_mcp_servers["docs-prod-1"].server_id == "docs-prod-1"
+
+        manager.config_mcp_servers.clear()
+        await manager.load_servers_from_config(
+            self._config(
+                server_id="docs-prod-1",
+                url="https://prod.example.com/mcp",
+                transport=MCPTransport.sse,
+                auth_type=MCPAuth.bearer_token,
+                alias="docs",
+            )
+        )
+
+        assert list(manager.config_mcp_servers) == ["docs-prod-1"]
+        assert manager.config_mcp_servers["docs-prod-1"].url == "https://prod.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_absent_server_id_keeps_the_derived_hash(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(self._config())
+
+        derived = manager._generate_stable_server_id(
+            server_name="docs_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=None,
+            alias=None,
+        )
+        assert list(manager.config_mcp_servers) == [derived]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_value", ["", "   ", 123, True, ["docs-prod-1"]])
+    async def test_blank_or_non_string_server_id_is_rejected(self, config_only_mcp_manager_factory, bad_value: Any):
+        manager = config_only_mcp_manager_factory()
+
+        with pytest.raises(ValueError, match="server_id must be a non-empty string"):
+            await manager.load_servers_from_config(self._config(server_id=bad_value))
+
+    @pytest.mark.asyncio
+    async def test_two_servers_pinning_the_same_id_are_rejected(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+        config: Dict[str, Any] = {
+            "docs_server": {"url": "https://a.example.com/mcp", "server_id": "shared-id"},
+            "wiki_server": {"url": "https://b.example.com/mcp", "server_id": "shared-id"},
+        }
+
+        with pytest.raises(ValueError, match="already used by MCP server 'docs_server'"):
+            await manager.load_servers_from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_colliding_with_a_derived_id_is_rejected(self, config_only_mcp_manager_factory):
+        """A pin that lands on another entry's derived hash collides just as hard."""
+        manager = config_only_mcp_manager_factory()
+        derived = manager._generate_stable_server_id(
+            server_name="docs_server",
+            url="https://a.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=None,
+            alias=None,
+        )
+        config: Dict[str, Any] = {
+            "docs_server": {"url": "https://a.example.com/mcp", "transport": MCPTransport.http},
+            "wiki_server": {"url": "https://b.example.com/mcp", "server_id": derived},
+        }
+
+        with pytest.raises(ValueError, match="already used by MCP server 'docs_server'"):
+            await manager.load_servers_from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_colliding_with_a_db_backed_server_is_rejected(self, config_only_mcp_manager_factory):
+        """get_registry() is ``config | registry``, so the db row would hide the config server.
+
+        The registry is seeded by hand because on a real startup the config loads before the
+        database does, so this check only fires on a later reload. The startup ordering is covered
+        by ``test_db_row_arriving_on_a_pinned_config_id_warns``; the warning there is not redundant.
+        """
+        manager = config_only_mcp_manager_factory()
+        manager.registry["db-uuid-1"] = MCPServer(
+            server_id="db-uuid-1",
+            name="db_server",
+            transport=MCPTransport.http,
+            url="https://db.example.com/mcp",
+        )
+
+        with pytest.raises(ValueError, match="belongs to a database-backed MCP server"):
+            await manager.load_servers_from_config(self._config(server_id="db-uuid-1"))
+
+    @pytest.mark.asyncio
+    async def test_derived_id_matching_a_db_backed_server_is_not_rejected(self, config_only_mcp_manager_factory):
+        """Only a pinned id is an authoring error; a hash collision must not fail startup."""
+        manager = config_only_mcp_manager_factory()
+        derived = manager._generate_stable_server_id(
+            server_name="docs_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=None,
+            alias=None,
+        )
+        manager.registry[derived] = MCPServer(
+            server_id=derived,
+            name="db_server",
+            transport=MCPTransport.http,
+            url="https://db.example.com/mcp",
+        )
+
+        await manager.load_servers_from_config(self._config())
+
+        assert derived in manager.config_mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_is_stripped_of_surrounding_whitespace(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(self._config(server_id="  docs-prod-1  "))
+
+        assert list(manager.config_mcp_servers) == ["docs-prod-1"]
+
+    @staticmethod
+    async def _reload_with_db_server(manager: MCPServerManager, server_id: str, db_name: str = "db_server") -> None:
+        row = LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=db_name,
+            alias=db_name,
+            url="https://db.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        raw_row = MagicMock()
+        raw_row.model_dump.return_value = row.model_dump()
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=[raw_row])
+        built = MCPServer(
+            server_id=server_id,
+            name=db_name,
+            server_name=db_name,
+            url="https://db.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        with (
+            patch(  # test-quality-ok: the db reload path has no seam but its own repository
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(  # test-quality-ok: same, the prisma client is fetched inside the reload
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=AsyncMock(return_value=built)),
+        ):
+            await manager.reload_servers_from_database()
+
+    @pytest.mark.asyncio
+    async def test_db_row_arriving_on_a_pinned_config_id_warns(self, config_only_mcp_manager_factory, caplog):
+        """The db row loads after config on startup, so the config server is hidden then, not at load."""
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "docs-prod-1")
+
+        assert any("docs-prod-1" in m and "database entry takes precedence" in m for m in caplog.messages)
+        assert manager.get_registry()["docs-prod-1"].url == "https://db.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_db_row_with_a_distinct_id_does_not_warn(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert all("database entry takes precedence" not in m for m in caplog.messages)
+        assert set(manager.get_registry()) == {"docs-prod-1", "db-uuid-1"}
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_another_entrys_server_name_is_rejected(self, config_only_mcp_manager_factory):
+        """expand_permission_list resolves against registry keys first, so this steals the grants."""
+        manager = config_only_mcp_manager_factory()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "wiki_server",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_another_entrys_alias_is_rejected(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {
+                        "alias": "wiki",
+                        "url": "https://wiki.example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                    "docs_server": {
+                        "server_id": "wiki",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_name_is_allowed(self, config_only_mcp_manager_factory):
+        """The most natural pin an operator writes; it resolves to the same server either way."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(self._config(server_id="docs_server"))
+
+        assert list(manager.config_mcp_servers) == ["docs_server"]
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_alias_is_allowed(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(self._config(alias="docs", server_id="docs"))
+
+        assert list(manager.config_mcp_servers) == ["docs"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("aliasing_entry_first", [True, False])
+    async def test_pinning_own_name_that_is_another_entrys_alias_is_rejected(self, config_only_mcp_manager_factory, aliasing_entry_first: bool):
+        """A grant naming 'docs_server' reaches both servers unpinned; the pin would narrow it to one."""
+        manager = config_only_mcp_manager_factory()
+        wiki = (
+            "wiki_server",
+            {"alias": "docs_server", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+        )
+        docs = (
+            "docs_server",
+            {"server_id": "docs_server", "url": "https://example.com/mcp", "transport": MCPTransport.http},
+        )
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(dict((wiki, docs) if aliasing_entry_first else (docs, wiki)))
+
+    @pytest.mark.asyncio
+    async def test_pinning_own_name_that_is_another_entrys_mapped_alias_is_rejected(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "docs_server",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                },
+                mcp_aliases={"docs_server": "wiki_server"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_own_alias_shared_with_a_later_entry_is_rejected(self, config_only_mcp_manager_factory):
+        """Nothing rejects duplicate aliases, so the first entry's pin would answer the second's grants."""
+        manager = config_only_mcp_manager_factory()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'docs_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {
+                        "alias": "shared",
+                        "server_id": "shared",
+                        "url": "https://wiki.example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                    "docs_server": {
+                        "alias": "shared",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_own_name_pin_resolves_grants_like_the_unpinned_name(self, config_only_mcp_manager_factory):
+        """The negative control: a sole-owner self-pin must keep loading and answer the same grants."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"alias": "wiki", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {
+                    "server_id": "docs_server",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            }
+        )
+        wiki_id = next(sid for sid, server in manager.config_mcp_servers.items() if server.alias == "wiki")
+
+        assert manager.expand_permission_list(["docs_server"]) == ["docs_server"]
+        assert manager.expand_permission_list(["wiki"]) == [wiki_id]
+
+    @pytest.mark.asyncio
+    async def test_derived_id_is_not_checked_against_names(self, config_only_mcp_manager_factory):
+        """Unpinned configs must keep loading; only a pinned id can be an authoring error."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {"url": "https://example.com/mcp", "transport": MCPTransport.http},
+            }
+        )
+
+        assert len(manager.config_mcp_servers) == 2
+
+    @pytest.mark.asyncio
+    async def test_shadow_warning_is_not_repeated_on_every_reload(self, config_only_mcp_manager_factory, caplog):
+        """reload_servers_from_database runs on the config-reload timer; one warning, not one a tick."""
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "docs-prod-1")
+            first_round = [m for m in caplog.messages if "database entry takes precedence" in m]
+            await self._reload_with_db_server(manager, "docs-prod-1")
+            second_round = [m for m in caplog.messages if "database entry takes precedence" in m]
+
+        assert len(first_round) == 1
+        assert second_round == first_round
+
+    @pytest.mark.asyncio
+    async def test_shadow_warning_fires_again_when_the_shadowed_set_changes(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "docs-prod-1")
+            await self._reload_with_db_server(manager, "db-uuid-1")
+            await self._reload_with_db_server(manager, "docs-prod-1")
+
+        assert len([m for m in caplog.messages if "database entry takes precedence" in m]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_a_mapped_alias_is_rejected(self, config_only_mcp_manager_factory):
+        """An alias can also arrive from litellm_settings.mcp_aliases; it is reserved just the same."""
+        manager = config_only_mcp_manager_factory()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "wiki",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                },
+                {"wiki": "wiki_server"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_mapped_alias_is_allowed(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            self._config(server_id="docs"),
+            {"docs": "docs_server"},
+        )
+
+        assert list(manager.config_mcp_servers) == ["docs"]
+
+    @pytest.mark.asyncio
+    async def test_mapped_alias_for_an_unknown_server_reserves_nothing(self, config_only_mcp_manager_factory):
+        """A dangling mcp_aliases entry is never applied, so it must not fail an unrelated pin."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            self._config(server_id="wiki"),
+            {"wiki": "a_server_that_does_not_exist"},
+        )
+
+        assert list(manager.config_mcp_servers) == ["wiki"]
+
+    @pytest.mark.asyncio
+    async def test_config_id_that_is_a_db_server_name_warns(self, config_only_mcp_manager_factory, caplog):
+        """The mirror of the shadow case: here the config entry captures the db server's grants."""
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert any("db_server" in m and "name or alias of a database-backed" in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_capture_warning_is_not_repeated_on_every_reload(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert len([m for m in caplog.messages if "name or alias of a database-backed" in m]) == 1
+
+    @pytest.mark.asyncio
+    async def test_config_id_unrelated_to_db_names_does_not_warn(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert all("name or alias of a database-backed" not in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_mapped_alias_for_a_server_with_its_own_alias_reserves_nothing(self, config_only_mcp_manager_factory):
+        """load_servers_from_config ignores the mapping when the entry sets alias, so it is free."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {
+                    "alias": "wiki_prod",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "docs_server": {
+                    "server_id": "wiki",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki": "wiki_server"},
+        )
+
+        assert "wiki" in manager.config_mcp_servers
+        assert len(manager.config_mcp_servers) == 2
+
+    @pytest.mark.asyncio
+    async def test_only_the_first_mapped_alias_for_a_server_is_reserved(self, config_only_mcp_manager_factory):
+        """Only the first mapping is applied, so pinning the second one must still load."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {
+                    "server_id": "wiki_two",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki_one": "wiki_server", "wiki_two": "wiki_server"},
+        )
+
+        assert "wiki_two" in manager.config_mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_invalid_name_is_reported_before_any_entry_body_is_read(self, config_only_mcp_manager_factory):
+        """The identifier index walks every entry up front, so a bad name must still fail on the name."""
+        with pytest.raises(Exception, match="Server name cannot contain"):
+            await config_only_mcp_manager_factory().load_servers_from_config({"my-server": None})
+
+    @pytest.mark.asyncio
+    async def test_a_shadowing_db_server_reports_only_the_shadow_warning(self, config_only_mcp_manager_factory, caplog):
+        """The db row wins the id outright, so the capture message would contradict the shadow one."""
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db_server")
+
+        assert any("database entry takes precedence" in m for m in caplog.messages)
+        assert all("name or alias of a database-backed" not in m for m in caplog.messages)
+        assert manager.get_registry()["db_server"].url == "https://db.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_blank_alias_still_blocks_the_mapping(self, config_only_mcp_manager_factory):
+        """The loader only consults mcp_aliases when the key is absent, so a blank alias frees it."""
+        manager = config_only_mcp_manager_factory()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {
+                    "alias": "",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "docs_server": {
+                    "server_id": "wiki",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki": "wiki_server"},
+        )
+
+        assert "wiki" in manager.config_mcp_servers
+        assert manager.config_mcp_servers["wiki"].url == "https://example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_a_row_that_shadows_one_id_still_reports_capturing_another(self, config_only_mcp_manager_factory, caplog):
+        """Skipping is per identifier, not per row, so the second collision is not lost."""
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(
+            {
+                "docs_server": {
+                    "server_id": "shadow_x",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "wiki_server": {
+                    "server_id": "capture_y",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            }
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "shadow_x", db_name="capture_y")
+
+        assert any("shadow_x" in m and "database entry takes precedence" in m for m in caplog.messages)
+        assert any("capture_y" in m and "name or alias of a database-backed" in m for m in caplog.messages)
+
+
+class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
+    """The bearer that admitted the request as a LiteLLM key must not be sent to the IdP as the
+    RFC 8693 subject_token (or ID-JAG assertion). Only ``x-litellm-api-key`` disambiguates: with it
+    present, ``Authorization`` is the caller's own identity token and is exchanged as before."""
+
+    _ADMISSION_KEY: Final = "sk-litellm-virtual-key"
+    _USER_TOKEN: Final = "user-idp-jwt"
+
+    @staticmethod
+    def _token_exchange_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+
+    @staticmethod
+    def _id_jag_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_endpoint="https://idp.example.com/token",
+            id_jag_resource_token_endpoint="https://resource-as.example.com/token",
+        )
+
+    @staticmethod
+    def _recording_provider() -> MagicMock:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        provider: Final = MagicMock()
+        provider.resolve_credentials = AsyncMock(
+            return_value=Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+        )
+        return provider
+
+    @staticmethod
+    def _subjects_seen_by(provider: MagicMock) -> list[str | None]:
+        return [
+            call.args[0].inbound_token.get_secret_value() if call.args[0].inbound_token else None
+            for call in provider.resolve_credentials.call_args_list
+        ]
+
+    @staticmethod
+    def _manager_with_recording_client() -> MCPServerManager:
+        manager: Final = MCPServerManager()
+        client: Final = AsyncMock()
+        client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        client.list_prompts = AsyncMock(return_value=[])
+        client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
+        manager._create_mcp_client = AsyncMock(return_value=client)
+        return manager
+
+    @staticmethod
+    def _subject_token_given_to_client(manager: MCPServerManager) -> str | None:
+        return manager._create_mcp_client.call_args.kwargs["subject_token"]
+
+    async def _call_tool_subject(self, server: MCPServer, oauth2_headers, raw_headers, user_api_key_auth):
+        manager: Final = self._manager_with_recording_client()
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            proxy_logging_obj=None,
+            user_api_key_auth=user_api_key_auth,
+        )
+        return self._subject_token_given_to_client(manager)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag])
+    async def test_tools_call_with_only_the_litellm_key_has_no_subject(self, auth_type):
+        server = (
+            self._token_exchange_server("te-call")
+            if auth_type == MCPAuth.oauth2_token_exchange
+            else self._id_jag_server("jag-call")
+        )
+        subject_token = await self._call_tool_subject(
+            server,
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_rest_tools_call_with_only_the_litellm_key_has_no_subject(self):
+        """The REST facade passes no oauth2_headers; the bearer is reached through raw_headers only."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-rest"),
+            oauth2_headers=None,
+            raw_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-split"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={
+                "X-LiteLLM-API-Key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_an_empty_x_litellm_api_key_has_no_subject(self):
+        """Admission ignores an empty ``x-litellm-api-key`` and validates ``Authorization`` instead."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-empty-header"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"x-litellm-api-key": "", "authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_the_same_litellm_key_in_both_headers_has_no_subject(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-same-key"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={
+                "x-litellm-api-key": self._ADMISSION_KEY,
+                "authorization": f"Bearer {self._ADMISSION_KEY}",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_a_different_litellm_key_in_authorization_has_no_subject(self):
+        """A second ``sk-`` virtual key next to ``x-litellm-api-key`` is still a gateway credential."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-second-key"),
+            oauth2_headers={"Authorization": "Bearer sk-another-virtual-key"},
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": "Bearer sk-another-virtual-key",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_exchanges_the_bearer_when_jwt_admission_left_api_key_unset(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-jwt"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={"authorization": f"Bearer {self._USER_TOKEN}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id="alice"),
+        )
+        assert subject_token == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_tools_list_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        await manager._get_tools_from_server(
+            server=self._token_exchange_server("te-list-key"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_prompts_list_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.get_prompts_from_server(
+            server=self._token_exchange_server("te-prompts-key"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_resource_read_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.read_resource_from_server(
+            server=self._token_exchange_server("te-read-key"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            url=AnyUrl("file:///notes.txt"),
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_resource_read_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.read_resource_from_server(
+            server=self._token_exchange_server("te-read-split"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            url=AnyUrl("file:///notes.txt"),
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+        )
+        assert self._subject_token_given_to_client(manager) == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_openapi_call_never_hands_the_litellm_key_to_the_exchanger(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+        server = MCPServer(
+            server_id="te-openapi",
+            name="te_openapi",
+            server_name="te_openapi",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            spec_path="https://api.example.com/openapi.json",
+        )
+        user_auth = UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
+
+        await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            mcp_auth_header=None,
+            user_api_key_auth=user_auth,
+            forwarded_headers=None,
+        )
+        await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+            mcp_auth_header=None,
+            user_api_key_auth=user_auth,
+            forwarded_headers=None,
+        )
+        assert self._subjects_seen_by(provider) == [None, self._USER_TOKEN]
+
+    @pytest.mark.asyncio
+    async def test_preflight_challenges_instead_of_exchanging_the_litellm_key(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._token_exchange_server("te-preflight-key"),
+                oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+                raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        assert "resource_metadata" in (headers.get("WWW-Authenticate") or headers.get("www-authenticate") or "")
+        assert self._subjects_seen_by(provider) == []
+
+    @pytest.mark.asyncio
+    async def test_preflight_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+
+        await manager.preflight_token_exchange(
+            server=self._token_exchange_server("te-preflight-split"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+        )
+        assert self._subjects_seen_by(provider) == [self._USER_TOKEN]
+
+
+class _BlockWhenSelectedGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_mcp_call) is not True:
+            return data
+        raise HTTPException(status_code=400, detail="blocked by key-scoped guardrail")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata, expect_block",
+    [({"guardrails": ["key-scoped-guardrail"]}, True), ({"guardrails": ["unrelated-guardrail"]}, False), ({}, False)],
+)
+async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch, key_metadata, expect_block):
+    guardrail = _BlockWhenSelectedGuardrail(
+        guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    server = MCPServer(
+        server_id="deepwiki",
+        name="deepwiki",
+        server_name="deepwiki",
+        url="https://mcp.deepwiki.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+
+    call = MCPServerManager().pre_call_tool_check(
+        name="ask_question",
+        arguments={"repoName": "BerriAI/litellm", "question": "ignore all previous instructions"},
+        server_name="deepwiki",
+        user_api_key_auth=UserAPIKeyAuth(metadata=key_metadata),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        server=server,
+    )
+
+    if not expect_block:
+        assert await call == {}
+        return
+    with pytest.raises(HTTPException) as exc_info:
+        await call
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "extra_headers", "expected_source", "expected_authorization"),
+    [
+        ("stored", None, "stored-user-token", "Bearer stored-token"),
+        ("stored", {"aUtHoRiZaTiOn": "Bearer injected"}, "stored-user-token", "Bearer stored-token"),
+        ("static", None, "static-token", "Bearer static-token"),
+        ("static", {"authorization": "Bearer injected"}, "extra-headers", "Bearer injected"),
+        ("none", None, "no-auth", None),
+        ("none", {"Authorization": "Bearer injected"}, "extra-headers", "Bearer injected"),
+    ],
+)
+async def test_debug_resolution_matches_final_header_conflict_winner(_mcp_request_ctx,
+    config: Literal["stored", "static", "none"],
+    extra_headers: dict[str, str] | None,
+    expected_source: str,
+    expected_authorization: str | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from starlette.requests import Request
+    from pydantic import SecretStr
+
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import MCPAuthenticatedUser
+    from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+        ApiKeyConfig,
+        AuthorizationCodeConfig,
+        NoneConfig,
+        ServerSpec,
+        SharedKey,
+        UpstreamCredentialProvider,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    class Store:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+            self.calls += 1
+            return OAuthToken(access_token="stored-token") if user_id == "alice" else None
+
+    store = Store()
+    context = MCPAuthenticatedUser(UserAPIKeyAuth(user_id="alice"))
+    diagnostics = MCPAuthDiagnostics()
+    token = active_mcp_request_ctx_var.set(
+        _mcp_request_ctx(
+            request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+        )
+    )
+    selected = {
+        "stored": AuthorizationCodeConfig(),
+        "static": ApiKeyConfig(key_source=SharedKey(value=SecretStr("static-token"))),
+        "none": NoneConfig(),
+    }[config]
+    try:
+        auth, remaining = await MCPServerManager()._resolve_v2_auth(
+            server=MCPServer(
+                server_id="s",
+                name="s",
+                transport="http",
+                url="https://up.example/mcp",
+                static_headers={"Authorization": "Bearer configured"},
+            ),
+            spec=ServerSpec(server_id="s", resource="https://up.example/mcp", config=selected),
+            provider=UpstreamCredentialProvider(oauth_token_store=store),
+            subject_token=None,
+            user_api_key_auth=context.user_api_key_auth,
+            extra_headers=extra_headers,
+        )
+        request = httpx.Request("GET", "https://up.example/mcp", headers=remaining)
+        if auth is not None:
+            next(auth.auth_flow(request))
+        assert diagnostics.resolution() == expected_source
+        assert request.headers.get("Authorization") == expected_authorization
+        assert store.calls == (1 if config == "stored" else 0)
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_debug_reports_legacy_signing_and_non_http_transport(_mcp_request_ctx, transport: Literal["http", "stdio"]) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from starlette.requests import Request
+
+    from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    diagnostics = MCPAuthDiagnostics()
+    token = active_mcp_request_ctx_var.set(
+        _mcp_request_ctx(
+            request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+        )
+    )
+    try:
+        server = MCPServer(
+            server_id="signed",
+            name="signed",
+            transport=transport,
+            url="https://up.example/mcp",
+            auth_type="aws_sigv4",
+            aws_access_key_id="AKIDEXAMPLE",
+            aws_secret_access_key="test-signing-secret",
+            aws_region_name="us-east-1",
+            aws_service_name="execute-api",
+            command="python",
+            args=["-c", "pass"],
+        )
+        client = await MCPServerManager()._create_mcp_client(server)
+        if transport == "stdio":
+            assert diagnostics.resolution() == "not-applicable"
+        else:
+            assert diagnostics.resolution() == "aws-sigv4"
+            request = httpx.Request("POST", "https://up.example/mcp", content=b"{}")
+            next(client._aws_auth.auth_flow(request))
+            assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256 ")
+            assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_temporary_server_discovery_reuses_resolved_metadata_without_publishing() -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="temporary-oauth-discovery", name="temporary", url="https://idp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.true_passthrough,
+    )
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    metadata: Final = MCPOAuthMetadata(
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+        registration_url="https://idp.example.com/register",
+    )
+    with patch.object(manager, "_discover_oauth_metadata_for_server", AsyncMock(return_value=metadata)) as discovery:
+        resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+        repeated: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert resolved.authorization_url == metadata.authorization_url
+    assert resolved.token_url == metadata.token_url
+    assert resolved.registration_url == metadata.registration_url
+    assert repeated is resolved
+    assert server.server_id not in manager.registry
+    assert server.server_id not in manager.config_mcp_servers
+    discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.true_passthrough])
+async def test_repeated_stale_oauth_discovery_is_bounded(auth_type: MCPAuth) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="repeated-stale", name="stale", url="https://idp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=auth_type, oauth2_flow="authorization_code",
+    )
+    manager.registry[server.server_id] = server
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    metadata: Final = MCPOAuthMetadata(
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+    )
+    with (
+        patch.object(manager, "_discover_oauth_metadata_for_server", AsyncMock(return_value=metadata)) as discovery,
+        patch.object(manager, "_publish_resolved_oauth_server", return_value=None),
+    ):
+        if auth_type == MCPAuth.true_passthrough:
+            assert await manager.ensure_oauth_metadata_discovered(server) is server
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await manager.ensure_oauth_metadata_discovered(server)
+            assert exc.value.status_code == 503
+            assert "changed repeatedly" in str(exc.value.detail)
+    assert discovery.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_discovery_falls_back_to_resolved_registered_server() -> None:
+    manager: Final = MCPServerManager()
+    original: Final = MCPServer(
+        server_id="resolved-replacement", name="replacement", url="https://old.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+    )
+    replacement: Final = original.model_copy(update={
+        "url": "https://new.example.com/mcp", "authorization_url": "https://new.example.com/authorize",
+        "token_url": "https://new.example.com/token",
+    })
+    manager.registry[original.server_id] = replacement
+    assert await manager._rejoin_oauth_metadata_discovery(original, retry_stale=False) is replacement
+
+
+def test_stale_discovery_cannot_overwrite_new_registered_server() -> None:
+    manager: Final = MCPServerManager()
+    original: Final = MCPServer(
+        server_id="stale-publication", name="publication", url="https://old.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+    )
+    manager._set_oauth_discovery_deferred(original.server_id, True)
+    original_slot: Final = manager._oauth_discovery_slot(original.server_id)
+    assert original_slot is not None
+    replacement: Final = original.model_copy(update={"url": "https://new.example.com/mcp"})
+    manager.registry[original.server_id] = replacement
+    manager._set_oauth_discovery_deferred(original.server_id, True)
+    assert manager._publish_resolved_oauth_server(original, original_slot.generation) is None
+    assert manager.registry[original.server_id] is replacement
+
+
+@pytest.mark.asyncio
+async def test_temporary_oauth_discovery_expires_without_more_requests() -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="expiring-session", name="temporary", url="https://idp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.true_passthrough,
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+    )
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert manager._oauth_discovery_slot(server.server_id) is not None
+    loop: Final = asyncio.get_running_loop()
+    expired: Final = loop.create_future()
+    with patch.object(loop, "time", return_value=loop.time() + 301):
+        loop.call_later(0, expired.set_result, None)
+        await expired
+    assert resolved.authorization_url == server.authorization_url
+    assert manager._oauth_discovery_slot(server.server_id) is None
+
+
+def test_old_temporary_discovery_expiry_preserves_replacement() -> None:
+    manager: Final = MCPServerManager()
+    manager._set_oauth_discovery_deferred("reused-session", True)
+    old_slot: Final = manager._oauth_discovery_slot("reused-session")
+    assert old_slot is not None
+    manager._set_oauth_discovery_deferred("reused-session", True)
+    replacement: Final = manager._oauth_discovery_slot("reused-session")
+    manager._expire_temporary_oauth_discovery("reused-session", old_slot.generation)
+    assert manager._oauth_discovery_slot("reused-session") is replacement
+    assert replacement is not None
+    manager._expire_temporary_oauth_discovery("reused-session", replacement.generation)
+    assert manager._oauth_discovery_slot("reused-session") is None
+    manager._expire_temporary_oauth_discovery("reused-session", replacement.generation)
+    assert manager._oauth_discovery_slot("reused-session") is None
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_coalesces_concurrent_checks_and_reuses_results(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="coalesced",
+        name="coalesced",
+        transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/coalesced.json",
+        auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def serve(request):
+        started.set()
+        await release.wait()
+        return httpx.Response(200, json={"paths": {}})
+
+    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release.set()
+    results = await asyncio.gather(*tasks)
+    cached = await manager.health_check_server(server.server_id)
+    assert [result.status for result in results] == ["healthy"] * 4
+    assert cached.status == "healthy"
+    assert {result.last_health_check for result in [*results, cached]} == {results[0].last_health_check}
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_cache_expires_at_thirty_seconds(respx_mock, monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _OpenAPIHealthProbe
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    clock = iter([0.0, 29.0, 30.0, 30.0])
+    probe = _OpenAPIHealthProbe("https://93.184.216.34/expiry.json", clock=clock.__next__)
+    route = respx_mock.get(probe.spec_path).mock(
+        side_effect=[
+            httpx.Response(200, json={"paths": {}}),
+            httpx.Response(503),
+        ]
+    )
+    first = await probe.check()
+    assert first[0] == "healthy"
+    assert await probe.check() == first
+    refreshed = await probe.check()
+    assert refreshed[0] == "unhealthy"
+    assert refreshed[1] == "OpenAPI specification request failed (HTTP 503)"
+    assert refreshed[2] >= first[2]
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_reports_size_limit_as_unknown_and_caches_failure(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="oversized",
+        name="oversized",
+        transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/large.json",
+        auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    route = respx_mock.get(server.spec_path).respond(200, headers={"content-length": str(12 * 1024 * 1024)})
+    result = await manager.health_check_server(server.server_id)
+    cached = await manager.health_check_server(server.server_id)
+    assert result.status == "unknown"
+    assert result.health_check_error == "OpenAPI specification probe refused: Response exceeds the configured size limit"
+    assert cached.health_check_error == result.health_check_error
+    assert cached.last_health_check == result.last_health_check
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_waiting", [False, True])
+async def test_openapi_health_cancellation_does_not_poison_cache(respx_mock, monkeypatch, already_waiting):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="cancelled-cache", name="cancelled-cache", transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/cancelled-cache.json", auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    started = asyncio.Event()
+    attempts = []
+
+    async def serve(request):
+        attempts.append(request.url)
+        if not started.is_set():
+            started.set()
+            await asyncio.Event().wait()
+        return httpx.Response(200, json={"paths": {}})
+
+    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    leader = asyncio.create_task(manager.health_check_server(server.server_id))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    follower = asyncio.create_task(manager.health_check_server(server.server_id)) if already_waiting else None
+    await asyncio.sleep(0)
+    leader.cancel()
+    cancelled = await leader
+    assert cancelled.status == "unknown"
+    assert cancelled.health_check_error == "OpenAPI specification check was cancelled"
+    recovered = await follower if follower is not None else await manager.health_check_server(server.server_id)
+    assert recovered.status == "healthy"
+    assert recovered.health_check_error is None
+    cached = await manager.health_check_server(server.server_id)
+    assert cached.last_health_check == recovered.last_health_check
+    assert cached.status == "healthy"
+    assert len(attempts) == 2
+    assert route.call_count == 1
+
+
+class _DiscoveryClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+from pydantic import TypeAdapter
+from mcp.types import JSONRPCMessage
+
+_JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
+
+
+@contextlib.contextmanager
+def _mcp_upstream(respond):
+    """Drive the SDK's streamable-HTTP transport off an httpx2 MockTransport; respx only sees httpx."""
+    from litellm.experimental_mcp_client.client import MCPClient
+
+    def make_client(self, *args, **kwargs):
+        return httpx2.AsyncClient(
+            transport=httpx2.MockTransport(respond),
+            headers=kwargs.get("headers"),
+            auth=kwargs.get("auth") or self._resolved_auth or self._aws_auth,
+        )
+
+    with (
+        patch.object(  # test-quality-ok: respx cannot intercept httpx2; inject MockTransport through the client factory
+            MCPClient, "_create_httpx_client_factory", lambda self: functools.partial(make_client, self)
+        )
+    ):
+        yield
+
+
+class _DiscoveryUpstream:
+    def __init__(self) -> None:
+        self.requests: tuple[tuple[str, str], ...] = ()
+        self.outcome = "supported"
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.release.set()
+
+    async def respond(self, request: httpx2.Request) -> httpx2.Response:
+        from mcp.types import JSONRPCRequest
+
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        self.requests = (*self.requests, (payload.method, request.headers.get("authorization", "")))
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "discovery", "version": "1"},
+                        "capabilities": {} if self.outcome == "unsupported" else {"prompts": {}, "resources": {}},
+                    },
+                },
+            )
+        self.entered.set()
+        await self.release.wait()
+        if self.outcome == "failure":
+            return httpx2.Response(503)
+        if self.outcome == "paged_failure" and (payload.params or {}).get("cursor"):
+            return httpx2.Response(503)
+        if self.outcome == "cancelled":
+            raise asyncio.CancelledError()
+        if self.outcome == "rejected":
+            return httpx2.Response(
+                200, json={"jsonrpc": "2.0", "id": payload.id, "error": {"code": -32601, "message": "Unsupported"}}
+            )
+        result: Final = {
+            "prompts/list": {"prompts": [{"name": "example", "description": "original"}]},
+            "resources/list": {"resources": [{"name": "example", "uri": "test://example", "description": "original"}]},
+            "resources/templates/list": {
+                "resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]
+            },
+            "tools/list": {"tools": []},
+        }[payload.method]
+        continuation: Final = (
+            {"nextCursor": "last-page"}
+            if self.outcome in ("paged", "paged_failure") and not (payload.params or {}).get("cursor")
+            else {}
+        )
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {**result, **continuation}})
+
+    @property
+    def initializes(self) -> int:
+        return sum(method == "initialize" for method, _auth in self.requests)
+
+
+def _discovery_server() -> MCPServer:
+    return MCPServer(server_id="discovery", name="discovery", url="https://discovery.example/mcp", transport=MCPTransport.http)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None:
+    import respx
+
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    server: Final = _discovery_server()
+    with _mcp_upstream(upstream.respond):
+        first: Final = await operation(server, None)
+        assert len(first) == 1
+        assert first[0].name == "discovery-example"
+        first[0].description = "caller changed it"
+        second: Final = await operation(server, None, add_prefix=False)
+        assert second[0].name == "example"
+        assert second[0].description == "original"
+        assert upstream.initializes == 1
+        clock.now = 59.999
+        assert (await operation(server, None))[0].name == "discovery-example"
+        assert upstream.initializes == 1
+        clock.now = 60.001
+        assert (await operation(server, None))[0].name == "discovery-example"
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+@pytest.mark.parametrize("outcome", ("unsupported", "rejected", "failure"))
+async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: str) -> None:
+    import respx
+
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = outcome
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
+        assert await operation(_discovery_server(), None) == []
+        assert await operation(_discovery_server(), None) == []
+        assert upstream.initializes == (2 if outcome == "failure" else 1)
+        if outcome == "failure":
+            upstream.outcome = "supported"
+            assert (await operation(_discovery_server(), None))[0].name == "discovery-example"
+            assert upstream.initializes == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+async def test_discovery_cache_retries_failed_pagination_before_caching_complete_list(kind: str) -> None:
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = "paged_failure"
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
+        assert await operation(_discovery_server(), None) == []
+        assert upstream.initializes == 1
+        upstream.outcome = "paged"
+        recovered: Final = await operation(_discovery_server(), None)
+        assert [item.name for item in recovered] == ["discovery-example", "discovery-example"]
+        assert upstream.initializes == 2
+        requests_after_recovery: Final = upstream.requests
+        assert await operation(_discovery_server(), None) == recovered
+        assert upstream.requests == requests_after_recovery
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_isolates_forwarded_credentials_and_shares_static_auth() -> None:
+    import respx
+
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _discovery_server()
+    first_user: Final = UserAPIKeyAuth(user_id="first")
+    second_user: Final = UserAPIKeyAuth(user_id="second")
+    with _mcp_upstream(upstream.respond):
+        for user in (first_user, second_user):
+            assert len(await manager.get_prompts_from_server(server, user)) == 1
+        assert upstream.initializes == 1
+        for credential in ("first-secret", "second-secret", "first-secret"):
+            assert (
+                len(
+                    await manager.get_prompts_from_server(
+                        server, first_user, extra_headers={"Authorization": credential}
+                    )
+                )
+                == 1
+            )
+        assert upstream.initializes == 3
+        assert {auth for method, auth in upstream.requests if method == "prompts/list"} == {
+            "",
+            "first-secret",
+            "second-secret",
+        }
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> None:
+    import respx
+
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.release.clear()
+    with _mcp_upstream(upstream.respond):
+        tasks: Final = tuple(
+            asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None)) for _ in range(10)
+        )
+        await asyncio.wait_for(upstream.entered.wait(), timeout=5)
+        tasks[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await tasks[0]
+        upstream.release.set()
+        results: Final = await asyncio.wait_for(asyncio.gather(*tasks[1:]), timeout=5)
+        assert all(result[0].name == "discovery-example" for result in results)
+        assert upstream.initializes == 1
+        assert results[0][0] is not results[1][0]
+        assert (await manager.get_prompts_from_server(_discovery_server(), None))[0].name == "discovery-example"
+        assert upstream.initializes == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old_results() -> None:
+    import respx
+
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.release.clear()
+    with _mcp_upstream(upstream.respond):
+        task: Final = asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None))
+        await asyncio.wait_for(upstream.entered.wait(), timeout=5)
+        manager._invalidate_discovery_lists("discovery")
+        upstream.release.set()
+        assert (await task)[0].name == "discovery-example"
+        assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
+        assert upstream.initializes == 2
+        manager._invalidate_discovery_lists("discovery")
+        assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
+        assert upstream.initializes == 3
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    import respx
+
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    with _mcp_upstream(upstream.respond):
+        assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
+        assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
+        assert upstream.initializes == 2
+
+
+@pytest.mark.parametrize("value,expected", (("invalid", 60.0), ("nan", 60.0), ("inf", 60.0), ("-1", 60.0), ("12.5", 12.5)))
+def test_discovery_cache_ttl_validation(value: str, expected: float, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _mcp_discovery_cache_ttl
+
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", value)
+    assert _mcp_discovery_cache_ttl() == expected
+
+
+@pytest.mark.parametrize("auth_type", (MCPAuth.oauth2, MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag))
+def test_discovery_cache_keys_isolate_user_dependent_auth(auth_type: MCPAuth) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = _discovery_server().model_copy(update={"auth_type": auth_type})
+    first: Final = manager._discovery_key(server, UserAPIKeyAuth(user_id="first"), None, None, None, None)
+    second: Final = manager._discovery_key(server, UserAPIKeyAuth(user_id="second"), None, None, None, None)
+    anonymous: Final = manager._discovery_key(server, None, None, None, None, None)
+    assert len({first, second, anonymous}) == 3
+    assert "first" not in str(first)
+    assert "second" not in str(second)
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_retries_cancelled_fetches() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+
+    async def cancelled() -> list[Prompt]:
+        raise asyncio.CancelledError()
+
+    async def supported() -> list[Prompt]:
+        return [Prompt(name="recovered")]
+
+    with pytest.raises(asyncio.CancelledError):
+        await cache.get(("server", None), cancelled)
+    assert [item.name for item in await cache.get(("server", None), supported)] == ["recovered"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_cancels_fetch_when_last_waiter_leaves() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    entered: Final = asyncio.Event()
+    stopped: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def fetch() -> list[Prompt]:
+        entered.set()
+        try:
+            await release.wait()
+            return [Prompt(name="result")]
+        finally:
+            stopped.set()
+
+    tasks: Final = tuple(asyncio.create_task(cache.get(("server", None), fetch)) for _ in range(3))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    for task in tasks:
+        task.cancel()
+    outcomes: Final = await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(isinstance(outcome, asyncio.CancelledError) for outcome in outcomes)
+    try:
+        await asyncio.wait_for(stopped.wait(), timeout=1)
+    finally:
+        release.set()
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_bounds_detached_fetches_without_dropping_results() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    entered: Final[asyncio.Queue[None]] = asyncio.Queue()
+    release: Final = asyncio.Event()
+
+    async def blocked() -> list[Prompt]:
+        await entered.put(None)
+        await release.wait()
+        return [Prompt(name="blocked")]
+
+    tasks: Final = tuple(asyncio.create_task(cache.get((str(index), None), blocked)) for index in range(1024))
+    try:
+        for _ in tasks:
+            await asyncio.wait_for(entered.get(), timeout=5)
+        active_tasks: Final = frozenset(asyncio.all_tasks())
+
+        async def overflow() -> list[Prompt]:
+            assert frozenset(asyncio.all_tasks()) <= active_tasks
+            return [Prompt(name="overflow")]
+
+        result: Final = await cache.get(("overflow", None), overflow)
+        assert [item.name for item in result] == ["overflow"]
+    finally:
+        release.set()
+        outcomes: Final = await asyncio.gather(*tasks)
+        assert all(result[0].name == "blocked" for result in outcomes)
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> None:
+    import respx
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+    class CredentialSource(UpstreamCredentialProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.token: str | None = "token-a"
+
+        async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+            if self.token is None:
+                return Error(CredError.of_unauthorized("Credential revoked"))
+            return Ok(StaticHeaderAuth("Bearer " + self.token))
+
+    source: Final = CredentialSource()
+    managers: Final = (MCPServerManager(cred_provider=source), MCPServerManager(cred_provider=source))
+    server: Final = MCPServer(
+        server_id="discovery",
+        name="discovery",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="discovery-client",
+        authorization_url="https://discovery.example/authorize",
+        token_url="https://discovery.example/token",
+    )
+    user: Final = UserAPIKeyAuth(user_id="same-user", api_key="same-key")
+    upstream: Final = _DiscoveryUpstream()
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        response: Final = await upstream.respond(request)
+        if '"prompts/list"' not in request.content.decode():
+            return response
+        from mcp.types import JSONRPCRequest
+
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        name: Final = {"Bearer token-a": "account-a", "Bearer token-b": "account-b"}[request.headers["authorization"]]
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"prompts": [{"name": name}]}})
+
+    with _mcp_upstream(respond):
+        for manager in managers:
+            assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
+                "discovery-account-a"
+            ]
+        assert upstream.initializes == 2
+        source.token = "token-b"
+        for manager in managers:
+            assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
+                "discovery-account-b"
+            ]
+        assert upstream.initializes == 4
+        source.token = None
+        for manager in managers:
+            assert await manager.get_prompts_from_server(server, user) == []
+        assert upstream.initializes == 4
+
+
+@pytest.mark.asyncio
+async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None:
+    import respx
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+
+    class TokenStore:
+        def __init__(self) -> None:
+            self.calls: tuple[tuple[str, str], ...] = ()
+
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+            self.calls = (*self.calls, (user_id, server_id))
+            return OAuthToken(access_token="stored-token")
+
+        async def invalidate(self, user_id: str, server_id: str) -> None:
+            return None
+
+    store: Final = TokenStore()
+    manager: Final = MCPServerManager(per_user_oauth_token_store=store)
+    server: Final = MCPServer(
+        server_id="discovery",
+        name="discovery",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="discovery-client",
+        authorization_url="https://discovery.example/authorize",
+        token_url="https://discovery.example/token",
+    )
+    user: Final = UserAPIKeyAuth(user_id="requesting-user")
+    upstream: Final = _DiscoveryUpstream()
+    with _mcp_upstream(upstream.respond):
+        assert len(await manager.get_prompts_from_server(server, user)) == 1
+        assert len(await manager.get_prompts_from_server(server, user)) == 1
+    assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
+    assert upstream.initializes == 1
+    assert ("prompts/list", "Bearer stored-token") in upstream.requests
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_evicts_results_at_capacity() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+
+    async def original() -> list[Prompt]:
+        return [Prompt(name="original")]
+
+    async def refetched() -> list[Prompt]:
+        return [Prompt(name="refetched")]
+
+    for index in range(1025):
+        assert (await cache.get((f"server-{index:04}", None), original))[0].name == "original"
+    assert (await cache.get(("server-1024", None), refetched))[0].name == "original"
+    assert (await cache.get(("server-0000", None), refetched))[0].name == "refetched"
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_invalidation_preserves_other_servers_and_pending_fetches() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def original() -> list[Prompt]:
+        return [Prompt(name="original")]
+
+    async def blocked() -> list[Prompt]:
+        entered.set()
+        await release.wait()
+        return [Prompt(name="pending")]
+
+    async def refetched() -> list[Prompt]:
+        return [Prompt(name="refetched")]
+
+    assert (await cache.get(("server", None), original))[0].name == "original"
+    assert (await cache.get(("server-extra", None), original))[0].name == "original"
+    task: Final = asyncio.create_task(cache.get(("other", None), blocked))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    cache.invalidate("server")
+    release.set()
+    assert (await asyncio.wait_for(task, timeout=5))[0].name == "pending"
+    assert (await cache.get(("other", None), refetched))[0].name == "pending"
+    assert (await cache.get(("server-extra", None), refetched))[0].name == "original"
+    assert (await cache.get(("server", None), refetched))[0].name == "refetched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("description", ("x" * 96_000, "é" * 40_000), ids=("ascii", "unicode"))
+async def test_discovery_cache_returns_oversized_results_without_retaining_them(description: str) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    fetch: Final = AsyncMock(return_value=[Prompt(name="large", description=description)])
+    for _ in range(2):
+        result: Final = await cache.get(("server", None), fetch)
+        assert result[0].description == description
+    assert fetch.await_count == 2
+
+
+class TestProtectedCredentialPreparation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,credential", [
+        (MCPAuth.bearer_token, None),
+        (MCPAuth.bearer_token, "Bearer"),
+        (MCPAuth.api_key, None),
+        (MCPAuth.basic, "Basic"),
+    ])
+    @pytest.mark.parametrize("dispatch", ["managed", "local"])
+    async def test_openapi_dispatch_rejects_unusable_effective_credentials(
+        self, tmp_path: Path, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+        auth_type: MCPAuthType, credential: str | None, dispatch: str,
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.server import _handle_local_mcp_tool
+        from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
+
+        spec_path: Final = tmp_path / "openapi.json"
+        spec_path.write_text(json.dumps({"openapi": "3.0.0", "info": {"title": "Auth", "version": "1"},
+                                        "paths": {"/echo": {"get": {"operationId": "echo"}}}}))
+        server: Final = MCPServer(
+            server_id="dispatch-auth", name="dispatch-auth", url="https://upstream.example",
+            transport=MCPTransport.http, auth_type=auth_type, authentication_token=credential,
+        )
+        manager: Final = MCPServerManager()
+        await manager._register_openapi_tools(str(spec_path), server, server.url)
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="unexpected success")
+        result: Final = (
+            await manager._call_openapi_tool_handler(server, "echo", {})
+            if dispatch == "managed"
+            else await _handle_local_mcp_tool(add_server_prefix_to_name("echo", get_server_prefix(server)), {})
+        )
+        assert result.is_error is True
+        assert "requires a usable upstream credential" in result.content[0].text
+        assert destination.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("transport", [MCPTransport.http, MCPTransport.sse])
+    @pytest.mark.parametrize("client_secret", [None, ""])
+    @pytest.mark.parametrize("subject", [None, "caller-subject"])
+    async def test_incomplete_obo_rejects_caller_and_static_fallback(
+        self, transport: MCPTransport, client_secret: str | None, subject: str | None
+    ) -> None:
+        server = MCPServer(
+            server_id="incomplete-obo", name="incomplete-obo", url="https://upstream.example/mcp",
+            transport=transport, auth_type=MCPAuth.oauth2_token_exchange,
+            client_id="gateway", client_secret=client_secret,
+            token_exchange_endpoint="https://idp.example/token", authentication_token="static-fallback",
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(
+                server, mcp_auth_header="Bearer override", subject_token=subject,
+            )
+        assert exc.value.status_code == (401 if subject is None else 500)
+        assert "static-fallback" not in str(exc.value.detail)
+        assert "override" not in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.api_key, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("credential", [None, "", "  ", {"X-Trace": "trace"}])
+    async def test_static_auth_without_usable_credential_rejects(
+        self, auth_type: MCPAuthType, credential: str | dict[str, str] | None
+    ) -> None:
+        server = MCPServer(
+            server_id="empty-static", name="empty-static", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=credential)
+        assert exc.value.status_code == 500
+        assert "credential" in str(exc.value.detail).lower()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,headers", [
+        (MCPAuth.api_key, {"X-API-Key": "key"}),
+        (MCPAuth.bearer_token, {"Authorization": "Bearer token"}),
+    ])
+    async def test_static_auth_accepts_actual_forwarded_credential(
+        self, auth_type: MCPAuthType, headers: dict[str, str]
+    ) -> None:
+        server = MCPServer(
+            server_id="header-static", name="header-static", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type,
+        )
+        client = await MCPServerManager()._create_mcp_client(server, extra_headers=headers)
+        assert client._get_auth_headers() == headers
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2_token_exchange])
+    async def test_openapi_protected_auth_rejects_missing_credentials(self, auth_type: MCPAuthType) -> None:
+        server = MCPServer(
+            server_id="openapi-empty", name="openapi-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type,
+            token_exchange_endpoint="https://idp.example/token",
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager().resolve_openapi_upstream_auth(
+                mcp_server=server, oauth2_headers=None, raw_headers=None, mcp_auth_header=None,
+                user_api_key_auth=None, forwarded_headers=None,
+            )
+        assert exc.value.status_code in (401, 500)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,slot,value", [
+        (MCPAuth.api_key, "X-API-Key", "token"),
+        (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
+        (MCPAuth.authorization, "Authorization", "Bearer abc"),
+        (MCPAuth.authorization, "Authorization", "Custom abc"),
+    ])
+    async def test_raw_static_credentials_are_forwarded_unchanged(
+        self, auth_type: MCPAuthType, slot: str, value: str,
+    ) -> None:
+        server = MCPServer(server_id="raw-key", name="raw-key", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=auth_type, authentication_token=value)
+        client = await MCPServerManager()._create_mcp_client(server)
+        assert client._resolved_auth is not None
+        request = httpx.Request("GET", server.url)
+        flow = client._resolved_auth.auth_flow(request)
+        try:
+            assert next(flow).headers[slot] == value
+        finally:
+            flow.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["Bearer", "basic", "token", "ApiKey", " bEaReR ", "\tTOKEN\t"])
+    @pytest.mark.parametrize("source", ["configured", "caller", "forwarded"])
+    async def test_raw_authorization_rejects_bare_schemes_before_dispatch(
+        self, respx_mock: MockRouter, value: str, source: str,
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="raw-empty", name="raw-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.authorization,
+            authentication_token=value if source == "configured" else None,
+        )
+        destination: Final = respx_mock.route().respond(200)
+        with pytest.raises(HTTPException, match="requires a usable upstream credential") as exc:
+            await MCPServerManager()._create_mcp_client(
+                server, mcp_auth_header=value if source == "caller" else None,
+                extra_headers={"Authorization": value} if source == "forwarded" else None,
+            )
+        assert exc.value.status_code == 500
+        assert destination.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_byok_flag_cannot_bypass_incomplete_obo(self) -> None:
+        server = MCPServer(server_id="obo-byok", name="obo-byok", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.oauth2_token_exchange, is_byok=True,
+                           token_exchange_endpoint="https://idp.example/token")
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header="Bearer override")
+        assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("configured,override", [(None, "Bearer usable"), ("shared", "Bearer usable")])
+    async def test_bearer_override_remains_usable(self, configured: str | None, override: str) -> None:
+        server = MCPServer(server_id="override", name="override", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.bearer_token, authentication_token=configured)
+        client = await MCPServerManager()._create_mcp_client(server, mcp_auth_header=override)
+        assert client._get_auth_headers()["Authorization"] == override
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("token", [None, "shared"])
+    async def test_empty_injected_header_cannot_satisfy_protected_auth(self, token: str | None) -> None:
+        server = MCPServer(server_id="empty-header", name="empty-header", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.bearer_token, authentication_token=token)
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, extra_headers={"authorization": " "})
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_custom_slot_uses_its_actual_credential(self) -> None:
+        server = MCPServer(server_id="custom", name="custom", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.api_key,
+                           upstream_token_header="X-Custom", authentication_token="key")
+        client = await MCPServerManager()._create_mcp_client(server, extra_headers={"X-Trace": "trace"})
+        assert client._credential_slot == "X-Custom"
+        assert await client.discovery_auth_fingerprint()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("static_headers,accepted", [
+        ({"apikey": "static-key"}, True),
+        ({"apikey": ""}, False),
+        ({"X-Tenant": "tenant"}, True),
+    ])
+    async def test_api_key_carried_by_static_header_passes_fail_closed_check(
+        self, static_headers: dict[str, str], accepted: bool
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="static-slot", name="static-slot", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key, static_headers=static_headers,
+        )
+        if not accepted:
+            with pytest.raises(HTTPException) as exc:
+                await MCPServerManager()._create_mcp_client(server, extra_headers=dict(static_headers))
+            assert exc.value.status_code == 500
+            return
+        client: Final = await MCPServerManager()._create_mcp_client(server, extra_headers=dict(static_headers))
+        request: Final = await client.prepare_request_auth()
+        assert all(request.headers[name] == value for name, value in static_headers.items())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("static,forwarded,caller", [
+        ({"X-API-Key": "static"}, {"x-api-key": "forwarded"}, None),
+        ({}, {"X-API-Key": "forwarded"}, None),
+        ({}, None, "ApiKey caller"),
+        ({"X-API-Key": "static"}, {"Authorization": ""}, None),
+    ])
+    async def test_openapi_static_credentials_remain_supported(
+        self, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+        static: dict[str, str], forwarded: dict[str, str] | None, caller: str | None
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header, _request_extra_headers, create_tool_function,
+        )
+        tool: Final = create_tool_function(
+            "/echo", "get", {}, "https://upstream.example", headers=static, auth_type=MCPAuth.api_key,
+        )
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
+        caller_token: Final = _request_auth_header.set(caller)
+        extra_token: Final = _request_extra_headers.set(forwarded)
+        try:
+            assert await tool() == TextResult("authenticated")
+            sent: Final = destination.calls.last.request.headers
+            assert sent.get("x-api-key") == static.get("X-API-Key", (forwarded or {}).get("X-API-Key"))
+            if caller:
+                assert sent["authorization"] == caller
+            assert destination.call_count == 1
+        finally:
+            _request_auth_header.reset(caller_token)
+            _request_extra_headers.reset(extra_token)
+
+    @pytest.mark.asyncio
+    async def test_static_resolution_cancellation_closes_flow(self) -> None:
+        from collections.abc import AsyncGenerator
+        from litellm.experimental_mcp_client.client import MCPClient
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import prepare_mcp_client
+
+        class CancelledAuth(httpx.Auth):
+            closed = False
+
+            async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
+                try:
+                    raise asyncio.CancelledError()
+                    yield request
+                finally:
+                    self.closed = True
+
+        auth = CancelledAuth()
+        server = MCPServer(server_id="cancel", name="cancel", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.api_key)
+        client = MCPClient(server_url=server.url, auth_type=MCPAuth.api_key, resolved_auth=auth)
+        with pytest.raises(asyncio.CancelledError):
+            await prepare_mcp_client(server, client)
+        assert auth.closed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.basic, MCPAuth.token, MCPAuth.authorization])
+    async def test_other_static_schemes_reject_whitespace_credentials(self, auth_type: MCPAuthType) -> None:
+        server = MCPServer(server_id="blank-static", name="blank-static", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=auth_type, authentication_token=" ")
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("header", ["Basic", "Basic @@@", "Other abc", "Basic QmFzaWM=", "Basic bm8tY29sb24="])
+    async def test_basic_headers_without_usable_credentials_reject(self, header: str) -> None:
+        server = MCPServer(server_id="bad-basic", name="bad-basic", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.basic)
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, extra_headers={"Authorization": header})
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["Basic", "Basic ", "basic"])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_basic_scheme_alone_is_not_a_credential(self, value: str, source: str) -> None:
+        server = MCPServer(server_id="basic-scheme", name="basic-scheme", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.basic,
+                           authentication_token=value if source == "configured" else None)
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,value,default_slot", [
+        (MCPAuth.api_key, "fixture-key", "X-API-Key"),
+        (MCPAuth.bearer_token, "fixture-key", "Authorization"),
+        (MCPAuth.basic, "user:pass", "Authorization"),
+        (MCPAuth.token, "fixture-key", "Authorization"),
+        (MCPAuth.authorization, "fixture-key", "Authorization"),
+    ])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_usable_credential_survives_an_empty_alternate_header(
+        self, auth_type: MCPAuthType, value: str, default_slot: str, source: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="alternate", name="alternate", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type, upstream_token_header="X-Custom",
+            authentication_token=value if source == "configured" else None,
+        )
+        empty_slot: Final = default_slot if source == "configured" else "X-Custom"
+        selected_slot: Final = "X-Custom" if source == "configured" else default_slot
+        client: Final = await MCPServerManager()._create_mcp_client(
+            server, mcp_auth_header=value if source == "caller" else None, extra_headers={empty_slot: ""},
+        )
+        request: Final = await client.prepare_request_auth()
+        assert request.headers[selected_slot]
+        assert request.headers[empty_slot] == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_custom_and_default_headers_do_not_satisfy_auth(self) -> None:
+        server: Final = MCPServer(
+            server_id="both-empty", name="both-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key, upstream_token_header="X-Custom",
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, extra_headers={"X-Custom": "", "X-API-Key": ""})
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_slot", [None, "X-Custom"])
+    @pytest.mark.parametrize("source", ["caller", "forwarded"])
+    async def test_api_key_preserves_explicit_authorization_credential(
+        self, custom_slot: str | None, source: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="caller-auth", name="caller-auth", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key, upstream_token_header=custom_slot,
+        )
+        headers: Final = {"Authorization": "Bearer caller-credential", "X-API-Key": ""}
+        client: Final = await MCPServerManager()._create_mcp_client(
+            server, mcp_auth_header=headers if source == "caller" else None,
+            extra_headers=headers if source == "forwarded" else None,
+        )
+        request: Final = await client.prepare_request_auth()
+        assert request.headers["Authorization"] == "Bearer caller-credential"
+        assert request.headers["X-API-Key"] == ""
+        assert custom_slot is None or custom_slot not in request.headers
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", [
+        "", " ", "Bearer", "Basic", "token", "ApiKey",
+        "Bearer Bearer", "ApiKey ApiKey", "token token", "bEaReR   BEARER", "aPiKeY\tAPIKEY",
+    ])
+    async def test_api_key_rejects_authorization_without_a_credential(self, value: str) -> None:
+        server: Final = MCPServer(
+            server_id="caller-empty", name="caller-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header={"Authorization": value})
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["no-colon", "Basic bm8tY29sb24="])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_basic_requires_a_username_password_separator(self, value: str, source: str) -> None:
+        server: Final = MCPServer(
+            server_id="basic-pair", name="basic-pair", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.basic,
+            authentication_token=value if source == "configured" else None,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["user:pass", "user:", ":pass", ":"])
+    async def test_basic_preserves_username_password_pairs(self, value: str) -> None:
+        import base64
+
+        server: Final = MCPServer(
+            server_id="basic-valid", name="basic-valid", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.basic, authentication_token=value,
+        )
+        client: Final = await MCPServerManager()._create_mcp_client(server)
+        request: Final = await client.prepare_request_auth()
+        scheme, encoded = request.headers["Authorization"].split(" ", 1)
+        assert scheme == "Basic"
+        assert base64.b64decode(encoded) == value.encode()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,value", [
+        (MCPAuth.bearer_token, "Bearer"), (MCPAuth.bearer_token, "Bearer "), (MCPAuth.bearer_token, "bearer"),
+        (MCPAuth.token, "token"), (MCPAuth.token, "token "), (MCPAuth.token, "TOKEN"),
+    ])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_static_scheme_only_input_cannot_hide_behind_rendered_prefix(
+        self, auth_type: MCPAuthType, value: str, source: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="empty-scheme", name="empty-scheme", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type,
+            authentication_token=value if source == "configured" else None,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,value,expected", [
+        (MCPAuth.bearer_token, "token", "Bearer token"),
+        (MCPAuth.bearer_token, "Bearertoken", "Bearer Bearertoken"),
+        (MCPAuth.token, "tokenish", "token tokenish"),
+    ])
+    async def test_static_credentials_that_resemble_schemes_remain_usable(
+        self, auth_type: MCPAuthType, value: str, expected: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="real-token", name="real-token", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type, authentication_token=value,
+        )
+        client: Final = await MCPServerManager()._create_mcp_client(server)
+        request: Final = await client.prepare_request_auth()
+        assert request.headers["Authorization"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [False, True])
+async def test_request_selected_during_guardrail_runs_concurrently_with_tool(monkeypatch, selected):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    tool_started = asyncio.Event()
+    guardrail_started = asyncio.Event()
+
+    class ObserveDuring(CustomGuardrail):
+        async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+            if not self.should_run_guardrail(data, GuardrailEventHooks.during_mcp_call):
+                return data
+            assert data["mcp_tool_name"] == "execute"
+            assert data["mcp_arguments"] == {"text": "hello"}
+            guardrail_started.set()
+            await tool_started.wait()
+            return data
+
+    async def upstream(text):
+        assert text == "hello"
+        tool_started.set()
+        if selected:
+            await guardrail_started.wait()
+        return "executed"
+
+    guardrail = ObserveDuring(guardrail_name="observe", event_hook="during_mcp_call", default_on=False)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    registry = tool_registry.MCPToolRegistry()
+    registry.register_tool("observer-execute", "Execute", {"type": "object"}, upstream)
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    manager = MCPServerManager()
+    manager.registry = {"observer": MCPServer(
+        server_id="observer", name="observer", server_name="observer", transport="http",
+        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+    )}
+    manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
+    result = await asyncio.wait_for(manager.call_tool(
+        server_name="observer", name="execute", arguments={"text": "hello"},
+        user_api_key_auth=UserAPIKeyAuth(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        guardrail_context=MCPRequestContext.resolve_guardrail_context({"metadata": {"guardrails": ["observe"] if selected else []}}),
+    ), timeout=5)
+    assert tool_started.is_set()
+    assert guardrail_started.is_set() is selected
+    assert result.is_error is False
+    assert result.content[0].text == "executed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_config,in_db,expected", [(True, False, True), (False, True, False), (True, True, False)])
+async def test_server_response_identifies_read_only_config(in_config, in_db, expected):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="source-server", name="source_server", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server} if in_config else {}
+    manager.registry = {server.server_id: server} if in_db else {}
+
+    listed = await manager.get_all_mcp_servers_unfiltered()
+
+    assert len(listed) == 1
+    assert listed[0].model_dump().get("is_config") is expected
+    assert manager._build_mcp_server_table(server).model_dump().get("is_config") is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_caller,legacy_factory", [(True, False), (False, False), (True, True)])
+async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller, legacy_factory):
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
+
+    upstream = MCPServer(server_id="explicit-empty", name="explicit_empty", url="https://example.invalid/mcp", transport=MCPTransport.http, allow_sampling=True)
+    token = auth_context_var.set(None)
+    sampling = AsyncMock()
+    try:
+        legacy_server.set_auth_context(UserAPIKeyAuth(user_id="unrelated"), raw_headers={"authorization": "unrelated-credential"}, client_ip="192.0.2.99")
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory,
+            patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
+        ):
+            if legacy_factory:
+                callback = _create_sampling_callback(user_api_key_auth=UserAPIKeyAuth(user_id="explicit"))
+            else:
+                await MCPServerManager()._create_mcp_client(upstream, user_api_key_auth=UserAPIKeyAuth(user_id="explicit") if with_caller else None)
+                callback = factory.call_args.kwargs["sampling_callback"]
+            await callback(None, None)
+        captured = sampling.await_args.kwargs
+        if with_caller:
+            assert captured["user_api_key_auth"].user_id == "explicit"
+        else:
+            assert captured["user_api_key_auth"] is None
+        assert captured["raw_headers"] is None
+        assert captured["client_ip"] is None
+    finally:
+        auth_context_var.reset(token)
+
+
+class TestSharedIdentifierPrefixWarning:
+    """Two stored rows sharing lowercased alias-or-server_name publish one tool
+    prefix; reload must surface them once so the ambiguity is visible."""
+
+    @pytest.mark.asyncio
+    async def test_reload_warns_once_per_shared_identifier(self, caplog):
+        manager = MCPServerManager()
+        rows = [
+            LiteLLM_MCPServerTable(
+                server_id="srv-a", server_name="alpha", alias="shared", url="https://a.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-b", server_name="beta", alias="Shared", url="https://b.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-c", server_name="gamma", alias="lonely", url="https://c.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+        ]
+        raw_rows = [MagicMock(model_dump=lambda row=row: row.model_dump()) for row in rows]
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=raw_rows)
+
+        async def build_from_table(table, **_kwargs):
+            return MCPServer(
+                server_id=table.server_id,
+                name=table.alias or table.server_name,
+                alias=table.alias,
+                server_name=table.server_name,
+                url=table.url,
+                transport=table.transport,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+            patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        shared_warnings = [m for m in caplog.messages if "share the identifier" in m]
+        assert len(shared_warnings) == 1
+        assert "srv-a" in shared_warnings[0]
+        assert "srv-b" in shared_warnings[0]
+        assert "srv-c" not in shared_warnings[0]
+        assert "'shared'" in shared_warnings[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["auto", "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"])
+async def test_configured_protocol_reaches_the_upstream_client(config_only_mcp_manager_factory, revision):
+    manager = config_only_mcp_manager_factory()
+    await manager.load_servers_from_config({"versions": {"url": "http://127.0.0.1:9/mcp", "transport": "http", "protocol_version": revision}})
+    server = next(iter(manager.config_mcp_servers.values()))
+    client = await manager._create_mcp_client(server)
+    assert server.protocol_version == revision
+    assert client.protocol_version == revision
+
+
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+@pytest.mark.parametrize("explicit", (None, "auto", "2025-11-25"))
+def test_runtime_protocol_metadata_preserves_explicit_precedence(
+    revision: MCPUpstreamProtocol, explicit: MCPUpstreamProtocol | None
+) -> None:
+    server: Final = MCPServer.model_validate({
+        "server_id": "preview", "name": "preview", "transport": "http",
+        "mcp_info": {"protocol_version": revision},
+        **({"protocol_version": explicit} if explicit is not None else {}),
+    })
+    assert server.protocol_version == (explicit if explicit is not None else revision)

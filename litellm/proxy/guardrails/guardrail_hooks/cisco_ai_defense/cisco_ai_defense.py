@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException
+from typing_extensions import TypedDict, Unpack
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
@@ -111,6 +112,10 @@ class CiscoAIDefenseGuardrailAPIError(Exception):
     """Raised when there is an error talking to the Cisco AI Defense API."""
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     """
     Cisco AI Defense guardrail integration.
@@ -144,7 +149,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         on_flagged_action: str | None = None,
         fallback_on_error: str | None = None,
         timeout: float | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         resolved_api_key: Final = api_key or os.environ.get("CISCO_AI_DEFENSE_API_KEY")
         if not resolved_api_key:

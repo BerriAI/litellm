@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._models import Headers, Response
@@ -31,9 +31,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 from ..common_utils import OllamaError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -124,7 +123,7 @@ class OllamaChatConfig(BaseConfig):
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
@@ -321,7 +320,7 @@ class OllamaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -420,9 +419,22 @@ class OllamaChatConfig(BaseConfig):
         )
 
 
+def _done_chunk_usage(chunk: Mapping[str, object]) -> ChatCompletionUsageBlock | None:
+    prompt_eval_count: Final = chunk.get("prompt_eval_count")
+    eval_count: Final = chunk.get("eval_count")
+    if chunk.get("done") is not True or not isinstance(prompt_eval_count, int) or not isinstance(eval_count, int):
+        return None
+    return ChatCompletionUsageBlock(
+        prompt_tokens=prompt_eval_count,
+        completion_tokens=eval_count,
+        total_tokens=prompt_eval_count + eval_count,
+    )
+
+
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    seen_tool_calls: bool = False
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -468,6 +480,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
+                self.seen_tool_calls = True
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
@@ -508,9 +521,10 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls are present
+                # Override finish_reason when tool_calls appeared in any chunk
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                # Fixes: https://github.com/BerriAI/litellm/issues/34692
+                if self.seen_tool_calls:
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
@@ -525,17 +539,11 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     )
                 ]
 
-            usage: Final = ChatCompletionUsageBlock(
-                prompt_tokens=chunk.get("prompt_eval_count", 0),
-                completion_tokens=chunk.get("eval_count", 0),
-                total_tokens=chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0),
-            )
-
             return ModelResponseStream(
                 id=str(uuid.uuid4()),
                 object="chat.completion.chunk",
                 created=int(time.time()),  # ollama created_at is in UTC
-                usage=usage,
+                usage=_done_chunk_usage(chunk),
                 model=chunk["model"],
                 choices=choices,
             )

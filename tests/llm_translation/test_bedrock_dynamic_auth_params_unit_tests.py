@@ -9,6 +9,7 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from unittest.mock import Mock
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 
 
@@ -42,7 +43,7 @@ def test_bedrock_completion_with_region_name():
 
         # Pass the client so that the HTTP call will be intercepted.
         response = litellm.completion(
-            model="cohere.command-r-v1:0",
+            model="bedrock/cohere.command-r-v1:0",
             messages=[{"role": "user", "content": "Hello, world!"}],
             aws_region_name="us-west-12",
             client=client,
@@ -98,7 +99,7 @@ def test_bedrock_completion_with_dynamic_authentication_params():
 
         # Pass the client so that the HTTP call will be intercepted.
         response = litellm.completion(
-            model="cohere.command-r-v1:0",
+            model="bedrock/cohere.command-r-v1:0",
             messages=[{"role": "user", "content": "Hello, world!"}],
             aws_access_key_id="dynamically_generated_access_key_id",
             aws_secret_access_key="dynamically_generated_secret_access_key",
@@ -146,7 +147,7 @@ def test_bedrock_completion_with_dynamic_bedrock_runtime_endpoint():
 
         # Pass the client so that the HTTP call will be intercepted.
         response = litellm.completion(
-            model="cohere.command-r-v1:0",
+            model="bedrock/cohere.command-r-v1:0",
             messages=[{"role": "user", "content": "Hello, world!"}],
             aws_bedrock_runtime_endpoint="https://my-fake-endpoint.com",
             client=client,
@@ -179,24 +180,25 @@ class DummyCredentials:
     "model",
     [
         "bedrock/converse/cohere.command-r-v1:0",
-        "cohere.command-r-v1:0",
+        "amazon.nova-2-lite-v1:0",
         "bedrock/cohere.command-r-v1:0",
         "bedrock/invoke/cohere.command-r-v1:0",
     ],
 )
 @pytest.mark.parametrize(
-    "param_name, param_value",
+    "param_name, param_value, expected_credentials_value",
     [
-        ("aws_session_token", "dummy_session_token"),
-        ("aws_session_name", "dummy_session_name"),
-        ("aws_profile_name", "dummy_profile_name"),
-        ("aws_role_name", "dummy_role_name"),
-        ("aws_web_identity_token", "dummy_web_identity_token"),
-        ("aws_sts_endpoint", "dummy_sts_endpoint"),
-        ("aws_external_id", "dummy_external_id"),
+        ("aws_session_token", "dummy_session_token", "dummy_session_token"),
+        ("aws_session_name", "dummy_session_name", "dummy_session_name"),
+        ("aws_profile_name", "dummy_profile_name", "dummy_profile_name"),
+        ("aws_role_name", "dummy_role_name", "dummy_role_name"),
+        ("aws_web_identity_token", "dummy_web_identity_token", "dummy_web_identity_token"),
+        ("aws_sts_endpoint", "dummy_sts_endpoint", "dummy_sts_endpoint"),
+        ("aws_external_id", "dummy_external_id", "dummy_external_id"),
+        ("aws_session_tags", [{"Key": "team", "Value": "genai"}], ({"Key": "team", "Value": "genai"},)),
     ],
 )
-def test_dynamic_aws_params_propagation(model, param_name, param_value):
+def test_dynamic_aws_params_propagation(model, param_name, param_value, expected_credentials_value):
     """
     When passed to litellm.completion, each dynamic AWS authentication parameter
     should propagate down to the get_credentials() call in BaseAWSLLM.
@@ -249,7 +251,7 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value):
                         "finish_reason": "COMPLETE",
                     }
                 )
-                if "converse" in model:
+                if BedrockModelInfo.get_bedrock_route(model) == "converse":
                     mock_response.text = json.dumps(
                         {
                             "output": {
@@ -281,6 +283,4 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value):
                 )
 
                 # We now assert that get_credentials() was called with the dynamic param.
-                assert (
-                    dummy_get_credentials.called_kwargs.get(param_name) == param_value
-                )
+                assert dummy_get_credentials.called_kwargs.get(param_name) == expected_credentials_value

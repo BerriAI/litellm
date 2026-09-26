@@ -13,7 +13,7 @@ from prisma import Json
 
 from litellm.proxy.utils import hash_token
 
-MASTER_KEY = "sk-1234"
+MASTER_KEY = "sk-proxy-behavior-master-key"
 SCRATCH_PREFIX = "scratch-"
 
 
@@ -31,7 +31,7 @@ def _write_minimal_proxy_config() -> str:
     return f.name
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def proxy_app():
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -67,7 +67,7 @@ async def proxy_app():
         yield app
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def proxy_client(proxy_app) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=proxy_app)
     async with httpx.AsyncClient(
@@ -76,7 +76,7 @@ async def proxy_client(proxy_app) -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def prisma(proxy_app):
     from litellm.proxy import proxy_server
 
@@ -84,7 +84,7 @@ async def prisma(proxy_app):
     return proxy_server.prisma_client
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def world(prisma):
     from .actors import seed_world
 

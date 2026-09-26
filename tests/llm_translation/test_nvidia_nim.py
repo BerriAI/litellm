@@ -1,17 +1,21 @@
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock
 
 
 
 import httpx
 import pytest
+from openai.types import CreateEmbeddingResponse, Embedding
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
 from unittest.mock import patch, MagicMock
 
 import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from base_rerank_unit_tests import BaseLLMRerankTest
+from tests.capturing_transport import CapturingTransport
 
 
 def test_completion_nvidia_nim():
@@ -63,27 +67,29 @@ def test_embedding_nvidia_nim():
     litellm.set_verbose = True
     from openai import OpenAI
 
-    client = OpenAI(
-        api_key="fake-api-key",
+    transport: Final = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="nvidia/nv-embedqa-e5-v5",
+            usage=EmbeddingUsage(prompt_tokens=6, total_tokens=6),
+        )
     )
-    with patch.object(client.embeddings.with_raw_response, "create") as mock_client:
-        try:
-            litellm.embedding(
-                model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
-                input="What is the meaning of life?",
-                input_type="passage",
-                dimensions=1024,
-                client=client,
-            )
-        except Exception as e:
-            print(e)
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
-        print("request_body: ", request_body)
-        assert request_body["input"] == "What is the meaning of life?"
-        assert request_body["model"] == "nvidia/nv-embedqa-e5-v5"
-        assert request_body["extra_body"]["input_type"] == "passage"
-        assert request_body["dimensions"] == 1024
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+    response: Final = litellm.embedding(
+        model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
+        input="What is the meaning of life?",
+        input_type="passage",
+        dimensions=1024,
+        client=client,
+    )
+    request_body: Final = transport.request_bodies[0]
+    assert request_body["input"] == "What is the meaning of life?"
+    assert request_body["model"] == "nvidia/nv-embedqa-e5-v5"
+    assert request_body["input_type"] == "passage"
+    assert request_body["dimensions"] == 1024
+    assert "encoding_format" not in request_body
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 
 def test_chat_completion_nvidia_nim_with_tools():

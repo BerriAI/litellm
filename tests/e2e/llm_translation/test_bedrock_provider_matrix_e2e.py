@@ -8,7 +8,8 @@ caller can hand AWS support the request id behind a completion. Regional
 inference-profile ids are the deployment shape most Bedrock customers run; a
 v1.90.0 regression timed them out, and the Converse route keeps them covered in
 test_chat_completions_regression_e2e.py, so the invoke route carries its own
-rows here.
+rows here. The file also covers Bedrock-native OpenAI model ids taking the
+default (Converse) route with max_tokens.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ pytestmark = pytest.mark.e2e
 
 CONVERSE_REGIONAL_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 INVOKE_REGIONAL_BACKEND = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+OPENAI_FAMILY_BACKEND = "bedrock/global.openai.gpt-6-sol"
 PROVIDER_HEADER_PREFIX = "llm_provider-"
 BEDROCK_REQUEST_ID_HEADER = "llm_provider-x-amzn-requestid"
 
@@ -131,6 +133,50 @@ class TestBedrockResponseHeaders:
         _assert_request_id_header(result)
 
 
+def _register_bedrock_batch_deployment(client: PassthroughClient, resources: ResourceManager) -> str:
+    model = f"e2e-bedrock-batch-chat-{unique_marker()}"
+    model_id = client.proxy.create_model(
+        model,
+        LiteLLMParamsBody(
+            model=CONVERSE_REGIONAL_BACKEND,
+            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            aws_region_name="os.environ/AWS_REGION",
+            s3_bucket_name="os.environ/AWS_BATCH_S3_BUCKET",
+            s3_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            s3_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            s3_encryption_key_id=f"alias/e2e-unused-{unique_marker()}",
+            aws_batch_role_arn="os.environ/AWS_BATCH_ROLE_ARN",
+        ),
+    )
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+    return model
+
+
+class TestBedrockBatchDeploymentServesChat:
+    @pytest.mark.covers(
+        "llm.chat_completions.bedrock_converse.batch_deployment.nonstream.works",
+        exercised_on=[],
+    )
+    def test_batch_s3_keys_do_not_break_chat(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = _register_bedrock_batch_deployment(client, resources)
+        key = resources.key()
+
+        result = client.proxy.transport.send(
+            "/chat/completions",
+            headers=client.proxy.transport.bearer(key),
+            json=ChatBody(model=model, messages=_prompt(), max_tokens=64),
+        )
+
+        assert result.ok, (
+            f"chat on a batch-configured deployment failed: {result.status_code} {result.body[:300]}; "
+            "batch-only S3 keys were forwarded to Bedrock as additionalModelRequestFields"
+        )
+        _assert_completion(ChatResponse.model_validate_json(result.body))
+
+
 class TestBedrockInvokeRegionalModelIds:
     @pytest.mark.covers("llm.chat_completions.bedrock_invoke.basic.nonstream.works", exercised_on=[])
     def test_invoke_regional_id_completes(
@@ -155,3 +201,18 @@ class TestBedrockInvokeRegionalModelIds:
         )
 
         _assert_streamed_completion(result)
+
+
+class TestBedrockOpenAIFamilyDefaultRoute:
+    @pytest.mark.covers("llm.chat_completions.bedrock_converse.basic.nonstream.works", exercised_on=[])
+    def test_openai_family_model_id_completes_with_max_tokens(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = _register_bedrock_model(
+            client, resources, "e2e-bedrock-openai-family", OPENAI_FAMILY_BACKEND
+        )
+        key = resources.key()
+
+        response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_prompt(), max_tokens=64)))
+
+        _assert_completion(response)

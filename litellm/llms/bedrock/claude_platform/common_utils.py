@@ -1,11 +1,75 @@
+from collections.abc import Mapping
 from typing import Final
 
+import httpx
+
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 
 CLAUDE_PLATFORM_SERVICE_NAME: Final = "aws-external-anthropic"
 CLAUDE_PLATFORM_BEDROCK_ROUTE: Final = "claude_platform/"
+
+CLAUDE_PLATFORM_UNSUPPORTED_PARAMS_OVERRIDE_KEY: Final = "claude_platform_unsupported_params"
+CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS: Final = frozenset(
+    {
+        "workspace_id",
+        "aws_workspace_id",
+        "anthropic_workspace_id",
+        "anthropic-workspace-id",
+        CLAUDE_PLATFORM_UNSUPPORTED_PARAMS_OVERRIDE_KEY,
+    }
+)
+CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS: Final = frozenset({"context_management"})
+
+
+def filter_claude_platform_request_body(
+    params: Mapping[str, object],
+    unsupported_override: frozenset[str] | None = None,
+    log_dropped: bool = True,
+) -> dict[str, object]:
+    unsupported: Final = (
+        unsupported_override if unsupported_override is not None else CLAUDE_PLATFORM_ON_AWS_UNSUPPORTED_REQUEST_PARAMS
+    )
+    dropped_unsupported: Final = tuple(k for k in params if k in unsupported)
+    if dropped_unsupported and log_dropped:
+        verbose_logger.warning(
+            "bedrock/claude_platform: dropping unsupported Messages API param(s) %s from the request body; "
+            "the Claude Platform on AWS endpoint rejects unknown fields. The request will proceed without them.",
+            dropped_unsupported,
+        )
+    return {
+        k: v
+        for k, v in params.items()
+        if k not in CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS and k not in unsupported and not k.startswith("aws_")
+    }
+
+
+def resolve_unsupported_override(
+    litellm_params: Mapping[str, object] | GenericLiteLLMParams,
+    optional_params: Mapping[str, object] | None = None,
+    log_invalid: bool = True,
+) -> frozenset[str] | None:
+    from_optional: Final = (optional_params or {}).get(CLAUDE_PLATFORM_UNSUPPORTED_PARAMS_OVERRIDE_KEY)
+    raw: Final = (
+        from_optional
+        if from_optional is not None
+        else litellm_params.get(CLAUDE_PLATFORM_UNSUPPORTED_PARAMS_OVERRIDE_KEY)
+    )
+    if raw is None:
+        return None
+    if isinstance(raw, (list, set, frozenset, tuple)):
+        return frozenset(str(item) for item in raw)
+    if log_invalid:
+        verbose_logger.warning(
+            "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type %s; "
+            "expected a list of param names. Using the default unsupported-param set.",
+            type(raw).__name__,
+        )
+    return None
 
 
 def strip_claude_platform_route(model: str) -> str:
@@ -15,6 +79,14 @@ def strip_claude_platform_route(model: str) -> str:
 
 
 class BedrockClaudePlatformMixin(BaseAWSLLM):
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     @staticmethod
     def _get_workspace_id(optional_params: dict, litellm_params: dict) -> str | None:
         workspace_id = (

@@ -1,15 +1,18 @@
 """Support for OpenAI gpt-5 model family."""
 
+import re
 from typing import Final
 
 import litellm
 from litellm.utils import (
-    _is_explicitly_disabled_factory,
     _supports_factory,
     declared_value_factory,
+    is_explicitly_disabled_factory,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
+
+_GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
 
 
 def _catalogue_declares_default_effort() -> bool:
@@ -61,6 +64,14 @@ def _get_effort_level(value: str | dict | None) -> str | None:
     return None
 
 
+GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
+
+
+def is_gpt_reasoning_series_name(model: str) -> bool:
+    normalized: Final = model.split("/")[-1]
+    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and not normalized.startswith("gpt-5-chat")
+
+
 class OpenAIGPT5Config(OpenAIGPTConfig):
     """Configuration for gpt-5 models including GPT-5-Codex variants.
 
@@ -73,21 +84,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        # The gpt-5-chat* family (gpt-5-chat, gpt-5-chat-latest, gpt-5-chat-2025-08-07,
-        # …) are regular chat models: they support temperature and tool_choice but NOT
-        # reasoning_effort.  They must NOT be routed through the GPT-5 reasoning path.
-        #
-        # Versioned chat models such as gpt-5.3-chat and gpt-5.1-chat ARE reasoning
-        # models and must stay on the GPT-5 path.  The distinguishing feature is that
-        # the gpt-5-chat family has a literal "-chat" immediately after "gpt-5"
-        # (i.e. "gpt-5-chat…"), while versioned chat models interpose a minor version
-        # number (i.e. "gpt-5.<digit>-chat").
-        #
-        # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
-        # than a substring check) makes this boundary explicit and avoids any ambiguity
-        # if future model names coincidentally contain "gpt-5-chat" as an interior run.
-        _normalized: Final = model.split("/")[-1]  # strip provider prefix, e.g. "openai/"
-        return "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
+        return is_gpt_reasoning_series_name(model)
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -118,18 +115,28 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model_name: Final = model.split("/")[-1]
         return model_name.startswith("gpt-5.4")
 
+    @staticmethod
+    def _gpt_series_version(model: str) -> tuple[int, int] | None:
+        match: Final = _GPT_SERIES_VERSION.match(model.split("/")[-1])
+        if match is None:
+            return None
+        return int(match.group(1)), int(match.group(2) or 0)
+
     @classmethod
     def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
         """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
-        model_name: Final = model.split("/")[-1]
-        if not model_name.startswith("gpt-5."):
-            return False
-        try:
-            version_str: Final = model_name.replace("gpt-5.", "").split("-")[0]
-            major: Final = version_str.split(".")[0]
-            return int(major) >= 4
-        except (ValueError, IndexError):
-            return False
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (5, 4)
+
+    @classmethod
+    def is_model_gpt_5_6_plus_model(cls, model: str) -> bool:
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (5, 6)
+
+    @classmethod
+    def is_model_gpt_6_plus_model(cls, model: str) -> bool:
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (6, 0)
 
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
@@ -196,7 +203,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         Use this for opt-out checks where unknown models should be allowed through.
         """
-        return _is_explicitly_disabled_factory(
+        return is_explicitly_disabled_factory(
             model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",

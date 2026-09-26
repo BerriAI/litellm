@@ -168,6 +168,35 @@ def completed_responses_object(result: StreamingResponse) -> ResponsesObject | N
     return completed[-1] if completed else None
 
 
+class AnthropicMessageObject(BaseModel):
+    id: str
+
+
+class AnthropicStreamEvent(BaseModel):
+    """One SSE frame of a native Anthropic stream. Only `message_start` carries the
+    message, so it stays optional and the deltas validate as themselves."""
+
+    type: str
+    message: AnthropicMessageObject | None = None
+
+
+def anthropic_message_id(result: StreamingResponse) -> str | None:
+    """The `msg_...` id the caller was served, which is what the spend row is keyed by
+    on this route: off the `message_start` frame when streaming, off the body when not."""
+    if not result.is_streaming:
+        return AnthropicMessageObject.model_validate_json(result.body).id
+    events = (
+        AnthropicStreamEvent.model_validate_json(payload)
+        for payload in result.stream_events
+    )
+    started = tuple(
+        event.message
+        for event in events
+        if event.type == "message_start" and event.message is not None
+    )
+    return started[0].id if started else None
+
+
 class OpenAIResponsesBody(BaseModel):
     model: str
     input: str

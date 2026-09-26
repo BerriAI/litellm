@@ -101,19 +101,8 @@ class BedrockFilesHandler(BaseAWSLLM):
             allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(optional_params),
         )
 
-        # Get AWS credentials
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=optional_params.get("aws_access_key_id"),
-            aws_secret_access_key=optional_params.get("aws_secret_access_key"),
-            aws_session_token=optional_params.get("aws_session_token"),
-            aws_region_name=aws_region_name,
-            aws_session_name=optional_params.get("aws_session_name"),
-            aws_profile_name=optional_params.get("aws_profile_name"),
-            aws_role_name=optional_params.get("aws_role_name"),
-            aws_web_identity_token=optional_params.get("aws_web_identity_token"),
-            aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
-        )
+        credentials: Final[Credentials] = self.resolve_s3_credentials(optional_params, aws_region_name)
 
         # Create S3 client
         s3_client: Final = boto3.client(
