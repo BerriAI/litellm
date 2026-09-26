@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use litellm_auth::SecretValue;
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
@@ -11,21 +14,42 @@ use litellm_llms::{
         auth::{ValidatedEnvironment, with_default_headers},
     },
 };
+use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 
 use super::{
-    Error,
+    Error, MessagesCall,
     common_utils::{MessagesProvider, string_headers},
-    route::MessagesCall,
-    types::ProviderMessagesRequest,
+    types::invalid_request,
 };
 
-pub(super) struct ResolvedProvider {
-    pub(super) model: String,
-    pub(super) provider: MessagesProvider,
+struct ResolvedProvider {
+    model: String,
+    provider: MessagesProvider,
 }
 
-pub(super) fn resolve_provider(
+pub(super) struct ProviderMessagesRequest {
+    pub(super) provider: MessagesProvider,
+    pub(super) url: String,
+    pub(super) body: AnthropicMessagesRequest,
+    pub(super) environment: ValidatedEnvironment,
+    pub(super) timeout: Option<Duration>,
+    /// The caller's own credential, reported to the host beside the wire request.
+    pub(super) api_key: Option<SecretValue>,
+}
+
+pub(super) async fn prepare(
+    call: MessagesCall,
+    secrets: &dyn SecretSource,
+) -> Result<ProviderMessagesRequest, Error> {
+    let resolved = resolve_provider(&call.body.model, call.custom_llm_provider.as_deref())?;
+    let secrets = secrets
+        .resolve(resolved.provider.config().secret_names())
+        .await?;
+    prepare_provider_request(call, resolved, secrets.as_ref())
+}
+
+fn resolve_provider(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {
@@ -53,7 +77,7 @@ pub(super) fn resolve_provider(
     })
 }
 
-pub(super) fn prepare_provider_request(
+fn prepare_provider_request(
     call: MessagesCall,
     resolved: ResolvedProvider,
     secrets: &dyn Lookup,
@@ -113,11 +137,8 @@ pub(super) fn prepare_provider_request(
         body: transformed,
         environment,
         timeout,
+        api_key: api_key.map(SecretValue::new),
     })
-}
-
-pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
 }
 
 fn without_additional_drop_params(
@@ -145,7 +166,7 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::messages::types::MessagesShaping;
+    use crate::messages::MessagesShaping;
 
     #[fixture]
     fn shaping() -> MessagesShaping {
