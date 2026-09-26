@@ -258,6 +258,18 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
     assert BedrockModelInfo.get_bedrock_route(model, {"guardrailConfig": None}) == "chat_completions"
 
 
+@pytest.mark.parametrize("model", ["openai.gpt-oss-20b-1:0", "us.xai.grok-4.6"])
+@pytest.mark.parametrize(
+    "request_params",
+    [{"additionalModelRequestFields": {"reasoning_effort": "high"}}, {"top_k": 40}],
+    ids=["additionalModelRequestFields", "top_k"],
+)
+def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, request_params):
+    assert bedrock_request_needs_converse(model, request_params) is True
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
+    assert BedrockModelInfo.get_bedrock_route(model, {key: None for key in request_params}) == "chat_completions"
+
+
 @pytest.mark.parametrize(
     "request_params, expected_route",
     [
