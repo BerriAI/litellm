@@ -1,6 +1,6 @@
+import asyncio
 import base64
 import os
-import time
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -122,7 +123,7 @@ class CyberArkSecretManager(BaseSecretManager):
         token: Final = self._authenticate()
         return {"Authorization": f'Token token="{token}"'}
 
-    def _ensure_variable_exists(self, secret_name: str) -> None:
+    async def _ensure_variable_exists(self, secret_name: str, async_client: AsyncHTTPHandler) -> None:
         """
         Ensure a variable exists in CyberArk Conjur by creating a policy entry if needed.
 
@@ -138,7 +139,7 @@ class CyberArkSecretManager(BaseSecretManager):
         policy_yaml: Final = f"- !variable {quoted_name}\n"
 
         try:
-            resp: Final = self._load_variable_policy(policy_url, policy_yaml)
+            resp: Final = await self._load_variable_policy(async_client, policy_url, policy_yaml)
         except Exception as e:
             verbose_logger.warning("Error ensuring variable exists: %s", e)
             return
@@ -149,9 +150,10 @@ class CyberArkSecretManager(BaseSecretManager):
         else:
             verbose_logger.warning("Could not ensure variable exists: %s - %s", resp.status_code, resp.text)
 
-    def _load_variable_policy(self, policy_url: str, policy_yaml: str, attempt: int = 0) -> httpx.Response:
-        client: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
-        resp: Final = client.client.post(
+    async def _load_variable_policy(
+        self, async_client: AsyncHTTPHandler, policy_url: str, policy_yaml: str, attempt: int = 0
+    ) -> httpx.Response:
+        resp: Final = await async_client.client.post(
             policy_url,
             headers={
                 **self._get_request_headers(),
@@ -161,8 +163,8 @@ class CyberArkSecretManager(BaseSecretManager):
         )
         if resp.status_code != 409 or attempt + 1 == CYBERARK_POLICY_LOAD_ATTEMPTS:
             return resp
-        time.sleep(CYBERARK_POLICY_LOAD_RETRY_DELAY_SECONDS * (1 << attempt))
-        return self._load_variable_policy(policy_url, policy_yaml, attempt + 1)
+        await asyncio.sleep(CYBERARK_POLICY_LOAD_RETRY_DELAY_SECONDS * (1 << attempt))
+        return await self._load_variable_policy(async_client, policy_url, policy_yaml, attempt + 1)
 
     def get_url(self, secret_name: str) -> str:
         """
@@ -311,7 +313,7 @@ class CyberArkSecretManager(BaseSecretManager):
 
         try:
             # Ensure the variable exists in the policy first
-            self._ensure_variable_exists(secret_name)
+            await self._ensure_variable_exists(secret_name, async_client)
 
             # Now set the secret value
             url: Final = self.get_url(secret_name)

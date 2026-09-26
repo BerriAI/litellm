@@ -210,44 +210,45 @@ def create_async_task(**completion_kwargs):
     return asyncio.create_task(litellm.acompletion(**completion_args))
 
 
-class _OtlpCapture(BaseHTTPRequestHandler):
-    exports: list[bytes] = []
+def _otlp_capture(exports: list[bytes]) -> type[BaseHTTPRequestHandler]:
+    class OtlpCapture(BaseHTTPRequestHandler):
+        def do_POST(self):
+            exports.append(self.rfile.read(int(self.headers.get("content-length", 0))))
+            self.send_response(200)
+            self.end_headers()
 
-    def do_POST(self):
-        self.exports.append(self.rfile.read(int(self.headers.get("content-length", 0))))
-        self.send_response(200)
-        self.end_headers()
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
 
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("content-type", "application/json")
-        self.end_headers()
-        self.wfile.write(b"{}")
+        def log_message(self, *args):
+            pass
 
-    def log_message(self, *args):
-        pass
+    return OtlpCapture
 
 
 @pytest.fixture
 def local_langfuse():
-    _OtlpCapture.exports = []
-    server = HTTPServer(("127.0.0.1", 0), _OtlpCapture)
+    exports: list[bytes] = []
+    server = HTTPServer(("127.0.0.1", 0), _otlp_capture(exports))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_port}", _OtlpCapture.exports
+    yield f"http://127.0.0.1:{server.server_port}", exports
     server.shutdown()
 
 
+def _exported_spans(exports: list[bytes]):
+    for body in exports:
+        for resource_spans in ExportTraceServiceRequest.FromString(body).resource_spans:
+            for scope_spans in resource_spans.scope_spans:
+                yield from scope_spans.spans
+
+
 def _exported_attributes(exports: list[bytes], trace_id: str) -> list[dict[str, str]]:
-    spans = [
-        span
-        for body in exports
-        for resource_spans in ExportTraceServiceRequest.FromString(body).resource_spans
-        for scope_spans in resource_spans.scope_spans
-        for span in scope_spans.spans
-    ]
     return [
         {attribute.key: attribute.value.string_value for attribute in span.attributes}
-        for span in spans
+        for span in _exported_spans(list(exports))
         if span.trace_id.hex() == trace_id
     ]
 

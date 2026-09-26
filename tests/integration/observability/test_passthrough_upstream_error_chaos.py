@@ -147,6 +147,7 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
             )
             await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 5, 30)
             victim: Final = psutil.Process(workers[0])
+            victim.suspend()
             victim_ports: Final = frozenset(
                 connection.raddr.port for connection in victim.net_connections(kind="tcp") if connection.raddr
             )
