@@ -148,6 +148,11 @@ def initialize_callbacks_on_proxy(
 
     verbose_proxy_logger.debug("%sinitializing callbacks=%s on proxy%s", blue_color_code, value, reset_color_code)
     if isinstance(value, list):
+        from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+        preset_present: Final = any(
+            isinstance(entry, str) and entry != "otel" and entry in PRESET_BY_CALLBACK for entry in value
+        )
         imported_list: Final[list[Any]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
             if isinstance(callback, str) and callback == "compression_interception":
@@ -180,11 +185,7 @@ def initialize_callbacks_on_proxy(
                 validate_otel_v2_callback_settings(callback_specific_params.get("otel"))
 
             from litellm.integrations.otel.model.config import validate_otel_v2_excluded_services_env
-            from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
-            preset_present: Final = any(
-                isinstance(entry, str) and entry != "otel" and entry in PRESET_BY_CALLBACK for entry in value
-            )
             validate_otel_v2_excluded_services_env(
                 callback_specific_params.get("otel") if "otel" in value and not preset_present else None
             )
