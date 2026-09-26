@@ -53,9 +53,16 @@ def test_multiple_reports_cannot_supply_a_stale_pass(tmp_path: Path) -> None:
 
 
 def test_passing_scenario_keeps_nonbinding_diagnostics(tmp_path: Path) -> None:
-    (tmp_path / "checks.json").write_text('[{"id":"tools-list","status":"SUCCESS"},{"id":"advisory","status":"INFO"}]')
+    (tmp_path / "checks.json").write_text(
+        json.dumps(
+            [
+                {"id": identity, "status": "INFO" if identity == "advisory" else "SUCCESS"}
+                for identity in ("tools-list", "tools-name-format", "wire-schema-valid", "advisory")
+            ]
+        )
+    )
     checks: Final = read_checks(tmp_path, "tools-list")
-    assert tuple((check.id, check.status) for check in checks) == (("tools-list", "SUCCESS"), ("advisory", "INFO"))
+    assert checks[-1].id == "advisory" and checks[-1].status == "INFO"
 
 
 def test_unrecognized_result_status_cannot_pass(tmp_path: Path) -> None:
@@ -123,3 +130,25 @@ def test_only_fixture_name_is_translated_to_advertised_name(method: str) -> None
 )
 def test_name_integration_preserves_other_requests(body: bytes) -> None:
     assert prefixed_request(body, "official") == body
+
+
+@pytest.mark.parametrize(
+    "scenario,identities",
+    (
+        ("server-initialize", ("server-initialize", "server-session-id-visible-ascii", "wire-schema-valid")),
+        ("tools-list", ("tools-list", "tools-name-format", "wire-schema-valid")),
+        ("tools-call-image", ("tools-call-image", "wire-schema-valid")),
+    ),
+)
+def test_missing_secondary_checks_cannot_report_complete_conformance(
+    tmp_path: Path, scenario: str, identities: tuple[str, ...]
+) -> None:
+    report: Final = tmp_path / "checks.json"
+    for missing in identities:
+        report.write_text(
+            json.dumps([{"id": identity, "status": "SUCCESS"} for identity in identities if identity != missing])
+        )
+        with pytest.raises(AssertionError, match="conformance"):
+            read_checks(tmp_path, scenario)
+    report.write_text(json.dumps([{"id": identity, "status": "SUCCESS"} for identity in identities]))
+    assert len(read_checks(tmp_path, scenario)) == len(identities)
