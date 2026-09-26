@@ -1,31 +1,15 @@
 #!/usr/bin/env python3
-"""Report SQL `IN (...)` lists whose length nothing bounds.
+"""Fail CI on SQL `IN (...)` lists whose length nothing bounds (Postgres caps a statement at 32,767 binds).
 
-Postgres caps a prepared statement at 32,767 bind parameters and a membership filter
-binds one per value, so a list built from table data breaks once the table outgrows
-the cap (LIT-7535). Reported, across litellm/ and enterprise/:
+Reported under litellm/ and enterprise/: a Prisma `"in"` / `"not_in"` filter over a value with no
+fixed size, and a raw-SQL `IN (` followed by a value spliced in at runtime. Chunk an `in` list with
+`litellm.repositories.chunked_in`, pass raw SQL one array parameter, or record a real bound with
+`# bounded-ok: <reason>` on the reported line or the line above.
 
-  prisma   a dict literal with an `"in"` / `"not_in"` key whose value has no fixed
-           size. A list, tuple or set written out in full passes, as does a name the
-           module binds once to a tuple, frozenset or constant; any other name, a call,
-           a comprehension or a starred display does not.
-  raw-sql  a string literal whose `IN (` is followed by a value spliced in at runtime:
-           an f-string or format slot, a `%s`, or the end of the literal itself.
-           `IN (SELECT ...)`, `IN ($1, $2)` and `= ANY($1::text[])` pass.
-
-The Prisma engine chunks `create_many` on its own but sends an `update_many` /
-`delete_many` filter whole. `litellm.repositories.chunked_in` chunks an `in` list for
-find_many / count / update_many / delete_many and is itself exempt. Record a real bound with
-`# bounded-ok: <reason>` on the reported line or alone on the line above; the reason is required.
-
-Findings that predate the check are grandfathered in `unbounded_in_baseline.txt`, keyed by
-path, enclosing function or class, kind, field and occurrence within that scope, so moving
-code up or down a file keeps its entry. The run fails on a finding the baseline lacks and on
-a baseline entry no finding matches, so the baseline only shrinks. `--update-baseline`
-rewrites the entries under the scanned targets.
+Existing findings live in `unbounded_in_baseline.txt`, keyed without line numbers. A finding the
+baseline lacks fails the run, as does an entry no finding matches; `--update-baseline` rewrites it.
 
 Usage: python check_unbounded_in_lists.py [--update-baseline] [--baseline FILE] [files-or-dirs...]
-       (default targets: litellm enterprise)
 """
 
 from __future__ import annotations
