@@ -98,9 +98,6 @@ class AgentIdentityStore:
             row: Final = await self.identities.table.find_unique(where=where)
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent identity could not be loaded")
-        proven: Final = await self.subject(issuer, tenant, claims.get("oid"))
-        if isinstance(proven, AgentIdentityFailure):
-            return proven
         if row is None:
             return await self.unbound_client(where)
         agent: Final = await self.agent(row.agent_id)
@@ -124,6 +121,9 @@ class AgentIdentityStore:
                 mode=subject.mode,
                 subject_oid=subject.oid,
             )
+        proven: Final = await self.subject(issuer, tenant, claims.get("oid"))
+        if isinstance(proven, AgentIdentityFailure):
+            return proven
         human: Final = (
             VerifiedHumanSubject.model_validate(proven.model_dump())
             if proven is not None
@@ -170,6 +170,8 @@ class AgentIdentityStore:
             where: Final[LiteLLM_AgentIdentityWhereInput] = {
                 "agent_id": context.agent_id,
                 "revision": context.binding_revision,
+                "active": True,
+                "agent": {"is": {"enabled": True, "identity_managed": True}},
             }
             data: Final[LiteLLM_AgentIdentityUpdateManyMutationInput] = {
                 "last_authenticated_at": datetime.now(timezone.utc)
