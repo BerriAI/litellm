@@ -370,15 +370,18 @@ def _db_system_for_excluded_service(service: str) -> str:
     return resolved
 
 
-def validate_otel_v2_excluded_services_env() -> None:
+def validate_otel_v2_excluded_services_env(settings: object) -> None:
     """Validate ``LITELLM_OTEL_EXCLUDED_SERVICES`` at boot even with no ``otel`` callback.
 
     Preset-only deployments build env-only configs through a path that swallows
     init errors, so a bogus value would otherwise degrade to the legacy callback
     silently. Splitting and normalizing here raises the same ``ValueError`` the
-    field raises.
+    field raises. An explicit ``callback_settings.otel.excluded_services`` wins
+    over the env var, so a bad env value is inert then and must not block boot.
     """
     if not is_otel_v2_enabled():
+        return
+    if isinstance(settings, Mapping) and "excluded_services" in settings:
         return
     raw: Final = os.environ.get("LITELLM_OTEL_EXCLUDED_SERVICES")
     if not raw:

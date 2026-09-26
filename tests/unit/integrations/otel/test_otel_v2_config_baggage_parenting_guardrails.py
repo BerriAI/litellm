@@ -128,7 +128,7 @@ def test_excluded_services_env_is_validated_at_boot_when_enabled(monkeypatch):
     is_otel_v2_enabled.cache_clear()
     try:
         with pytest.raises(ValueError, match="'auth' is not a datastore service; allowed: postgres, redis"):
-            validate_otel_v2_excluded_services_env()
+            validate_otel_v2_excluded_services_env(None)
     finally:
         is_otel_v2_enabled.cache_clear()
 
@@ -140,7 +140,19 @@ def test_excluded_services_env_validation_accepts_datastore_names(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis, postgres")
     is_otel_v2_enabled.cache_clear()
     try:
-        validate_otel_v2_excluded_services_env()
+        validate_otel_v2_excluded_services_env(None)
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_excluded_services_env_bad_value_is_inert_when_config_wins(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled, validate_otel_v2_excluded_services_env
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "auth")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        validate_otel_v2_excluded_services_env({"excluded_services": ["postgres"]})
     finally:
         is_otel_v2_enabled.cache_clear()
 
