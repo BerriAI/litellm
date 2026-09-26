@@ -1606,8 +1606,17 @@ def test_image_dimensions_from_bytes_skips_any_number_of_fill_bytes_before_a_mar
     assert get_image_dimensions(data="data:image/jpeg;base64," + base64.b64encode(image).decode()) == (800, 600)
 
 
-def test_image_dimensions_from_bytes_gives_up_on_a_segment_length_below_two() -> None:
-    assert image_dimensions_from_bytes(b"\xff\xd8\xff\xe0\x00\x00\x02" + _jpeg_sof(800, 600)) is None
+def test_jpeg_scan_steps_past_a_zero_segment_length_one_byte_at_a_time() -> None:
+    image: Final = b"\xff\xd8\xff\xe0\x00\x00\x02" + _jpeg_sof(800, 600)
+
+    assert image_dimensions_from_bytes(image) == (800, 600)
+    assert get_image_dimensions(data="data:image/jpeg;base64," + base64.b64encode(image).decode()) == (800, 600)
+
+
+def test_get_image_dimensions_reads_past_the_segment_limit_that_bounds_image_dimensions_from_bytes() -> None:
+    image: Final = b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * MAX_JPEG_HEADER_SEGMENTS + _jpeg_sof(800, 600)
+
+    assert get_image_dimensions(data="data:image/jpeg;base64," + base64.b64encode(image).decode()) == (800, 600)
 
 
 @pytest.mark.parametrize(
@@ -1617,6 +1626,7 @@ def test_image_dimensions_from_bytes_gives_up_on_a_segment_length_below_two() ->
         pytest.param(b"\xff\xd8\xff\xe0\x00\x10JFIF", id="jpeg-truncated"),
         pytest.param(b"\xff\xd8" + b"\xff" * 10, id="jpeg-ends-in-a-short-fill-run"),
         pytest.param(b"\xff\xd8" + b"\xff" * 2000, id="jpeg-ends-in-a-long-fill-run"),
+        pytest.param(b"\xff\xd8\xff\xe0\x00\x01\x02" + _jpeg_sof(800, 600), id="jpeg-segment-length-one"),
     ],
 )
 def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes) -> None:
@@ -1628,11 +1638,6 @@ def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes)
     "image",
     [
         pytest.param(b"BM" + b"\x00" * 30, id="unknown-format"),
-        pytest.param(
-            b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * MAX_JPEG_HEADER_SEGMENTS + _jpeg_sof(800, 600),
-            id="too-many-jpeg-segments",
-        ),
-        pytest.param(b"\xff\xd8\xff\xe0\x00\x01\x02" + _jpeg_sof(800, 600), id="jpeg-segment-length-one"),
     ],
 )
 def test_get_image_dimensions_falls_back_to_the_default_size_for_a_header_it_cannot_read(image: bytes) -> None:
