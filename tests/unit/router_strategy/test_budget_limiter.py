@@ -174,7 +174,7 @@ def _apply_budget_filter(
     request_tags: Sequence[str],
     spend_key: str,
     spend: float,
-):
+) -> tuple[Sequence[DeploymentTypedDict], str]:
     limiter: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=None)
     limiter.provider_budget_config = provider_budget
     limiter.deployment_budget_config = deployment_budget
@@ -190,7 +190,7 @@ def _apply_budget_filter(
     )
 
 
-def _filter_one(scope: _Scope, config: BudgetConfig, spend: float):
+def _filter_one(scope: _Scope, config: BudgetConfig, spend: float) -> tuple[Sequence[DeploymentTypedDict], str]:
     match scope:
         case "provider":
             return _apply_budget_filter(
