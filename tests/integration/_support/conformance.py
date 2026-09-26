@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import queue
 import signal
@@ -115,7 +116,7 @@ def reference_server(root: Path, directory: Path, port: int) -> Iterator["McpPee
 
 
 @contextmanager
-def authenticated_endpoint(target: str, key: str) -> Iterator[str]:
+def authenticated_endpoint(target: str, key: str, alias: str) -> Iterator[str]:
     from integration._support.asgi import asgi_server
     from starlette.applications import Starlette
     from starlette.requests import Request
@@ -125,10 +126,13 @@ def authenticated_endpoint(target: str, key: str) -> Iterator[str]:
 
     async def forward(scope: Scope, receive: Receive, send: Send) -> None:
         request: Final = Request(scope, receive)
+        original: Final = await request.body()
+        body: Final = prefixed_request(original, alias)
         headers: Final = tuple(
-            (name, value) for name, value in request.headers.raw if name.lower() != b"authorization"
+            (name, value)
+            for name, value in request.headers.raw
+            if name.lower() != b"authorization" and (name.lower() != b"content-length" or body == original)
         ) + ((b"authorization", f"Bearer {key}".encode()),)
-        body: Final = await request.body()
         async with httpx.AsyncClient(timeout=35, trust_env=False) as client:
             async with client.stream(request.method, target, headers=headers, content=body) as response:
                 streamed: Final = StreamingResponse(response.aiter_raw(), status_code=response.status_code)
@@ -141,3 +145,16 @@ def authenticated_endpoint(target: str, key: str) -> Iterator[str]:
 
     with asgi_server(Starlette(routes=[Mount("/mcp", app=forward)])) as url:
         yield url + "/mcp/"
+
+
+def prefixed_request(body: bytes, alias: str) -> bytes:
+    try:
+        request: Final = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(request, dict) or request.get("method") not in ("tools/call", "prompts/get"):
+        return body
+    params: Final = request.get("params")
+    if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+        return body
+    return json.dumps({**request, "params": {**params, "name": f"{alias}-{params['name']}"}}).encode()
