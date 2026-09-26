@@ -563,6 +563,10 @@ def _jpeg_b64(width: int, height: int) -> str:
             id="each-of-several-references-as-one-megapixel",
         ),
         pytest.param({"input_image": "https://example.com/reference.png"}, 1, id="unmeasurable-url-as-one-megapixel"),
+        pytest.param(
+            {"input_image": {"url": "https://example.com/reference.png"}}, 1, id="non-string-reference-as-one-megapixel"
+        ),
+        pytest.param({"input_image": "https://example.com/café.png"}, 1, id="non-ascii-url-as-one-megapixel"),
         pytest.param({}, 0, id="generation-without-references"),
     ),
 )

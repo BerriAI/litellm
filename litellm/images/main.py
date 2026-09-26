@@ -52,7 +52,6 @@ from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
-    CustomPricingLiteLLMParams,
     LlmProviders,
     all_litellm_params,
 )
@@ -63,7 +62,20 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
-_CUSTOM_PRICING_FIELDS: Final = MappingProxyType({field: True for field in CustomPricingLiteLLMParams.model_fields})
+_IMAGE_PRICING_FIELDS: Final = MappingProxyType(
+    dict.fromkeys(
+        (
+            "input_cost_per_image",
+            "output_cost_per_image",
+            "output_cost_per_image_512",
+            "output_cost_per_image_1024",
+            "output_cost_per_image_1536",
+            "input_cost_per_pixel",
+            "output_cost_per_pixel",
+        ),
+        True,
+    )
+)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -887,7 +899,7 @@ def image_edit(
             optional_params=dict(image_edit_request_params),
             litellm_params={
                 **image_edit_request_params,
-                **litellm_params.model_dump(include=_CUSTOM_PRICING_FIELDS, exclude_none=True),
+                **litellm_params.model_dump(include=_IMAGE_PRICING_FIELDS, exclude_none=True),
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
             },

@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 EMPTY_QUERY: Final[Mapping[str, object]] = MappingProxyType({})
 _REFERENCE_IMAGE_FIELD: Final = re.compile(r"input_image(?:_\d+)?")
+_DATA_URL_HEADER_MAX_CHARS: Final = 256
 
 
 def api_version_from(litellm_params: Mapping[str, object]) -> str | None:
@@ -164,9 +165,8 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         if ocr_result is not None:
             return ocr_result
         foundry_result: Final = logged_relay_shape(FOUNDRY_RELAY_SHAPES, httpx_response, logging_obj, endpoint)
-        reference_pixels: Final = _relayed_reference_pixels(request_data)
-        if isinstance(foundry_result, ImageResponse) and reference_pixels:
-            record_reference_pixels(foundry_result, reference_pixels)
+        if isinstance(foundry_result, ImageResponse):
+            _record_relayed_reference_pixels(foundry_result, request_data)
         if foundry_result is not None:
             return foundry_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))
@@ -213,13 +213,16 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         )
 
 
-def _relayed_reference_pixels(request_data: Mapping[str, object]) -> tuple[int | None, ...]:
-    return tuple(
+def _record_relayed_reference_pixels(image_response: ImageResponse, request_data: Mapping[str, object]) -> None:
+    reference_pixels: Final = tuple(
         _relayed_image_pixels(value) for key, value in request_data.items() if _REFERENCE_IMAGE_FIELD.fullmatch(key)
     )
+    if reference_pixels:
+        record_reference_pixels(image_response, reference_pixels)
 
 
 def _relayed_image_pixels(value: object) -> int | None:
     if not isinstance(value, str):
         return None
-    return base64_image_pixels(value.partition("base64,")[2] or value)
+    data_url_header, separator, _ = value[:_DATA_URL_HEADER_MAX_CHARS].partition("base64,")
+    return base64_image_pixels(value, start=len(data_url_header) + len(separator) if separator else 0)

@@ -1,5 +1,4 @@
 import base64
-import binascii
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     resolve_image_model_info,
 )
-from litellm.litellm_core_utils.token_counter import image_dimensions_from_bytes
+from litellm.litellm_core_utils.token_counter import get_image_type, image_dimensions_from_bytes
 from litellm.llms.azure_ai.image_generation.flux_transformation import AzureFoundryFluxImageGenerationConfig
 from litellm.types.utils import ImageResponse, ModelInfo
 
@@ -43,7 +42,7 @@ def _price(resolved: ModelInfo, cost_key: str) -> float | None:
     return _get_cost_per_unit(shared_entry, cost_key, default_value=None)
 
 
-def _catalog_pixel_rate(resolved: ModelInfo) -> float:
+def _pixel_rate(resolved: ModelInfo) -> float:
     return _price(resolved, "input_cost_per_pixel") or 0.0
 
 
@@ -72,7 +71,7 @@ def _flux2_prices(resolved: ModelInfo, deployment: ModelInfo | None) -> _Flux2Me
 
 
 def _catalog_flux2_prices(resolved: ModelInfo) -> _Flux2MegapixelPrices:
-    catalog_megapixel_rate: Final = _catalog_pixel_rate(resolved) * MEGAPIXEL
+    catalog_megapixel_rate: Final = _pixel_rate(resolved) * MEGAPIXEL
     catalog_first_megapixel: Final = _price(resolved, "output_cost_per_image")
     return _Flux2MegapixelPrices(
         first=catalog_megapixel_rate if catalog_first_megapixel is None else catalog_first_megapixel,
@@ -132,32 +131,38 @@ def _generated_pixels(
     images: Final = image_response.data or ()
     if not images:
         return (requested_pixels,) * (n or 0)
-    return tuple(_returned_image_pixels(model, image.b64_json) or requested_pixels for image in images)
+    return tuple(_billed_output_pixels(model, image.b64_json, requested_pixels) for image in images)
 
 
-def _returned_image_pixels(model: str, b64_json: str | None) -> int | None:
+def _billed_output_pixels(model: str, b64_json: str | None, requested_pixels: int) -> int:
     if not b64_json:
-        return None
+        return requested_pixels
     pixels: Final = base64_image_pixels(b64_json)
     if pixels is None:
         verbose_logger.warning(
-            "Could not read the dimensions of the image %s returned, billing the requested size", model
+            "Could not read the dimensions of the image %s returned, billing %d pixels instead", model, requested_pixels
         )
+        return requested_pixels
     return pixels
 
 
-def base64_image_pixels(encoded_image: str) -> int | None:
-    header_chars: Final = IMAGE_HEADER_BASE64_PREFIX_CHARS
-    return _decoded_image_pixels(encoded_image[:header_chars]) or (
-        _decoded_image_pixels(encoded_image) if len(encoded_image) > header_chars else None
-    )
+def base64_image_pixels(encoded_image: str, start: int = 0) -> int | None:
+    header_end: Final = start + IMAGE_HEADER_BASE64_PREFIX_CHARS
+    header_bytes: Final = _decoded(encoded_image[start:header_end])
+    header_pixels: Final = _pixels(header_bytes)
+    if header_pixels is not None or len(encoded_image) <= header_end or get_image_type(header_bytes) != "jpeg":
+        return header_pixels
+    return _pixels(_decoded(encoded_image[start:]))
 
 
-def _decoded_image_pixels(encoded_image: str) -> int | None:
+def _decoded(encoded_image: str) -> bytes:
     try:
-        image_bytes: Final = base64.b64decode(encoded_image)
-    except binascii.Error:
-        return None
+        return base64.b64decode(encoded_image)
+    except ValueError:
+        return b""
+
+
+def _pixels(image_bytes: bytes) -> int | None:
     dimensions: Final = image_dimensions_from_bytes(image_bytes)
     return None if dimensions is None else dimensions[0] * dimensions[1] or None
 
@@ -200,7 +205,7 @@ def cost_calculator(
         output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
         if output_cost_per_image:
             return output_cost_per_image * num_images
-        if not _catalog_pixel_rate(_model_info):
+        if not _pixel_rate(_model_info):
             return 0.0
 
         from litellm.cost_calculator import default_image_cost_calculator

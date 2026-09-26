@@ -621,11 +621,12 @@ async def test_flux2_router_image_edit_bills_the_deployment_rates(monkeypatch: p
             {"output_cost_per_image": 0.5, "input_cost_per_pixel": 1e-07},
             0.5 + 1e-07 * 1024 * 1024 + 1e-07 * 2 * 1024 * 1024,
         ),
+        ({"input_cost_per_second": 0.001}, None),
     ),
-    ids=("flat", "flat-input-image-price", "per-pixel", "image-price-and-pixel-rate"),
+    ids=("flat", "flat-input-image-price", "per-pixel", "image-price-and-pixel-rate", "non-image-price-keeps-catalog"),
 )
 async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_built_before_routing(
-    monkeypatch: pytest.MonkeyPatch, deployment_prices: Mapping[str, float], expected_cost: float
+    monkeypatch: pytest.MonkeyPatch, deployment_prices: Mapping[str, float], expected_cost: float | None
 ):
     mock_client: Final = AsyncHTTPHandler()
     mock_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_edit_ok))
@@ -655,8 +656,12 @@ async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_
     )
 
     response: Final = await router.aimage_edit(**routed_request, litellm_logging_obj=logging_obj)
+    pro_row: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+    catalog_cost: Final = pro_row["output_cost_per_image"] + pro_row["input_cost_per_pixel"] * 3 * 1024 * 1024
 
-    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        catalog_cost if expected_cost is None else expected_cost
+    )
 
 
 def test_flux2_image_edit_surfaces_a_response_that_is_not_json():
