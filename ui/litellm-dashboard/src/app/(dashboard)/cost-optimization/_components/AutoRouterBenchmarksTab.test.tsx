@@ -179,8 +179,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
     expect(screen.getByText("$2,174.59")).toBeInTheDocument();
     expect(screen.queryByText("-86%")).not.toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual(["Unavailable", "Unavailable"]);
     expect(screen.getByText("$23.13")).toBeInTheDocument();
     expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
   });
@@ -237,7 +236,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getAllByText("$10,126.28").length).toBeGreaterThan(0);
   });
 
-  it.each([null, undefined])("keeps totals when the classification breakdown is %s", (classifier_cost) => {
+  it.each([null, undefined])("keeps recorded savings when the comparison is unavailable: %s", (classifier_cost) => {
     const partialCosts: Partial<Totals> = {
       classifier_cost,
       cost_coverage: "partial",
@@ -250,8 +249,7 @@ describe("AutoRouterBenchmarksTab", () => {
 
     expect(screen.getAllByText("Unavailable")).toHaveLength(2);
     expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("$353.71")).toBeInTheDocument();
+    expect(screen.queryByText("LLM spend")).not.toBeInTheDocument();
     expect(screen.getByText("$2,174.59")).toBeInTheDocument();
   });
 

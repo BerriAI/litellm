@@ -413,12 +413,7 @@ describe("UserInfoView auto-router usage", () => {
       ).toBeInTheDocument();
       expect(screen.getByText("$3.00")).toBeInTheDocument();
       expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
-      expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-        "Unavailable",
-        "Unavailable",
-        "Unavailable",
-        "Unavailable",
-      ]);
+      expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual(["Unavailable", "Unavailable"]);
     },
   );
 

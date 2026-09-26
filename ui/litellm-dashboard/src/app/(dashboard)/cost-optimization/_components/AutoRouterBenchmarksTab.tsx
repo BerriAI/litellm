@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SimpleTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
@@ -53,15 +53,17 @@ const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ lab
   </Card>
 );
 
-const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean }> = ({
+const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean; tooltip?: string }> = ({
   label,
   value,
   hint,
   subdued,
+  tooltip,
 }) => (
   <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2">
     <dt className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
       {label}
+      {tooltip && <SimpleTooltip content={tooltip} />}
       {hint && <span className="text-xs">{hint}</span>}
     </dt>
     <dd
@@ -72,9 +74,13 @@ const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?
   </dl>
 );
 
-const CostBreakdown: React.FC<{ view: BenchmarkView; partialComparison: boolean }> = ({ view, partialComparison }) => {
+const CostBreakdown: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
   const costTurns = viewGroup(view) ? stats.turns : stats.cost_requests;
+  const eligibleSpend = stats.savings_estimated_turns > 0 ? stats.savings_estimated_actual_spend : stats.spend;
+  const actualSpend = stats.baseline_spend == null ? null : eligibleSpend;
+  const fullComparison =
+    actualSpend != null && (stats.savings_estimated_turns === 0 || stats.savings_estimated_turns === costTurns);
   const llmSpend =
     stats.llm_spend === undefined && stats.spend != null && stats.classifier_cost != null
       ? stats.spend - stats.classifier_cost
@@ -83,29 +89,25 @@ const CostBreakdown: React.FC<{ view: BenchmarkView; partialComparison: boolean 
     <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
       <SpendRow
         label="Actual auto-router spend"
-        value={stats.spend == null ? "Unavailable" : usd(stats.spend)}
-        hint={stats.cost_coverage === "partial" ? "Partial" : undefined}
+        value={actualSpend == null ? "Unavailable" : usd(actualSpend)}
+        tooltip="Actual spend and baseline spend cover only requests with a recorded baseline estimate. Requests without an estimate are excluded from the savings comparison. Actual spend includes classification costs."
       />
-      <div className="mb-3 border-l-2 pl-4">
-        <SpendRow subdued label="LLM spend" value={llmSpend == null ? "Unavailable" : usd(llmSpend)} />
-        <SpendRow
-          subdued
-          label="Classification cost"
-          value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
-          hint={
-            stats.classifier_cost == null || costTurns == null
-              ? undefined
-              : classificationRatePer1kTurns(stats.classifier_cost, costTurns)
-          }
-        />
-      </div>
-      {stats.cost_coverage === "partial" && (
-        <p className="mb-3 text-xs text-muted-foreground">Some request costs are unavailable</p>
+      {fullComparison && (
+        <div className="mb-3 border-l-2 pl-4">
+          <SpendRow subdued label="LLM spend" value={llmSpend == null ? "Unavailable" : usd(llmSpend)} />
+          <SpendRow
+            subdued
+            label="Classification cost"
+            value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
+            hint={
+              stats.classifier_cost == null || costTurns == null
+                ? undefined
+                : classificationRatePer1kTurns(stats.classifier_cost, costTurns)
+            }
+          />
+        </div>
       )}
       <Separator />
-      {partialComparison && stats.baseline_spend != null && (
-        <SpendRow label="Actual spend on estimated requests" value={usd(stats.savings_estimated_actual_spend)} />
-      )}
       <SpendRow
         label="Estimated baseline spend"
         value={stats.baseline_spend == null ? "Unavailable" : usd(stats.baseline_spend)}
@@ -144,13 +146,13 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
           </div>
           {partialComparison && (
             <p className="text-center text-xs text-muted-foreground">
-              {stats.savings_estimated_turns.toLocaleString()} of {comparisonRequests?.toLocaleString()} requests have
-              savings estimates
+              Savings based on {stats.savings_estimated_turns.toLocaleString()} of{" "}
+              {comparisonRequests?.toLocaleString()} requests
             </p>
           )}
         </div>
 
-        <CostBreakdown view={view} partialComparison={partialComparison} />
+        <CostBreakdown view={view} />
       </div>
     </Card>
   );

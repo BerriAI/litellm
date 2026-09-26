@@ -92,7 +92,7 @@ describe("KeyAutoRouterUsageTab", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
 
-  it("renders this key's daily savings and selected-router session costs", async () => {
+  it("compares only eligible request costs and explains the excluded usage", async () => {
     const user = userEvent.setup();
     const activity = {
       dateValue: { from: new Date(2025, 0, 1), to: new Date(2025, 0, 31) },
@@ -101,12 +101,7 @@ describe("KeyAutoRouterUsageTab", () => {
     renderWithProviders(<KeyAutoRouterUsageTab accessToken="test-token" keyToken="key-hash-1" activity={activity} />);
 
     expect(await screen.findByText("$12.75")).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "Unavailable",
-      "Unavailable",
-      "Unavailable",
-      "Unavailable",
-    ]);
+    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual(["Unavailable", "Unavailable"]);
     expect(screen.getByText("$0.5000")).toBeInTheDocument();
     expect(screen.queryByText("-50%")).not.toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
@@ -123,15 +118,12 @@ describe("KeyAutoRouterUsageTab", () => {
     expect(screen.getByText("Whole sessions overlapping the selected dates")).toBeInTheDocument();
     expect(screen.queryByText("$12.75")).not.toBeInTheDocument();
     expect(screen.getByText("-50%")).toBeInTheDocument();
-    expect(screen.getByText("1 of 2 requests have savings estimates")).toBeInTheDocument();
-    expect(screen.getByText("Actual spend on estimated requests")).toBeInTheDocument();
-    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
-      "$100.00",
-      "$99.75",
-      "$0.2500",
-      "$1.00",
-      "$2.00",
-    ]);
+    expect(screen.getByText("Savings based on 1 of 2 requests")).toBeInTheDocument();
+    expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual(["$1.00", "$2.00"]);
+    await user.hover(screen.getByLabelText("question-circle"));
+    expect(
+      await screen.findByText(/Requests without an estimate are excluded from the savings comparison/),
+    ).toBeVisible();
     expect(screen.getByText("Auto-router prompt caching")).toBeInTheDocument();
     expect(screen.getAllByText("50.0%").length).toBeGreaterThan(0);
   });
