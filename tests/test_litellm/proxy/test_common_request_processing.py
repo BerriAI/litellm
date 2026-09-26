@@ -62,7 +62,9 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
-from litellm.proxy.utils import ProxyLogging
+from litellm.caching.caching import DualCache
+from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3, _request_stash
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.router import Router
 
 
@@ -8750,6 +8752,37 @@ async def test_ttft_keepalive_cancels_the_in_flight_call_when_the_client_gives_u
     await asyncio.sleep(0)
 
     assert upstream_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_delay, interval", [(0.0, 5.0), (0.2, 0.05)], ids=["fast_path", "pinged_path"])
+async def test_ttft_keepalive_releases_the_parallel_slot_taken_by_the_wrapped_call(upstream_delay, interval):
+    """Regression for #42819. The wrapped call runs as its own task, so a max_parallel_requests
+    slot acquired there was invisible to the release on the request's context and leaked"""
+    cache: Final = DualCache()
+    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+    key: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-keepalive-slot"), max_parallel_requests=1)
+
+    async def admit() -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data={"model": "gpt-4o-mini"}, call_type=""
+        )
+
+    async def upstream():
+        await admit()
+        await asyncio.sleep(upstream_delay)
+        return _sse_response(['data: {"done": true}\n\n'])
+
+    token: Final = _request_stash.set(None)
+    try:
+        await _drain(await open_sse_before_first_byte(upstream(), ping_interval_seconds=interval))
+        await limiter.async_log_success_event(kwargs={}, response_obj=None, start_time=None, end_time=None)
+
+        await admit()
+        with pytest.raises(HTTPException, match="max_parallel_requests"):
+            await admit()
+    finally:
+        _request_stash.reset(token)
 
 
 @pytest.mark.parametrize(

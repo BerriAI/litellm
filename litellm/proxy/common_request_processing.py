@@ -112,6 +112,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
@@ -1233,6 +1234,8 @@ async def open_sse_before_first_byte(
     if interval is None:
         return await produce_response
 
+    # The task runs in a copy of this context, so the rate limiter's stash must exist before it forks (#42819)
+    get_or_create_request_stash()
     produce_task: Final = asyncio.ensure_future(produce_response)
     await asyncio.wait((produce_task,), timeout=interval)
     if produce_task.done():
