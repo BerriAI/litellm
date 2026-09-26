@@ -11,7 +11,7 @@ function describeImageSource(src: string): string {
 export function MarkdownImage({ src, alt, title }: MarkdownImageProps) {
   const [loaded, setLoaded] = useState(false);
 
-  if (!src) {
+  if (typeof src !== "string" || src === "") {
     return <span>{alt}</span>;
   }
 
