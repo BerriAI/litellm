@@ -12,6 +12,15 @@ import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
+HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
+    ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "VIRTUAL_ENV")
+)
+HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
+
+for _name in tuple(os.environ):
+    if _name not in HOST_ENVIRONMENT_ALLOWLIST and not _name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES):
+        del os.environ[_name]
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
