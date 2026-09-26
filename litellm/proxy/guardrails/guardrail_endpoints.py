@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-import concurrent.futures
+import asyncio
 import inspect
 import json
 import os
@@ -22,6 +22,12 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.path_utils import safe_join
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
+    ExecutionTimeoutError,
+    await_with_timeout,
+    call_off_loop_with_timeout,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
@@ -401,7 +407,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -421,6 +427,8 @@ async def create_guardrail(
             )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error adding guardrail to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -2124,15 +2132,20 @@ async def test_custom_code_guardrail(
     try:
         exec_globals: Final = build_sandbox_globals()
 
-        try:
+        def load_module() -> None:
             compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
             exec(compiled, exec_globals)  # noqa: S102
+
+        try:
+            await call_off_loop_with_timeout(load_module, EXECUTION_TIMEOUT_SECONDS, label="test:load")
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
                 error=f"Syntax error in custom code: {e}",
                 error_type="compilation",
             )
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2178,16 +2191,9 @@ async def test_custom_code_guardrail(
             return apply_fn(test_inputs, safe_request_data, request.input_type)
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future: Final = executor.submit(execute_guardrail)
-                try:
-                    result: Final = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
-                except concurrent.futures.TimeoutError:
-                    return TestCustomCodeGuardrailResponse(
-                        success=False,
-                        error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
-                        error_type="execution",
-                    )
+            result: Final = await _run_test_guardrail(execute_guardrail, EXECUTION_TIMEOUT_SECONDS)
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2217,6 +2223,23 @@ async def test_custom_code_guardrail(
             error=f"Unexpected error: {e}",
             error_type="execution",
         )
+
+
+def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
+    return TestCustomCodeGuardrailResponse(
+        success=False,
+        error=f"Execution timeout: code took longer than {timeout:g} seconds",
+        error_type="execution",
+    )
+
+
+async def _run_test_guardrail(execute_guardrail: Callable[[], object], timeout: float) -> object:
+    deadline: Final = asyncio.get_running_loop().time() + timeout
+    raw_result: Final = await call_off_loop_with_timeout(execute_guardrail, timeout, label="test")
+    if not inspect.iscoroutine(raw_result):
+        return raw_result
+    remaining: Final = max(deadline - asyncio.get_running_loop().time(), 0.0)
+    return await await_with_timeout(raw_result, remaining, label="test")
 
 
 def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
