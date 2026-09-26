@@ -1715,8 +1715,8 @@ if MCP_AVAILABLE:
                 continue
 
             # Caller sign-in: challenge at connect because a tool-call-time 401 is wrapped into a
-            # JSON-RPC error and the WWW-Authenticate header is lost. Non-OBO gates fire only on a
-            # single-server connect the key's grant admits.
+            # JSON-RPC error and the WWW-Authenticate header is lost. OBO keeps its connect gate;
+            # guardrail-only gates fire only on a single-server connect the key's grant admits.
             sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
             if (
                 server
@@ -1726,7 +1726,7 @@ if MCP_AVAILABLE:
                 )
                 is None
                 and (
-                    server.auth_type == MCPAuth.oauth2_token_exchange
+                    (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
                     or await _key_granted_single_server(server, mcp_servers, user_api_key_auth, client_ip)
                 )
             ):

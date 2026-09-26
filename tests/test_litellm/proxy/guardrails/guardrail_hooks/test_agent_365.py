@@ -210,7 +210,7 @@ def _mcp_data(**overrides: Any) -> dict:
         "mcp_tool_name": "send_email",
         "mcp_arguments": {"to": "user@example.com", "body": "hello"},
         "mcp_server_name": "outlook_mcp",
-        "incoming_bearer_token": FAKE_ASSERTION,
+        "incoming_subject_token": FAKE_ASSERTION,
         "metadata": {"headers": {"mcp-session-id": "sess-123"}},
     }
     data.update(overrides)
@@ -699,9 +699,19 @@ class TestUnreachableFallback:
         handler: Final = FakeHandler([])
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
-            await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+            await _run(guardrail, _mcp_data(incoming_subject_token=None))
         assert exc_info.value.status_code == 401
         assert handler.calls == []
+
+    @pytest.mark.asyncio
+    async def test_raw_bearer_without_subject_token_is_no_bearer(self):
+        exchanger: Final = StubTokenExchanger()
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, _mcp_data(incoming_subject_token=None, incoming_bearer_token=FAKE_ASSERTION))
+        assert exc_info.value.status_code == 401
+        assert exchanger.calls == []
 
     @pytest.mark.asyncio
     async def test_non_jwt_bearer_token_fail_closed(self):
@@ -709,7 +719,7 @@ class TestUnreachableFallback:
         handler: Final = FakeHandler([])
         guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         with pytest.raises(HTTPException) as exc_info:
-            await _run(guardrail, _mcp_data(incoming_bearer_token="sk-litellm-virtual-key"))
+            await _run(guardrail, _mcp_data(incoming_subject_token="sk-litellm-virtual-key"))
         assert exc_info.value.status_code == 401
         assert exchanger.calls == []
 
@@ -717,7 +727,7 @@ class TestUnreachableFallback:
     async def test_missing_bearer_token_blocks_even_fail_open(self):
         handler: Final = FakeHandler([])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
-        data: Final = _mcp_data(incoming_bearer_token=None)
+        data: Final = _mcp_data(incoming_subject_token=None)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, data)
         assert exc_info.value.status_code == 401
@@ -871,7 +881,7 @@ class TestOboTokenCache:
         handler: Final = FakeHandler([_allow_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         await _run(guardrail, _mcp_data())
-        await _run(guardrail, _mcp_data(incoming_bearer_token=other_assertion))
+        await _run(guardrail, _mcp_data(incoming_subject_token=other_assertion))
         assert len(exchanger.calls) == 2
         assert handler.calls[1].headers["Authorization"] == "Bearer token-b"
 

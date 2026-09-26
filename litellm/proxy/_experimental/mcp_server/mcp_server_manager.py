@@ -5971,8 +5971,14 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        # Admission credentials are never handed to guardrails as the caller's assertion.
-        incoming_bearer_token: Final = self._extract_subject_token(None, raw_headers, user_api_key_auth)
+        inbound_authorization: Final = next(
+            (v for k, v in (raw_headers or {}).items() if isinstance(k, str) and k.lower() == "authorization"),
+            "",
+        )
+        incoming_bearer_token: Final = (
+            inbound_authorization[len("bearer ") :] if inbound_authorization.lower().startswith("bearer ") else None
+        )
+        incoming_subject_token: Final = self._extract_subject_token(None, raw_headers, user_api_key_auth)
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,
@@ -5988,6 +5994,7 @@ class MCPServerManager:
             ),
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
             "incoming_bearer_token": incoming_bearer_token,
+            "incoming_subject_token": incoming_subject_token,
             "headers": logging_safe_mcp_headers(raw_headers),
             "tool_description": tool.description if tool is not None else None,
             "tool_input_schema": tool.input_schema if tool is not None else None,
@@ -7192,17 +7199,16 @@ class MCPServerManager:
         return None
 
     def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
-        """The server a scoped ``/mcp/{name}`` connect resolves to, matched the way the router matches
-        it: case-insensitive over server_id, name and every published prefix form, then the exact
-        name lookup as the fallback."""
-        return next(
+        """The server a scoped ``/mcp/{name}`` connect resolves to: the alias-first exact lookup, then
+        the router's case-insensitive prefix match."""
+        return self.get_mcp_server_by_name(name, client_ip=client_ip) or next(
             (
                 server
                 for server in self.get_filtered_registry(client_ip).values()
                 if server_answers_to_name(server, name)
             ),
             None,
-        ) or self.get_mcp_server_by_name(name, client_ip=client_ip)
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

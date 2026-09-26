@@ -10270,6 +10270,50 @@ class TestOboPreflightScopedToAllowedServers:
         )
 
 
+class TestOboChallengeGateKeepsBaseConnectRules:
+    """An OBO connect carrying a bearer in oauth2_headers is challenged by the exchange path, not the
+    preemptive gate, so a multi-server connect or a single-server connect with any bearer at all must
+    not be refused before the session opens."""
+
+    LITELLM_KEY_BEARER = {"Authorization": "Bearer sk-1234"}
+
+    async def _run(self, servers: list[MCPServer], mcp_servers: list[str]) -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with (
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
+                mcp_operations.global_mcp_server_manager,
+                "get_mcp_server_answering_to",
+                return_value=servers[0],
+            ),
+            patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the test controls its answer
+                mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=servers)
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
+                mcp_servers=mcp_servers,
+                oauth2_headers=self.LITELLM_KEY_BEARER,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1"),
+                client_ip=None,
+                raw_headers={"x-litellm-api-key": "sk-1234", "authorization": "Bearer sk-1234"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_multi_server_connect_with_any_bearer_is_not_preemptively_challenged(self):
+        obo = _make_obo_server("obo")
+        catalog = MCPServer(server_id="id-catalog", name="catalog", alias="catalog", transport=MCPTransport.http)
+
+        await self._run([obo, catalog], ["obo", "catalog"])
+
+    @pytest.mark.asyncio
+    async def test_single_obo_connect_with_litellm_key_bearer_still_challenges(self):
+        with pytest.raises(HTTPException) as exc:
+            await self._run([_make_obo_server("obo")], ["obo"])
+        assert exc.value.status_code == 401
+
+
 @pytest.mark.asyncio
 async def test_post_mcp_call_guardrails_return_the_rewritten_result():
     """The result a post_mcp_call guardrail rewrote must be what the caller sends back."""

@@ -195,7 +195,7 @@ class Agent365Guardrail(CustomGuardrail):
             return data
 
         tool_name: Final = str(data.get("mcp_tool_name") or "")
-        assertion: Final = entra_assertion(data.get("incoming_bearer_token"))
+        assertion: Final = entra_assertion(data.get("incoming_subject_token"))
         if assertion is None:
             self._handle_caller_fault(
                 data=data,
