@@ -4019,6 +4019,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    signoz: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="signoz",
+        ui_callback_name="SigNoz",
+        litellm_callback_params=("SIGNOZ_INGESTION_ENDPOINT", "SIGNOZ_INGESTION_KEY"),
+    )
+
     zerobus: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="zerobus",
         ui_callback_name="Databricks Zerobus",

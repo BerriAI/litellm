@@ -30,6 +30,11 @@ from litellm.integrations.otel.presets.phoenix import (
     phoenix_preset,
     phoenix_project_headers,
 )
+from litellm.integrations.otel.presets.signoz import (
+    signoz_dynamic_endpoint,
+    signoz_dynamic_headers,
+    signoz_preset,
+)
 from litellm.integrations.otel.presets.weave import weave_dynamic_headers, weave_preset
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -44,6 +49,7 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
         "langtrace": langtrace_preset,
         "levo": levo_preset,
         "newrelic": newrelic_preset,
+        "signoz": signoz_preset,
         "weave_otel": weave_preset,
     }
 )
@@ -58,6 +64,7 @@ DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynami
             "arize": arize_dynamic_headers,
             "langfuse_otel": langfuse_dynamic_headers,
             "newrelic": newrelic_dynamic_headers,
+            "signoz": signoz_dynamic_headers,
             "weave_otel": weave_dynamic_headers,
         }
     )
@@ -71,9 +78,15 @@ DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynam
     MappingProxyType(
         {
             "newrelic": newrelic_dynamic_endpoint,
+            "signoz": signoz_dynamic_endpoint,
         }
     )
 )
+
+
+#: Backends whose per-request endpoint is a key/team supplied URL, so naming one
+#: is a tenant account on its own (a self-hosted collector needs no ingestion key).
+TENANT_ENDPOINT_CALLBACKS: Final[frozenset[str]] = frozenset({"signoz"})
 
 
 #: Callback name → per-request *routing* header builder, sourced from the key/team
@@ -142,6 +155,7 @@ __all__ = [
     "DYNAMIC_HEADERS_BY_CALLBACK",
     "PRESET_BY_CALLBACK",
     "PROJECT_HEADERS_BY_CALLBACK",
+    "TENANT_ENDPOINT_CALLBACKS",
     "Preset",
     "agentops_preset",
     "arize_preset",
@@ -153,5 +167,6 @@ __all__ = [
     "newrelic_preset",
     "phoenix_preset",
     "project_routing_headers",
+    "signoz_preset",
     "weave_preset",
 ]
