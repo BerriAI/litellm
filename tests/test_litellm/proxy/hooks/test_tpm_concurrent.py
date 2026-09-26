@@ -30,7 +30,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _call_id_from_callback_kwargs,
+    call_id_from_callback_kwargs,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
@@ -145,7 +145,7 @@ async def test_no_leak_on_over_limit_rejection(rate_limiter):
         "max_tokens": 200,
     }
 
-    estimated = handler._estimate_tokens_for_request(data=data)
+    estimated = handler.estimate_tokens_for_request(data=data)
     assert estimated > user_api_key_dict.tpm_limit, (
         "Test assumes the reservation amount blows past the limit; "
         f"estimated={estimated}, limit={user_api_key_dict.tpm_limit}"
@@ -384,7 +384,7 @@ async def test_should_rate_limit_does_not_inflate_tokens_counter(rate_limiter):
         "max_tokens": 10,
     }
 
-    estimated = handler._estimate_tokens_for_request(data=data)
+    estimated = handler.estimate_tokens_for_request(data=data)
 
     await handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
@@ -426,7 +426,7 @@ async def test_concurrent_burst_within_tpm_budget_all_succeed(rate_limiter):
         "max_tokens": 100,
     }
 
-    estimated_per_request = handler._estimate_tokens_for_request(data=request_data)
+    estimated_per_request = handler.estimate_tokens_for_request(data=request_data)
     n_concurrent = 3
     # Sanity: total reservation must fit within tpm_limit and we want enough
     # headroom that any +1 inflation would NOT push us over.
@@ -581,7 +581,7 @@ async def test_estimate_tokens_uses_max_tokens_when_explicit(rate_limiter):
     """When max_tokens is set explicitly, reservation should equal input + max_tokens."""
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={
             "messages": [
                 {"role": "user", "content": "abcd" * 4}
@@ -604,7 +604,7 @@ async def test_estimate_tokens_honors_explicit_zero_max_tokens(rate_limiter):
     """
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={
             "messages": [
                 {"role": "user", "content": "abcd" * 4}
@@ -623,7 +623,7 @@ async def test_estimate_tokens_honors_explicit_zero_max_output_tokens_for_respon
 ):
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={
             "input": "describe this image in detail",  # 29 chars ~ 7 tokens
             "max_output_tokens": 0,
@@ -639,7 +639,7 @@ async def test_estimate_tokens_zero_for_empty_embeddings(rate_limiter):
     """Embeddings have no output budget — reservation should equal input only."""
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={"input": "hello world"}  # 11 chars
     )
     # input ~= 11/4 = 2 tokens (max(1, 11//4)); max_tokens = 0
@@ -1061,7 +1061,7 @@ async def test_estimate_tokens_floor_caps_at_smallest_configured_tpm(rate_limite
     """
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={"messages": [{"role": "user", "content": "hello"}]},
         min_configured_tpm_limit=1000,
     )
@@ -1081,7 +1081,7 @@ async def test_estimate_tokens_floor_unchanged_for_large_tpm(rate_limiter):
     """
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={"messages": [{"role": "user", "content": "hello"}]},
         min_configured_tpm_limit=100_000,
     )
@@ -1098,7 +1098,7 @@ async def test_estimate_tokens_floor_unchanged_when_kwarg_omitted(rate_limiter):
     """
     handler, _cache = rate_limiter
 
-    estimate = handler._estimate_tokens_for_request(
+    estimate = handler.estimate_tokens_for_request(
         data={"messages": [{"role": "user", "content": "hello"}]},
     )
     assert estimate == 1 + 1024
@@ -3382,7 +3382,7 @@ def test_rerank_usage_reconciles_project_split_token_quota(
 def test_split_quota_helpers_handle_non_mapping_inputs(rate_limiter):
     handler, _cache = rate_limiter
 
-    assert _call_id_from_callback_kwargs(object()) is None
+    assert call_id_from_callback_kwargs(object()) is None
     assert handler._is_embedding_request(object(), None) is False
     assert handler._get_explicit_output_cap(object(), None) is None
     assert handler.get_output_candidate_count(object()) == 1

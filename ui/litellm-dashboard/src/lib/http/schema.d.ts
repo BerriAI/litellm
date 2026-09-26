@@ -4914,6 +4914,41 @@ export interface paths {
         patch: operations["assemblyai_proxy_route_eu_assemblyai__endpoint__patch"];
         trace?: never;
     };
+    "/fairness/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fairness Settings */
+        get: operations["get_fairness_settings_fairness_settings_get"];
+        /** Update Fairness Settings */
+        put: operations["update_fairness_settings_fairness_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fairness/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fairness Status */
+        get: operations["get_fairness_status_fairness_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fal_ai/{endpoint}": {
         parameters: {
             query?: never;
@@ -30215,6 +30250,70 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** FairnessSettings */
+        FairnessSettings: {
+            /**
+             * Default Max Queue Wait Seconds
+             * @default 0
+             */
+            default_max_queue_wait_seconds: number;
+            /**
+             * Default Reserved Share
+             * @default 0.25
+             */
+            default_reserved_share: number;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Max Queue Depth Per Class
+             * @default 100
+             */
+            max_queue_depth_per_class: number;
+            /**
+             * Queue Poll Interval Seconds
+             * @default 0.1
+             */
+            queue_poll_interval_seconds: number;
+            /**
+             * Saturation Check Cache Ttl
+             * @default 60
+             */
+            saturation_check_cache_ttl: number;
+            /**
+             * Saturation Threshold
+             * @default 0.5
+             */
+            saturation_threshold: number;
+            /**
+             * Workload Classes
+             * @default []
+             */
+            workload_classes: components["schemas"]["WorkloadClass"][];
+        };
+        /** FairnessSettingsResponse */
+        FairnessSettingsResponse: {
+            /** Persisted */
+            persisted: boolean;
+            settings: components["schemas"]["FairnessSettings"];
+        };
+        /** FairnessStatusResponse */
+        FairnessStatusResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Limiter Active */
+            limiter_active: boolean;
+            /** Models */
+            models: components["schemas"]["ModelFairnessStatus"][];
+            /** Saturation Threshold */
+            saturation_threshold: number;
+            /** Stats Window Seconds */
+            stats_window_seconds: number;
+            /** Window Size Seconds */
+            window_size_seconds: number;
+        };
         /**
          * FallbackCreateRequest
          * @description Request model for creating/updating fallbacks
@@ -35929,6 +36028,25 @@ export interface components {
              * @description The window (in days) used to bucket 'imminent' models.
              */
             warn_within_days: number;
+        };
+        /** ModelFairnessStatus */
+        ModelFairnessStatus: {
+            /** Classes */
+            classes: components["schemas"]["WorkloadClassStatus"][];
+            /** Current Requests */
+            current_requests: number;
+            /** Current Tokens */
+            current_tokens: number;
+            /** Enforcing Reservations */
+            enforcing_reservations: boolean;
+            /** Model Group */
+            model_group: string;
+            /** Rpm */
+            rpm: number | null;
+            /** Saturation */
+            saturation: number;
+            /** Tpm */
+            tpm: number | null;
         };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
@@ -46458,6 +46576,57 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** WorkloadClass */
+        WorkloadClass: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Max Queue Wait Seconds
+             * @description how long an over-limit request may wait; 0 rejects immediately
+             * @default 0
+             */
+            max_queue_wait_seconds: number;
+            /** Name */
+            name: string;
+            /**
+             * Reserved Share
+             * @description fraction of model RPM/TPM reserved once saturated
+             */
+            reserved_share: number;
+        };
+        /** WorkloadClassStatus */
+        WorkloadClassStatus: {
+            /** Admitted After Wait Total */
+            admitted_after_wait_total: number;
+            /** Avg Queue Wait Seconds */
+            avg_queue_wait_seconds: number;
+            /** Current Requests */
+            current_requests: number;
+            /** Current Tokens */
+            current_tokens: number;
+            /** Disconnected Total */
+            disconnected_total: number;
+            /** Max Queue Wait Seconds */
+            max_queue_wait_seconds: number;
+            /** Name */
+            name: string;
+            /** Queue Depth */
+            queue_depth: number;
+            /** Queued Total */
+            queued_total: number;
+            /** Rejected Capacity Total */
+            rejected_capacity_total: number;
+            /** Rejected Deadline Total */
+            rejected_deadline_total: number;
+            /** Rejected Queue Full Total */
+            rejected_queue_full_total: number;
+            /** Reserved Rpm */
+            reserved_rpm: number | null;
+            /** Reserved Share */
+            reserved_share: number;
+            /** Reserved Tpm */
+            reserved_tpm: number | null;
+        };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
@@ -54298,6 +54467,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fairness_settings_fairness_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FairnessSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_fairness_settings_fairness_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FairnessSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FairnessSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fairness_status_fairness_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FairnessStatusResponse"];
                 };
             };
         };

@@ -11861,6 +11861,91 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+def test_fairness_settings_propagate_on_config_reload(monkeypatch):
+    """A fairness update saved by one worker reaches peer workers through the periodic
+    litellm_settings reload: it becomes the effective settings object and is mirrored into
+    the priority reservation globals the dynamic limiter reads."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+
+    monkeypatch.setattr(litellm, "fairness_settings", None)
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm, "priority_reservation_settings", None)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(ps, "llm_router", None)
+    saved = FairnessSettings(
+        enabled=True,
+        workload_classes=(WorkloadClass(name="production", reserved_share=0.7, max_queue_wait_seconds=15.0),),
+        saturation_threshold=0.9,
+    )
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values("litellm_settings", {"fairness_settings": saved.model_dump(mode="json")})
+    )
+
+    assert litellm.fairness_settings == saved
+    assert litellm.priority_reservation == {"production": 0.7}
+    assert litellm.priority_reservation_settings is not None
+    assert litellm.priority_reservation_settings.saturation_threshold == 0.9
+    assert "dynamic_rate_limiter_v3" in litellm.callbacks
+
+
+@pytest.mark.asyncio
+async def test_disabling_fairness_keeps_a_limiter_configured_after_fairness_settings_in_yaml(tmp_path, monkeypatch):
+    """The config file lists fairness_settings above callbacks, so if fairness were applied in
+    key order it would register the limiter first and later remove the one the config asked for."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.hooks.fairness_settings import _CONFIG_RESERVATION
+    from litellm.types.proxy.fairness import FairnessSettings
+
+    monkeypatch.setattr(litellm, "fairness_settings", None)
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm, "priority_reservation_settings", None)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(_CONFIG_RESERVATION, "limiter_added_by_fairness", False)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}],
+                "litellm_settings": {
+                    "fairness_settings": {
+                        "enabled": True,
+                        "workload_classes": [{"name": "prod", "reserved_share": 0.5}],
+                    },
+                    "callbacks": ["dynamic_rate_limiter_v3"],
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+    router, _, _ = await ps.ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+    ps.ProxyConfig._apply_fairness_settings_value(FairnessSettings(enabled=False), router)
+
+    assert "dynamic_rate_limiter_v3" in litellm.callbacks, litellm.callbacks
+
+
+def test_invalid_fairness_settings_row_is_ignored_on_config_reload(monkeypatch):
+    """A malformed row must not take down the reload or half-apply."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "fairness_settings", None)
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values(
+            "litellm_settings",
+            {"fairness_settings": {"enabled": True, "workload_classes": [{"name": "default", "reserved_share": 2}]}},
+        )
+    )
+
+    assert litellm.fairness_settings is None
+    assert litellm.priority_reservation is None
+
+
 @pytest.mark.asyncio
 async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
     """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with

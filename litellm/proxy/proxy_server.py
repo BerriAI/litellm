@@ -588,6 +588,9 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.fairness_endpoints import (
+    router as fairness_router,
+)
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
@@ -703,6 +706,7 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy.middleware.active_request_middleware import ActiveRequestMiddleware
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -850,6 +854,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.fairness import FAIRNESS_SETTINGS_KEY
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -2412,6 +2417,7 @@ app.add_middleware(
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
+app.add_middleware(ActiveRequestMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -6104,6 +6110,8 @@ class ProxyConfig:
                     from litellm.types.utils import PriorityReservationSettings
 
                     litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                elif key == FAIRNESS_SETTINGS_KEY:
+                    continue
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -6327,6 +6335,9 @@ class ProxyConfig:
 
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
+            fairness_value: Final = litellm_settings.get(FAIRNESS_SETTINGS_KEY)
+            if fairness_value is not None:
+                self._apply_fairness_settings_value(fairness_value, router)
 
         if redis_usage_cache is None:
             env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(
@@ -7719,8 +7730,25 @@ class ProxyConfig:
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         self.litellm_settings.apply_db_row("litellm_settings", db_values)
         for key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
-            if key in db_values and (value := self.litellm_settings.get(key)) is not None:
-                setattr(litellm, key, value)
+            if key not in db_values or (value := self.litellm_settings.get(key)) is None:
+                continue
+            if key == FAIRNESS_SETTINGS_KEY:
+                self._apply_fairness_settings_value(value, llm_router)
+                continue
+            setattr(litellm, key, value)
+
+    @staticmethod
+    def _apply_fairness_settings_value(value: object, router: litellm.Router | None) -> None:
+        from litellm.proxy.hooks.fairness_settings import apply_fairness_settings, parse_fairness_settings
+
+        settings: Final = parse_fairness_settings(value)
+        if settings is None:
+            return
+        apply_fairness_settings(
+            settings,
+            internal_usage_cache=proxy_logging_obj.internal_usage_cache.dual_cache,
+            llm_router=router,
+        )
 
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
@@ -19669,6 +19697,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(fairness_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
