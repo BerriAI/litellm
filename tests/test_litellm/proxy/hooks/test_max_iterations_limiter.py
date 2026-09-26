@@ -6,21 +6,23 @@ Tests that session-scoped iteration counting works correctly:
 - Different sessions have independent counters
 """
 
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
 
 
-def _make_mock_agent(max_iterations: int) -> AgentResponse:
+def _make_mock_agent(max_iterations: int, agent_id: str = "agent-test-123") -> AgentResponse:
     return AgentResponse(
-        agent_id="agent-test-123",
+        agent_id=agent_id,
         agent_name="test-agent",
         litellm_params={"max_iterations": max_iterations},
         agent_card_params={"name": "test-agent", "version": "1.0.0"},
@@ -46,11 +48,9 @@ async def test_max_iterations_basic_enforcement():
 
     mock_agent = _make_mock_agent(max_iterations=3)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
-        mock_registry.get_agent_by_id.return_value = mock_agent
-
+    registry: Final = AgentRegistry()
+    registry.register_agent(mock_agent)
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         # First 3 requests should succeed
         for i in range(3):
             await handler.async_pre_call_hook(
@@ -91,11 +91,9 @@ async def test_max_iterations_different_sessions_independent():
 
     mock_agent = _make_mock_agent(max_iterations=2)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
-        mock_registry.get_agent_by_id.return_value = mock_agent
-
+    registry: Final = AgentRegistry()
+    registry.register_agent(mock_agent)
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         # Session A: 2 calls succeed
         for _ in range(2):
             await handler.async_pre_call_hook(
@@ -154,3 +152,80 @@ async def test_max_iterations_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "researcher_id,orchestrator_id,researcher_session,orchestrator_session",
+    [
+        ("researcher", "orchestrator", "shared-trace", "shared-trace"),
+        ("parent:child", "parent", "trace", "child:trace"),
+    ],
+)
+async def test_agent_session_iteration_counters_do_not_mix_usage(
+    researcher_id: str, orchestrator_id: str, researcher_session: str, orchestrator_session: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(4, researcher_id))
+    registry.register_agent(_make_mock_agent(2, orchestrator_id))
+    researcher: Final = UserAPIKeyAuth(agent_id=researcher_id)
+    orchestrator: Final = UserAPIKeyAuth(agent_id=orchestrator_id)
+    researcher_data: Final = {"metadata": {"session_id": researcher_session}}
+    orchestrator_data: Final = {"metadata": {"session_id": orchestrator_session}}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        for _ in range(3):
+            assert await handler.async_pre_call_hook(researcher, cache, researcher_data, "") is None
+        for _ in range(2):
+            assert await handler.async_pre_call_hook(orchestrator, cache, orchestrator_data, "") is None
+        with pytest.raises(HTTPException) as rejected:
+            await handler.async_pre_call_hook(orchestrator, cache, orchestrator_data, "")
+        assert rejected.value.status_code == 429
+        assert "Current count: 3" in str(rejected.value.detail)
+        assert await handler.async_pre_call_hook(researcher, cache, researcher_data, "") is None
+        with pytest.raises(HTTPException) as researcher_rejected:
+            await handler.async_pre_call_hook(researcher, cache, researcher_data, "")
+        assert researcher_rejected.value.status_code == 429
+        assert "Current count: 5" in str(researcher_rejected.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_metadata_iteration_limit_keeps_existing_session_count() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    key: Final = UserAPIKeyAuth(metadata={"max_iterations": 2})
+    await cache.async_set_cache(key="{session_iterations:existing}:count", value=2)
+
+    with pytest.raises(HTTPException) as rejected:
+        await handler.async_pre_call_hook(key, cache, {"metadata": {"session_id": "existing"}}, "")
+
+    assert rejected.value.status_code == 429
+    assert "Current count: 3" in str(rejected.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_legacy_agent_id_shares_the_registered_agents_iteration_limit() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config(
+        (
+            {
+                "agent_name": "configured-agent",
+                "agent_card_params": {"name": "configured-agent", "version": "1"},
+                "litellm_params": {"max_iterations": 2},
+            },
+        )
+    )
+    legacy_id, agent_id = next(iter(registry.config_agent_legacy_ids.items()))
+    data: Final = {"metadata": {"session_id": "trace"}}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        for identity in (legacy_id, agent_id):
+            assert await handler.async_pre_call_hook(UserAPIKeyAuth(agent_id=identity), cache, data, "") is None
+        with pytest.raises(HTTPException) as rejected:
+            await handler.async_pre_call_hook(UserAPIKeyAuth(agent_id=legacy_id), cache, data, "")
+        assert rejected.value.status_code == 429
+        assert "Current count: 3" in str(rejected.value.detail)

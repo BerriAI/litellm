@@ -1,7 +1,7 @@
 """
 Max Iterations Limiter for LiteLLM Proxy.
 
-Enforces a per-session cap on the number of LLM calls an agentic loop can make.
+Enforces a per-agent, per-session cap on the number of LLM calls an agentic loop can make.
 Callers send a `session_id` with each request (via `x-litellm-session-id` header
 or `metadata.session_id`), and this hook counts calls per session. When the count
 exceeds `max_iterations` (configured in agent litellm_params or key metadata), returns 429.
@@ -10,6 +10,7 @@ Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
+import json
 import os
 from typing import TYPE_CHECKING, Any, Final
 
@@ -60,7 +61,8 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
           metadata.session_id in request body
 
     Cache key pattern:
-        {session_iterations:<session_id>}:count
+        {agent_session_iterations:[<agent_id>,<session_id>]}:count
+        Without an agent, retains {session_iterations:<session_id>}:count.
 
     Multi-instance support:
         Uses Redis Lua script for atomic increment (same pattern as
@@ -109,7 +111,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         )
 
         # Increment and check
-        cache_key: Final = self._make_cache_key(session_id)
+        cache_key: Final = self._make_cache_key(session_id, user_api_key_dict.agent_id)
         current_count: Final = await self._increment_and_get(cache_key)
 
         if current_count > max_iterations:
@@ -171,14 +173,19 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             return int(max_iterations)
         return None
 
-    def _make_cache_key(self, session_id: str) -> str:
+    def _make_cache_key(self, session_id: str, agent_id: str | None = None) -> str:
         """
         Create cache key for session iteration counter.
 
-        Uses Redis hash-tag pattern {session_iterations:<session_id>} so all
-        keys for a session land on the same Redis Cluster slot.
+        The Redis hash tag includes both identities when an agent is configured.
+        Keys without an agent retain the legacy session scope.
         """
-        return f"{{session_iterations:{session_id}}}:count"
+        if agent_id is None:
+            return f"{{session_iterations:{session_id}}}:count"
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        scope: Final = json.dumps((global_agent_registry.stable_agent_id(agent_id), session_id), separators=(",", ":"))
+        return f"{{agent_session_iterations:{scope}}}:count"
 
     async def _increment_and_get(self, cache_key: str) -> int:
         """

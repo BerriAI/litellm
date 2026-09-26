@@ -1,7 +1,7 @@
 """
 Per-Session Budget Limiter for LiteLLM Proxy.
 
-Enforces a dollar-amount cap per session (identified by `session_id` /
+Enforces a dollar-amount cap per agent and session (identified by `session_id` /
 `x-litellm-trace-id`). After each successful LLM call the response cost is
 accumulated against the session. When the accumulated spend exceeds
 `max_budget_per_session` (configured in agent litellm_params), subsequent
@@ -14,6 +14,7 @@ Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as max_iterations_limiter.py.
 """
 
+import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Final
@@ -61,10 +62,10 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     Pre-call hook that enforces max_budget_per_session.
 
     Configuration (set in agent litellm_params):
-        - max_budget_per_session: dollar cap per session_id
+        - max_budget_per_session: dollar cap per agent and session_id
 
     Cache key pattern:
-        {session_budget:<session_id>}:spend
+        {agent_session_budget:[<agent_id>,<session_id>]}:spend
     """
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
@@ -97,12 +98,13 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         max_budget = self._get_max_budget_per_session(user_api_key_dict)
 
         session_id: Final = self._get_session_id(data)
+        agent_id: Final = user_api_key_dict.agent_id
 
-        if max_budget is None or session_id is None:
+        if max_budget is None or session_id is None or agent_id is None:
             return None
 
         max_budget = float(max_budget)
-        cache_key: Final = self._make_cache_key(session_id)
+        cache_key: Final = self._make_cache_key(session_id, agent_id)
         current_spend: Final = await self._get_current_spend(cache_key)
 
         verbose_proxy_logger.debug(
@@ -159,7 +161,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             if response_cost <= 0:
                 return
 
-            cache_key: Final = self._make_cache_key(str(session_id))
+            cache_key: Final = self._make_cache_key(str(session_id), agent.agent_id)
             await self._increment_spend(cache_key, float(response_cost))
 
             verbose_proxy_logger.debug(
@@ -205,8 +207,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             return float(max_budget)
         return None
 
-    def _make_cache_key(self, session_id: str) -> str:
-        return f"{{session_budget:{session_id}}}:spend"
+    def _make_cache_key(self, session_id: str, agent_id: str) -> str:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        scope: Final = json.dumps((global_agent_registry.stable_agent_id(agent_id), session_id), separators=(",", ":"))
+        return f"{{agent_session_budget:{scope}}}:spend"
 
     async def _get_current_spend(self, cache_key: str) -> float:
         """Read current accumulated spend for a session."""

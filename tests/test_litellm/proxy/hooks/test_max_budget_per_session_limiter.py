@@ -8,15 +8,17 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+import logging
+from typing import Final
 from unittest.mock import patch
 
-import logging
 import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     _PROXY_MaxBudgetPerSessionHandler,
 )
@@ -24,9 +26,9 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
 
 
-def _make_mock_agent(max_budget_per_session: float) -> AgentResponse:
+def _make_mock_agent(max_budget_per_session: float, agent_id: str = "agent-budget-123") -> AgentResponse:
     return AgentResponse(
-        agent_id="agent-budget-123",
+        agent_id=agent_id,
         agent_name="budget-agent",
         litellm_params={"max_budget_per_session": max_budget_per_session},
         agent_card_params={"name": "budget-agent", "version": "1.0.0"},
@@ -49,11 +51,9 @@ async def test_budget_per_session_under_budget_passes():
 
     mock_agent = _make_mock_agent(max_budget_per_session=5.0)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
-        mock_registry.get_agent_by_id.return_value = mock_agent
-
+    registry: Final = AgentRegistry()
+    registry.register_agent(mock_agent)
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         result = await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -79,16 +79,14 @@ async def test_budget_per_session_exceeds_budget():
     )
 
     session_id = "session-over-budget"
-    cache_key = handler._make_cache_key(session_id)
+    cache_key = handler._make_cache_key(session_id, "agent-budget-123")
     await handler._increment_spend(cache_key, 1.50)
 
     mock_agent = _make_mock_agent(max_budget_per_session=1.0)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
-        mock_registry.get_agent_by_id.return_value = mock_agent
-
+    registry: Final = AgentRegistry()
+    registry.register_agent(mock_agent)
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         with pytest.raises(HTTPException) as exc_info:
             await handler.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -115,16 +113,14 @@ async def test_budget_per_session_independent_sessions():
         agent_id="agent-budget-123",
     )
 
-    cache_key_a = handler._make_cache_key("session-A")
+    cache_key_a = handler._make_cache_key("session-A", "agent-budget-123")
     await handler._increment_spend(cache_key_a, 3.0)
 
     mock_agent = _make_mock_agent(max_budget_per_session=2.0)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
-        mock_registry.get_agent_by_id.return_value = mock_agent
-
+    registry: Final = AgentRegistry()
+    registry.register_agent(mock_agent)
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         # Session A should be blocked
         with pytest.raises(HTTPException) as exc_info:
             await handler.async_pre_call_hook(
@@ -165,6 +161,88 @@ async def test_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "researcher_id,orchestrator_id,researcher_session,orchestrator_session",
+    [
+        ("researcher", "orchestrator", "shared-trace", "shared-trace"),
+        ("parent:child", "parent", "trace", "child:trace"),
+    ],
+)
+async def test_agent_session_budget_counters_do_not_mix_usage(
+    researcher_id: str, orchestrator_id: str, researcher_session: str, orchestrator_session: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(3.0, researcher_id))
+    registry.register_agent(_make_mock_agent(1.0, orchestrator_id))
+    researcher: Final = UserAPIKeyAuth(agent_id=researcher_id)
+    orchestrator: Final = UserAPIKeyAuth(agent_id=orchestrator_id)
+    researcher_data: Final = {"metadata": {"session_id": researcher_session}}
+    orchestrator_data: Final = {"metadata": {"session_id": orchestrator_session}}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        await handler.async_log_success_event(
+            {
+                "litellm_params": {"metadata": {"session_id": researcher_session, "agent_id": researcher_id}},
+                "response_cost": 2.0,
+            },
+            None,
+            None,
+            None,
+        )
+        assert await handler.async_pre_call_hook(researcher, cache, researcher_data, "") is None
+        assert await handler.async_pre_call_hook(orchestrator, cache, orchestrator_data, "") is None
+
+        await handler.async_log_success_event(
+            {
+                "litellm_params": {"metadata": {"session_id": orchestrator_session, "agent_id": orchestrator_id}},
+                "response_cost": 1.0,
+            },
+            None,
+            None,
+            None,
+        )
+        with pytest.raises(HTTPException) as rejected:
+            await handler.async_pre_call_hook(orchestrator, cache, orchestrator_data, "")
+        assert rejected.value.status_code == 429
+        assert "Current spend: $1.0000" in str(rejected.value.detail)
+        assert await handler.async_pre_call_hook(researcher, cache, researcher_data, "") is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_agent_id_shares_the_registered_agents_budget() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config(
+        (
+            {
+                "agent_name": "configured-agent",
+                "agent_card_params": {"name": "configured-agent", "version": "1"},
+                "litellm_params": {"max_budget_per_session": 1.0},
+            },
+        )
+    )
+    legacy_id, agent_id = next(iter(registry.config_agent_legacy_ids.items()))
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        await handler.async_log_success_event(
+            {"litellm_params": {"metadata": {"session_id": "trace", "agent_id": legacy_id}}, "response_cost": 1.0},
+            None,
+            None,
+            None,
+        )
+        for identity in (agent_id, legacy_id):
+            with pytest.raises(HTTPException) as rejected:
+                await handler.async_pre_call_hook(
+                    UserAPIKeyAuth(agent_id=identity), cache, {"metadata": {"session_id": "trace"}}, ""
+                )
+            assert rejected.value.status_code == 429
+            assert "Current spend: $1.0000" in str(rejected.value.detail)
 
 
 class _OpenBreakerRedis:
