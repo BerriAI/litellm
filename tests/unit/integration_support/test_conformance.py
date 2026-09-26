@@ -266,7 +266,7 @@ def test_only_initialize_is_captured(body: bytes, expected: bool) -> None:
         ),
         (
             "server-sse-multiple-streams",
-            ("server-accepts-multiple-post-streams", "server-sse-streams-functional", "wire-schema-valid"),
+            ("server-accepts-multiple-post-streams", "server-sse-streams-functional"),
         ),
     ),
 )

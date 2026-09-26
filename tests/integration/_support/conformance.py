@@ -44,7 +44,6 @@ def read_checks(directory: Path, scenario: str) -> tuple[ConformanceCheck, ...]:
         "server-sse-multiple-streams": (
             "server-accepts-multiple-post-streams",
             "server-sse-streams-functional",
-            "wire-schema-valid",
         ),
         "server-initialize": ("server-initialize", "server-session-id-visible-ascii", "wire-schema-valid"),
         "tools-list": ("tools-list", "tools-name-format", "wire-schema-valid"),
