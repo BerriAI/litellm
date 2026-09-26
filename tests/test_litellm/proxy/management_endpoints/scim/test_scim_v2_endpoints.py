@@ -3,7 +3,8 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, groupby
+from operator import itemgetter
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call
@@ -54,6 +55,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     update_user,
     user_api_key_auth,
 )
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -6345,21 +6347,37 @@ class _OwnedResource:
 _LEGACY_TEAM: Final = LiteLLM_TeamTable(team_id="legacy-team", team_alias="legacy")
 
 
-def _legacy_membership_prisma(mocker: MockerFixture) -> MagicMock:
+def _filter_subjects(filter_: object) -> tuple[str, ...]:
+    """The literal(s) a Prisma string filter compares against: ``"x"``, ``{"equals": "x"}`` or ``{"in": [..]}``."""
+    if isinstance(filter_, str):
+        return (filter_,)
+    assert isinstance(filter_, dict), filter_
+    return tuple(filter_["in"]) if "in" in filter_ else (str(filter_["equals"]),)
+
+
+def _legacy_membership_prisma(
+    mocker: MockerFixture, users: tuple[LiteLLM_UserTable, ...] = (_OWNED_HUMAN, _ORDINARY_USER)
+) -> MagicMock:
     """One source-owned human (SCIM id ``scim-human``, local id ``human-local``), one source-owned
-    native agent-user (``nat-000001`` / ``agent-1``) and one ordinary legacy user."""
-    users: Final = (_OWNED_HUMAN, _ORDINARY_USER)
+    native agent-user (``nat-000001`` / ``agent-1``) and the given legacy users (one ordinary by default)."""
     resources: Final = (_OwnedResource("scim-human", _OWNED_HUMAN.user_id), _OwnedResource("nat-000001", "agent-1"))
 
     def _subjects(where: Mapping[str, object]) -> frozenset[str]:
         clauses: Final = tuple(where.get("OR", (where,)))
-        return frozenset(str(value) for clause in clauses for value in clause.values())  # comprehension-ok: test
+        filters: Final = chain.from_iterable(clause.values() for clause in clauses)
+        return frozenset(chain.from_iterable(map(_filter_subjects, filters)))
+
+    def _row_keys(row: LiteLLM_UserTable) -> tuple[tuple[str, LiteLLM_UserTable], ...]:
+        return tuple((key, row) for key in (row.user_id, row.sso_user_id, row.user_email) if key)
+
+    keyed: Final = sorted(chain.from_iterable(map(_row_keys, users)), key=itemgetter(0))
+    by_key: Final = MappingProxyType(
+        {key: tuple(row for _, row in group) for key, group in groupby(keyed, itemgetter(0))}
+    )
 
     async def _users_find_many(where: Mapping[str, object], take: int | None = None) -> tuple[LiteLLM_UserTable, ...]:
-        subjects: Final = _subjects(where)
-        return tuple(
-            row for row in users if subjects & frozenset(filter(None, (row.user_id, row.sso_user_id, row.user_email)))
-        )
+        hits: Final = chain.from_iterable(by_key.get(subject, ()) for subject in _subjects(where))
+        return tuple(MappingProxyType({row.user_id: row for row in hits}).values())
 
     async def _users_find_unique(where: Mapping[str, str]) -> LiteLLM_UserTable | None:
         return next((row for row in users if row.user_id == where["user_id"]), None)
@@ -6372,8 +6390,22 @@ def _legacy_membership_prisma(mocker: MockerFixture) -> MagicMock:
     async def _team_find_unique(where: Mapping[str, str]) -> LiteLLM_TeamTable | None:
         return _LEGACY_TEAM if where["team_id"] == _LEGACY_TEAM.team_id else None
 
+    by_folded_email: Final = MappingProxyType(
+        {row.user_email.lower(): row for row in users if row.user_email is not None}
+    )
+
+    async def _folded_email_rows(sql: str, folded: Sequence[str]) -> tuple[Mapping[str, str], ...]:
+        assert "LOWER(user_email) = ANY($1::text[])" in sql, sql
+        hits: Final = tuple(filter(None, map(by_folded_email.get, folded)))
+        return tuple(MappingProxyType({"user_id": row.user_id, "folded_email": row.user_email.lower()}) for row in hits)
+
     prisma: Final = mocker.MagicMock()
     prisma.db.litellm_usertable.find_many = AsyncMock(side_effect=_users_find_many)
+    prisma.writer_db.litellm_usertable.find_many = AsyncMock(side_effect=_users_find_many)
+    writer_tx: Final = mocker.MagicMock()
+    writer_tx.query_raw = AsyncMock(side_effect=_folded_email_rows)
+    prisma.tx.return_value.__aenter__ = AsyncMock(return_value=writer_tx)
+    prisma.tx.return_value.__aexit__ = AsyncMock(return_value=False)
     prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=_users_find_unique)
     prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
     prisma.db.litellm_teamtable.update = AsyncMock(return_value=_LEGACY_TEAM)
@@ -6436,6 +6468,87 @@ async def test_legacy_key_cannot_put_a_source_owned_subject_on_its_roster(
     assert member in failure.value.message
     for side_effect in side_effects:
         side_effect.assert_not_awaited()
+
+
+_FORTY_THOUSAND: Final = 40_000
+_OWNERSHIP_READS_PER_PASS: Final = 2 * -(-_FORTY_THOUSAND // IN_LIST_CHUNK_SIZE)
+
+
+@pytest.mark.asyncio
+async def test_legacy_key_naming_40k_native_ids_is_refused_after_the_batched_ownership_read_alone(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native ids are owned by SCIM id, so the chunked resource read settles it: no per-member user reads."""
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    prisma: Final = _legacy_membership_prisma(mocker)
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
+    members: Final = tuple(f"nat-{index:06d}" for index in range(1, _FORTY_THOUSAND + 1))
+
+    with pytest.raises(HTTPException) as failure:
+        await scim_v2._assert_legacy_members_unowned(
+            UserAPIKeyAuth(token="legacy-hash"), tuple(SCIMMember(value=value) for value in members)
+        )
+
+    assert failure.value.status_code == 403
+    assert prisma.writer_db.litellm_scimresource.find_many.await_count == _OWNERSHIP_READS_PER_PASS
+    assert prisma.writer_db.litellm_usertable.find_many.await_count == 0
+    assert prisma.db.litellm_usertable.find_many.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_key_naming_40k_ordinary_users_resolves_aliases_in_chunked_reads(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Values found by id, SSO id or email exactly never fall back to a single-value read."""
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    ordinary: Final = tuple(
+        LiteLLM_UserTable(user_id=f"u-{index}", user_email=f"u{index}@example.com", sso_user_id=f"sso-{index}")
+        for index in range(_FORTY_THOUSAND)
+    )
+    prisma: Final = _legacy_membership_prisma(mocker, users=(_OWNED_HUMAN, *ordinary))
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
+    spellings: Final = (
+        lambda row: row.user_id,
+        lambda row: f" {row.sso_user_id} ",
+        lambda row: row.user_email,
+    )
+    members: Final = tuple(spellings[index % 3](row) for index, row in enumerate(ordinary))
+
+    await scim_v2._assert_legacy_members_unowned(
+        UserAPIKeyAuth(token="legacy-hash"), tuple(SCIMMember(value=value) for value in members)
+    )
+
+    assert prisma.writer_db.litellm_scimresource.find_many.await_count == 2 * _OWNERSHIP_READS_PER_PASS
+    assert prisma.writer_db.litellm_usertable.find_many.await_count == _OWNERSHIP_READS_PER_PASS
+    assert prisma.tx.call_count == _OWNERSHIP_READS_PER_PASS // 2
+    assert prisma.db.litellm_usertable.find_many.await_count == 0
+    assert prisma.db.litellm_usertable.find_unique.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_key_naming_an_owned_human_by_differently_cased_email_is_refused_on_the_writer(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The alias is found by folded email on the writer while the read replica, lagging, knows no such user."""
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    prisma: Final = _legacy_membership_prisma(mocker)
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
+    replica: Final = AsyncMock(return_value=())
+    prisma.db.litellm_usertable.find_many = replica
+    prisma.db.query_raw = replica
+
+    with pytest.raises(HTTPException) as failure:
+        await scim_v2._assert_legacy_members_unowned(
+            UserAPIKeyAuth(token="legacy-hash"),
+            (SCIMMember(value="ordinary@example.com"), SCIMMember(value=" HUMAN@Example.com ")),
+        )
+
+    assert failure.value.status_code == 403
+    assert "HUMAN@Example.com" in str(failure.value.detail)
+    replica.assert_not_awaited()
 
 
 @pytest.mark.asyncio

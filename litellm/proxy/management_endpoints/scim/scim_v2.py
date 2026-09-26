@@ -9,7 +9,8 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
-from itertools import chain
+from itertools import chain, groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, overload
 
 from fastapi import (
@@ -63,7 +64,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
-from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, find_many_in
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -484,29 +485,96 @@ async def _assert_legacy_source_access(
         raise HTTPException(403, "This record is owned by a different provisioning source")
 
 
-async def _assert_legacy_members_unowned(auth: UserAPIKeyAuth | None, members: Sequence[SCIMMember]) -> None:
-    """Refuse a legacy (non-source) SCIM write that would put a directory-owned subject on its roster.
+_FOLDED_EMAIL_USERS_SQL: Final = """
+SELECT user_id, LOWER(user_email) AS folded_email
+FROM "LiteLLM_UserTable"
+WHERE LOWER(user_email) = ANY($1::text[])
+"""
 
-    A member may name the subject by SCIM resource id, local id, SSO identity or email; every
-    spelling is resolved to the user ids it names and checked against the source-owned resources
-    before anything is provisioned or written. The in-process source sync calls these routes
-    without a key and is exempt, as it is for single-record access.
-    """
+
+class _FoldedEmailRow(BaseModel):
+    user_id: str
+    folded_email: str
+
+
+_FOLDED_EMAIL_ROWS: Final = TypeAdapter(tuple[_FoldedEmailRow, ...])
+
+
+def _pair_key(pair: tuple[str, str]) -> str:
+    return pair[0]
+
+
+def _pair_user_id(pair: tuple[str, str]) -> str:
+    return pair[1]
+
+
+def _ids_by_key(pairs: Iterable[tuple[str | None, str]]) -> Mapping[str, frozenset[str]]:
+    keyed: Final = sorted(((key, user_id) for key, user_id in pairs if key), key=_pair_key)
+    grouped: Final = groupby(keyed, _pair_key)
+    return MappingProxyType({key: frozenset(map(_pair_user_id, group)) for key, group in grouped})
+
+
+async def _users_by_folded_email(
+    prisma_client: PrismaClient, subjects: tuple[str, ...]
+) -> Mapping[str, frozenset[str]]:
+    """Case-insensitive email match in chunked writer reads; `find_many_in` cannot fold the chunked field."""
+    folded: Final = tuple(dict.fromkeys(subject.lower() for subject in subjects))
+    starts: Final = range(0, len(folded), IN_LIST_CHUNK_SIZE)
+
+    async def _page(start: int) -> tuple[_FoldedEmailRow, ...]:
+        async with prisma_client.tx() as tx:
+            rows: Final = await tx.query_raw(_FOLDED_EMAIL_USERS_SQL, folded[start : start + IN_LIST_CHUNK_SIZE])
+        return _FOLDED_EMAIL_ROWS.validate_python(rows)
+
+    pages: Final = tuple([await _page(start) for start in starts])
+    return _ids_by_key((row.folded_email, row.user_id) for row in chain.from_iterable(pages))
+
+
+async def _accounts_named_by_member_values(
+    values: tuple[str, ...], prisma_client: PrismaClient
+) -> Mapping[str, frozenset[str]]:
+    """``_accounts_named_by_member_value`` for many values in O(chunks) writer reads: exact user id, exact
+    stripped SSO id, case-insensitive stripped email."""
+    users: Final = _table(UserRepository(prisma_client, use_writer=True))
+    subjects: Final = tuple(dict.fromkeys(value.strip() for value in values))
+    by_id: Final = _ids_by_key((row.user_id, row.user_id) for row in await find_many_in(users, "user_id", values))
+    by_sso: Final = _ids_by_key(
+        (row.sso_user_id, row.user_id) for row in await find_many_in(users, "sso_user_id", subjects)
+    )
+    by_email: Final = await _users_by_folded_email(prisma_client, subjects)
+    empty: Final = frozenset[str]()
+    return MappingProxyType(
+        {
+            value: by_id.get(value, empty)
+            | by_sso.get(value.strip(), empty)
+            | by_email.get(value.strip().lower(), empty)
+            for value in values
+        }
+    )
+
+
+async def _assert_legacy_members_unowned(auth: UserAPIKeyAuth | None, members: Sequence[SCIMMember]) -> None:
+    """403 for a legacy (non-source) write naming a source-owned subject by SCIM id, local id, SSO id or email."""
     if auth is None or not members:
         return
     client: Final = await _get_prisma_client_or_raise_exception()
     values: Final = tuple(dict.fromkeys(_member_value(member) for member in members))
-    named: Final = tuple([(value, await _accounts_named_by_member_value(value, client)) for value in values])
-    candidates: Final = tuple(dict.fromkeys(chain(values, chain.from_iterable(ids for _, ids in named))))
-    owned: Final = await _source_owned_ids(client, "Users", candidates)
-    offending: Final = next(
-        (value for value, ids in named if value in owned or not owned.isdisjoint(ids)),
-        None,
+    owned_directly: Final = await _source_owned_ids(client, "Users", values)
+    direct: Final = next((value for value in values if value in owned_directly), None)
+    if direct is not None:
+        raise _owned_member_error(direct)
+    named: Final = await _accounts_named_by_member_values(values, client)
+    alias_ids: Final = tuple(frozenset(chain.from_iterable(named.values())))
+    owned_by_alias: Final = await _source_owned_ids(client, "Users", alias_ids)
+    aliased: Final = next((value for value, ids in named.items() if not owned_by_alias.isdisjoint(ids)), None)
+    if aliased is not None:
+        raise _owned_member_error(aliased)
+
+
+def _owned_member_error(value: str) -> HTTPException:
+    return HTTPException(
+        403, f"Group member '{value}' is owned by a different provisioning source and cannot be added here"
     )
-    if offending is not None:
-        raise HTTPException(
-            403, f"Group member '{offending}' is owned by a different provisioning source and cannot be added here"
-        )
 
 
 def _patched_members(op: SCIMPatchOperation) -> tuple[SCIMMember, ...]:
