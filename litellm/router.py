@@ -3401,6 +3401,7 @@ class Router:
 
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
+        fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
         try:
             model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
             fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
@@ -3452,12 +3453,14 @@ class Router:
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:
                         Router._combine_responses_fallback_usage(fallback_item, partial_usage)
+                    fallback_yielded = True
                     yield fallback_item
             else:
+                fallback_yielded = True  # rebind-ok: see the pre-init above
                 yield fallback_response
         except Exception as fallback_error:
             verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
-            if fallback_response is None:
+            if not fallback_yielded:
                 for held_event in held_lifecycle_events:
                     yield held_event
             if isinstance(fallback_error, MidStreamFallbackError) and fallback_error.original_exception is not None:

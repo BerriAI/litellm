@@ -4719,6 +4719,74 @@ async def test_aresponses_fallback_attempt_drops_held_lifecycle_events_when_a_fa
 
 
 @pytest.mark.asyncio
+async def test_aresponses_fallback_attempt_replays_held_lifecycle_events_when_the_fallback_dies_before_its_first_event():
+    """A fallback stream that raises before yielding anything announced no response of its own, so the
+    primary's held created/in_progress pair is replayed ahead of the error and the client sees the
+    announcement the failure belongs to, the same as when no fallback was attempted at all."""
+    router: Final = _make_router_with_fallback()
+    trigger: Final = MidStreamFallbackError(
+        message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+    )
+    held: Final = (MagicMock(type="response.created"), MagicMock(type="response.in_progress"))
+    fallback_error: Final = RuntimeError("fallback closed before its first event")
+    adopt_headers: Final = MagicMock(return_value=({}, {}))
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_make_responses_iterator(error=fallback_error),
+    ):
+        outcome: Final = [
+            item
+            async for item in _events_until_error(
+                router._aresponses_fallback_attempt(
+                    trigger,
+                    _make_responses_iterator(),
+                    {"model": "gpt-4", "stream": True, "input": "Hello"},
+                    adopt_headers,
+                    held,
+                )
+            )
+        ]
+
+    assert outcome == [*held, fallback_error]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events_once_the_fallback_announced_itself():
+    """Once the fallback has yielded its own created event, a later failure must not replay the
+    primary's held pair on top of it, or the client would again see two announced response ids."""
+    router: Final = _make_router_with_fallback()
+    trigger: Final = MidStreamFallbackError(
+        message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+    )
+    held: Final = (MagicMock(type="response.created"), MagicMock(type="response.in_progress"))
+    fallback_created: Final = MagicMock(type="response.created")
+    fallback_error: Final = RuntimeError("fallback dropped after announcing itself")
+    adopt_headers: Final = MagicMock(return_value=({}, {}))
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_make_responses_iterator(chunks=(fallback_created,), error=fallback_error),
+    ):
+        outcome: Final = [
+            item
+            async for item in _events_until_error(
+                router._aresponses_fallback_attempt(
+                    trigger,
+                    _make_responses_iterator(),
+                    {"model": "gpt-4", "stream": True, "input": "Hello"},
+                    adopt_headers,
+                    held,
+                )
+            )
+        ]
+
+    assert outcome == [fallback_created, fallback_error]
+
+
+@pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
     """Mid-stream error: input is rewritten to include user prompt +
     developer instruction + prior assistant message with partial output."""
