@@ -8483,6 +8483,38 @@ async def test_upstream_error_body_for_log_sanitizes_before_slicing():
 
 
 @pytest.mark.asyncio
+async def test_upstream_error_body_for_log_masks_a_pem_after_a_json_escaped_newline():
+    """A PEM embedded in a JSON-escaped error string keeps literal \\n separators;
+    the dangling mask must still cut it."""
+    preview: Final = (
+        b'{"error":"bad credentials -----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBg'
+        + b"kqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7" * 4
+        + b'\\n","status":500}'
+    )
+    output: Final = _upstream_error_body_for_log(preview, "utf-8", redact_secrets)
+    assert "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw" not in output, output
+    assert "-----BEGIN" not in output, output
+    assert "bad credentials" in output, output
+    assert output.rstrip().endswith("REDACTED"), output
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_body_for_log_masks_a_pem_header_at_the_preview_cut():
+    """A header so close to the head cut that fewer than 32 key chars fit must
+    still be masked instead of leaking the partial key."""
+    prefix: Final = "x" * (PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS - len("-----BEGIN PRIVATE KEY-----") - 11)
+    sanitized: Final = prefix + " -----BEGIN PRIVATE KEY----- MIIEvQIBAD" + "y" * 300
+    key_start: Final = sanitized.index("MIIEvQIBAD")
+    assert key_start < PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS
+    assert PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS - key_start < 32
+    output: Final = _upstream_error_body_for_log(sanitized.encode(), "utf-8", redact_secrets)
+    head: Final = output.removesuffix(_TRUNCATION_MARKER)
+    assert "-----BEGIN" not in head, head
+    assert "MIIEvQIBAD" not in head, head
+    assert head.rstrip().endswith("REDACTED"), head
+
+
+@pytest.mark.asyncio
 async def test_upstream_error_body_for_log_marks_bodies_past_the_scan_cap():
     """A body beyond the 64 KiB raw scan cap must carry the truncation marker
     even when its scanned head collapses below the log cap: the tail we never

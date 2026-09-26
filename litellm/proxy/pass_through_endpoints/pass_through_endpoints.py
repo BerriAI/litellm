@@ -947,7 +947,9 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
-_DANGLING_PRIVATE_KEY: Final = re.compile(r"-----BEGIN[A-Z \-]*PRIVATE KEY----- ?[A-Za-z0-9+/= ]{32,}")
+_DANGLING_PRIVATE_KEY: Final = re.compile(
+    r"-----BEGIN[A-Z \-]*PRIVATE KEY-----(?:[A-Za-z0-9+/= \\nr]{32,}|[A-Za-z0-9+/= \\nr]*$)"
+)
 
 
 def _mask_dangling_private_key(text: str) -> str:
