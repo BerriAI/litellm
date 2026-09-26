@@ -635,7 +635,7 @@ class TestRequestCoverage:
 
     def test_tool_schemas_give_up_their_free_text_and_nothing_else(self):
         """Every string is collected except what must reach the model verbatim: names,
-        types, formats, patterns, required lists, enum and const values."""
+        types, formats, patterns and required lists."""
         data = {
             "tools": [
                 {
@@ -673,8 +673,9 @@ class TestRequestCoverage:
                 }
             ]
         }
-        _, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
+        caller, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
 
+        assert sorted(text for text, _ in caller) == ["a", "a", "b"], "enum and const go to the caller vault"
         assert sorted(text for text, _ in privileged) == [
             "comment",
             "default",
@@ -690,6 +691,38 @@ class TestRequestCoverage:
             "top",
             "vendor",
         ]
+
+    @pytest.mark.asyncio
+    async def test_enum_values_are_redacted_and_restored_in_the_tool_call(self):
+        """An enum value holding PII is redacted, and the model's use of the stand-in is
+        restored in its tool arguments, so the call still carries a value the schema allows."""
+        guardrail = _guardrail(event_hook=["pre_call", "post_call"])
+        shield = _FakeShield({"[EMAIL_1]": "ops@example.com"})
+        redact_mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+        data = {
+            "messages": [],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "notify",
+                        "parameters": {"properties": {"to": {"type": "string", "enum": ["ops@example.com"]}}},
+                    },
+                }
+            ],
+        }
+
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+        assert redact_mock.call_args_list[0].kwargs["json"]["texts"] == ["ops@example.com"]
+        assert data["tools"][0]["function"]["parameters"]["properties"]["to"]["enum"] == ["[EMAIL_1]"]
+
+        guardrail.async_handler.post = shield.post  # type: ignore[method-assign]
+        call = SimpleNamespace(function=SimpleNamespace(name="notify", arguments='{"to": "[EMAIL_1]"}'))
+        reply = ModelResponse(choices=[Choices(message=Message(content=None, tool_calls=None))])
+        reply.choices[0].message.tool_calls = [call]
+        await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=None, response=reply)
+
+        assert json.loads(call.function.arguments) == {"to": "ops@example.com"}
 
     def test_schema_nesting_past_the_bound_is_refused(self):
         schema: dict = {"type": "object", "description": "past-the-bound@example.com"}
