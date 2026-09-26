@@ -886,3 +886,28 @@ async def test_shared_batch_read_falls_back_to_a_caches_own_read_when_its_redis_
     assert results == [[1], [2], ["m", None]]
     assert first_redis.async_batch_get_cache.await_args.args[0] == ["a1"]
     assert second_redis.async_batch_get_cache.await_args.args[0] == ["b1"]
+
+
+@pytest.mark.asyncio
+async def test_shared_batch_read_keeps_a_caches_own_tier_failure_to_itself_like_the_separate_read():
+    redis = _recording_redis({"a1": 1, "b1": 2, "c1": 3})
+    broken_memory_read = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10
+    )
+    broken_memory_read.in_memory_cache.async_batch_get_cache = AsyncMock(side_effect=RuntimeError("memory read"))
+    broken_backfill = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    broken_backfill.in_memory_cache.async_set_cache = AsyncMock(side_effect=RuntimeError("memory write"))
+    healthy = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+
+    shared = await DualCache.async_batch_get_cache_shared(
+        [(broken_memory_read, ["a1"]), (broken_backfill, ["b1"]), (healthy, ["c1"])]
+    )
+    broken_backfill.last_redis_batch_access_time.clear()
+    separate = [
+        await broken_memory_read.async_batch_get_cache(keys=["a1"]),
+        await broken_backfill.async_batch_get_cache(keys=["b1"]),
+        await healthy.async_batch_get_cache(keys=["c1"]),
+    ]
+
+    assert shared == separate == [None, None, [3]]
+    assert redis.async_batch_get_cache.await_args_list[0].args[0] == ["b1", "c1"]

@@ -400,7 +400,11 @@ class DualCache(BaseCache):
             if shared_redis is None or cache.redis_cache is not shared_redis:
                 results[index] = await cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
                 continue
-            pending = await cache._prepare_batch_get(keys, local_only=False)
+            try:
+                pending = await cache._prepare_batch_get(keys, local_only=False)
+            except Exception as e:
+                DualCache._log_shared_batch_get_failure(e)
+                continue
             pendings.append((index, cache, pending))
             results[index] = pending.result
 
@@ -419,19 +423,27 @@ class DualCache(BaseCache):
             if isinstance(e, RedisCircuitBreakerOpenError):
                 verbose_logger.debug("LiteLLM Cache: async_batch_get_cache_shared served from memory only: %s", e)
             else:
-                log_redis_failure(
-                    verbose_logger,
-                    logging.ERROR,
-                    "LiteLLM Cache: exception in async_batch_get_cache_shared",
-                    e,
-                    with_traceback=True,
-                )
+                DualCache._log_shared_batch_get_failure(e)
             return results
 
         for index, cache, pending in pendings:
             own_result = {key: redis_result[key] for key in pending.redis_keys if key in redis_result}
-            results[index] = await cache._apply_batch_get(pending, own_result)
+            try:
+                results[index] = await cache._apply_batch_get(pending, own_result)
+            except Exception as e:
+                results[index] = None
+                DualCache._log_shared_batch_get_failure(e)
         return results
+
+    @staticmethod
+    def _log_shared_batch_get_failure(e: Exception) -> None:
+        log_redis_failure(
+            verbose_logger,
+            logging.ERROR,
+            "LiteLLM Cache: exception in async_batch_get_cache_shared",
+            e,
+            with_traceback=True,
+        )
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
