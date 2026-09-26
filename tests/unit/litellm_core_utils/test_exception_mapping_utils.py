@@ -1,8 +1,10 @@
 import httpx
 import openai
 import pytest
+from fastapi import HTTPException
 
 import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -1500,3 +1502,39 @@ def test_litellm_proxy_repeated_response_header_keeps_each_value():
         )
 
     assert exc_info.value.response.headers.multi_items() == repeated
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        HTTPException(status_code=400, detail={"error": "Violated guardrail policy"}),
+        HTTPException(status_code=422, detail={"error": "Violated guardrail policy"}),
+        GuardrailRaisedException(guardrail_name="prompt-shield", message="Violated guardrail policy"),
+    ],
+    ids=["http_400", "http_422", "guardrail_raised"],
+)
+def test_guardrail_block_raised_inside_an_llm_call_is_returned_unmapped(block: Exception):
+    returned = exception_type(
+        model="gpt-5.6",
+        original_exception=block,
+        custom_llm_provider="openai",
+        completion_kwargs={},
+        extra_kwargs={},
+    )
+
+    assert returned is block
+
+
+def test_guardrail_provider_failure_status_is_still_mapped():
+    upstream_failure = HTTPException(status_code=401, detail={"error": "guardrail provider rejected the key"})
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=upstream_failure,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value is not upstream_failure

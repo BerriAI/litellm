@@ -19,7 +19,9 @@ from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
+import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
@@ -49,6 +51,7 @@ def _make_logging_obj(
     prompt_return = (merged_model, merged_messages, merged_optional_params)
     logging_obj.get_chat_completion_prompt.return_value = prompt_return
     logging_obj.async_get_chat_completion_prompt = AsyncMock(return_value=prompt_return)
+    logging_obj.async_failure_handler = AsyncMock()
     logging_obj.model_call_details = {}
     return logging_obj
 
@@ -640,3 +643,32 @@ async def test_aresponses_prompt_swap_cross_provider_with_credentials_raises():
             prompt_id="p1",
             api_key="sk-ant-test",
         )
+
+
+def _guardrail_block() -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+
+
+@pytest.mark.asyncio
+async def test_async_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
+    block = _guardrail_block()
+    logging_obj = _make_logging_obj(merged_model="openai/gpt-4o", merged_messages=[])
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(side_effect=block)
+
+    patches = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2], patches[3], pytest.raises(HTTPException) as exc_info:
+        await litellm.aresponses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
+
+    assert exc_info.value is block
+
+
+def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
+    block = _guardrail_block()
+    logging_obj = _make_logging_obj(merged_model="openai/gpt-4o", merged_messages=[])
+    logging_obj.get_chat_completion_prompt.side_effect = block
+
+    patches = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2], patches[3], pytest.raises(HTTPException) as exc_info:
+        litellm.responses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
+
+    assert exc_info.value is block
