@@ -754,7 +754,11 @@ def image_edit(
             "n",
             "quality",
             "size",
-            "style",
+            # "style" is intentionally NOT blocklisted here: image_edit has no named
+            # `style` argument, so blocklisting it would drop the param for every
+            # provider. It only reaches handlers whose image-edit config advertises
+            # "style" in get_supported_openai_params (e.g. bedrock Nova Canvas,
+            # recraft); every other provider's transform ignores unknown keys.
             "async_call",
         ]
         litellm_params_list: Final = all_litellm_params
@@ -971,9 +975,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
-    model: str,
-    prompt: str,
+    image: FileTypes | list[FileTypes] | None = None,
+    model: str | None = None,
+    prompt: str | None = None,
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
@@ -1008,10 +1012,15 @@ async def aimage_edit(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
+                api_base=local_vars.get("base_url", None),
             )
 
-        images: Final = image if isinstance(image, list) else [image]
+        images: Final = (
+            image
+            if isinstance(image, list)
+            else ([image] if image is not None else [])  # mutable-ok: single-image wrap like sync image_edit
+        )
 
         func: Final = partial(
             image_edit,

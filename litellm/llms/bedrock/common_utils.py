@@ -121,6 +121,39 @@ def merge_bedrock_aws_request_params(
     return request_params
 
 
+# Headers safe to surface in logs/callbacks: non-sensitive request metadata.
+# Everything else (Authorization, X-Amz-Security-Token, X-Amz-Date, ...) is
+# signature material and must never leave the request path.
+_BEDROCK_LOGGING_SAFE_HEADERS: Final[frozenset[str]] = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "host",
+        "accept",
+        "x-amzn-requestid",
+        "x-amzn-errortype",
+    }
+)
+_BEDROCK_REDACTED_HEADER_VALUE: Final = "[REDACTED]"
+
+
+def redact_bedrock_headers_for_logging(headers: Mapping[str, str]) -> dict[str, str]:
+    """Copy ``headers`` with every non-allowlisted value replaced by ``[REDACTED]``.
+
+    SigV4-signed Bedrock requests carry credentials in headers (Authorization,
+    X-Amz-Security-Token, X-Amz-Date); ``Logging.pre_call`` forwards
+    ``additional_args["headers"]`` unmasked to logger_fn and custom
+    ``log_pre_api_call`` callbacks, so handlers must pass this copy instead of
+    the prepared request headers. Key names are preserved (case-sensitively)
+    so log consumers keep seeing the full header shape; the allowlist match is
+    case-insensitive per HTTP header semantics. The sent request is untouched.
+    """
+    return {  # mutable-ok: redacted logging copy handed to the caller
+        key: (value if key.lower() in _BEDROCK_LOGGING_SAFE_HEADERS else _BEDROCK_REDACTED_HEADER_VALUE)
+        for key, value in headers.items()
+    }
+
+
 def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
     """The s3_access_key_id / s3_secret_access_key pair when both are set, otherwise None."""
     s3_access_key_id: Final = params.get("s3_access_key_id")
