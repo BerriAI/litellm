@@ -72,13 +72,12 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
     )
 
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
-        default="fail_open",
+        default="fail_closed",
         description=(
             "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, skips the evaluation, or "
-            "rejects the gateway's own client credentials. 'fail_open' (default) allows the tool call and records "
-            "it as Unscanned in the logs and OpenTelemetry. "
-            "'fail_closed' blocks it with HTTP 503. Policy blocks, 4xx rejections, throttling and a rejected "
-            "caller token always block."
+            "rejects the gateway's own client credentials. 'fail_closed' (default) blocks the tool call with HTTP 503. "
+            "'fail_open' allows it, logs an error and records it as Unscanned in the logs and OpenTelemetry. "
+            "Policy blocks, 4xx rejections, throttling and a rejected caller token always block."
         ),
     )
 

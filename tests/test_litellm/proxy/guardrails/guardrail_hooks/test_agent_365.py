@@ -234,31 +234,19 @@ class TestInitializeGuardrail:
         assert guardrail.client_secret == "env-secret"
         assert guardrail.api_base == "https://env.example.test"
         assert guardrail.resource_app_id == AGENT_365_PROD_RESOURCE_APP_ID
-        assert guardrail.unreachable_fallback == "fail_open"
+        assert guardrail.unreachable_fallback == "fail_closed"
 
-    def test_unset_fallback_survives_a_model_dump_round_trip(self):
-        stored: Final = LitellmParams(
-            guardrail="agent_365", mode="pre_mcp_call", tenant_id="t", client_id="c", client_secret="s"
-        ).model_dump()
-        assert stored["unreachable_fallback"] is None
-        guardrail: Final = initialize_guardrail(LitellmParams(**stored), {"guardrail_name": "a365-db"})
-        assert guardrail.unreachable_fallback == "fail_open"
-
-    def test_explicit_fail_closed_is_kept(self):
+    def test_fail_open_is_opt_in_through_litellm_params(self):
         params: Final = LitellmParams(
             guardrail="agent_365",
             mode="pre_mcp_call",
             tenant_id="t",
             client_id="c",
             client_secret="s",
-            unreachable_fallback="fail_closed",
+            unreachable_fallback="fail_open",
         )
-        guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-closed"})
-        assert guardrail.unreachable_fallback == "fail_closed"
-
-    def test_agent_365_default_leaves_other_guardrails_unset(self):
-        assert LitellmParams(guardrail="generic_guardrail_api", mode="pre_call").unreachable_fallback is None
-        assert Agent365GuardrailConfigModel.model_fields["unreachable_fallback"].default == "fail_open"
+        guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-open"})
+        assert guardrail.unreachable_fallback == "fail_open"
 
     def test_authority_host_defaults_to_public_entra(self, monkeypatch):
         monkeypatch.delenv("AGENT365_AUTHORITY_HOST", raising=False)
@@ -569,44 +557,50 @@ class TestDefenderNotEvaluated:
         assert "rejected" in exc_info.value.detail["error"]
 
 
-class TestFailOpenDefault:
+AVAILABILITY_FAILURES: Final = (
+    pytest.param([_token_response(), httpx.ReadTimeout("timed out")], id="evaluate-timeout"),
+    pytest.param([_token_response(), _response(502, text="bad gateway")], id="evaluate-5xx"),
+    pytest.param([_token_response(), _not_evaluated_response("Skipped")], id="evaluate-skipped"),
+    pytest.param([_response(503, text="entra down")], id="entra-5xx"),
+)
+
+
+class TestOptInFailOpen:
     @pytest.mark.asyncio
-    async def test_constructor_default_lets_timed_out_evaluation_through_unscanned(self, caplog):
-        handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
-        guardrail: Final = _default_fallback_guardrail(handler)
-        assert guardrail.unreachable_fallback == "fail_open"
+    @pytest.mark.parametrize("responses", AVAILABILITY_FAILURES)
+    async def test_constructor_default_blocks_each_availability_failure_with_503(self, responses):
+        guardrail: Final = _default_fallback_guardrail(FakeHandler(responses))
+        assert guardrail.unreachable_fallback == "fail_closed"
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, _mcp_data())
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("responses", AVAILABILITY_FAILURES)
+    async def test_opted_in_fail_open_lets_each_availability_failure_through_as_failed_to_respond(self, responses):
+        guardrail: Final = _make_guardrail(FakeHandler(responses), unreachable_fallback="fail_open")
         data: Final = _mcp_data()
-        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-            assert await _run(guardrail, data) is data
+        assert await _run(guardrail, data) is data
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_failed_to_respond"
         assert info["guardrail_response"]["verdict"] == "Unscanned"
+
+    @pytest.mark.asyncio
+    async def test_opted_in_fail_open_logs_the_unscanned_call_at_error_level(self, caplog):
+        handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            await _run(guardrail, _mcp_data())
         fail_open_logs: Final = [r for r in caplog.records if "unreachable_fallback='fail_open'" in r.getMessage()]
         assert [r.levelno for r in fail_open_logs] == [logging.ERROR], caplog.text
 
     @pytest.mark.asyncio
-    async def test_constructor_default_still_blocks_a_policy_block(self):
+    async def test_opted_in_fail_open_still_blocks_a_policy_block(self):
         handler: Final = FakeHandler([_token_response(), _block_response()])
-        guardrail: Final = _default_fallback_guardrail(handler)
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
         assert exc_info.value.status_code == 400
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "responses",
-        [
-            [_token_response(), httpx.ReadTimeout("timed out")],
-            [_token_response(), _response(502, text="bad gateway")],
-            [_token_response(), _not_evaluated_response("Skipped")],
-            [_response(503, text="entra down")],
-        ],
-    )
-    async def test_each_availability_failure_lets_the_call_through_as_failed_to_respond(self, responses):
-        guardrail: Final = _default_fallback_guardrail(FakeHandler(responses))
-        data: Final = _mcp_data()
-        assert await _run(guardrail, data) is data
-        assert _guardrail_info(data)["guardrail_status"] == "guardrail_failed_to_respond"
 
 
 class TestUnreachableFallback:

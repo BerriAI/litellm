@@ -54,7 +54,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         agent_id=litellm_params.agent_id,
         authority_host=authority_host,
         request_timeout=litellm_params.timeout if litellm_params.timeout is not None else 10.0,
-        unreachable_fallback=litellm_params.unreachable_fallback or "fail_open",
+        unreachable_fallback=litellm_params.unreachable_fallback,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

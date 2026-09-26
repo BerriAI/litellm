@@ -25570,9 +25570,11 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error. 'fail_open' logs a critical error and allows the request to proceed. Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @default fail_closed
+             * @enum {string}
              */
-            unreachable_fallback?: ("fail_closed" | "fail_open") | null;
+            unreachable_fallback: "fail_closed" | "fail_open";
             /**
              * Violation Message Template
              * @description Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.
@@ -34794,9 +34796,11 @@ export interface components {
             tracker_api_key?: string | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when the guardrail endpoint is unreachable. 'fail_closed' blocks, 'fail_open' allows and logs. Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed.
+             * @description Behavior when the headroom compression service is unreachable or errors. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and forwards the request uncompressed instead of blocking it.
+             * @default fail_closed
+             * @enum {string}
              */
-            unreachable_fallback?: ("fail_closed" | "fail_open") | null;
+            unreachable_fallback: "fail_closed" | "fail_open";
             /**
              * Use V2
              * @description If True and guardrail='noma', route to the new Noma v2 implementation instead of the legacy implementation.

@@ -265,14 +265,50 @@ def _chat(rig: Rig, model: str, marker: str) -> httpx.Response:
     )
 
 
-def test_default_lets_the_call_through_unscanned_when_agent_365_cannot_evaluate(
+def test_default_blocks_with_503_and_never_reaches_upstream_when_agent_365_cannot_evaluate(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with _rig(gateway, tmp_path, fallback=None) as rig:
+        unavailable: Final = "could not authorize the tool call"
         outage: Final = rig.caller.call(f"{rig.alias}-outage", {"a": 1})
-        assert outage.text == '{"a": 1}', f"Agent 365 down must fail open by default: {outage.raw}"
+        assert outage.error is not None and unavailable in outage.raw, (
+            f"Agent 365 down must block by default: {outage.raw}"
+        )
         skipped: Final = rig.caller.call(f"{rig.alias}-skipped", {"a": 2})
-        assert skipped.text == '{"a": 2}', f"Defender skipping the call must fail open by default: {skipped.raw}"
+        assert skipped.error is not None and unavailable in skipped.raw, (
+            f"Defender skip must block by default: {skipped.raw}"
+        )
+        denied: Final = rig.caller.call(f"{rig.alias}-denied", {"a": 3})
+        assert denied.error is not None and "Blocked by Microsoft Defender" in denied.raw, denied.raw
+        assert rig.caller.call(f"{rig.alias}-add", {"a": 4}).text == '{"a": 4}'
+        assert rig.upstream_tool_names() == ("add",)
+        statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 4, seconds=70)
+        assert statuses == {
+            "outage": "guardrail_failed_to_respond",
+            "skipped": "guardrail_failed_to_respond",
+            "denied": "guardrail_intervened",
+            "add": "success",
+        }, statuses
+
+
+def test_explicit_fail_closed_matches_the_default(gateway: Gateway, tmp_path: Path) -> None:
+    with _rig(gateway, tmp_path, fallback="fail_closed") as rig:
+        outage: Final = rig.caller.call(f"{rig.alias}-outage", {"a": 1})
+        assert outage.error is not None and "could not authorize the tool call" in outage.raw, outage.raw
+        assert rig.caller.call(f"{rig.alias}-add", {"a": 2}).text == '{"a": 2}'
+        assert rig.upstream_tool_names() == ("add",)
+        statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 2, seconds=70)
+        assert statuses == {"outage": "guardrail_failed_to_respond", "add": "success"}, statuses
+
+
+def test_opted_in_fail_open_lets_the_call_through_unscanned_and_still_blocks_policy_denials(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _rig(gateway, tmp_path, fallback="fail_open") as rig:
+        outage: Final = rig.caller.call(f"{rig.alias}-outage", {"a": 1})
+        assert outage.text == '{"a": 1}', f"Agent 365 down must fail open once opted in: {outage.raw}"
+        skipped: Final = rig.caller.call(f"{rig.alias}-skipped", {"a": 2})
+        assert skipped.text == '{"a": 2}', f"Defender skipping the call must fail open once opted in: {skipped.raw}"
         denied: Final = rig.caller.call(f"{rig.alias}-denied", {"a": 3})
         assert denied.error is not None and "Blocked by Microsoft Defender" in denied.raw, denied.raw
         assert rig.upstream_tool_names() == ("outage", "skipped")
@@ -284,32 +320,8 @@ def test_default_lets_the_call_through_unscanned_when_agent_365_cannot_evaluate(
         }, statuses
 
 
-def test_explicit_fail_closed_blocks_with_503_and_never_reaches_upstream_when_agent_365_is_down(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    with _rig(gateway, tmp_path, fallback="fail_closed") as rig:
-        outage: Final = rig.caller.call(f"{rig.alias}-outage", {"a": 1})
-        assert outage.error is not None and "could not authorize the tool call" in outage.raw, outage.raw
-        assert rig.caller.call(f"{rig.alias}-add", {"a": 2}).text == '{"a": 2}'
-        assert rig.upstream_tool_names() == ("add",)
-        statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 2, seconds=70)
-        assert statuses == {"outage": "guardrail_failed_to_respond", "add": "success"}, statuses
-
-
-def test_explicit_fail_open_matches_the_default_and_still_blocks_policy_denials(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+def test_opted_in_fail_open_covers_malformed_or_stalled_agent_365_replies(gateway: Gateway, tmp_path: Path) -> None:
     with _rig(gateway, tmp_path, fallback="fail_open") as rig:
-        assert rig.caller.call(f"{rig.alias}-outage", {"a": 1}).text == '{"a": 1}'
-        denied: Final = rig.caller.call(f"{rig.alias}-denied", {"a": 2})
-        assert denied.error is not None and "Blocked by Microsoft Defender" in denied.raw, denied.raw
-        assert rig.upstream_tool_names() == ("outage",)
-        statuses: Final = eventually(lambda: _guardrail_statuses(rig.key), lambda seen: len(seen) >= 2, seconds=70)
-        assert statuses == {"outage": "guardrail_failed_to_respond", "denied": "guardrail_intervened"}, statuses
-
-
-def test_default_fails_open_on_malformed_or_stalled_agent_365_replies(gateway: Gateway, tmp_path: Path) -> None:
-    with _rig(gateway, tmp_path, fallback=None) as rig:
         for index, tool in enumerate(("nonjson", "nobool", "slow")):
             outcome: Final = rig.caller.call(f"{rig.alias}-{tool}", {"a": index})
             assert outcome.text == json.dumps({"a": index}), f"{tool}: {outcome.raw}"
@@ -318,10 +330,10 @@ def test_default_fails_open_on_malformed_or_stalled_agent_365_replies(gateway: G
         assert statuses == dict.fromkeys(("nonjson", "nobool", "slow"), "guardrail_failed_to_respond"), statuses
 
 
-def test_default_fails_open_when_entra_is_down_stalled_malformed_or_refuses_the_gateway_credentials(
+def test_opted_in_fail_open_covers_entra_down_stalled_malformed_or_refusing_the_gateway_credentials(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _rig(gateway, tmp_path, fallback=None) as rig:
+    with _rig(gateway, tmp_path, fallback="fail_open") as rig:
         cases: Final = ("entra-outage", "entra-slow", "entra-nonjson", "entra-misconfigured")
         for index, case in enumerate(cases):
             outcome: Final = rig.caller_for("mcp", _caller_token(case)).call(f"{rig.alias}-add", {"a": index})
@@ -339,10 +351,10 @@ def test_default_fails_open_when_entra_is_down_stalled_malformed_or_refuses_the_
         assert [row["gi"][0]["guardrail_status"] for row in rows] == ["guardrail_failed_to_respond"] * len(cases)
 
 
-def test_throttling_and_ordinary_4xx_from_agent_365_keep_blocking_under_the_default(
+def test_throttling_and_ordinary_4xx_from_agent_365_keep_blocking_even_when_opted_in_to_fail_open(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _rig(gateway, tmp_path, fallback=None) as rig:
+    with _rig(gateway, tmp_path, fallback="fail_open") as rig:
         throttled: Final = rig.caller.call(f"{rig.alias}-throttled", {"a": 1})
         assert throttled.error == "Error: Agent 365 guardrail could not authorize the tool call", throttled.raw
         rejected: Final = rig.caller.call(f"{rig.alias}-rejected", {"a": 2})
@@ -352,8 +364,10 @@ def test_throttling_and_ordinary_4xx_from_agent_365_keep_blocking_under_the_defa
         assert statuses == {"throttled": "guardrail_failed_to_respond", "rejected": "guardrail_intervened"}, statuses
 
 
-def test_caller_authentication_failures_keep_blocking_under_the_default(gateway: Gateway, tmp_path: Path) -> None:
-    with _rig(gateway, tmp_path, fallback=None) as rig:
+def test_caller_authentication_failures_keep_blocking_even_when_opted_in_to_fail_open(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _rig(gateway, tmp_path, fallback="fail_open") as rig:
         rejected: Final = "Error: Agent 365 guardrail rejected the tool call"
         missing: Final = rig.call_without_bearer("add")
         assert missing.error == rejected, missing.raw
@@ -372,8 +386,8 @@ def test_caller_authentication_failures_keep_blocking_under_the_default(gateway:
         assert [row["gi"][0]["guardrail_status"] for row in rows] == ["guardrail_intervened"] * 3
 
 
-def test_every_mcp_entry_point_fails_open_on_outage_and_blocks_denials(gateway: Gateway, tmp_path: Path) -> None:
-    with _rig(gateway, tmp_path, fallback=None) as rig:
+def test_every_mcp_entry_point_honors_the_fail_open_opt_in_and_blocks_denials(gateway: Gateway, tmp_path: Path) -> None:
+    with _rig(gateway, tmp_path, fallback="fail_open") as rig:
         for entry in ENTRY_POINTS:
             caller: Final = rig.caller_for(entry)
             passed: Final = caller.call(f"{rig.alias}-outage", {"entry": entry}, server_id=rig.server_id)
@@ -383,10 +397,10 @@ def test_every_mcp_entry_point_fails_open_on_outage_and_blocks_denials(gateway: 
         assert rig.upstream_tool_names() == ("outage",) * len(ENTRY_POINTS)
 
 
-def test_chat_completions_never_touch_agent_365_while_a_sibling_guardrail_keeps_its_fail_closed_default(
+def test_agent_365_fail_open_opt_in_does_not_leak_to_a_sibling_guardrail_on_chat_completions(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _rig(gateway, tmp_path, fallback=None, sibling=True) as rig, rig.candidate.scenario() as scenario:
+    with _rig(gateway, tmp_path, fallback="fail_open", sibling=True) as rig, rig.candidate.scenario() as scenario:
         model: Final = scenario.model()
         chat: Final = _chat(rig, model, "sibling-" + uuid.uuid4().hex)
         assert chat.status_code == 500 and "Generic Guardrail API failed" in chat.text, chat.text
@@ -433,7 +447,7 @@ def test_agent365_authority_host_env_wins_over_azure_authority_host_when_config_
 def test_thirty_call_burst_against_a_flapping_agent_365_reaches_upstream_exactly_once_each_on_two_workers(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _rig(gateway, tmp_path, fallback=None, workers=2) as rig:
+    with _rig(gateway, tmp_path, fallback="fail_open", workers=2) as rig:
         markers: Final = tuple(("outage" if index % 2 else "add", uuid.uuid4().hex) for index in range(30))
         with ThreadPoolExecutor(max_workers=10) as pool:
             outcomes: Final = tuple(
@@ -449,10 +463,10 @@ def test_thirty_call_burst_against_a_flapping_agent_365_reaches_upstream_exactly
         assert rig.upstream_tool_names() == ()
 
 
-def test_default_survives_a_worker_kill_and_keeps_blocking_denials_on_two_workers(
+def test_opted_in_fail_open_survives_a_worker_kill_and_keeps_blocking_denials_on_two_workers(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    with _rig(gateway, tmp_path, fallback=None, workers=2) as rig:
+    with _rig(gateway, tmp_path, fallback="fail_open", workers=2) as rig:
         before: Final = rig.every_worker_serves_the_catalog(2)
         victim: Final = min(before)
         os.kill(victim, signal.SIGKILL)

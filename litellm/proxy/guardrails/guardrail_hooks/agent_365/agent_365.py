@@ -159,7 +159,7 @@ class Agent365Guardrail(CustomGuardrail):
         agent_id: str | None = None,
         authority_host: str = AGENT_365_DEFAULT_AUTHORITY_HOST,
         request_timeout: float = 10.0,
-        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_open",
+        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         async_handler: AsyncHTTPHandler | None = None,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail (event_hook, default_on)
     ) -> None:
@@ -180,7 +180,7 @@ class Agent365Guardrail(CustomGuardrail):
         self.authority_host = authority if "://" in authority else f"https://{authority}"
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
-            "fail_closed" if unreachable_fallback == "fail_closed" else "fail_open"
+            "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
