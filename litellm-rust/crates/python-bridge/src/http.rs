@@ -97,7 +97,10 @@ pub(crate) fn call_config(
     let settings = HttpSettings::from_layers([
         for_call(call_ssl_verify(kwargs)?, asynchronous),
         HttpSettingsLayer::from_environment(&ProcessEnvironment),
-        configured(&PythonSettings::Http.read(py)?)?,
+        match PythonSettings::Http.read_or_unset(py)? {
+            Some(snapshot) => configured(&snapshot)?,
+            None => HttpSettingsLayer::default(),
+        },
     ])
     .without_missing_files(&|path: &Path| path.exists());
     let resolution = Resolution::from(&settings);
@@ -148,7 +151,10 @@ fn unreported(
 }
 
 pub(crate) fn url_policy(py: Python<'_>) -> PyResult<UrlPolicy> {
-    project_url_policy(&PythonSettings::UrlPolicy.read(py)?)
+    match PythonSettings::UrlPolicy.read_or_unset(py)? {
+        Some(snapshot) => project_url_policy(&snapshot),
+        None => Ok(UrlPolicy::default()),
+    }
 }
 
 fn project_url_policy(snapshot: &Snapshot<'_>) -> PyResult<UrlPolicy> {
