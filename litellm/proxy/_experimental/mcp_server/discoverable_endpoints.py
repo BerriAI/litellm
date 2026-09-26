@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     can_store_oauth_credential,
     oauth_authorization_uses_gateway_credential,
 )
+from litellm.proxy._experimental.mcp_server.caller_sign_in import caller_sign_in_for
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
     CredentialSource,
@@ -2546,9 +2547,9 @@ async def _build_oauth_protected_resource_response(
             detail=(f"Upstream oauth-protected-resource metadata unavailable for MCP server {mcp_server.name!r}"),
         )
 
-    obo_response: Final = _obo_protected_resource_response(mcp_server, resource_url)
-    if obo_response is not None:
-        return obo_response
+    sign_in_response: Final = _caller_sign_in_protected_resource_response(mcp_server, resource_url)
+    if sign_in_response is not None:
+        return sign_in_response
 
     if mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
@@ -2569,49 +2570,28 @@ async def _build_oauth_protected_resource_response(
     }
 
 
-def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict | None:
-    """The OBO (token_exchange) PRM, or None when this server is not OBO / no issuer is configured.
+def _caller_sign_in_protected_resource_response(
+    mcp_server: MCPServer | None, resource_url: str
+) -> dict[str, object] | None:
+    """The caller sign-in PRM: the OBO issuer(s) LiteLLM trusts merged with every registered
+    ``CallerSignInProvider``'s contribution, or None when no sign-in gates this server.
 
-    The client SSOs with the IdP to obtain a subject token, which LiteLLM then exchanges, so discovery
-    points at the JWT-auth issuer(s) LiteLLM trusts (the same IdP that issues and validates the
-    subject), not the gateway. None falls the caller back to the gateway default so discovery still
-    returns metadata; it just can't name the IdP.
+    The client SSOs with the IdP to obtain a subject token, which LiteLLM then exchanges (or a
+    guardrail consumes directly), so discovery points at the issuer(s), not the gateway. None falls
+    the caller back to the gateway default so discovery still returns metadata; it just can't name
+    the IdP. The anonymous metadata fetch passes ``user_api_key_auth=None`` because it cannot see
+    which key selected a provider.
     """
-    if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
+    if mcp_server is None:
         return None
-    issuers: Final = _jwt_auth_issuers()
-    if not issuers:
+    sign_in: Final = caller_sign_in_for(mcp_server, None)
+    if sign_in is None or not sign_in.issuers:
         return None
     return {
-        "authorization_servers": issuers,
+        "authorization_servers": list(sign_in.issuers),
         "resource": resource_url,
-        "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+        "scopes_supported": list(sign_in.scopes),
     }
-
-
-def _jwt_auth_issuers() -> list:
-    """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
-
-    In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
-    against, so OBO discovery points clients at the JWT-auth issuer to obtain a subject token.
-    Sourced from ``JWT_ISSUER`` and any configured ``litellm_jwtauth.issuers``.
-    """
-    import os  # noqa: PLC0415
-
-    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
-
-    issuers: Final[list] = []
-    env_issuer: Final = os.getenv("JWT_ISSUER")
-    if env_issuer:
-        issuers.append(env_issuer)
-
-    jwtauth: Final = general_settings.get("litellm_jwtauth") if isinstance(general_settings, Mapping) else None
-    raw_issuers: Final = jwtauth.get("issuers") if isinstance(jwtauth, dict) else getattr(jwtauth, "issuers", None)
-    for cfg in raw_issuers or []:
-        issuer = cfg.get("issuer") if isinstance(cfg, dict) else getattr(cfg, "issuer", None)
-        if issuer and issuer not in issuers:
-            issuers.append(issuer)
-    return issuers
 
 
 @router.get("/.well-known/oauth-protected-resource")

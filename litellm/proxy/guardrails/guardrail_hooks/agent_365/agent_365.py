@@ -9,17 +9,14 @@ exchanged for a delegated Agent 365 token, so Defender evaluates and audits
 as the signed-in user.
 """
 
-import hashlib
-import threading
 import time
 import uuid
-from collections import OrderedDict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -34,7 +31,18 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
+    build_token_exchanger,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import TokenExchanger
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    ServerSpec,
+    TokenExchangeConfig,
+)
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
@@ -49,37 +57,13 @@ if TYPE_CHECKING:
     from litellm.types.utils import GuardrailStatus
 
 TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+ENTRA_ISSUER_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/v2.0"
 EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
 DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
-_GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
-    {"invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"}
-)
-# Entra reports a malformed or unverifiable assertion as ``invalid_client`` too; only its AADSTS50027xx
-# (InvalidJwtToken) sub-codes tell that apart from a bad gateway secret.
-_INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
-_AADSTS_CODES_ADAPTER: Final = TypeAdapter(tuple[int, ...])
+GATEWAY_SCOPE_TEMPLATE: Final = "api://{client_id}/access_as_user"
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
 _TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
-_OBO_CACHE_MAX_ENTRIES: Final = 1000
-_DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
-_TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
-
-
-def _parse_expires_in(raw: object) -> float:
-    if not isinstance(raw, (int, float, str)):
-        return _DEFAULT_TOKEN_TTL_SECONDS
-    try:
-        return float(raw)
-    except ValueError:
-        return _DEFAULT_TOKEN_TTL_SECONDS
-
-
-def _parse_aadsts_codes(raw: object) -> tuple[int, ...]:
-    try:
-        return _AADSTS_CODES_ADAPTER.validate_python(raw)
-    except ValidationError:
-        return ()
 
 
 def _parse_tool_input_schema(raw: object) -> Mapping[str, object] | None:
@@ -128,27 +112,6 @@ class _BlockedDetail(TypedDict):
     correlation_id: ReadOnly[str | None]
 
 
-class Agent365TokenExchangeError(Exception):
-    def __init__(self, status_code: int, error_code: str, description: str, aadsts_codes: tuple[int, ...] = ()) -> None:
-        super().__init__(f"{error_code}: {description}")
-        self.status_code = status_code
-        self.error_code = error_code
-        self.description = description
-        self.aadsts_codes = aadsts_codes
-
-    @property
-    def gateway_owned(self) -> bool:
-        """Whether the gateway's own client credentials, scope or resource were refused, as opposed to the
-        caller's assertion. The caller cannot fix a gateway-owned rejection by signing in again."""
-        if self.error_code not in _GATEWAY_OWNED_TOKEN_ERRORS:
-            return False
-        return not any(str(code).startswith(_INVALID_ASSERTION_AADSTS_PREFIX) for code in self.aadsts_codes)
-
-
-class Agent365MalformedResponseError(Exception):
-    pass
-
-
 class Agent365ThrottledError(Exception):
     def __init__(self, status_code: int) -> None:
         super().__init__(f"HTTP {status_code}")
@@ -175,6 +138,7 @@ class Agent365Guardrail(CustomGuardrail):
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         async_handler: AsyncHTTPHandler | None = None,
+        token_exchanger: TokenExchanger | None = None,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail (event_hook, default_on)
     ) -> None:
         super().__init__(
@@ -197,8 +161,19 @@ class Agent365Guardrail(CustomGuardrail):
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self._obo_token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()  # mutable-ok: lock-guarded LRU
-        self._obo_cache_lock = threading.Lock()
+        self._exchange_config: Final = TokenExchangeConfig(
+            profile="entra_obo",
+            token_exchange_endpoint=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=tenant_id),
+            client_id=client_id,
+            client_secret=SecretStr(client_secret),
+            scopes=(f"{self.resource_app_id}/{AGENT_365_SCOPE_NAME}",),
+        )
+        self._exchange_server: Final = ServerSpec(
+            server_id=f"agent-365:{tenant_id}",
+            resource=self.api_base,
+            config=self._exchange_config,
+        )
+        self._token_exchanger: Final = token_exchanger if token_exchanger is not None else build_token_exchanger()
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
 
     @staticmethod
@@ -238,29 +213,8 @@ class Agent365Guardrail(CustomGuardrail):
             )
 
         try:
-            obo_token: Final = await self._get_obo_token(assertion)
-        except Agent365TokenExchangeError as exc:
-            if exc.gateway_owned:
-                return self._handle_unavailable(
-                    data=data,
-                    tool_name=tool_name,
-                    reason=(
-                        f"Entra rejected the gateway's own Agent 365 credentials ({exc.error_code}); "
-                        "check the guardrail's client_id, client_secret and resource_app_id"
-                    ),
-                )
-            self._handle_caller_fault(
-                data=data,
-                tool_name=tool_name,
-                status_code=401,
-                reason=f"the Entra On-Behalf-Of token exchange was rejected ({exc.error_code})",
-            )
-        except Agent365ThrottledError as exc:
-            self._handle_throttled(
-                data=data,
-                tool_name=tool_name,
-                reason=f"the Entra token endpoint returned HTTP {exc.status_code}",
-                latency_ms=None,
+            exchange_result: Final = await self._token_exchanger.exchange(
+                assertion, self._exchange_server, self._exchange_config, tenant_id=self.tenant_id
             )
         except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:
             return self._handle_unavailable(
@@ -268,12 +222,33 @@ class Agent365Guardrail(CustomGuardrail):
                 tool_name=tool_name,
                 reason=f"the Entra token endpoint could not be reached ({type(exc).__name__})",
             )
-        except Agent365MalformedResponseError as exc:
-            return self._handle_unavailable(
-                data=data,
-                tool_name=tool_name,
-                reason=str(exc),
-            )
+        match exchange_result:
+            case Ok(token):
+                obo_token: Final = token.access_token
+            case Error(error):
+                match error.tag:
+                    case "unauthorized":
+                        self._handle_caller_fault(
+                            data=data,
+                            tool_name=tool_name,
+                            status_code=401,
+                            reason=f"the Entra On-Behalf-Of token exchange was rejected ({error.unauthorized.detail})",
+                        )
+                    case "misconfigured":
+                        return self._handle_unavailable(
+                            data=data,
+                            tool_name=tool_name,
+                            reason=(
+                                f"Entra rejected the gateway's own Agent 365 credentials ({error.misconfigured}); "
+                                "check the guardrail's client_id, client_secret and resource_app_id"
+                            ),
+                        )
+                    case _:
+                        return self._handle_unavailable(
+                            data=data,
+                            tool_name=tool_name,
+                            reason=f"the Entra token exchange failed ({error.summary})",
+                        )
 
         start: Final = time.perf_counter()
         try:
@@ -289,14 +264,14 @@ class Agent365Guardrail(CustomGuardrail):
                 reason=f"the Agent 365 endpoint could not be reached ({type(exc).__name__})",
             )
         latency_ms: Final = (time.perf_counter() - start) * 1000.0
-        fallback: Final = self._handle_evaluate_error(
+        fallback: Final = await self._handle_evaluate_error(
             data=data, tool_name=tool_name, assertion=assertion, response=response, latency_ms=latency_ms
         )
         if fallback is not None:
             return fallback
         return self._enforce_verdict(data=data, tool_name=tool_name, response=response, latency_ms=latency_ms)
 
-    def _handle_evaluate_error(
+    async def _handle_evaluate_error(
         self,
         data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
@@ -313,7 +288,9 @@ class Agent365Guardrail(CustomGuardrail):
             )
         if 400 <= response.status_code < 500:
             if response.status_code == 401:
-                self._evict_obo_token(assertion)
+                await self._token_exchanger.invalidate(
+                    assertion, self._exchange_server, self._exchange_config, tenant_id=self.tenant_id
+                )
             self._record_verdict(
                 data=data,
                 verdict="Rejected",
@@ -460,62 +437,29 @@ class Agent365Guardrail(CustomGuardrail):
             return call_id
         return str(uuid.uuid4())
 
-    async def _get_obo_token(self, assertion: str) -> str:
-        cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()
-        now: Final = time.time()
-        with self._obo_cache_lock:
-            cached: Final = self._obo_token_cache.get(cache_key)
-            if cached and cached[1] > now + _TOKEN_EXPIRY_SLACK_SECONDS:
-                self._obo_token_cache.move_to_end(cache_key)
-                return cached[0]
-
-        response: Final = await self._post_allowing_error_status(
-            url=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id),
-            data={  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
-                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "assertion": assertion,
-                "scope": f"{self.resource_app_id}/{AGENT_365_SCOPE_NAME}",
-                "requested_token_use": "on_behalf_of",
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: httpx header dict
+    def caller_sign_in(self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> CallerSignIn | None:
+        """The Entra sign-in this guardrail requires of callers: only a ``default_on`` guardrail the caller's
+        key or team has not opted out of, because the anonymous metadata fetch that follows a challenge cannot
+        see which key selected a guardrail and would advertise the wrong issuer. Only servers that leave the
+        caller's top-level ``Authorization`` with the gateway qualify: a forwarded API-key header travels
+        upstream in its own slot and does not displace the Entra assertion."""
+        if not (self.default_on and server.keeps_caller_authorization):
+            return None
+        if user_api_key_auth is not None:
+            probe: Final[dict[str, Mapping[str, object]]] = {  # pyright: ignore[reportUnknownVariableType]  # UserAPIKeyAuth metadata dicts are untyped
+                "metadata": {
+                    "user_api_key_metadata": user_api_key_auth.metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a raw dict
+                    "user_api_key_team_metadata": user_api_key_auth.team_metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.team_metadata is a raw dict
+                }
+            }
+            if self.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # should_run_guardrail takes an untyped data dict
+                data=probe, event_type=GuardrailEventHooks.pre_mcp_call
+            ) is not True:
+                return None
+        return CallerSignIn(
+            issuers=(ENTRA_ISSUER_TEMPLATE.format(tenant_id=self.tenant_id),),
+            scopes=(GATEWAY_SCOPE_TEMPLATE.format(client_id=self.client_id),),
         )
-        if response.status_code in (408, 429):
-            raise Agent365ThrottledError(status_code=response.status_code)
-        if response.status_code >= 500:
-            raise httpx.HTTPStatusError(
-                f"Entra token endpoint returned {response.status_code}",
-                request=response.request,
-                response=response,
-            )
-        try:
-            parsed_body: Final = response.json()
-        except ValueError as exc:
-            raise Agent365MalformedResponseError("the Entra token endpoint returned a non-JSON body") from exc
-        if not isinstance(parsed_body, dict):
-            raise Agent365MalformedResponseError("the Entra token endpoint returned a non-object JSON body")
-        body: Final = parsed_body
-        if response.status_code >= 400:
-            raise Agent365TokenExchangeError(
-                status_code=response.status_code,
-                error_code=str(body.get("error", "invalid_grant")),
-                description=str(body.get("error_description", ""))[:512],
-                aadsts_codes=_parse_aadsts_codes(body.get("error_codes")),
-            )
-        if "access_token" not in body:
-            raise Agent365MalformedResponseError("the Entra token endpoint returned no access_token")
-        raw_access_token: Final = body.get("access_token")
-        if not isinstance(raw_access_token, str) or not raw_access_token:
-            raise Agent365MalformedResponseError("the Entra token endpoint returned a non-string access_token")
-        access_token: Final = raw_access_token
-        expires_at: Final = time.time() + _parse_expires_in(body.get("expires_in", 3599))
-        with self._obo_cache_lock:
-            self._obo_token_cache[cache_key] = (access_token, expires_at)
-            self._obo_token_cache.move_to_end(cache_key)
-            while len(self._obo_token_cache) > _OBO_CACHE_MAX_ENTRIES:
-                self._obo_token_cache.popitem(last=False)
-        return access_token
 
     async def _post_allowing_error_status(
         self,
@@ -581,11 +525,6 @@ class Agent365Guardrail(CustomGuardrail):
             "tool": tool_name,
         }
         raise HTTPException(status_code=503, detail=throttled_detail)
-
-    def _evict_obo_token(self, assertion: str) -> None:
-        cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()
-        with self._obo_cache_lock:
-            self._obo_token_cache.pop(cache_key, None)
 
     def _handle_unavailable(
         self,

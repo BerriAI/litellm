@@ -163,6 +163,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     openapi_tool_name,
     parse_admin_env_vars,
+    server_answers_to_name,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -4145,6 +4146,12 @@ class MCPServerManager:
                 if subject_token is not None:
                     return
             case _:
+                from litellm.proxy._experimental.mcp_server.caller_sign_in import (  # noqa: PLC0415  # lazy: provider discovery pulls the guardrail registry
+                    caller_sign_in_for,
+                )
+
+                if subject_token is None and caller_sign_in_for(server, user_api_key_auth) is not None:
+                    raise_token_exchange_challenge(server, root_path=get_request_root_path())
                 return
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         spec: Final = _to_server_spec_fail_closed(resolved_server)
@@ -5805,13 +5812,8 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        # Extract incoming Bearer token from raw request headers so
-        # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
-        normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
-        incoming_bearer_token: str | None = None
-        auth_hdr: Final = normalized_raw.get("authorization", "")
-        if auth_hdr.lower().startswith("bearer "):
-            incoming_bearer_token = auth_hdr[len("bearer ") :]
+        # Admission credentials are never handed to guardrails as the caller's assertion.
+        incoming_bearer_token: Final = self._extract_subject_token(None, raw_headers, user_api_key_auth)
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,
@@ -7029,6 +7031,18 @@ class MCPServerManager:
                     return None
                 return server
         return None
+
+    def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
+        """The server a scoped ``/mcp/{name}`` connect resolves to, matched the way the router matches
+        it: case-insensitive over server_id, name and every published prefix form."""
+        return next(
+            (
+                server
+                for server in self.get_filtered_registry(client_ip).values()
+                if server_answers_to_name(server, name)
+            ),
+            None,
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """
