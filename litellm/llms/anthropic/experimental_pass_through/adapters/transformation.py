@@ -199,7 +199,7 @@ from litellm.types.llms.openai import (
     ToolMessageContentPart,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
-from litellm.utils import supports_mid_conversation_system
+from litellm.utils import is_explicitly_disabled_factory, supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicStreamWrapper
 
@@ -1164,6 +1164,10 @@ class LiteLLMAnthropicMessagesAdapter:
             cast(AnthropicThinkingParam, thinking)
         )
         if not reasoning_effort:
+            return
+        if reasoning_effort == "none" and is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=custom_llm_provider, key="supports_none_reasoning_effort"
+        ):
             return
 
         new_kwargs["reasoning_effort"] = (

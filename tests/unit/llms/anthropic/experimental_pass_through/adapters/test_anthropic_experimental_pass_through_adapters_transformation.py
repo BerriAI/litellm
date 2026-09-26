@@ -2393,6 +2393,30 @@ def test_thinking_disabled_stays_plain_string_when_auto_summary_enabled():
 
 
 @pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_effort"),
+    [
+        pytest.param("us.openai.gpt-6-astra", "bedrock", None, id="bedrock-gpt-6-astra"),
+        pytest.param("global.openai.gpt-6-astra", "bedrock", None, id="bedrock-gpt-6-astra-global"),
+        pytest.param("openai.gpt-6-astra", "bedrock_mantle", None, id="mantle-gpt-6-astra"),
+        pytest.param("us.openai.gpt-6-sol", "bedrock", "none", id="bedrock-gpt-6-sol"),
+        pytest.param("converse/global.openai.gpt-6-luna", "bedrock", "none", id="bedrock-converse-gpt-6-luna"),
+        pytest.param("openai.gpt-6-sol", "bedrock_mantle", "none", id="mantle-gpt-6-sol"),
+        pytest.param("converse/us.openai.gpt-5.6-sol", "bedrock", "none", id="bedrock-gpt-5.6-sol-without-flag"),
+    ],
+)
+def test_thinking_disabled_sends_effort_none_only_to_targets_that_take_it(
+    model: str, custom_llm_provider: str, expected_effort: str | None, local_model_cost_map: None
+) -> None:
+    new_kwargs: Final[dict[str, object]] = {"model": model}
+    LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+        cast(Any, {"thinking": {"type": "disabled"}}), cast(Any, new_kwargs), custom_llm_provider=custom_llm_provider
+    )
+
+    assert "thinking" not in new_kwargs
+    assert new_kwargs.get("reasoning_effort") == expected_effort
+
+
+@pytest.mark.parametrize(
     "model",
     [
         # SDK-style model with the provider prefix intact
