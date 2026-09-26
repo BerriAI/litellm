@@ -47,6 +47,8 @@ def _model_double(tool: str) -> Callable[[Request], Reply]:
     arguments: Final = json.dumps(ADD)
 
     def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target.endswith("/models"):
+            return _json({"object": "list", "data": []})
         body: Final = json.loads(request.body)
         assert isinstance(body, dict), request.body
         done: Final = _has_tool_result(body)
@@ -192,7 +194,9 @@ class Rig:
         )
 
     def upstream_tools(self) -> tuple[tuple[str, ...], ...]:
-        return tuple(_tool_names(json.loads(request.body)) for request in self.wire.drain())
+        return tuple(
+            _tool_names(json.loads(request.body)) for request in self.wire.drain() if request.method == "POST"
+        )
 
     def final_text(self, body: Mapping[str, object]) -> str:
         if self.surface == "chat":

@@ -265,7 +265,7 @@ def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
     return not isinstance(status_code, int) or status_code >= 500 or status_code == 429
 
 
-_PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
+PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -885,7 +885,7 @@ class BaseResponsesAPIStreamingIterator:
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
-        if event.type not in _PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
+        if event.type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
             self._output_started = True
 
     def _fallback_error(self, original: Exception) -> MidStreamFallbackError:

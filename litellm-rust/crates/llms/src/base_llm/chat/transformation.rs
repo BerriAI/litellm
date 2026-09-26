@@ -4,30 +4,17 @@ use litellm_types::{
 };
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
-    #[error("expected {expected}, got {actual}")]
-    InvalidType {
-        expected: &'static str,
-        actual: &'static str,
-    },
-    #[error("missing required field: {0}")]
-    MissingField(&'static str),
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
-    #[error("invalid response: {0}")]
-    InvalidResponse(String),
-    #[error("unsupported: {0}")]
-    Unsupported(&'static str),
-    #[error(transparent)]
-    Auth(#[from] litellm_auth::Error),
-}
+use crate::{
+    Error,
+    base_llm::chat::streaming::{ChatStream, StreamShape},
+};
 
 /// The provider-shaped request body a config produces. Named rather than a bare
 /// `Value` so the transform contract stays a typed one, mirroring
 /// [`crate::base_llm::audio_transcription::transformation::AudioTranscriptionRequestData`].
 pub struct ProviderChatRequestData {
     pub body: Value,
+    pub stream_shape: StreamShape,
 }
 
 /// The raw provider response body handed back to a config for normalization.
@@ -41,7 +28,7 @@ pub const STREAM_PARAM: &str = "stream";
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
-pub use litellm_auth::RequestAuth;
+pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 
 /// Why a request cannot be served by the Rust path.
 ///
@@ -78,26 +65,25 @@ pub trait BaseConfig: Sync {
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error>;
 
-    fn auth(
+    /// `None` means this config has no streaming path yet, so the host keeps the request.
+    fn model_response_iterator(&self, _shape: StreamShape) -> Option<ChatStream> {
+        None
+    }
+
+    /// Shapes the forwarded headers and names the credential, the way Python's
+    /// `validate_environment` does, without applying it: `resolve_auth` does that once
+    /// for every config.
+    fn validate_environment(
         &self,
+        headers: Headers,
         api_key: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<RequestAuth, Error>;
+    ) -> Result<ValidatedEnvironment, Error>;
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("content-type", "application/json")]
-    }
-
-    /// Whether an auth header the caller already supplied is the credential this
-    /// request should authenticate with, so the resolved one is not applied.
-    ///
-    /// Defaults to false: the deployment's credential outranks anything
-    /// forwarded, which is what every provider wants for its own auth header.
-    /// A provider overrides this only for a scheme it hands off to entirely.
-    fn defers_to_forwarded_auth(&self, _headers: &[(String, String)]) -> bool {
-        false
     }
 
     /// Parameters consumed as call configuration (credentials, endpoints)

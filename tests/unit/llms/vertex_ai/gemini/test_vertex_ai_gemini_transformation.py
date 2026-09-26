@@ -1,7 +1,12 @@
 import base64
+from pathlib import Path
+from typing import Final
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -2727,3 +2732,40 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+WHITE_PNG: Final = (Path(__file__).parents[4] / "white_100x100.png").read_bytes()
+
+
+@respx.mock
+def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    image_url: Final = "https://tool-result-images.test/gemini-tool-response.png"
+    respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
+    tool_message: Final = {
+        "role": "tool",
+        "tool_call_id": "call_test456",
+        "content": [
+            {"type": "text", "text": '{"url": "https://example.com"}'},
+            {"type": "input_image", "image_url": image_url},
+        ],
+    }
+    last_message_with_tool_calls: Final = {
+        "tool_calls": [
+            {
+                "id": "call_test456",
+                "function": {"name": "type_text_at", "arguments": '{"x": 300, "y": 400, "text": "hello"}'},
+            }
+        ]
+    }
+
+    result: Final = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "inline_data" not in result[0]
+    function_response: Final = result[0]["function_response"]
+    assert function_response["name"] == "type_text_at"
+    assert len(function_response["parts"]) == 1
+    inline_data: Final[BlobType] = function_response["parts"][0]["inline_data"]
+    assert inline_data == {"data": base64.b64encode(WHITE_PNG).decode(), "mime_type": "image/png"}

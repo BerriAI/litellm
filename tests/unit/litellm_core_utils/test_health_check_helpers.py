@@ -1,5 +1,6 @@
 """Test health check helper functions"""
 
+import socket
 import struct
 import zlib
 from types import MappingProxyType
@@ -214,24 +215,26 @@ async def test_ahealth_check_failure_masks_raw_request_headers():
     This tests the fix for the security vulnerability where Authorization headers
     were being exposed in health check error responses.
     """
-    # Use a model configuration that will fail (invalid endpoint)
     test_api_key = "dapi-test-key-1234567890abcdef"
     test_headers = {
         "Authorization": f"Bearer {test_api_key}",
         "Content-Type": "application/json",
     }
 
-    response = await ahealth_check(
-        model_params={
-            "model": "databricks/dbrx-instruct",
-            "api_base": "https://invalid-endpoint-that-will-fail.com/",
-            "api_key": test_api_key,
-            "headers": test_headers,
-        },
-        mode="chat",
-    )
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        api_base = f"http://127.0.0.1:{reserved.getsockname()[1]}/"
 
-    # Should have error and raw_request_typed_dict
+        response = await ahealth_check(
+            model_params={
+                "model": "databricks/dbrx-instruct",
+                "api_base": api_base,
+                "api_key": test_api_key,
+                "headers": test_headers,
+            },
+            mode="chat",
+        )
+
     assert "error" in response
     assert "raw_request_typed_dict" in response
 
@@ -243,22 +246,15 @@ async def test_ahealth_check_failure_masks_raw_request_headers():
     headers = raw_request_dict["raw_request_headers"]
     assert headers is not None
 
-    # Security check: Authorization header should be masked, not show full key
-    if "Authorization" in headers:
-        auth_header = headers["Authorization"]
-        # Should be masked (e.g., "Be****90" or similar)
-        assert auth_header != f"Bearer {test_api_key}", "Authorization header must be masked"
-        assert auth_header != test_api_key, "API key must not appear in Authorization header"
-        # Masked headers typically have asterisks or are truncated
-        assert "*" in auth_header or len(auth_header) < len(f"Bearer {test_api_key}"), (
-            f"Authorization header should be masked but got: {auth_header}"
-        )
+    assert "Authorization" in headers
+    auth_header = headers["Authorization"]
+    assert auth_header != f"Bearer {test_api_key}", "Authorization header must be masked"
+    assert auth_header != test_api_key, "API key must not appear in Authorization header"
+    assert "*" in auth_header or len(auth_header) < len(f"Bearer {test_api_key}"), (
+        f"Authorization header should be masked but got: {auth_header}"
+    )
 
-    # Content-Type should remain unmasked (not sensitive)
-    if "Content-Type" in headers:
-        assert headers["Content-Type"] == "application/json"
-
-    print(f"Masked Authorization header: {headers.get('Authorization', 'NOT FOUND')}")
+    assert headers["Content-Type"] == "application/json"
 
 
 @pytest.mark.asyncio
