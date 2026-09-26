@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
@@ -15,6 +15,7 @@ from litellm.types.proxy.agent_identity import (
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageResponse
+    from prisma.types import LiteLLM_AgentsTableWhereInput
 
 
 # AgentProvider
@@ -309,6 +310,27 @@ class AgentKeySummary(BaseModel):
     token: str
     key_alias: str | None = None
     key_name: str | None = None
+
+
+def agent_budget_counter_key(agent_id: str, reset_at: datetime | None) -> str:
+    if reset_at is None:
+        return f"spend:agent:{agent_id}"
+    aware: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
+    window: Final = aware.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return f"spend:agent_window:{window}:{agent_id}"
+
+
+def agent_spend_filter(counter_key: str) -> "LiteLLM_AgentsTableWhereInput":
+    if counter_key.startswith("spend:agent_window:"):
+        _, _, raw_window, agent_id = counter_key.split(":", 3)
+        window: Final = datetime.strptime(raw_window, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+        windowed: Final[LiteLLM_AgentsTableWhereInput] = {"agent_id": agent_id, "spend_window": window}
+        return windowed
+    cumulative: Final[LiteLLM_AgentsTableWhereInput] = {
+        "agent_id": counter_key.removeprefix("spend:agent:"),
+        "spend_window": None,
+    }
+    return cumulative
 
 
 class AgentResponse(BaseModel):
