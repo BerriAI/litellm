@@ -1591,4 +1591,3 @@ def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
     with pytest.raises(HTTPException, match=message) as failure:
         agent_endpoints._validate_managed_identity_request(request)
     assert failure.value.status_code == 400
-
