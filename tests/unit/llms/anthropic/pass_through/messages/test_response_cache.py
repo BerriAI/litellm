@@ -1,9 +1,10 @@
 import asyncio
-import datetime
-from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, AsyncIterator, Dict, List
 
 import pytest
+
+
+import datetime
 
 import litellm
 from litellm._internal_context import in_post_response_phase
@@ -15,7 +16,7 @@ from litellm.llms.anthropic.pass_through.messages.response_cache import (
     AnthropicMessagesStreamCacheWriter,
 )
 
-STREAM_EVENTS: list[bytes] = [
+STREAM_EVENTS: List[bytes] = [
     b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_stream_1", "type": "message", '
     b'"role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": null, '
     b'"usage": {"input_tokens": 10, "output_tokens": 0}}}\n\n',
@@ -30,7 +31,7 @@ STREAM_EVENTS: list[bytes] = [
 ]
 
 
-def _anthropic_response(message_id: str, text: str) -> dict[str, Any]:
+def _anthropic_response(message_id: str, text: str) -> Dict[str, Any]:
     return {
         "id": message_id,
         "type": "message",
@@ -45,28 +46,26 @@ def _anthropic_response(message_id: str, text: str) -> dict[str, Any]:
 class _CountingHandler:
     """Stands in for the provider dispatch so cache hits are observable as skipped calls."""
 
-    def __init__(self, results: list[Any]) -> None:
+    def __init__(self, results: List[Any]) -> None:
         self.results = results
-        self.calls: list[dict[str, Any]] = []
+        self.calls: List[Dict[str, Any]] = []
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         return self.results[min(len(self.calls) - 1, len(self.results) - 1)]
 
 
-async def _byte_stream(chunks: list[bytes]) -> AsyncIterator[bytes]:
+async def _byte_stream(chunks: List[bytes]) -> AsyncIterator[bytes]:
     for chunk in chunks:
         yield chunk
 
 
-async def _collect(stream: AsyncIterator[bytes]) -> list[bytes]:
+async def _collect(stream: AsyncIterator[bytes]) -> List[bytes]:
     return [chunk async for chunk in stream]
 
 
 @pytest.fixture(autouse=True)
 async def _drain_logging_worker():
-    # anthropic_messages enqueues success logging on the global LoggingWorker; left
-    # pending, those coroutines revive on the next test's loop and pollute call counts
     yield
     await GLOBAL_LOGGING_WORKER.flush()
 
@@ -80,7 +79,7 @@ def local_cache():
 
 
 @pytest.fixture
-def request_kwargs() -> dict[str, Any]:
+def request_kwargs() -> Dict[str, Any]:
     return {
         "model": "anthropic/claude-sonnet-4-5",
         "custom_llm_provider": "anthropic",
@@ -184,8 +183,8 @@ async def test_multibyte_utf8_split_across_chunks_streams_and_caches(local_cache
     multibyte_delta = (
         'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
         '"delta": {"type": "text_delta", "text": "ALPHA €"}}\n\n'
-    ).encode()
-    split_at = multibyte_delta.index("€".encode()) + 1
+    ).encode("utf-8")
+    split_at = multibyte_delta.index("€".encode("utf-8")) + 1
     chunks = STREAM_EVENTS[:2] + [multibyte_delta[:split_at], multibyte_delta[split_at:]] + STREAM_EVENTS[3:]
     fake_handler = _CountingHandler([_byte_stream(chunks), _byte_stream([b"event: never_used\n\n"])])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
