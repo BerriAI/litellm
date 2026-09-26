@@ -73,7 +73,7 @@ pub(crate) enum DeploymentHooks {
     PostCallFailure,
 }
 
-/// What the Messages handler (`litellm/llms/anthropic/experimental_pass_through/messages/
+/// What the Messages handler (`litellm/llms/anthropic/messages/
 /// handler.py`) runs around the provider call: the `async_pre_request_hook` fan-out.
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
 pub(crate) enum MessagesHandler {

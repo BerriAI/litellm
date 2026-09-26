@@ -145,6 +145,10 @@ impl ProtocolHost for MessagesHost {
     }
 }
 
+fn no_preflight(_py: Python<'_>, _arguments: &Bound<'_, PyDict>) -> PyResult<()> {
+    Ok(())
+}
+
 #[pyclass]
 struct Invoke {
     kwargs: Py<PyDict>,
@@ -180,7 +184,7 @@ impl Invoke {
             MessagesHost {
                 error: self.error.clone_ref(py),
             },
-            |_, _| Ok(()),
+            no_preflight,
             self.asynchronous,
         )
     }

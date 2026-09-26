@@ -19,7 +19,6 @@ litellm-auth.workspace = true
 litellm-core.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-secrets.workspace = true
-litellm-http.workspace = true
 proptest.workspace = true
 rstest.workspace = true
 serde_json.workspace = true

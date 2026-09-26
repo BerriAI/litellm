@@ -8,6 +8,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._internal_context import is_internal_call
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge import callbacks_legacy_python as legacy
