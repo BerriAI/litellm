@@ -115,6 +115,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
         : undefined,
+    heuristic_first_max_context_tokens:
+      typeof parsedConfig.heuristic_first_max_context_tokens === "number"
+        ? parsedConfig.heuristic_first_max_context_tokens
+        : undefined,
     hybrid_boundary_margin:
       typeof parsedConfig.hybrid_boundary_margin === "number" ? parsedConfig.hybrid_boundary_margin : undefined,
     classification_mode:

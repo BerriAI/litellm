@@ -1091,6 +1091,18 @@ class ComplexityRouterConfig(BaseModel):
             "may not name the highest one, since that would make the LLM classifier unreachable."
         ),
     )
+    heuristic_first_max_context_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "The estimated size of the whole conversation, counting all message text at approximately four "
+            "characters per token, above which the local scorer may not decide cheaply and the request goes to "
+            "the LLM classifier even when the newest turn scores at or below heuristic_first_max_tier. The "
+            "newest turn in a long agentic session is usually a short nudge such as 'run the tests' or 'why did "
+            "that fail?' whose token-count signal says nothing about the task living in the conversation. None "
+            "keeps the scorer's tier at any conversation size."
+        ),
+    )
     hybrid_boundary_margin: float | None = Field(
         default=None,
         ge=0,
@@ -1778,6 +1790,15 @@ class ComplexityRouterConfig(BaseModel):
                 f"heuristic_first_max_tier {threshold} has no model configured in tiers; a threshold pointing at "
                 "an unconfigured tier would route short-circuited requests to the default fallback instead of the "
                 "pool the operator intended"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_heuristic_first_max_context_tokens(self) -> "ComplexityRouterConfig":
+        if self.classifier_type != "heuristic_first" and self.heuristic_first_max_context_tokens is not None:
+            raise ValueError(
+                f"heuristic_first_max_context_tokens is set but classifier_type is {self.classifier_type!r}; "
+                "set classifier_type 'heuristic_first' or remove heuristic_first_max_context_tokens"
             )
         return self
 

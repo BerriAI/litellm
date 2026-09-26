@@ -151,6 +151,7 @@ export interface StoredComplexityRouterConfig {
   classification_prompt?: unknown;
   classification_examples?: unknown;
   heuristic_first_max_tier?: unknown;
+  heuristic_first_max_context_tokens?: unknown;
   hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
@@ -218,6 +219,7 @@ export interface BuildComplexityRouterConfigParams {
   classificationPrompt: string | undefined;
   classificationExamples: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  heuristicFirstMaxContextTokens?: number;
   hybridBoundaryMargin?: number;
   classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
@@ -297,6 +299,7 @@ export interface ComplexityRouterConfigPayload {
   classification_prompt?: string;
   classification_examples?: string;
   heuristic_first_max_tier?: string;
+  heuristic_first_max_context_tokens?: number;
   hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
   session_affinity: boolean;
@@ -595,6 +598,7 @@ const classifierWireFields = (
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    heuristicFirstMaxContextTokens,
     hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
@@ -605,6 +609,7 @@ const classifierWireFields = (
     | "classifierLlmConfig"
     | "classifierFallback"
     | "heuristicFirstMaxTier"
+    | "heuristicFirstMaxContextTokens"
     | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
@@ -623,6 +628,10 @@ const classifierWireFields = (
     ...(supportsFallback && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...(effectiveType === "heuristic_first" &&
       heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+    ...(effectiveType === "heuristic_first" &&
+      heuristicFirstMaxContextTokens !== undefined && {
+        heuristic_first_max_context_tokens: heuristicFirstMaxContextTokens,
+      }),
     ...(effectiveType === "hybrid" &&
       hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
     ...(usesClassifierContext(effectiveType) &&
@@ -665,6 +674,7 @@ export const buildComplexityRouterConfig = ({
   classificationPrompt,
   classificationExamples,
   heuristicFirstMaxTier,
+  heuristicFirstMaxContextTokens,
   hybridBoundaryMargin,
   classificationMode,
   sessionAffinity,
@@ -728,6 +738,7 @@ export const buildComplexityRouterConfig = ({
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    heuristicFirstMaxContextTokens,
     hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,

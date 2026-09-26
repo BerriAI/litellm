@@ -10,6 +10,7 @@ const standard: ComplexityRouterConfigValue = {
   classifier_context_budget_chars: 16000,
   classifier_context_include_assistant_turns: true,
   classifier_fallback: "default_model",
+  heuristic_first_max_context_tokens: 8000,
   tiers: { SIMPLE: ["efficient"], MEDIUM: ["middle"], COMPLEX: [], REASONING: ["capable"] },
 };
 
@@ -62,6 +63,7 @@ describe("transitionClassifierType", () => {
       classifier_context_budget_chars: 16000,
       classifier_context_include_assistant_turns: true,
       classifier_fallback: "default_model",
+      ...(target === "heuristic_first" && { heuristic_first_max_context_tokens: 8000 }),
     };
     expect(result).toMatchObject(expectedSettings);
   });
@@ -70,6 +72,7 @@ describe("transitionClassifierType", () => {
     const result = transitionClassifierType(standard, target);
     expect(result.classifier_llm_config).toEqual({ model: "judge", timeout_ms: 20000 });
     expect(result.classifier_fallback).toBeUndefined();
+    expect(result.heuristic_first_max_context_tokens).toBeUndefined();
     if (target === "capability") {
       expect(result.capability_classifier_config?.base_threshold).toBeNaN();
     } else {

@@ -1102,6 +1102,7 @@ describe("heuristic_first", () => {
     ...baseParams,
     classifierType: "heuristic_first",
     heuristicFirstMaxTier: "SIMPLE",
+    heuristicFirstMaxContextTokens: 8000,
     classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     classifierContextWindowSize: 5,
     classifierContextBudgetChars: 4000,
@@ -1112,6 +1113,15 @@ describe("heuristic_first", () => {
     const config = buildComplexityRouterConfig(heuristicFirstParams);
     expect(config.classifier_type).toBe("heuristic_first");
     expect(config.heuristic_first_max_tier).toBe("SIMPLE");
+    expect(config.heuristic_first_max_context_tokens).toBe(8000);
+  });
+
+  it("omits heuristic_first_max_context_tokens when empty", () => {
+    const config = buildComplexityRouterConfig({
+      ...heuristicFirstParams,
+      heuristicFirstMaxContextTokens: undefined,
+    });
+    expect(config.heuristic_first_max_context_tokens).toBeUndefined();
   });
 
   it("keeps every classifier key the operator set, since heuristic_first still calls the classifier", () => {

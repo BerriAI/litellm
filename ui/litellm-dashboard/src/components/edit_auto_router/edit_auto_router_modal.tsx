@@ -108,6 +108,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classification_prompt",
   "classification_examples",
   "heuristic_first_max_tier",
+  "heuristic_first_max_context_tokens",
   "hybrid_boundary_margin",
   "heuristic_v2_success_threshold",
   "classification_mode",

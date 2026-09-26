@@ -50,6 +50,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     KeywordOverride,
     _built_in_prompt,
     _ClassifierCircuitBreaker,
+    _estimated_conversation_tokens,
     _is_classifier_timeout,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
@@ -13662,6 +13663,35 @@ class TestHeuristicFirstConfig:
         assert config.uses_llm_classifier is True
         assert ComplexityRouterConfig(tiers=dict(HEURISTIC_FIRST_TIERS)).uses_llm_classifier is False
 
+    def test_context_limit_is_accepted_on_heuristic_first(self):
+        config = ComplexityRouterConfig(
+            tiers=dict(HEURISTIC_FIRST_TIERS),
+            classifier_type="heuristic_first",
+            heuristic_first_max_tier="SIMPLE",
+            heuristic_first_max_context_tokens=8000,
+            classifier_llm_config={"model": "haiku-classifier"},
+        )
+        assert config.heuristic_first_max_context_tokens == 8000
+
+    def test_context_limit_is_rejected_on_llm(self):
+        with pytest.raises(ValidationError, match="heuristic_first_max_context_tokens is set but classifier_type"):
+            ComplexityRouterConfig(
+                tiers=dict(HEURISTIC_FIRST_TIERS),
+                classifier_type="llm",
+                heuristic_first_max_context_tokens=8000,
+                classifier_llm_config={"model": "haiku-classifier"},
+            )
+
+    def test_context_limit_rejects_zero(self):
+        with pytest.raises(ValidationError, match="greater than 0"):
+            ComplexityRouterConfig(
+                tiers=dict(HEURISTIC_FIRST_TIERS),
+                classifier_type="heuristic_first",
+                heuristic_first_max_tier="SIMPLE",
+                heuristic_first_max_context_tokens=0,
+                classifier_llm_config={"model": "haiku-classifier"},
+            )
+
 
 class TestHeuristicFirst:
     """Behavior of the heuristic-first chain: when the classifier call is skipped, and when it is not."""
@@ -13678,6 +13708,139 @@ class TestHeuristicFirst:
         assert outcome.score is not None
         assert outcome.signals
         assert outcome.classifier_cost is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "history_content",
+        [
+            "x" * 80,
+            [{"type": "text", "text": "x" * 80}],
+            [{"type": "tool_result", "content": "x" * 80}],
+            [{"type": "tool_result", "content": [{"type": "text", "text": "x" * 80}]}],
+        ],
+    )
+    async def test_long_context_vetoes_cheap_short_turn(self, mock_router_instance, history_content: object):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        router = _heuristic_first_router(
+            mock_router_instance,
+            heuristic_first_max_tier="MEDIUM",
+            heuristic_first_max_context_tokens=10,
+        )
+        messages = [
+            {"role": "user", "content": history_content},
+            {"role": "user", "content": "why did that fail?"},
+        ]
+
+        outcome = await router.aclassify("why did that fail?", messages=messages)
+
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause != "heuristic_first_short_circuit"
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("context_limit,history_characters", [(None, 40000), (100, 0), (10, 24)])
+    async def test_context_within_limit_or_unset_keeps_cheap_short_turn(
+        self, mock_router_instance, context_limit: int | None, history_characters: int
+    ):
+        mock_router_instance.acompletion = AsyncMock()
+        router = _heuristic_first_router(
+            mock_router_instance,
+            heuristic_first_max_tier="MEDIUM",
+            heuristic_first_max_context_tokens=context_limit,
+        )
+        messages = [
+            {"role": "assistant", "content": "x" * history_characters},
+            {"role": "user", "content": "why did that fail?"},
+        ]
+
+        outcome = await router.aclassify("why did that fail?", messages=messages)
+
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.cause == "heuristic_first_short_circuit"
+
+    @pytest.mark.asyncio
+    async def test_context_limit_preserves_user_turn_pin_until_next_human_ask(self, mock_router_instance):
+        mock_router_instance.cache = DualCache()
+        mock_router_instance.acompletion = AsyncMock(
+            side_effect=(_llm_response('{"tier": "MEDIUM"}'), _llm_response('{"tier": "COMPLEX"}'))
+        )
+        router: Final = _heuristic_first_router(
+            mock_router_instance,
+            heuristic_first_max_tier="MEDIUM",
+            heuristic_first_max_context_tokens=8000,
+            classification_mode="user_turn",
+        )
+        ask: Final = [
+            {"role": "user", "content": "Check whether this rollback is safe."},
+            TestClassificationMode.TOOL_CALL_1,
+            {"role": "tool", "tool_call_id": "call_1", "content": "x" * 40000},
+            {"role": "user", "content": "why did that fail?"},
+        ]
+        first: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"metadata": {"session_id": "context-threshold-pin"}},
+            messages=ask,
+        )
+        assert first is not None and first.routing_decision is not None
+        assert (first.routing_decision["cause"], first.routing_decision["tier"]) == ("llm_classifier", "MEDIUM")
+        mock_router_instance.acompletion.assert_awaited_once()
+
+        continuation: Final = [*ask, TestClassificationMode.TOOL_CALL_2, TestClassificationMode.TOOL_RESULT_2]
+        second: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"metadata": {"session_id": "context-threshold-pin"}},
+            messages=continuation,
+        )
+        assert second is not None and second.routing_decision is not None
+        assert (second.model, second.routing_decision["cause"]) == (first.model, "user_turn_continuation")
+        mock_router_instance.acompletion.assert_awaited_once()
+
+        third: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"metadata": {"session_id": "context-threshold-pin"}},
+            messages=[*continuation, {"role": "user", "content": "is that safe?"}],
+        )
+        assert third is not None and third.routing_decision is not None
+        assert (third.routing_decision["cause"], third.routing_decision["tier"]) == ("llm_classifier", "COMPLEX")
+        assert third.model == HEURISTIC_FIRST_TIERS["COMPLEX"]
+        assert mock_router_instance.acompletion.await_count == 2
+
+    @pytest.mark.parametrize(
+        "messages, expected",
+        [
+            (None, 0),
+            ([{"role": "assistant", "content": None}], 0),
+            ([{"role": "user", "content": [{"type": "tool_result", "content": None}]}], 0),
+            (
+                [
+                    {"role": "system", "content": "abcd"},
+                    {"role": "user", "content": [{"type": "text", "text": "efghij"}, {"type": "image_url"}]},
+                    {"role": "assistant", "content": "klmnopqr"},
+                ],
+                4,
+            ),
+            (
+                [{"role": "user", "content": [{"type": "tool_result", "content": "abcdefghijklmnop"}]}],
+                4,
+            ),
+            (
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "content": ["abcd", {"type": "text", "text": "efgh"}, {"type": "image"}],
+                            }
+                        ],
+                    }
+                ],
+                2,
+            ),
+        ],
+    )
+    def test_estimated_conversation_tokens_counts_text_and_tool_result_parts(self, messages, expected):
+        assert _estimated_conversation_tokens(messages) == expected
 
     @pytest.mark.asyncio
     async def test_no_signal_prompt_escalates_even_though_it_scores_simple(self, mock_router_instance):

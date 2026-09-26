@@ -497,6 +497,43 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _estimated_tool_result_characters(content: object) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        len(part)
+        if isinstance(part, str)
+        else len(text)
+        if isinstance(part, Mapping) and isinstance(text := part.get("text"), str)
+        else 0
+        for part in content
+    )
+
+
+def _estimated_content_characters(content: object) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if not isinstance(content, list):
+        return 0
+    text_characters: Final = sum(
+        len(text)
+        for part in content
+        if isinstance(part, Mapping) and part.get("type") == "text" and isinstance(text := part.get("text"), str)
+    )
+    tool_result_characters: Final = sum(
+        _estimated_tool_result_characters(part.get("content"))
+        for part in content
+        if isinstance(part, Mapping) and part.get("type") == "tool_result"
+    )
+    return text_characters + tool_result_characters
+
+
+def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
+    return sum(_estimated_content_characters(message.get("content")) // 4 for message in messages or ())
+
+
 def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
     """Span of each complete reminder block for one marker pair, left to right.
 
@@ -1972,6 +2009,9 @@ class ComplexityRouter(CustomLogger):
         A turn carrying images the classifier would see is never decided cheaply: the scorer reads
         text alone, so its confidence describes a request it has only partly seen, and a trivial
         caption beside a screenshot is exactly the misrouting vision classification exists to stop.
+
+        A configured conversation-size limit also vetoes the cheap decision because a short newest
+        turn can conceal a complex task in the preceding agentic context.
         """
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1980,11 +2020,16 @@ class ComplexityRouter(CustomLogger):
             threshold is not None
             and bool(signals)
             and not self._classifier_image_parts(messages)
+            and not self._exceeds_heuristic_first_context(messages)
             and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    def _exceeds_heuristic_first_context(self, messages: Sequence[Mapping[str, object]] | None) -> bool:
+        limit: Final = self.config.heuristic_first_max_context_tokens
+        return limit is not None and _estimated_conversation_tokens(messages) > limit
 
     async def _classify_hybrid(
         self,
@@ -2770,7 +2815,7 @@ class ComplexityRouter(CustomLogger):
             else ()
         )
 
-        cumulative_tokens: Final = sum(len(_message_text(msg.get("content"))) // 4 for msg in messages or ())
+        cumulative_tokens: Final = _estimated_conversation_tokens(messages)
         trajectory_block: Final = (
             (f"\nConversation so far: ~{cumulative_tokens} tokens across the request",)
             if has_prior_conversation

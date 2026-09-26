@@ -60,6 +60,7 @@ const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
+const HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID = "heuristic-first-max-context-tokens";
 const HEURISTIC_V2_SUCCESS_THRESHOLD_ID = "heuristic-v2-success-threshold";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
@@ -239,6 +240,20 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {
     onChange({ ...value, heuristic_first_max_tier: tier });
+  };
+
+  const handleHeuristicFirstMaxContextTokensChange = (raw: string) => {
+    setDraft({ id: HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID, raw });
+    if (raw.trim() === "") {
+      onChange({ ...value, heuristic_first_max_context_tokens: undefined });
+      return;
+    }
+    const parsed: number = Number(raw);
+    if (Number.isFinite(parsed)) {
+      onChange({ ...value, heuristic_first_max_context_tokens: Math.max(1, Math.round(parsed)) });
+      return;
+    }
+    onChange({ ...value, heuristic_first_max_context_tokens: undefined });
   };
 
   const handleHybridBoundaryMarginChange = (raw: string) => {
@@ -465,6 +480,26 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <p className="text-sm text-muted-foreground">
             A request the scorer places at or below this tier routes there without a classifier call. Anything the
             scorer places higher, and anything it found no signal for at all, goes to the classifier instead
+          </p>
+          <Label htmlFor={HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}>Max conversation tokens before classifier</Label>
+          <Input
+            id={HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}
+            type="text"
+            inputMode="numeric"
+            min={1}
+            aria-describedby={`${HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}-help`}
+            value={
+              draft?.id === HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID
+                ? draft.raw
+                : String(value.heuristic_first_max_context_tokens ?? "")
+            }
+            onChange={(event) => handleHeuristicFirstMaxContextTokensChange(event.target.value)}
+            onBlur={() => setDraft(null)}
+            className="w-full"
+          />
+          <p id={`${HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}-help`} className="text-sm text-muted-foreground">
+            Above this estimated conversation size, consult the classifier even for a short ask. Leave blank to disable
+            this limit. With user-turn classification, tool continuations keep their pinned model
           </p>
         </div>
       )}
