@@ -12,13 +12,15 @@ API:
 - ``canary(slot_id) -> Canary``: a fresh value per call. Call it inside the test (or the fixture
   that owns the config holding it), never at import time, so leftovers from earlier runs cannot
   match.
-- ``find_canary(blob, canaries) -> tuple[Match, ...]``: every canary whose core occurs in
-  ``blob`` either raw, inside any base64-looking run after decoding it (standard and URL-safe
-  alphabets, padded or not, at every 4-character alignment), or inside a gzip stream. Decoding
-  is applied recursively a few levels deep, so a gzip body carrying a ``Basic`` header value is
-  still searched, and a gzip member is inflated wherever it starts in the blob (bytes before or
-  after it do not hide it). JSON and URL encoding leave a hex core unchanged, so the raw search covers
-  them. A properly masked value such as ``sk-...e71b`` is not a match.
+- ``find_canary(blob, canaries, *, budget_bytes=DECODE_BUDGET_BYTES) -> tuple[Match, ...]``:
+  every canary whose core occurs in ``blob`` either raw, inside any base64-looking run after
+  decoding it (standard and URL-safe alphabets, padded or not, at every 4-character alignment),
+  or inside a gzip member wherever it starts in the blob. Decoding is applied recursively, so a
+  gzip body carrying a ``Basic`` header value is still searched. JSON and URL encoding leave a
+  hex core unchanged, so the raw search covers them. A properly masked value such as
+  ``sk-...e71b`` is not a match. The search is bounded (three nested layers and ``budget_bytes``
+  of decoded output per blob) and raises ``DecodeBudgetExceeded`` rather than returning a
+  partial result.
 """
 
 from __future__ import annotations
@@ -36,7 +38,21 @@ _BASE64_RUN: Final = re.compile(rb"[A-Za-z0-9+/_-]{24,}={0,2}")
 _GZIP_MAGIC: Final = b"\x1f\x8b"
 _TO_STANDARD: Final = bytes.maketrans(b"-_", b"+/")
 _MAX_DEPTH: Final = 3
-_MAX_INFLATED: Final = 64 * 1024 * 1024
+DECODE_BUDGET_BYTES: Final = 512 * 1024 * 1024
+
+
+class DecodeBudgetExceeded(AssertionError):
+    """A blob needs more decoded bytes than the search budget; the sweep cannot vouch for it."""
+
+
+@dataclass(slots=True)
+class _Budget:
+    remaining: int
+
+    def spend(self, size: int) -> None:
+        self.remaining -= size
+        if self.remaining < 0:
+            raise DecodeBudgetExceeded("find_canary needed more decoded bytes than its budget for one blob")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,33 +110,35 @@ def _decoded_runs(blob: bytes) -> Iterable[tuple[str, bytes]]:
                     continue
 
 
-def _gunzipped(blob: bytes) -> Iterable[bytes]:
+def _gunzipped(blob: bytes, budget: _Budget) -> Iterable[bytes]:
     """Inflate every gzip member in ``blob``, wherever it starts, ignoring trailing bytes."""
     start = blob.find(_GZIP_MAGIC)
     while start != -1:
         inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
         try:
-            inflated = inflater.decompress(blob[start:], _MAX_INFLATED)
+            inflated = inflater.decompress(blob[start:], budget.remaining + 1)
         except zlib.error:
             inflated = b""
+        budget.spend(len(inflated))
         if inflated:
             yield inflated
         start = blob.find(_GZIP_MAGIC, start + 1)
 
 
-def _matches(blob: bytes, canaries: Sequence[Canary], encoding: str, depth: int) -> Iterable[Match]:
+def _matches(blob: bytes, canaries: Sequence[Canary], encoding: str, depth: int, budget: _Budget) -> Iterable[Match]:
     lowered: Final = blob.lower()
     for candidate in canaries:
         if candidate.core.encode() in lowered:
             yield Match(candidate.slot, encoding)
     if depth >= _MAX_DEPTH:
         return
-    for inflated in _gunzipped(blob):
-        yield from _matches(inflated, canaries, f"{encoding}>gzip" if encoding != "raw" else "gzip", depth + 1)
+    for inflated in _gunzipped(blob, budget):
+        yield from _matches(inflated, canaries, f"{encoding}>gzip" if encoding != "raw" else "gzip", depth + 1, budget)
     for name, decoded in _decoded_runs(blob):
+        budget.spend(len(decoded))
         label = f"{encoding}>{name}" if encoding != "raw" else name
         if _worth_descending(decoded):
-            yield from _matches(decoded, canaries, label, depth + 1)
+            yield from _matches(decoded, canaries, label, depth + 1, budget)
         else:
             lowered_decoded = decoded.lower()
             yield from (Match(c.slot, label) for c in canaries if c.core.encode() in lowered_decoded)
@@ -134,10 +152,17 @@ def _worth_descending(decoded: bytes) -> bool:
     return _GZIP_MAGIC in decoded or _BASE64_RUN.search(decoded) is not None
 
 
-def find_canary(blob: bytes | str, canaries: Sequence[Canary]) -> tuple[Match, ...]:
-    """Every canary found in ``blob``, one ``Match`` per slot with the shallowest encoding seen."""
+def find_canary(
+    blob: bytes | str, canaries: Sequence[Canary], *, budget_bytes: int = DECODE_BUDGET_BYTES
+) -> tuple[Match, ...]:
+    """Every canary found in ``blob``, one ``Match`` per slot with the shallowest encoding seen.
+
+    Decoding is bounded: at most ``_MAX_DEPTH`` nested layers and ``DECODE_BUDGET_BYTES`` decoded or
+    inflated bytes per call (``budget_bytes``). Exceeding the byte budget raises ``DecodeBudgetExceeded`` (an
+    ``AssertionError``) instead of returning a partial, possibly clean, result.
+    """
     data: Final = blob.encode() if isinstance(blob, str) else blob
     found: Final[dict[str, Match]] = {}  # mutable-ok: first (shallowest) encoding per slot wins
-    for match in _matches(data, canaries, "raw", 0):
+    for match in _matches(data, canaries, "raw", 0, _Budget(budget_bytes)):
         found.setdefault(match.slot, match)
     return tuple(found.values())

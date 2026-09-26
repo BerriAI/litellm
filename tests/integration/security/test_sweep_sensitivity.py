@@ -14,7 +14,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import eventually, string_value
-from integration.security._canary import MARKER, canary, find_canary
+from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, DecodeBudgetExceeded, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
 from integration._support.wire import Request
 from integration.security._sweeps import (
@@ -53,6 +53,15 @@ def test_find_canary_decodes_base64_at_every_alignment_and_gzip(prefix: str) -> 
     assert [match.slot for match in find_canary(base64.b64encode(binary_wrapper), (marker,))] == [MARKER]
     assert find_canary(f"Basic {basic}".replace(basic[10:20], "A" * 10), (marker,)) == ()
     assert find_canary(f"sk-...{marker.core[-4:]}", (marker,)) == ()
+
+
+def test_find_canary_fails_loudly_past_its_decode_budget() -> None:
+    marker: Final = canary(MARKER)
+    bomb: Final = gzip.compress(b"\0" * (1024 * 1024 + 1))
+    with pytest.raises(DecodeBudgetExceeded):
+        find_canary(bomb, (marker,), budget_bytes=1024 * 1024)
+    assert find_canary(gzip.compress(b"\0" * 1024) + marker.value.encode(), (marker,), budget_bytes=1024 * 1024)
+    assert DECODE_BUDGET_BYTES >= 256 * 1024 * 1024
 
 
 def test_route_allowances_match_only_their_exact_route_and_caller() -> None:
