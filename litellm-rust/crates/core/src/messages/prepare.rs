@@ -506,13 +506,15 @@ mod tests {
         assert_eq!(prepared.body.params.stream.unwrap_or(false), expected);
     }
 
-    #[rstest]
-    fn untyped_messages_fail_as_request_decoding(shaping: MessagesShaping) {
+    #[test]
+    fn untyped_messages_fail_as_request_decoding() {
+        let Value::Object(fields) =
+            json!({"model": "claude-test", "messages": "nope", "max_tokens": 16})
+        else {
+            unreachable!()
+        };
         assert!(matches!(
-            prepared_body(
-                json!({"model": "claude-test", "messages": "nope", "max_tokens": 16}),
-                shaping,
-            ),
+            crate::messages::route::messages_body(fields),
             Err(Error::RequestDecoding(_))
         ));
     }
