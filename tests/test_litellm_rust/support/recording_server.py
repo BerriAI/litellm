@@ -26,6 +26,8 @@ class ResponseSpec:
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
+    disconnect_after_payloads: bool = False
+    inter_payload_delay: float = 0
 
     def payloads(self) -> tuple[bytes, ...]:
         if isinstance(self.body, bytes):
@@ -84,12 +86,17 @@ def recording_service() -> Iterator[RecordingServer]:
             payloads: Final = response.payloads()
             self.send_response(response.status)
             self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
-            self.send_header("Content-Length", str(sum(len(payload) for payload in payloads)))
+            self.send_header(
+                "Content-Length",
+                str(sum(len(payload) for payload in payloads) + int(response.disconnect_after_payloads)),
+            )
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
             try:
-                for payload in payloads:
+                for index, payload in enumerate(payloads):
+                    if index and response.inter_payload_delay:
+                        time.sleep(response.inter_payload_delay)
                     self.wfile.write(payload)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):

@@ -11,6 +11,7 @@ use litellm_core::messages::{
 };
 use litellm_host::host::{Demand, Host};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
+use reqwest::header::HeaderMap;
 use rstest::rstest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -28,7 +29,7 @@ const UPSTREAM_HEADERS: [(&str, &str); 2] = [
 const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 enum Seen {
-    Open(Vec<(String, String)>),
+    Open(HeaderMap),
     Deliver(Bytes),
 }
 
@@ -110,6 +111,16 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
     litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
+fn delivered_bytes(chunks: &[Seen]) -> Vec<u8> {
+    chunks
+        .iter()
+        .flat_map(|step| match step {
+            Seen::Deliver(chunk) => chunk.to_vec(),
+            Seen::Open(_) => panic!("the stream opens exactly once"),
+        })
+        .collect()
+}
+
 #[rstest]
 #[tokio::test]
 async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
@@ -123,16 +134,19 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
     let [Seen::Open(headers), chunks @ ..] = seen.as_slice() else {
         panic!("the stream opens before any chunk is delivered");
     };
-    let surfaced: Vec<(&str, &str)> = headers
+    let surfaced: Vec<(Option<&str>, Option<&str>)> = UPSTREAM_HEADERS
         .iter()
-        .filter(|(name, _)| {
-            UPSTREAM_HEADERS
-                .iter()
-                .any(|(upstream, _)| upstream == name)
+        .map(|(name, value)| {
+            (
+                headers.get(*name).and_then(|header| header.to_str().ok()),
+                Some(*value),
+            )
         })
-        .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
-    assert_eq!(surfaced, UPSTREAM_HEADERS);
+    assert!(
+        surfaced.iter().all(|(actual, expected)| actual == expected),
+        "{surfaced:?}"
+    );
     let delivered: Vec<u8> = chunks
         .iter()
         .flat_map(|step| match step {
@@ -433,6 +447,27 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
 
 #[rstest]
 #[tokio::test]
+async fn a_truncated_upstream_body_fails_after_delivering_received_bytes(call: MessagesCall) {
+    let payload = b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n";
+    let (base, server) = truncated_sse_upstream(payload).await;
+    let host = RecordingStreamHost::new(streaming(call, base), usize::MAX);
+
+    let error = stream_through(&host)
+        .await
+        .err()
+        .expect("a truncated body fails");
+
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    let seen = host.seen.into_inner().unwrap();
+    let [Seen::Open(_), chunks @ ..] = seen.as_slice() else {
+        panic!("the route opens before delivering bytes");
+    };
+    assert_eq!(delivered_bytes(chunks), payload.as_slice());
+    server.await.expect("server completes");
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
     let upstream = upstream([sse_response()]).await;
     let host = RecordingStreamHost::new(
@@ -456,4 +491,18 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
         .flatten()
         .collect();
     assert_eq!(delivered, SSE_BODY.as_bytes());
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_local_host_refuses_a_stream(call: MessagesCall) {
+    let upstream = upstream([sse_response()]).await;
+    let host = LocalMessagesHost::new(streaming(call, upstream.uri()));
+    let result = litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), &host).await;
+    assert!(matches!(
+        result,
+        Err(Error::Unsupported(
+            "streamed responses need a streaming host"
+        ))
+    ));
 }

@@ -4,7 +4,7 @@ use std::task::Poll;
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_host::event::WireRequest;
 use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
-use litellm_host::host::{Demand, HostOp, HostStep, Reply};
+use litellm_host::host::{Demand, HostOp, HostStep, Reply, Verdict};
 use litellm_host::machine::{HostFailure, Machine, MachineStep};
 use litellm_host::protocol::Protocol;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
@@ -49,10 +49,28 @@ enum Stage {
 enum Expect {
     Started,
     Arguments,
-    Wire(Reply<WireRequest>),
-    Emitted(Reply<()>),
+    Answer(Answer),
     Response,
     Terminal,
+}
+
+/// A machine op the adapter answers, with the reply its answer goes through.
+enum Answer {
+    Params(Reply<serde_json::Map<String, serde_json::Value>>),
+    Wire(Reply<WireRequest>),
+    Emitted(Reply<()>),
+}
+
+impl Answer {
+    fn send(self, step: LifecycleStep) -> PyResult<()> {
+        match (self, step) {
+            (Self::Params(reply), LifecycleStep::Params(params)) => reply.send(params),
+            (Self::Wire(reply), LifecycleStep::Wire(wire)) => reply.send(*wire),
+            (Self::Emitted(reply), LifecycleStep::Done) => reply.send(()),
+            _ => return Err(missing_state()),
+        }
+        Ok(())
+    }
 }
 
 enum Pending {
@@ -225,12 +243,8 @@ where
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
-            (Expect::Wire(reply), LifecycleStep::Wire(wire)) => {
-                reply.send(*wire);
-                self.resume_machine(py, None)
-            }
-            (Expect::Emitted(reply), LifecycleStep::Done) => {
-                reply.send(());
+            (Expect::Answer(answer), step) => {
+                answer.send(step)?;
                 self.resume_machine(py, None)
             }
             (Expect::Response, LifecycleStep::Response(response)) => self.succeeded(py, response),
@@ -304,39 +318,29 @@ where
                 answered(projected.map(|projection| reply.send(projection)))
             }
             HostOp::Custom(op) => answered(self.host.invoke(py, op)),
+            HostOp::PreRequest { request, reply } => {
+                let step = self.adapter.pre_request(py, *request);
+                return self.asked(py, step, Answer::Params(reply));
+            }
+            HostOp::AfterResponse { response, reply } => {
+                reply.send(Verdict::Return(*response));
+                Ok(Ok(()))
+            }
             HostOp::BeforeSend {
                 wire,
                 context,
                 reply,
-            } => match self.adapter.before_send(py, wire, &context) {
-                Ok(LifecycleStep::Wire(wire)) => {
-                    reply.send(*wire);
-                    Ok(Ok(()))
-                }
-                Ok(LifecycleStep::Await(awaitable)) => {
-                    self.pending = Some(Pending::Adapter(Expect::Wire(reply)));
-                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                }
-                Ok(_) => return Err(missing_state()),
-                Err(error) => Err(error),
-            },
+            } => {
+                let step = self.adapter.before_send(py, wire, &context);
+                return self.asked(py, step, Answer::Wire(reply));
+            }
             HostOp::Open(head, reply) => return self.opened(py, head, reply).map(Next::Return),
             HostOp::Deliver(chunk, reply) => {
                 return self.delivered(py, chunk, reply).map(Next::Return);
             }
             HostOp::Emit(event, reply) => {
-                match self.adapter.emit(py, LifecycleEvent::Machine(&event)) {
-                    Ok(LifecycleStep::Done) => {
-                        reply.send(());
-                        Ok(Ok(()))
-                    }
-                    Ok(LifecycleStep::Await(awaitable)) => {
-                        self.pending = Some(Pending::Adapter(Expect::Emitted(reply)));
-                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
-                    }
-                    Ok(_) => return Err(missing_state()),
-                    Err(error) => Err(error),
-                }
+                let step = self.adapter.emit(py, LifecycleEvent::Machine(&event));
+                return self.asked(py, step, Answer::Emitted(reply));
             }
         };
         match answered {
@@ -344,6 +348,27 @@ where
             Ok(Err(native)) => self
                 .resume_core(py, Some(HostFailure::Error(native)))
                 .map(Next::Continue),
+            Err(error) => self.interrupt(py, error).map(Next::Return),
+        }
+    }
+
+    /// Settles a machine op the adapter was asked: sends its answer and continues the
+    /// machine, suspends on the awaitable it returned, or interrupts with what it raised.
+    fn asked(
+        &mut self,
+        py: Python<'_>,
+        step: PyResult<LifecycleStep>,
+        answer: Answer,
+    ) -> PyResult<Next<H>> {
+        match step {
+            Ok(LifecycleStep::Await(awaitable)) => {
+                self.pending = Some(Pending::Adapter(Expect::Answer(answer)));
+                Ok(Next::Return(ExecutionStep::Await(awaitable)))
+            }
+            Ok(step) => {
+                answer.send(step)?;
+                self.resume_core(py, None).map(Next::Continue)
+            }
             Err(error) => self.interrupt(py, error).map(Next::Return),
         }
     }
@@ -566,8 +591,8 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use litellm_host::event::{MachineEvent, RawResponse, RequestContext};
-    use litellm_host::machine::{CallMachine, MachineFault};
+    use litellm_host::event::{MachineEvent, PublicRequest, RawResponse, RequestContext};
+    use litellm_host::{MachineFault, machine::CallMachine};
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
 
@@ -758,6 +783,23 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         FailBegin,
         ReplaceResponse,
         FailAfterSuccess,
+        AwaitPreRequest,
+    }
+
+    fn rewritten_params() -> serde_json::Map<String, serde_json::Value> {
+        [("tools".to_string(), serde_json::json!("rewritten-tools"))]
+            .into_iter()
+            .collect()
+    }
+
+    fn completed_awaitable(py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let locals = PyDict::new(py);
+        py.run(
+            pyo3::ffi::c_str!("async def done():\n    return 'hook-result'\ncoroutine = done()"),
+            Some(&locals),
+            Some(&locals),
+        )?;
+        Ok(locals.get_item("coroutine")?.expect("coroutine").unbind())
     }
 
     struct SyntheticAdapter {
@@ -777,6 +819,16 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 return Err(PyValueError::new_err("begin failed"));
             }
             Ok(LifecycleStep::Arguments(arguments))
+        }
+
+        fn pre_request(&mut self, py: Python<'_>, _: PublicRequest) -> PyResult<LifecycleStep> {
+            self.log.push("pre_request");
+            match self.script {
+                AdapterScript::AwaitPreRequest => {
+                    Ok(LifecycleStep::Await(completed_awaitable(py)?))
+                }
+                _ => Ok(LifecycleStep::Params(rewritten_params())),
+            }
         }
 
         fn before_send(
@@ -806,9 +858,9 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 AdapterScript::FailAfterSuccess => {
                     Err(PyValueError::new_err("after_success failed"))
                 }
-                AdapterScript::Plain | AdapterScript::FailBegin => {
-                    Ok(LifecycleStep::Response(response))
-                }
+                AdapterScript::Plain
+                | AdapterScript::FailBegin
+                | AdapterScript::AwaitPreRequest => Ok(LifecycleStep::Response(response)),
             }
         }
 
@@ -838,8 +890,16 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             Ok(())
         }
 
-        fn resume(&mut self, _: Python<'_>, _: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
-            Err(missing_state())
+        fn resume(
+            &mut self,
+            py: Python<'_>,
+            result: PyResult<Py<PyAny>>,
+        ) -> PyResult<LifecycleStep> {
+            if !matches!(self.script, AdapterScript::AwaitPreRequest) {
+                return Err(missing_state());
+            }
+            self.log.push(format!("resumed:{}", result?.bind(py)));
+            Ok(LifecycleStep::Params(rewritten_params()))
         }
 
         fn close(&mut self, _: Python<'_>) {
@@ -1137,6 +1197,105 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 assert_eq!(log.entries(), ["started", "begin", "opened"]);
                 assert_eq!(read_all(py, &stream, asynchronous), ["first", "second"]);
             }
+        });
+    }
+
+    fn hooked_machine() -> CallMachine<Synthetic> {
+        CallMachine::new(|host| {
+            Box::pin(async move {
+                let projected = host.project().await?;
+                let params = host
+                    .pre_request(PublicRequest {
+                        model: "m".into(),
+                        custom_llm_provider: "p".into(),
+                        messages: serde_json::json!([]),
+                        params: [("tools".to_string(), serde_json::json!("original-tools"))]
+                            .into_iter()
+                            .collect(),
+                        fields: &["tools"],
+                    })
+                    .await?;
+                let wire = host.before_send(wire(), context()).await?;
+                let tools = params["tools"].as_str().unwrap_or("not-a-string");
+                Ok(format!("{projected}|{tools}|{}", wire.url))
+            })
+        })
+    }
+
+    #[test]
+    fn the_pre_request_step_runs_between_projection_and_before_send() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            for asynchronous in [false, true] {
+                let (result, log) = run_scripted(
+                    py,
+                    hooked_machine(),
+                    OpScript::Answer,
+                    AdapterScript::Plain,
+                    asynchronous,
+                );
+                assert_eq!(
+                    result.unwrap().extract::<String>(py).unwrap(),
+                    "project:1|rewritten-tools|rewritten"
+                );
+                assert_eq!(
+                    log,
+                    [
+                        "started",
+                        "begin",
+                        "project",
+                        "pre_request",
+                        "before_send",
+                        "complete",
+                        "after_success",
+                        "succeeded:project:1|rewritten-tools|rewritten",
+                        "adapter.close",
+                        "host.close",
+                    ]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_pre_request_step_that_awaits_is_resumed_with_the_awaited_value() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let (result, log) = run_scripted(
+                py,
+                hooked_machine(),
+                OpScript::Answer,
+                AdapterScript::AwaitPreRequest,
+                true,
+            );
+            assert_eq!(
+                result.unwrap().extract::<String>(py).unwrap(),
+                "project:1|rewritten-tools|rewritten"
+            );
+            assert_eq!(
+                log,
+                [
+                    "started",
+                    "begin",
+                    "project",
+                    "pre_request",
+                    "resumed:hook-result",
+                    "before_send",
+                    "complete",
+                    "after_success",
+                    "succeeded:project:1|rewritten-tools|rewritten",
+                    "adapter.close",
+                    "host.close",
+                ]
+            );
         });
     }
 

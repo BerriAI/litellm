@@ -11,6 +11,11 @@ use litellm_http::{
 };
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    task::JoinHandle,
+};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
 /// A port nothing listens on, for calls that must fail before any request is sent.
@@ -33,6 +38,27 @@ pub async fn upstream(responses: impl IntoIterator<Item = ResponseTemplate>) -> 
     let server = MockServer::start().await;
     respond_in_order(&server, responses).await;
     server
+}
+
+pub async fn truncated_sse_upstream(payload: &'static [u8]) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let mut request = [0_u8; 4096];
+        assert!(socket.read(&mut request).await.expect("reads request") > 0);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            payload.len() + 1
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes headers");
+        socket.write_all(payload).await.expect("writes body");
+        socket.shutdown().await.expect("closes early");
+    });
+    (base, server)
 }
 
 /// Scripts responses on a started server, for responses that need its address.

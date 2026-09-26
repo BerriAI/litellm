@@ -3,7 +3,9 @@
 /// can perform mid-call (token acquisition, for one).
 pub trait Protocol: Send + Sync + 'static {
     type Response: Send + 'static;
-    type Error: Clone + Send + Sync + 'static;
+    /// A failure the call reports, including the machine's own
+    /// [`MachineFault`](crate::MachineFault)s.
+    type Error: Clone + Send + Sync + From<crate::MachineFault> + 'static;
     /// The caller's request as the host projects it, answered once before anything else.
     type Projection: Send + 'static;
     /// Each operation carries the [`Reply`](crate::host::Reply) its answer goes through.

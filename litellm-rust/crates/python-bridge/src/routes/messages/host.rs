@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
-    route::{Messages, MessagesOutput, MessagesStreamHead},
+    route::{BODY_FIELDS, Messages, MessagesOutput, MessagesStreamHead},
 };
 use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
@@ -14,6 +14,7 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict},
 };
+use reqwest::header::HeaderMap;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -23,31 +24,6 @@ use crate::{
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
-
-const BODY_FIELDS: [&str; 22] = [
-    "max_tokens",
-    "metadata",
-    "stop_sequences",
-    "stream",
-    "system",
-    "temperature",
-    "thinking",
-    "tool_choice",
-    "tools",
-    "top_k",
-    "inference_geo",
-    "top_p",
-    "mcp_servers",
-    "context_management",
-    "compaction",
-    "container",
-    "output_format",
-    "speed",
-    "output_config",
-    "cache_control",
-    "reasoning_effort",
-    "safeguards",
-];
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -59,6 +35,13 @@ fn merge_headers(
         .chain(extra_headers.into_iter().flatten())
         .collect();
     (!merged.is_empty()).then_some(merged)
+}
+
+fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .collect()
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -77,6 +60,13 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         }
         Error::MissingField(field) => {
             let error = PyValueError::new_err(format!("missing required field: {field}"));
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
+        error @ (Error::AlreadyProjected
+        | Error::RequestDecoding(_)
+        | Error::RequestEncoding(_)) => {
+            let error = PyValueError::new_err(error.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
@@ -112,6 +102,7 @@ impl MessagesPythonHost {
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
         let fields = BODY_FIELDS
             .iter()
+            .filter(|name| **name != "messages")
             .filter_map(|name| match argument(name) {
                 Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
                 Ok(None) => None,
@@ -253,7 +244,7 @@ impl ProtocolHost for MessagesPythonHost {
     fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))
+            .call1((to_py(py, &header_pairs(&head.headers))?,))
             .map(Bound::unbind)
     }
 
@@ -293,6 +284,20 @@ mod tests {
     }
 
     #[rstest]
+    #[case::abandoned(litellm_host::MachineFault::Abandoned)]
+    #[case::unsupported(litellm_host::MachineFault::Unsupported("streaming"))]
+    fn host_faults_are_internal_errors(#[case] fault: litellm_host::MachineFault) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::from(fault);
+            assert!(!error.is_request());
+            let mapped = native_error(py, error).unwrap();
+            assert!(mapped.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+            assert!(!mapped.value(py).hasattr(REQUEST_ERROR_MARKER).unwrap());
+        });
+    }
+
+    #[rstest]
     #[case::extra_over_forwarded(
         Some(json!({"X-Priority": "forwarded", "X-Forwarded-Only": "keep"})),
         Some(json!({"X-Priority": "extra", "X-Extra-Only": "also-keep"})),
@@ -316,9 +321,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn header_pairs_drop_opaque_values_and_keep_duplicates() {
+        let mut headers = HeaderMap::new();
+        headers.append("X-Multi", "a".parse().unwrap());
+        headers.append("X-Multi", "b".parse().unwrap());
+        headers.append(
+            "x-opaque",
+            reqwest::header::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        assert_eq!(
+            header_pairs(&headers),
+            vec![
+                ("x-multi".to_string(), "a".to_string()),
+                ("x-multi".to_string(), "b".to_string())
+            ]
+        );
+    }
+
     #[rstest]
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
+    #[case::request_decoding(
+        Error::RequestDecoding(serde_json::from_value::<()>(json!("x")).unwrap_err().into()),
+        true,
+    )]
+    #[case::response_decoding(
+        Error::ResponseDecoding(serde_json::from_value::<()>(json!("x")).unwrap_err().into()),
+        false,
+    )]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),

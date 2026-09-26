@@ -23,7 +23,10 @@ async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: 
     .await;
 
     assert_eq!(message.id, "msg_1");
-    assert_eq!(message.content, [json!({"type": "text", "text": "hi"})]);
+    assert_eq!(
+        serde_json::to_value(&message.content).unwrap(),
+        json!([{"type": "text", "text": "hi"}])
+    );
     assert_eq!(message.stop_reason.as_deref(), Some("end_turn"));
 }
 
@@ -139,6 +142,76 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
 }
 
 #[rstest]
+#[tokio::test]
+async fn an_invalid_thinking_signature_retries_without_replayed_thinking(call: MessagesCall) {
+    let upstream = upstream([
+        status_response(
+            400,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "messages.3.content.0.thinking.signature.str: Input should be a valid string"
+                }
+            }),
+        ),
+        message_response(),
+    ])
+    .await;
+    let history = json!([
+        {"role": "user", "content": [{"type": "text", "text": "first question"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]},
+        {"role": "user", "content": [{"type": "text", "text": "second question"}]},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "replayed from another provider", "signature": null},
+            {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}}
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "found"}]}
+    ]);
+
+    let response = run(MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(upstream.uri()),
+        body: messages_body(object(json!({
+            "model": MODEL,
+            "max_tokens": 64,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}}}],
+            "messages": history,
+        })))
+        .unwrap(),
+        ..call
+    })
+    .await;
+    let requests = received(&upstream).await;
+
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected one recovery retry after the signature error"
+    );
+    let first = requests[0].json();
+    let retry = requests[1].json();
+    assert_eq!(first["messages"][3]["content"][0]["type"], "thinking");
+    assert_eq!(
+        first["thinking"],
+        json!({"type": "enabled", "budget_tokens": 1024})
+    );
+    assert_eq!(
+        retry["messages"],
+        json!([
+            {"role": "user", "content": [{"type": "text", "text": "first question"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]},
+            {"role": "user", "content": [{"type": "text", "text": "second question"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"key": "value"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "found"}]}
+        ])
+    );
+    assert!(retry.get("thinking").is_none());
+    assert!(matches!(response, Ok(MessagesOutput::Message(_))));
+}
+
+#[rstest]
 #[case::not_json(ResponseTemplate::new(200).set_body_string("not json"))]
 #[case::not_a_message(json_response(json!({"unexpected": true})))]
 #[tokio::test]
@@ -158,6 +231,64 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .expect("an unreadable body fails");
 
     assert_eq!(error.phase(), Phase::AfterSend, "{error:?}");
+    assert!(error.is_response(), "{error:?}");
+    assert!(!matches!(error, Error::InvalidRequest(_)), "{error:?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_body_that_is_not_json_is_a_response_decoding_error(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(200).set_body_string("not json")]).await;
+
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .err()
+    .expect("an unreadable body fails");
+
+    assert!(matches!(error, Error::ResponseDecoding(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("invalid messages response JSON: "),
+        "{error}"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn unrecognized_content_and_null_usage_counters_pass_through(call: MessagesCall) {
+    let content = json!([
+        {"type": "text", "text": null},
+        "stray",
+        {"type": "web_search_tool_result", "tool_use_id": "s1", "content": []}
+    ]);
+    let usage = json!({"input_tokens": 1, "output_tokens": 2, "cache_creation_input_tokens": null});
+    let body = Value::Object(
+        object(message_body())
+            .into_iter()
+            .chain(object(json!({"content": content, "usage": usage})))
+            .collect(),
+    );
+    let upstream = upstream([json_response(body)]).await;
+
+    let message = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .expect("the message decodes");
+
+    let MessagesOutput::Message(message) = message else {
+        panic!("a non-streaming call returned a stream");
+    };
+    let round_tripped = serde_json::to_value(&*message).unwrap();
+    assert_eq!(round_tripped["content"], content);
+    assert_eq!(round_tripped["usage"], usage);
 }
 
 #[rstest]
@@ -216,8 +347,40 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     let error = messages_body(object(raw)).expect_err("the body is rejected");
 
+    assert!(matches!(&error, Error::RequestDecoding(_)), "{error:?}");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.starts_with("invalid Anthropic messages request: ")),
-        "{error:?}"
+        error
+            .to_string()
+            .starts_with("invalid Anthropic messages request: "),
+        "{error}"
     );
+}
+
+#[rstest]
+#[case::unrelated_bad_request(400, "invalid tool signature", 1)]
+#[case::server_error(500, "invalid thinking signature", 1)]
+#[case::bounded_recovery(400, "invalid thinking signature", 2)]
+#[tokio::test]
+async fn thinking_recovery_is_specific_and_bounded(
+    call: MessagesCall,
+    #[case] status: u16,
+    #[case] message: &str,
+    #[case] attempts: usize,
+) {
+    let error = json!({"error": {"type": "invalid_request_error", "message": message}});
+    let upstream = upstream([
+        status_response(status, error.clone()),
+        status_response(status, error),
+    ])
+    .await;
+    let result = run(MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await;
+    assert!(
+        matches!(result, Err(Error::Transport(TransportError::Http { status: actual, .. })) if actual == status)
+    );
+    assert_eq!(received(&upstream).await.len(), attempts);
 }

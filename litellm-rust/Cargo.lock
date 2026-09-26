@@ -3101,14 +3101,20 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "litellm-auth",
+ "litellm-core",
  "litellm-host",
  "litellm-host-python",
+ "litellm-http",
+ "litellm-secrets",
  "proptest",
  "pyo3",
  "rstest",
  "serde_json",
  "strum",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -3282,6 +3288,7 @@ dependencies = [
  "litellm-coroutine",
  "rstest",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
 ]
 
