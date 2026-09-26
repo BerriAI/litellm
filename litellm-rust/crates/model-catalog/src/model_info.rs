@@ -1,7 +1,6 @@
-use crate::capabilities::{
-    AudioFormat, InputModality, Mode, OutputModality, ReasoningEffort, VertexAiAudioApi,
-};
+use crate::capabilities::{AudioFormat, InputModality, Mode, OutputModality, VertexAiAudioApi};
 use crate::pricing::{OffPeakPricing, SearchContextCostPerQuery, TieredRate, WebSearchBillingUnit};
+use litellm_types::llms::openai::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;

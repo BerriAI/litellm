@@ -9,8 +9,8 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 import asyncio
 import contextlib
 import os
-from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -23,19 +23,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
+from litellm._internal_context import in_post_response_phase, post_response_phase  # noqa: E402
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY  # noqa: E402
 from litellm.integrations.otel import (  # noqa: E402
     GenAI,
     LiteLLM,
     OpenTelemetryV2Config,
-)
-from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.plumbing.context import (  # noqa: E402
-    reset_mcp_message_trace_carrier,
-    reset_mcp_message_transport_span,
-    set_mcp_message_trace_carrier,
-    set_mcp_message_transport_span,
-    set_request_root_span,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
@@ -44,6 +37,14 @@ from litellm.integrations.otel.model.spans import (  # noqa: E402
     SpanRole,
 )
 from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
+from litellm.integrations.otel.plumbing import providers  # noqa: E402
+from litellm.integrations.otel.plumbing.context import (  # noqa: E402
+    reset_mcp_message_trace_carrier,
+    reset_mcp_message_transport_span,
+    set_mcp_message_trace_carrier,
+    set_mcp_message_transport_span,
+    set_request_root_span,
+)
 
 # --------------------------------------------------------------------------- #
 #  Fixtures
@@ -1772,9 +1773,10 @@ class _Service:
 
 
 class _ServicePayload:
-    def __init__(self, service="redis", call_type="set", error=None):
+    def __init__(self, service="redis", call_type="set", error=None, caller=None):
         self.service = _Service(service)
         self.call_type = call_type
+        self.caller = caller
         self.error = error
 
 
@@ -1782,6 +1784,54 @@ def _service_parent(logger):
     """Helper: a live PROXY_REQUEST span to parent service spans under."""
     return logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+
+
+async def _redis_get_through_service_logger(logger):
+    """Drive a real ``RedisCache.async_get_cache`` (client doubled at the edge) through the real
+    ``ServiceLogging`` into ``logger``, the way the proxy's cache reads reach OTel."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    from litellm._service_logger import ServiceLogging
+    from litellm.caching.redis_cache import RedisCache
+
+    async_client = MagicMock()
+    async_client.get = AsyncMock(return_value=None)
+    async_client.ping = AsyncMock(return_value=True)
+    with (
+        patch("litellm._redis.get_redis_client", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_connection_pool", return_value=MagicMock()),
+        patch("litellm._redis.get_redis_async_client", return_value=async_client),
+        patch.object(litellm, "service_callback", [logger]),
+        patch.object(
+            litellm,
+            "in_memory_llm_clients_cache",
+            MagicMock(get_cache=MagicMock(return_value=None)),
+        ),
+    ):
+        cache = RedisCache(
+            host="127.0.0.1", port=6379, service_logger_obj=ServiceLogging()
+        )
+        await cache.async_get_cache("otel-naming-key")
+        await asyncio.gather(
+            *(t for t in asyncio.all_tasks() if t is not asyncio.current_task())
+        )
+
+
+def test_redis_service_span_is_named_by_operation_and_keeps_the_caller_chain_as_an_attribute():
+    """``redis async_get_cache``, not ``redis async_get_cache <- caller <- caller``: the stack
+    walk that used to be spliced into the span name rides on ``litellm.service.caller`` instead,
+    so one operation is one span name and ``db.operation.name`` is the bare operation."""
+    logger, exporter = _logger()
+    asyncio.run(_redis_get_through_service_logger(logger))
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis async_get_cache"
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
+    assert span.attributes["db.operation.name"] == "async_get_cache"
+    callers = span.attributes[LiteLLM.SERVICE_CALLER].split(" <- ")
+    assert callers[0] == "_redis_get_through_service_logger" and len(callers) == 2, (
+        callers
     )
 
 
@@ -1853,7 +1903,7 @@ def test_async_service_failure_hook_marks_error_status():
     try:
         asyncio.run(
             logger.async_service_failure_hook(
-                payload=_ServicePayload("postgres", "query"),
+                payload=_ServicePayload("postgres", "query", caller="query <- get_user_object"),
                 error="boom",
                 parent_otel_span=parent,
             )
@@ -1868,6 +1918,7 @@ def test_async_service_failure_hook_marks_error_status():
     # Without an explicit error_type from the payload, V2 stamps the fallback.
     assert span.attributes["error.type"] == "error"
     assert span.attributes[LiteLLM.SERVICE_NAME] == "postgres"
+    assert span.attributes[LiteLLM.SERVICE_CALLER] == "query <- get_user_object"
 
 
 def test_async_service_failure_hook_preserves_payload_error_over_override():
@@ -2084,6 +2135,153 @@ def test_service_call_under_a_remote_parent_is_never_detached():
     assert span.parent.span_id == 0x123
     assert span.context.trace_id == 0xABC
     assert list(span.links) == []
+
+
+def _service_hook_from_post_response_task(
+    logger, payload, *, parent, ambient, end_time
+):
+    """Log ``payload`` the way the proxy's post-response tail does: the hook runs on a
+    task spawned from inside ``post_response_phase`` while the server span is still open."""
+
+    async def _dispatch():
+        with post_response_phase():
+            task = asyncio.create_task(
+                logger.async_service_success_hook(
+                    payload=payload,
+                    parent_otel_span=parent,
+                    start_time=end_time - 0.4,
+                    end_time=end_time,
+                )
+            )
+        assert not in_post_response_phase(), (
+            "the phase must not leak into the request task"
+        )
+        await task
+
+    if ambient is None:
+        asyncio.run(_dispatch())
+        return
+    with trace.use_span(ambient, end_on_exit=False):
+        asyncio.run(_dispatch())
+
+
+@pytest.mark.parametrize("parent_source", ["ambient", "threaded"])
+def test_service_call_from_the_post_response_phase_detaches_before_the_server_span_ends(
+    parent_source,
+):
+    """The streaming tail: the response-cache write and the success callbacks run
+    after the client has the whole response but before the ASGI server span closes,
+    so the call ends before its parent does. Timing alone would keep it a child;
+    being dispatched from the post-response phase is what detaches it, with a link."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    assert server.is_recording()
+    try:
+        _service_hook_from_post_response_task(
+            logger,
+            _ServicePayload("redis", "async_set_cache"),
+            parent=server if parent_source == "threaded" else None,
+            ambient=server if parent_source == "ambient" else None,
+            end_time=_REQUEST_END - 0.1,
+        )
+    finally:
+        server.end(end_time=to_ns(_REQUEST_END))
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis async_set_cache"]
+    request_ctx = server.get_span_context()
+    assert span.end_time < server.end_time
+    assert span.parent is None
+    assert span.context.trace_id != request_ctx.trace_id
+    assert [(link.context.trace_id, link.context.span_id) for link in span.links] == [
+        (request_ctx.trace_id, request_ctx.span_id)
+    ]
+
+
+def test_service_call_from_the_post_response_phase_under_a_remote_parent_is_never_detached():
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+    logger, exporter = _logger()
+    remote = NonRecordingSpan(
+        SpanContext(
+            trace_id=0xABC,
+            span_id=0x123,
+            is_remote=True,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+    )
+    _service_hook_from_post_response_task(
+        logger,
+        _ServicePayload("redis", "get"),
+        parent=remote,
+        ambient=None,
+        end_time=_REQUEST_END,
+    )
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis get"]
+    assert span.parent.span_id == 0x123
+    assert span.context.trace_id == 0xABC
+    assert list(span.links) == []
+
+
+def test_redis_write_from_a_success_callback_detaches_while_the_server_span_is_still_open():
+    """The production dispatch path: ``Logging.async_success_handler`` runs the
+    success callbacks, one of which writes to redis and logs the service span
+    through the OTel logger. With the server span still recording (the streaming
+    tail), the redis span must still root its own trace linked to the request."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ModelResponse
+
+    logger, exporter = _logger()
+
+    class _RedisWritingCallback(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_increment", caller="async_increment_cache <- async_log_success_event"),
+                parent_otel_span=None,
+                start_time=_REQUEST_END - 0.5,
+                end_time=_REQUEST_END - 0.1,
+            )
+
+    async def _request():
+        logging_obj = Logging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+            dynamic_async_success_callbacks=[_RedisWritingCallback()],
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-4o",
+            user="u",
+            optional_params={},
+            litellm_params={"metadata": {}, "acompletion": True},
+            custom_llm_provider="openai",
+        )
+        await logging_obj.async_success_handler(
+            result=ModelResponse(model="gpt-4o", choices=[{"message": {"role": "assistant", "content": "ok"}}]),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+        )
+
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(_request())
+    finally:
+        server.end(end_time=to_ns(_REQUEST_END))
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis async_increment"]
+    request_ctx = server.get_span_context()
+    assert span.end_time < server.end_time
+    assert span.parent is None
+    assert span.context.trace_id != request_ctx.trace_id
+    assert [(link.context.trace_id, link.context.span_id) for link in span.links] == [
+        (request_ctx.trace_id, request_ctx.span_id)
+    ]
+    assert span.attributes[LiteLLM.SERVICE_CALLER] == "async_increment_cache <- async_log_success_event"
 
 
 # --------------------------------------------------------------------------- #

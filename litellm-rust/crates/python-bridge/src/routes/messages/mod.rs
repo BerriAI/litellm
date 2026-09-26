@@ -28,7 +28,7 @@ fn run_messages(
 ) -> PyResult<Py<PyAny>> {
     let secrets = crate::secrets::source(py)?;
     let config = crate::http::call_config(py, &kwargs, asynchronous)?;
-    let machine = messages_machine(crate::http::pool(), &config, secrets)
+    let machine = messages_machine(crate::http::resources(), &config, secrets)
         .map_err(crate::http::client_error)?;
     run_legacy_call(
         py,

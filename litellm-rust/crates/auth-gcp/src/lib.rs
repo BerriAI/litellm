@@ -131,7 +131,7 @@ impl Default for VertexAuth {
 }
 
 impl VertexAuth {
-    fn new(loader: Arc<dyn VertexProviderLoader>) -> Self {
+    pub fn new(loader: Arc<dyn VertexProviderLoader>) -> Self {
         Self {
             providers: Cache::builder().max_capacity(64).build(),
             loader,
@@ -220,16 +220,16 @@ impl VertexAuth {
     }
 }
 
-trait VertexTokenSource: Send + Sync {
+pub trait VertexTokenSource: Send + Sync {
     fn project_id(&self) -> VertexAuthFuture<'_, String>;
     fn token(&self) -> VertexAuthFuture<'_, String>;
 }
 
-trait VertexProviderLoader: Send + Sync {
+pub trait VertexProviderLoader: Send + Sync {
     fn load(&self, source: CredentialSource) -> VertexAuthFuture<'_, Arc<dyn VertexTokenSource>>;
 }
 
-type VertexAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
+pub type VertexAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 struct GcpTokenSource(Arc<dyn TokenProvider>);
 
@@ -305,7 +305,7 @@ fn validate_request_credentials(configured: &str) -> Result<&str, Error> {
 }
 
 #[derive(Clone, Debug)]
-enum CredentialSource {
+pub enum CredentialSource {
     Inline(SecretValue),
     Trusted(SecretValue),
     ApplicationCredentials(String),
