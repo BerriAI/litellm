@@ -13,6 +13,8 @@ from pydantic import (
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
+from litellm.types.proxy.management_endpoints.scim_agent_provisioning import SCIM_AGENT_USER_SCHEMA, SCIMAgentUser
+
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
@@ -106,6 +108,7 @@ class SCIMEnterpriseUser(BaseModel):
 class SCIMUser(SCIMResource):
     model_config = ConfigDict(populate_by_name=True)
 
+    agent_user: SCIMAgentUser | None = Field(default=None, alias=SCIM_AGENT_USER_SCHEMA)
     userName: str | None = None
     name: SCIMUserName | None = None
     displayName: str | None = None
@@ -120,9 +123,18 @@ class SCIMUser(SCIMResource):
         serialization_alias=SCIM_ENTERPRISE_USER_SCHEMA,
     )
 
+    @model_validator(mode="after")
+    def validate_agent_extension(self) -> "SCIMUser":
+        if SCIM_AGENT_USER_SCHEMA in self.schemas and self.agent_user is None:
+            raise ValueError("The agent-user schema requires identityParentId")
+        return self
+
     @model_serializer(mode="wrap")
     def _omit_absent_optional_blocks(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         dumped: Final = handler(self)
+        if self.agent_user is None:
+            dumped.pop(SCIM_AGENT_USER_SCHEMA, None)
+            dumped.pop("agent_user", None)
         if self.enterprise_user is None:
             dumped.pop(SCIM_ENTERPRISE_USER_SCHEMA, None)
             dumped.pop("enterprise_user", None)
