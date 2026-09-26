@@ -2725,3 +2725,63 @@ async def test_post_call_failure_hook_records_recovered_usage_as_settled_tokens(
     settled_tokens = await asyncio.create_task(reject_with_recovered_usage())
     assert settled_tokens == 6
     settle_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_success_racing_an_inflight_settlement_bills_only_the_uncounted_tokens(monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-racing-settle-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    settle_gate = asyncio.Event()
+    first_call_seen = asyncio.Event()
+    calls: list[tuple] = []
+
+    async def gated_increment(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            first_call_seen.set()
+            await settle_gate.wait()
+
+    monkeypatch.setattr(handler.v3_limiter, "async_increment_reservation_aware_tokens", gated_increment)
+    monkeypatch.setattr(handler.v3_limiter, "recovered_partial_usage_tokens", lambda *args, **kwargs: (6, 0, 0))
+    data = {"model": model, "litellm_call_id": "racing-settle"}
+
+    async def run_race() -> None:
+        stash = get_or_create_request_stash()
+        stash.dynamic_reserved_tokens = 40
+        stash.dynamic_token_scopes = frozenset({("model_saturation_check", model)})
+
+        failure_task = asyncio.create_task(
+            handler.async_post_call_failure_hook(
+                request_data=data,
+                original_exception=Exception("post-call guardrail rejected"),
+                user_api_key_dict=_prod_user(),
+            )
+        )
+        await asyncio.wait_for(first_call_seen.wait(), timeout=5)
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, "racing-settle", "prod"),
+            response_obj=ModelResponse(
+                model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+            ),
+            start_time=None,
+            end_time=None,
+        )
+        settle_gate.set()
+        await failure_task
+
+    await asyncio.create_task(run_race())
+    assert len(calls) == 2
+    second_ops = calls[1][1]["pipeline_operations"]
+    assert len(second_ops) == 1
+    for op in second_ops:
+        assert op["increment_value"] == 4

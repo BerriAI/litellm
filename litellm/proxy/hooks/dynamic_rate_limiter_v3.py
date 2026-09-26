@@ -632,6 +632,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if stash.dynamic_reserved_tokens <= 0 or stash.dynamic_reservation_settled:
             return False
         stash.dynamic_reservation_settled = True
+        stash.dynamic_reservation_settled_tokens = actual_tokens
         try:
             await self.v3_limiter.async_increment_reservation_aware_tokens(
                 pipeline_operations=self.v3_limiter.build_project_reservation_ops(
@@ -643,9 +644,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 ),
                 parent_otel_span=parent_otel_span,
             )
-            stash.dynamic_reservation_settled_tokens = actual_tokens
         except Exception:
             stash.dynamic_reservation_settled = False
+            stash.dynamic_reservation_settled_tokens = 0
             raise
         return True
 
@@ -658,17 +659,22 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         increment: Final = actual_tokens - stash.dynamic_reservation_settled_tokens
         if increment <= 0:
             return
-        await self.v3_limiter.async_increment_reservation_aware_tokens(
-            pipeline_operations=self.v3_limiter.build_project_reservation_ops(
-                targets=sorted(stash.dynamic_token_scopes),
-                reserved_scopes=frozenset(),
-                actual_tokens=increment,
-                reserved_tokens=0,
-                reservation_window_identities=stash.dynamic_reservation_windows,
-            ),
-            parent_otel_span=parent_otel_span,
-        )
+        previous: Final = stash.dynamic_reservation_settled_tokens
         stash.dynamic_reservation_settled_tokens = actual_tokens
+        try:
+            await self.v3_limiter.async_increment_reservation_aware_tokens(
+                pipeline_operations=self.v3_limiter.build_project_reservation_ops(
+                    targets=sorted(stash.dynamic_token_scopes),
+                    reserved_scopes=frozenset(),
+                    actual_tokens=increment,
+                    reserved_tokens=0,
+                    reservation_window_identities=stash.dynamic_reservation_windows,
+                ),
+                parent_otel_span=parent_otel_span,
+            )
+        except Exception:
+            stash.dynamic_reservation_settled_tokens = previous
+            raise
 
     def _queue_weights(self, model_group_info: ModelGroupInfo, fairness: FairnessSettings) -> Mapping[str, float]:
         normalized: Final = self._normalize_priority_weights(model_group_info)
