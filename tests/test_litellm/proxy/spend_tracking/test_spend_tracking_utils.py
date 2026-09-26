@@ -83,10 +83,16 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
         "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
     }
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
-        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+            kwargs={
+                "standard_logging_object": audit,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": redact},
+            },
+        )
+    )
     if not store_prompts or redact:
         assert "classifier_input" not in stored
         assert "originating_request_masked" not in stored
@@ -212,9 +218,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -4974,7 +4978,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -5012,9 +5016,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -5090,9 +5092,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():
@@ -5273,11 +5273,63 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     supplied: Final = MappingProxyType({"version": 1, "status": "estimated", "reason": "caller_supplied"})
     recorded: Final = MappingProxyType({"version": 1, "status": "unknown", "reason": "history_unavailable"})
     result: Final = _get_spend_logs_metadata(
-        {"autorouter_savings": 999.0, "autorouter_savings_estimate": supplied},  # mutable-ok: legacy metadata helper accepts dicts
+        {
+            "autorouter_savings": 999.0,
+            "autorouter_savings_estimate": supplied,
+        },  # mutable-ok: legacy metadata helper accepts dicts
         autorouter_savings=None,
         autorouter_savings_estimate=recorded,
     )
     assert result["autorouter_savings"] is None
     assert result["autorouter_savings_estimate"] == recorded
-    absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})  # mutable-ok: legacy metadata helper accepts dicts
+    absent: Final = _get_spend_logs_metadata(
+        {"autorouter_savings_estimate": supplied}
+    )  # mutable-ok: legacy metadata helper accepts dicts
     assert absent["autorouter_savings_estimate"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_logging_payload_honors_disable_flag():
+    """Test that get_logging_payload correctly suppresses end_user_id when disable_end_user_cost_tracking is True."""
+    litellm.disable_end_user_cost_tracking = True
+    kwargs = {
+        "litellm_params": {"metadata": {"user_api_key_end_user_id": "test-user-123"}},
+        "call_type": "completion",
+        "standard_logging_object": {
+            "metadata": {"user_api_key_end_user_id": "test-user-123"},
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "model_map_information": {},
+        },
+    }
+    response_obj = {"id": "chatcmpl-123", "usage": {"total_tokens": 15}}
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    try:
+        payload = get_logging_payload(kwargs, response_obj, start_time, end_time)
+        assert payload["end_user"] == ""
+    finally:
+        litellm.disable_end_user_cost_tracking = False
+
+
+@pytest.mark.asyncio
+async def test_get_logging_payload_tracks_when_not_disabled():
+    """Test that get_logging_payload correctly includes end_user_id when disable_end_user_cost_tracking is False."""
+    litellm.disable_end_user_cost_tracking = False
+    kwargs = {
+        "litellm_params": {"metadata": {"user_api_key_end_user_id": "test-user-456"}},
+        "call_type": "completion",
+        "standard_logging_object": {
+            "metadata": {"user_api_key_end_user_id": "test-user-456"},
+            "model_map_information": {},
+        },
+    }
+    response_obj = {"id": "chatcmpl-456"}
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    try:
+        payload = get_logging_payload(kwargs, response_obj, start_time, end_time)
+        assert payload["end_user"] == "test-user-456"
+    finally:
+        litellm.disable_end_user_cost_tracking = False
