@@ -10,6 +10,7 @@ from typing import Final, Literal
 
 import pytest
 
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.utils import BudgetConfig
@@ -247,3 +248,33 @@ async def test_unset_provider_cap_still_enforces_a_zero_deployment_cap(disable_b
 
     assert kept == []
     assert debug_info == _blocked_debug("deployment", 0.0, deployment_cap.max_budget)
+
+
+def _router_deployment(model_name: str, model: str, model_id: str, *, weight: int = 0) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model, "api_key": "sk-fake", "weight": weight},
+        "model_info": {"id": model_id},
+    }
+
+
+@pytest.mark.asyncio
+async def test_router_serves_the_uncapped_sibling_when_provider_max_budget_is_zero(disable_budget_sync) -> None:
+    router: Final = Router(
+        model_list=[
+            _router_deployment("chat", "openai/gpt-4o-mini", "openai-capped", weight=100),
+            _router_deployment("chat", "anthropic/claude-haiku-4-5", "anthropic-open"),
+            _router_deployment("openai-only", "openai/gpt-4o-mini", "openai-only", weight=100),
+        ],
+        provider_budget_config={"openai": BudgetConfig(budget_limit=0, time_period="1d")},
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    served: Final = await router.acompletion(model="chat", messages=messages, mock_response="served")
+
+    assert served._hidden_params["model_id"] == "anthropic-open"
+    assert served._hidden_params["custom_llm_provider"] == "anthropic"
+
+    with pytest.raises(ValueError, match=r"Exceeded budget for provider openai: 0\.0 >= 0\.0"):
+        await router.acompletion(model="openai-only", messages=messages, mock_response="served")
