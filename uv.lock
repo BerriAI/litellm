@@ -3142,6 +3142,23 @@ wheels = [
 ]
 
 [[package]]
+name = "hatchling"
+version = "1.32.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pathspec" },
+    { name = "pluggy" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "tomlkit" },
+    { name = "trove-classifiers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/69/08/33331757185504aae48b8d9bd78cec03a76e3aecfb52e549d05a2347c0dd/hatchling-1.32.0.tar.gz", hash = "sha256:0bdbde4a52b06c37e3eca395f85a762bf0ef06fe374fd8ae429dc6be10230f5f", size = 57783, upload-time = "2026-08-11T05:03:44.114Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/84/1798b6d85ecde0e31546004efd25c5de1b1f49250644a60cce460e12593a/hatchling-1.32.0-py3-none-any.whl", hash = "sha256:0e17c9c3b9aa7c625acc8d0f5b622f107d5049af9ecf5ada4de1aada5be7cdbc", size = 78435, upload-time = "2026-08-11T05:03:42.644Z" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4684,9 +4701,11 @@ dev = [
     { name = "diff-cover" },
     { name = "fakeredis" },
     { name = "fastapi-offline" },
+    { name = "hatchling" },
     { name = "hypothesis" },
     { name = "keyring" },
     { name = "langfuse" },
+    { name = "maturin" },
     { name = "mypy" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -4899,9 +4918,11 @@ dev = [
     { name = "diff-cover", specifier = "==9.7.2" },
     { name = "fakeredis", specifier = "==2.34.1" },
     { name = "fastapi-offline", specifier = "==1.7.6" },
+    { name = "hatchling", specifier = "==1.32.0" },
     { name = "hypothesis", specifier = "==6.165.10" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "langfuse", specifier = ">=4.7,<5.0" },
+    { name = "maturin", specifier = "==1.15.0" },
     { name = "mypy", specifier = "==1.20.1" },
     { name = "numpy", specifier = ">=1.26.0,<3.0" },
     { name = "openapi-core", specifier = "==0.22.0" },
@@ -5404,6 +5425,30 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/63/e2/9f66ca6a651a52abfe0d4964ce01439ed34f3f1e119de10ff3a07f403043/matplotlib-3.10.9-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:42fb814efabe95c06c1994d8ab5a8385f43a249e23badd3ba931d4308e5bca20", size = 8304420, upload-time = "2026-04-24T00:14:04.57Z" },
     { url = "https://files.pythonhosted.org/packages/e8/e8/467c03568218792906aa87b5e7bb379b605e056ed0c74fe00c051786d925/matplotlib-3.10.9-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:f76e640a5268850bfda54b5131b1b1941cc685e42c5fa98ed9f2d64038308cba", size = 8197981, upload-time = "2026-04-24T00:14:07.233Z" },
     { url = "https://files.pythonhosted.org/packages/6f/87/afead29192170917537934c6aff4b008c805fff7b1ccea0c79120d96beda/matplotlib-3.10.9-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3fc0364dfbe1d07f6d15c5ebd0c5bf89e126916e5a8667dd4a7a6e84c36653d4", size = 8774002, upload-time = "2026-04-24T00:14:09.816Z" },
+]
+
+[[package]]
+name = "maturin"
+version = "1.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/c8/22e5e21b2679c9bce6415ca578034ca2cc9316be0642ae21e051a2d5198c/maturin-1.15.0.tar.gz", hash = "sha256:94b26cc8e8aba61a5f2099715fe640e18c5f678e9a500408b38761263954228a", size = 385504, upload-time = "2026-08-24T12:11:22.665Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/69/5c01b461044eb1f45ddcce006706eb88110c793cdb11c7ae0b5e08492e94/maturin-1.15.0-py3-none-linux_armv6l.whl", hash = "sha256:6bf6dc62e22d4dcfd5a51244ff0d58975fa4979c48209fe84159617648956d82", size = 10206220, upload-time = "2026-08-24T12:10:53.327Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/1f/2b431554e11687cdb1077e0cdadcc118c53f611086b3af00c8545a67c6a5/maturin-1.15.0-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:cd35772633f489841132bc8e71d6fc7f842df30b9c05cd5cdf1ee1ddcb744cc7", size = 19416513, upload-time = "2026-08-24T12:10:56.126Z" },
+    { url = "https://files.pythonhosted.org/packages/51/36/e23a21cb34a648b711036b9b2fe1d4f3f4ee24f8db54215d73f1a9a3a3ec/maturin-1.15.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:c40b4eae7bf5ef1f4b1af8d623fe4105016f93578fb15b764e741d08ec3b92dd", size = 10014962, upload-time = "2026-08-24T12:10:58.486Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/80/33b15cb2d8f30f12c807955e8f2fd775027692904e30ec0784744ce8cd83/maturin-1.15.0-py3-none-manylinux_2_12_i686.manylinux2010_i686.musllinux_1_1_i686.whl", hash = "sha256:7eb066372f541f8eb4909c79c5d9bd0b9e8125980bdf1ec9e8aba23c6c8d6c55", size = 10196223, upload-time = "2026-08-24T12:11:00.696Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/91/b495e19e2f5c503b540452b2039115e7b2363867e8c5ad4179eb752fa92c/maturin-1.15.0-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl", hash = "sha256:653020a63525bb224e5ab0adf02e17a2e08bc86dbea7fc1399c9a56d7529b99e", size = 10541186, upload-time = "2026-08-24T12:11:02.857Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/2b/2abff58037188d852b124871b1f0d720e1c2bfb3d4f1b03d87c52cd66488/maturin-1.15.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl", hash = "sha256:0ebf9767892725083138e671c34482c660317a2f3d6a29fc0e0f34e9d8c99136", size = 10083468, upload-time = "2026-08-24T12:11:05.012Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/07/b7e9f8be99a6627849e81ac7b6694876bce8f50a92995fe17e3cf2610f0a/maturin-1.15.0-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.musllinux_1_1_armv7l.whl", hash = "sha256:7ab7eebffd7b8debca2265985de4eaeb332141276d24b9560b5ad484d4b3add1", size = 10047786, upload-time = "2026-08-24T12:11:07.042Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/ab/167e3cb7accee11b507dbe53e0e87aeccb376d44ae66284c96ee4df3a9fd/maturin-1.15.0-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.musllinux_1_1_ppc64le.whl", hash = "sha256:126e12e618b4db42f68c779a56d41f82a390145ba36ac3f621d057eb34f5ad9d", size = 13315332, upload-time = "2026-08-24T12:11:09.433Z" },
+    { url = "https://files.pythonhosted.org/packages/14/4d/801379f646cbc6b00998e5289b0630a886be3a4ee4c75b6bc9b87478a7f1/maturin-1.15.0-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:4f9d33e6c3f9615c8caceecbbbd440f8eb25a3ddeb687077682cd5eca2e9ae15", size = 10807183, upload-time = "2026-08-24T12:11:11.73Z" },
+    { url = "https://files.pythonhosted.org/packages/89/27/2e612e1cbd1580e9e94d4722c227b5180dca27b32b955a34b79918aa1292/maturin-1.15.0-py3-none-manylinux_2_31_riscv64.musllinux_1_1_riscv64.whl", hash = "sha256:bf29beddd0c6708f112db51d5275fc28b28b9e9c9c5faae387eaef662918b176", size = 10413274, upload-time = "2026-08-24T12:11:14.04Z" },
+    { url = "https://files.pythonhosted.org/packages/70/d8/202a7b4d75a51f20f84ec9ce3b7345b12b822207072164e2b1c6ef665125/maturin-1.15.0-py3-none-win32.whl", hash = "sha256:da649988be98e87e009e51b1bf0d301b6a301bc0cecbdd60d40d8ba60748d1ca", size = 8928744, upload-time = "2026-08-24T12:11:16.269Z" },
+    { url = "https://files.pythonhosted.org/packages/40/dc/4e90da594986ba78dd3bc8a5921ecdcdb11085b22b02a412caab3b225601/maturin-1.15.0-py3-none-win_amd64.whl", hash = "sha256:552c2be4afd43fe8d5c9f3ec8d4c4756d973b8dcbe94c14084390301f50243e1", size = 10335085, upload-time = "2026-08-24T12:11:18.326Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/10/15d4314edf130955edf2dc237aa393a8a7c10f2b9b57b89fa2f61f915659/maturin-1.15.0-py3-none-win_arm64.whl", hash = "sha256:c7dc0c66c78d3debdd9c5aa807e861fbcbf07f3505d34b125df74c03986b0f48", size = 9713795, upload-time = "2026-08-24T12:11:20.83Z" },
 ]
 
 [[package]]
@@ -9912,6 +9957,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0a/b1/fd7360d97c651098da505e95600e067a7eedb1b78635b2f1d23545ee4a46/traceloop_sdk-0.34.0.tar.gz", hash = "sha256:4aa26003dfa2e417f73728bd847284a12d6da43a946dd588603a0966e753b3e6", size = 19808, upload-time = "2024-12-12T21:03:41.647Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c5/e8/c89cc77c272312930cc263c45fbd2a648536e93358611bf03dba6f176a0b/traceloop_sdk-0.34.0-py3-none-any.whl", hash = "sha256:1cc3e5be9dd2765212feaa5655e1f43ddc66739585d78d9c81134428a2a7d927", size = 25944, upload-time = "2024-12-12T21:03:39.565Z" },
+]
+
+[[package]]
+name = "trove-classifiers"
+version = "2026.9.21.13"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/93/af436dfaa845cab5d96f0adbc1e4f3730532d37fa249e4eb796fb1d7fc82/trove_classifiers-2026.9.21.13.tar.gz", hash = "sha256:0a9ebc8d4e2f3e8a22848c5258033035bec17a3012ac3fea16dbaa764489eb71", size = 17085, upload-time = "2026-09-21T13:29:07.301Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/81/0da8afb52a71d0a4f2bd3152357b1a441e393b286374802b9d3addab4ab5/trove_classifiers-2026.9.21.13-py3-none-any.whl", hash = "sha256:8b1ff4f9c191b1040b71c37f1e445ab99732911e3cd91de52838453a854d7a17", size = 14232, upload-time = "2026-09-21T13:29:06.123Z" },
 ]
 
 [[package]]

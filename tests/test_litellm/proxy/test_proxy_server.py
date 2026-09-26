@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import types
 import uuid
@@ -15248,6 +15249,39 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
     assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+
+
+def test_proxy_server_imports_with_optional_native_packages_absent() -> None:
+    blocked: Final = (
+        "nacl",
+        "granian",
+        "pyroscope",
+        "hf_xet",
+        "awscrt",
+        "xmlsec",
+        "litellm.rust_bridge._native",
+    )
+    result: Final = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-c",
+            "import sys\n"
+            + "\n".join(f"sys.modules[{name!r}] = None" for name in blocked)
+            + "\nimport litellm.proxy.proxy_server\n"
+            + "from litellm.rust_bridge import native_bridge_available\n"
+            + "assert native_bridge_available() is False\n"
+            + 'print("ok")',
+        ],
+        cwd=Path(__file__).resolve().parents[3],
+        env={
+            **os.environ,
+            "PYTHONPATH": f"{Path(__file__).resolve().parents[3]}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0 and "ok" in result.stdout, f"returncode={result.returncode} stderr={result.stderr}"
 
 
 def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):

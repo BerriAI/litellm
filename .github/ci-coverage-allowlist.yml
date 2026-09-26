@@ -111,3 +111,9 @@ dockerfiles:
       An example image under cookbook/ that is documentation rather than a shipped artifact
     paths:
       - cookbook/litellm-ollama-docker-image/Dockerfile
+  - reason: >-
+      Building this image needs a Chainguard token (chainctl auth token) to resolve the
+      pinned virtualapk repo, which no pull request job holds; the FIPS scan gates run
+      inside the image build when one is produced
+    paths:
+      - docker/Dockerfile.fips
