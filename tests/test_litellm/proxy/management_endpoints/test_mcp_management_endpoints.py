@@ -8205,6 +8205,7 @@ class TestPinMCPServerTools:
             ),
             patch("litellm.proxy.management_endpoints.mcp_management_endpoints.set_mcp_server_pinned_tools", store_mock),
             patch("litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager", manager),
+            patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager", manager),
             patch.dict(
                 sys.modules,
                 {"litellm.proxy.proxy_server": types.SimpleNamespace(proxy_logging_obj=MagicMock(), general_settings={})},

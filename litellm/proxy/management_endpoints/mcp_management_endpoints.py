@@ -1541,28 +1541,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found in the database."},
             )
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
-            _get_server_auth_header,
-            _get_user_oauth_extra_headers,
-        )
-        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-        from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_unpinned_tool_catalog
 
-        upstream_tools: Final = await global_mcp_server_manager._get_tools_from_server(
-            server=server.model_copy(update={"pinned_tools": None}),
-            mcp_auth_header=_get_server_auth_header(
-                server,
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(request.headers),
-                MCPRequestHandler._get_mcp_auth_header_from_headers(request.headers),
-            ),
-            extra_headers=await _get_user_oauth_extra_headers(server, user_api_key_dict),
-            add_prefix=False,
-            raw_headers=dict(request.headers),
-            user_api_key_auth=user_api_key_dict,
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        upstream_tools: Final = await fetch_unpinned_tool_catalog(server, request, user_api_key_dict)
         snapshot: Final = {
             tool.name: PinnedMCPTool(description=tool.description or "", input_schema=tool.input_schema)
             for tool in upstream_tools

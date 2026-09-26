@@ -553,7 +553,7 @@ if MCP_AVAILABLE:
     def _extract_mcp_headers_from_request(
         request: Request,
         mcp_request_handler_cls,
-    ) -> tuple:
+    ) -> tuple[str | None, dict[str, dict[str, str]], dict[str, str]]:
         """
         Extract MCP auth headers from HTTP request.
 
@@ -718,6 +718,24 @@ if MCP_AVAILABLE:
             )
 
         return _create_tool_response_objects(tools, server)
+
+    async def fetch_unpinned_tool_catalog(
+        server: MCPServer, request: Request, user_api_key_dict: UserAPIKeyAuth
+    ) -> list[ListMCPToolsRestAPIResponseObject]:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        mcp_auth_header, mcp_server_auth_headers, raw_headers = _extract_mcp_headers_from_request(
+            request, MCPRequestHandler
+        )
+        return await _get_tools_for_single_server(
+            server.model_copy(update={"pinned_tools": None}),
+            _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header),
+            raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_dict,
+            extra_headers=await _get_user_oauth_extra_headers(server, user_api_key_dict),
+            apply_tool_filters=False,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        )
 
     async def _resolve_allowed_mcp_servers_for_tool_call(
         user_api_key_dict: UserAPIKeyAuth,
