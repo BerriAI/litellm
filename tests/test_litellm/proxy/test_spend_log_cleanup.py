@@ -210,24 +210,22 @@ async def test_should_delete_spend_logs():
 
 
 @pytest.mark.asyncio
-async def test_delete_batch_transaction_timeout_covers_statement_timeout():
-    tx_kwargs = []
+async def test_delete_batch_transaction_timeout_covers_statement_timeout() -> None:
+    transaction: Final = MagicMock()
+    transaction.execute_raw = AsyncMock(side_effect=[0, 0, 3])
 
     @asynccontextmanager
-    async def tx(**kwargs):
-        tx_kwargs.append(kwargs)
-        transaction = MagicMock()
-        transaction.execute_raw = AsyncMock(side_effect=[0, 0, 3])
+    async def tx(timeout: timedelta):
         yield transaction
 
-    prisma_client = MagicMock()
-    prisma_client.db.tx = tx
-    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "30d"})
+    prisma_client: Final = MagicMock()
+    prisma_client.db.tx = MagicMock(side_effect=tx)
+    cleaner: Final = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "30d"})
     cleaner.batch_timeout_seconds = 12
 
     await cleaner._execute_delete_batch(prisma_client, "DELETE FROM table", datetime.now(), _far_deadline())
 
-    assert tx_kwargs[0]["timeout"] >= timedelta(seconds=12)
+    assert prisma_client.db.tx.call_args.kwargs["timeout"] >= timedelta(seconds=12)
 
 
 @pytest.mark.asyncio
