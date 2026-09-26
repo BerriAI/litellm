@@ -4555,8 +4555,13 @@ class MCPServerManager:
         self._template_discovery_cache.invalidate(server_id)
 
     def _invalidate_server_definition_caches(self, server_id: str) -> None:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
+            invalidate_oauth_metadata_cache,
+        )
+
         self._invalidate_discovery_lists(server_id)
         self._listed_tools_by_server_id.pop(server_id, None)
+        invalidate_oauth_metadata_cache(server_id)
 
     def _discovers_per_caller(self, server: MCPServer) -> bool:
         return (

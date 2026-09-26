@@ -12611,3 +12611,39 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
     proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
     proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_server_drops_cached_upstream_oauth_metadata():
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="oauth-cache-server",
+        name="oauth_cache_server",
+        url="http://old-upstream/mcp",
+        transport=MCPTransport.http,
+    )
+    manager.registry[server.server_id] = server
+    stale_key: Final = (server.server_id, server.url)
+    other_key: Final = ("other-server", "http://other/mcp")
+    discoverable_endpoints._OAUTH_METADATA_CACHE[stale_key] = (time.time() + 300, {"iss": "old-idp"})
+    discoverable_endpoints._OAUTH_METADATA_CACHE[other_key] = (time.time() + 300, {"iss": "other"})
+    try:
+        await manager.update_server(
+            LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.name,
+                url="http://new-upstream/mcp",
+                transport=MCPTransport.http,
+            )
+        )
+        assert stale_key not in discoverable_endpoints._OAUTH_METADATA_CACHE
+        assert other_key in discoverable_endpoints._OAUTH_METADATA_CACHE
+    finally:
+        discoverable_endpoints._OAUTH_METADATA_CACHE.pop(stale_key, None)
+        discoverable_endpoints._OAUTH_METADATA_CACHE.pop(other_key, None)
