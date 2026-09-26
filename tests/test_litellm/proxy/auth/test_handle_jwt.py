@@ -8023,3 +8023,32 @@ async def test_database_free_jwt_admission_with_entra_shaped_claims(monkeypatch:
         assert auth.agent_id == ("configured" if kind == "config-agent" else None)
         assert auth.managed_agent_context is None
         assert result["is_proxy_admin"] is True
+
+
+@pytest.mark.parametrize(
+    "issuer,audience,disabled,expected",
+    [
+        (None, "gateway", False, False),
+        ("trusted", "gateway", False, True),
+        ("trusted", None, True, False),
+        ("other", "gateway", False, False),
+    ],
+)
+def test_managed_issuer_requires_configured_audience_validation(
+    monkeypatch: pytest.MonkeyPatch, issuer: str | None, audience: str | None, disabled: bool, expected: bool
+) -> None:
+    from litellm.proxy._types import JWTIssuerConfig
+
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        None,
+        DualCache(),
+        LiteLLM_JWTAuth(
+            issuers=[
+                JWTIssuerConfig(issuer="trusted", audience=audience, disable_audience_validation=disabled),
+            ]
+        ),
+    )
+    assert handler.managed_issuer_is_trusted(issuer) is expected
