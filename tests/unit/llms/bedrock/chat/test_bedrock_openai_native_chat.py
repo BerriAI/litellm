@@ -10,10 +10,12 @@ import pytest
 import litellm
 from litellm.llms.bedrock.chat.openai_native.transformation import BedrockOpenAIChatConfig
 from litellm.llms.bedrock.common_utils import (
+    bedrock_chat_rejects_function_tools_while_reasoning,
     bedrock_supports_openai_chat,
     bedrock_uses_native_openai_chat,
     get_bedrock_chat_config,
 )
+from litellm.main import responses_api_bridge_check
 
 MODEL = "global.openai.gpt-6-luna"
 
@@ -130,3 +132,52 @@ class TestRouting:
 
     def test_claude_unaffected(self):
         assert bedrock_uses_native_openai_chat("anthropic.claude-3-5-sonnet-20241022-v2:0") is False
+
+
+class TestFunctionToolsReasoningBridge:
+    """gpt-5.6/6 reject function tools while reasoning on chat completions; those requests
+    bridge to the native /v1/responses surface instead of regressing to Converse."""
+
+    FUNCTION_TOOL = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("global.openai.gpt-6-luna", True),
+            ("us.openai.gpt-5.6-sol", True),
+            ("global.openai.gpt-5.5", False),
+            ("us.openai.gpt-5.4", False),
+        ],
+    )
+    def test_version_boundary(self, model, expected):
+        assert bedrock_chat_rejects_function_tools_while_reasoning(model) is expected
+
+    def _bridge(self, model, **kw):
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "bedrock_converse",
+                    "mode": "chat",
+                    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+                    "supports_reasoning": True,
+                }
+            }
+        )
+        info, _ = responses_api_bridge_check(model=model, custom_llm_provider="bedrock", **kw)
+        return info.get("mode")
+
+    def test_tools_with_reasoning_bridges_to_responses(self):
+        assert self._bridge("global.openai.gpt-6-luna", tools=self.FUNCTION_TOOL, reasoning_effort="low") == "responses"
+
+    def test_tools_with_default_reasoning_bridges(self):
+        # unset reasoning_effort still means reasoning is active for these models
+        assert self._bridge("global.openai.gpt-6-luna", tools=self.FUNCTION_TOOL) == "responses"
+
+    def test_tools_with_reasoning_none_stays_chat(self):
+        assert self._bridge("global.openai.gpt-6-luna", tools=self.FUNCTION_TOOL, reasoning_effort="none") != "responses"
+
+    def test_gpt55_tools_with_reasoning_stays_chat(self):
+        assert self._bridge("global.openai.gpt-5.5", tools=self.FUNCTION_TOOL, reasoning_effort="low") != "responses"
+
+    def test_no_tools_stays_chat(self):
+        assert self._bridge("global.openai.gpt-6-luna", reasoning_effort="low") != "responses"
