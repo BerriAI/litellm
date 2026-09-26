@@ -19,9 +19,12 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
+
+if TYPE_CHECKING:
+    from prisma.types import LiteLLM_AgentsTableUpdateManyMutationInput, LiteLLM_AgentsTableWhereInput
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) -> Mapping[str, object]:
@@ -83,29 +86,19 @@ class AgentSpendResetWrites:
     table: BatchTable
 
     def queue_window_reset(self, budget_id: str, window: datetime, rollover_cap: float | None) -> None:
+        zero: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {"spend": 0.0, "spend_window": window}
         if rollover_cap is None:
-            self.table.update_many(
-                where={"budget_id": budget_id},  # mutable-ok: Prisma only serializes dict query filters
-                data={"spend": 0.0, "spend_window": window},  # mutable-ok: Prisma only serializes dict update payloads
-            )
+            all_agents: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id}
+            self.table.update_many(where=all_agents, data=zero)
             return
-        self.table.update_many(
-            where={
-                "budget_id": budget_id,
-                "spend": {"lte": rollover_cap},
-            },  # mutable-ok: Prisma only serializes dict query filters
-            data={"spend": 0.0, "spend_window": window},  # mutable-ok: Prisma only serializes dict update payloads
-        )
-        self.table.update_many(
-            where={
-                "budget_id": budget_id,
-                "spend": {"gt": rollover_cap},
-            },  # mutable-ok: Prisma only serializes dict query filters
-            data={
-                "spend": {"decrement": rollover_cap},
-                "spend_window": window,
-            },  # mutable-ok: Prisma only serializes dict update payloads
-        )
+        below: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id, "spend": {"lte": rollover_cap}}
+        above: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id, "spend": {"gt": rollover_cap}}
+        remainder: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {
+            "spend": {"decrement": rollover_cap},
+            "spend_window": window,
+        }
+        self.table.update_many(where=below, data=zero)
+        self.table.update_many(where=above, data=remainder)
 
 
 @dataclass(frozen=True, slots=True)

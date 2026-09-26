@@ -2340,13 +2340,9 @@ class DBSpendUpdateWriter:
                                 )
                                 _entity_spend_table(batcher, table_accessor).update_many(
                                     where=(
-                                        dict(
-                                            agent_spend_filter(entity_id)
-                                        )  # mutable-ok: Prisma only serializes dict query filters
+                                        agent_spend_filter(entity_id)
                                         if table_accessor == "litellm_agentstable"
-                                        else {
-                                            where_field: entity_id
-                                        }  # mutable-ok: Prisma only serializes dict query filters
+                                        else {where_field: entity_id}  # mutable-ok: Prisma filter
                                     ),
                                     data={"spend": {"increment": response_cost}},
                                 )

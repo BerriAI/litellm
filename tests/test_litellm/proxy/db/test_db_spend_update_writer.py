@@ -4805,7 +4805,7 @@ async def test_agent_admission_window_survives_logging_payload_and_background_qu
 @pytest.mark.parametrize("counter", ["spend:agent:another-agent", "spend:agent_window:malformed:window-agent"])
 async def test_invalid_agent_window_cannot_charge_another_agent(counter: str) -> None:
     writer: Final = DBSpendUpdateWriter()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not match"):
         await writer._update_agent_db(0.4, "window-agent", MagicMock(), counter_key=counter)
     transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert transactions["agent_list_transactions"] == {}
