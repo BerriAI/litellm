@@ -406,7 +406,11 @@ def _handle_invalid_parallel_tool_calls(
         shift = 0
         for i, replacement in replacements.items():
             tool_calls[:] = tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
-            shift += len(replacement)
+            # One entry is replaced by ``len(replacement)`` entries, so the
+            # offsets of everything after it move by the difference - not by
+            # the full length, which would skip one entry per expansion and
+            # leave the next ``multi_tool_use.parallel`` call in place.
+            shift += len(replacement) - 1
 
         return tool_calls
     except json.JSONDecodeError:
