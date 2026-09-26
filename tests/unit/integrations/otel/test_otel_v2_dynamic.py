@@ -1,6 +1,7 @@
 """Per-request multi-tenant credential routing (V1 parity)."""
 
 import base64
+import logging
 
 import pytest
 from opentelemetry.trace import NoOpTracer
@@ -714,14 +715,18 @@ def test_signoz_team_endpoint_off_the_allowlist_is_dropped_along_with_its_key(mo
     assert dynamic_otlp_headers("signoz", params) is None
 
 
-def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reaches_it(monkeypatch):
+def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reaches_it(monkeypatch, caplog):
     import litellm
     from litellm.integrations.otel.presets import dynamic_otlp_endpoint, dynamic_otlp_headers
+    from litellm.integrations.otel.presets.signoz import _warn_endpoint_without_key
 
     monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["collector.team.internal"])
     params = {"signoz_ingestion_endpoint": "http://collector.team.internal:4318"}
+    _warn_endpoint_without_key.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert dynamic_otlp_headers("signoz", params) is None
+    assert "Set signoz_ingestion_key alongside it" in caplog.text
     assert dynamic_otlp_endpoint("signoz", params) is None
-    assert dynamic_otlp_headers("signoz", params) is None
     cache = _cache(
         "signoz",
         exporters=[
