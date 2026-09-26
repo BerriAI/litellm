@@ -147,6 +147,22 @@ def _spans(batches: Sequence[Request]) -> tuple[Span, ...]:
     )
 
 
+def _prompt_events(span: Span) -> tuple[str, ...]:
+    return tuple(
+        attribute.value.string_value
+        for event in span.events
+        if event.name == "gen_ai.content.prompt"
+        for attribute in event.attributes
+        if attribute.key == "gen_ai.prompt"
+    )
+
+
+def _assert_prompted_with(span: Span, marker: str) -> Span:
+    prompts: Final = _prompt_events(span)
+    assert any(marker in prompt for prompt in prompts), (span.name, prompts)
+    return span
+
+
 def _spans_carrying(batches: Sequence[Request], marker: str, name: str | None = "litellm_request") -> tuple[Span, ...]:
     return tuple(
         span for span in _spans(batches) if name in (None, span.name) and marker.encode() in span.SerializeToString()
@@ -209,7 +225,7 @@ class _Sink:
         )
         spans: Final = _spans_carrying(settled, marker)
         assert len(spans) == 1, [span.span_id for span in spans]
-        return spans[0]
+        return _assert_prompted_with(spans[0], marker)
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,6 +583,8 @@ def _assert_each_once(sink: _Sink, markers: Sequence[str], seconds: float = 30) 
     )
     counts: Final = {marker: len(_spans_carrying(settled, marker)) for marker in markers}
     assert all(count == 1 for count in counts.values()), counts
+    for marker in markers:
+        _assert_prompted_with(_spans_carrying(settled, marker)[0], marker)
 
 
 def test_langtrace_two_workers_deliver_every_burst_span_exactly_once(gateway: Gateway, tmp_path: Path) -> None:
