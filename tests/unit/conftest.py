@@ -27,9 +27,15 @@ HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
         "TZ",
         "VIRTUAL_ENV",
         "LITELLM_LOCAL_MODEL_COST_MAP",
+        "TIKTOKEN_CACHE_DIR",
     )
 )
 HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
+HOST_ONLY_ENVIRONMENT: Final = frozenset(
+    name
+    for name in os.environ
+    if name not in HOST_ENVIRONMENT_ALLOWLIST and not name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES)
+)
 
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -190,9 +196,8 @@ def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple
 def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> Iterator[None]:
     credentials, config = isolated_aws_config_files
     with pytest.MonkeyPatch.context() as environment:
-        for name in tuple(os.environ):
-            if name not in HOST_ENVIRONMENT_ALLOWLIST and not name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES):
-                environment.delenv(name)
+        for name in HOST_ONLY_ENVIRONMENT:
+            environment.delenv(name, raising=False)
         environment.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
         environment.setenv("AWS_CONFIG_FILE", str(config))
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")

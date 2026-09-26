@@ -2349,7 +2349,7 @@ async def test_proxy_server_prisma_setup():
         mock_client.db = mock_db
 
         prisma_client = await ProxyStartupEvent._setup_prisma_client(
-            database_url=os.getenv("DATABASE_URL"),
+            database_url="postgresql://user:pass@localhost:5432/litellm",
             proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
             user_api_key_cache=user_api_key_cache,
         )
