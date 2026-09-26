@@ -10,7 +10,9 @@ from litellm.types.litellm_params import ControlOptions
 DEFAULT_CHUNKING_REQUESTS: Final = (
     pytest.param(MappingProxyType({}), id="unset"),
     pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": True}), id="dropped"),
-    pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": "true"}), id="dropped_by_string_flag"),
+    pytest.param(
+        MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": "true"}), id="dropped_by_string_flag"
+    ),
     pytest.param(MappingProxyType({CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=1)}), id="forged_options"),
     pytest.param(MappingProxyType({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}}), id="forged_mapping"),
 )
