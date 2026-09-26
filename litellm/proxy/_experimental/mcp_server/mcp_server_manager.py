@@ -5401,14 +5401,14 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None,
     ) -> tuple[MCPTool, ...]:
-        described: Final = apply_description_overrides(tools, server)
-        pinned, drift = pin_tool_catalog(described, server.pinned_tools) if server.pinned_tools else (described, None)
+        pinned, drift = pin_tool_catalog(tools, server.pinned_tools) if server.pinned_tools else (tuple(tools), None)
+        described: Final = apply_description_overrides(pinned, server)
         if proxy_logging_obj is None:
-            return pinned
+            return described
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
         )
-        scan: Final = await scan_tool_descriptions(pinned, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        scan: Final = await scan_tool_descriptions(described, server, proxy_logging_obj, user_api_key_auth, raw_headers)
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
         )

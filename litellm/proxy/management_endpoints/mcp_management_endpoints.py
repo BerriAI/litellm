@@ -1541,13 +1541,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found in the database."},
             )
-        from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_unpinned_tool_catalog
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
 
-        upstream_tools: Final = await fetch_unpinned_tool_catalog(server, request, user_api_key_dict)
-        snapshot: Final = {
-            tool.name: PinnedMCPTool(description=tool.description or "", input_schema=tool.input_schema)
-            for tool in upstream_tools
-        }
+        snapshot: Final = await fetch_pinnable_tool_catalog(server, request, user_api_key_dict)
         if not snapshot:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
