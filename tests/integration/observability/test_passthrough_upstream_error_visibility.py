@@ -697,7 +697,13 @@ def test_gemini_passthrough_streaming_429_client_disconnect_still_logs_failure(
     frames: Final = (b'data: {"error":"rate limited"}\n\n', b"data: [DONE]\n\n")
 
     def respond(request: Request) -> Reply:
-        return Reply(status=429, content_type="text/event-stream", chunks=frames, gate_after_first=gate)
+        return Reply(
+            status=429,
+            content_type="text/event-stream",
+            chunks=frames,
+            gate_after_first=gate,
+            gate_timeout_seconds=120,
+        )
 
     path: Final = tmp_path / "gemini-stream-429-disconnect.yaml"
     with wire_server(respond) as wire:

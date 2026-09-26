@@ -163,7 +163,11 @@ async def test_passthrough_disconnect_burst_logs_every_failure_once(gateway: Gat
     def respond(request: Request) -> Reply:
         if "streamGenerateContent" in request.target:
             return Reply(
-                status=429, content_type="text/event-stream", chunks=_RATE_LIMITED_FRAMES, gate_after_first=gate
+                status=429,
+                content_type="text/event-stream",
+                chunks=_RATE_LIMITED_FRAMES,
+                gate_after_first=gate,
+                gate_timeout_seconds=300,
             )
         return Reply(status=200, body=json.dumps({"ok": True}).encode())
 
