@@ -7,6 +7,7 @@
 //! may rewrite the wire request before it is sent.
 
 pub mod event;
+pub mod hooks;
 pub mod host;
 pub mod machine;
 pub mod protocol;

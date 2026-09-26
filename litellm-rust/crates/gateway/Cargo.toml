@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 axum.workspace = true
+http-body-util = "0.1"
 litellm-core.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-auth.workspace = true
@@ -14,11 +15,14 @@ litellm-config.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-secrets.workspace = true
-tower-http = { version = "0.7.1", default-features = false, features = ["trace"] }
+litellm-tracing.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
 rstest.workspace = true
-serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tower = { version = "0.5", features = ["util"] }

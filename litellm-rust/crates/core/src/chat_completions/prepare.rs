@@ -1,3 +1,4 @@
+use litellm_auth::SecretValue;
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::base_llm::{
     auth::{ValidatedEnvironment, with_default_headers},
@@ -14,10 +15,16 @@ use crate::chat_completions::types::{
     ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
 
+pub(super) struct ResolvedProvider {
+    pub(super) model: String,
+    pub(super) custom_llm_provider: String,
+    pub(super) config: &'static dyn BaseConfig,
+}
+
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn BaseConfig), Error> {
+) -> Result<ResolvedProvider, Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -32,7 +39,11 @@ pub(super) fn resolve_provider_config<'a>(
         })?;
     let config = chat_completions_provider_config(provider_info.custom_llm_provider)
         .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
-    Ok((provider_info.model.to_string(), config))
+    Ok(ResolvedProvider {
+        model: provider_info.model.to_string(),
+        custom_llm_provider: provider_info.custom_llm_provider.to_string(),
+        config,
+    })
 }
 
 pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error> {
@@ -43,7 +54,11 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
-    let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
+    let ResolvedProvider {
+        model,
+        custom_llm_provider,
+        config,
+    } = resolve_provider_config(request.model, request.custom_llm_provider)?;
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
         return Err(Error::InvalidRequest(
@@ -55,6 +70,7 @@ pub(super) fn resolve_request(
     }
     Ok(ResolvedChatCompletionsRequest {
         model,
+        custom_llm_provider,
         config,
         messages,
         optional_params: request.optional_params,
@@ -99,15 +115,18 @@ pub(super) fn prepare_provider_request(
         &env_lookup,
     )?;
     let transformed =
-        config.transform_request(&model, request.messages, request.optional_params)?;
+        config.transform_request(&model, request.messages, request.optional_params.clone())?;
 
     Ok(ProviderChatCompletionsRequest {
         model,
+        custom_llm_provider: request.custom_llm_provider,
         config,
         url,
         body: transformed.body,
+        optional_params: request.optional_params,
         environment,
         timeout: request.timeout,
+        api_key: request.api_key.map(|key| SecretValue::new(key.to_string())),
     })
 }
 
@@ -449,11 +468,19 @@ mod tests {
             json!("abc-123"),
         )]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let signed = crate::chat_completions::handler::outbound_request(
+        let authenticated = resolve_auth(
             &litellm_auth::AuthServices::default(),
-            &prepared,
+            prepared.environment,
+            &|_| None,
         )
         .await
+        .expect("resolves");
+        let signed = crate::chat_completions::handler::outbound_request(
+            authenticated,
+            prepared.url,
+            &prepared.body,
+            prepared.timeout,
+        )
         .expect("signs");
 
         let authorization = signed
@@ -502,11 +529,19 @@ mod tests {
             call.api_key = None;
             call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
             let prepared = prepare_chat_completions_call(call).expect("prepares");
-            let error = crate::chat_completions::handler::outbound_request(
+            let authenticated = resolve_auth(
                 &litellm_auth::AuthServices::default(),
-                &prepared,
+                prepared.environment,
+                &|_| None,
             )
             .await
+            .expect("resolves");
+            let error = crate::chat_completions::handler::outbound_request(
+                authenticated,
+                prepared.url,
+                &prepared.body,
+                prepared.timeout,
+            )
             .expect_err("{forwarded} should decline instead of being signed");
             assert!(
                 matches!(error, Error::Unsupported(_)),
