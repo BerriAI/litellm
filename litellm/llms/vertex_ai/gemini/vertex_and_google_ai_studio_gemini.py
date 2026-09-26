@@ -1276,7 +1276,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         voice: Final = value.get("voice")
         speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
-            dict[str, object]  # mutable-ok: provider request serialization requires a concrete dict
+            dict[str, object]
         ] = (
             {  # mutable-ok: provider request serialization requires a concrete dict
                 "voiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
