@@ -9,6 +9,7 @@ from prisma.builder import QueryBuilder
 from litellm.repositories.chunked_in import (
     IN_LIST_CHUNK_SIZE,
     MAX_IN_LIST_CHUNK_SIZE,
+    ChunkedFieldWriteError,
     SameFieldFilterError,
     count_in,
     delete_many_in,
@@ -244,3 +245,25 @@ async def test_the_chunk_filter_equals_a_hand_written_filter() -> None:
     table = _table(2)
     await find_many_in(table, "id", ["id-0", "id-1", "id-0"])
     assert table.filters == [{"id": {"in": ["id-0", "id-1"]}}]
+
+
+async def test_an_update_that_moves_a_row_into_a_later_chunk_is_refused_before_any_query() -> None:
+    table = FakeTable(rows=[{"id": "old", "team": "a"}, {"id": "new", "team": "b"}])
+    with pytest.raises(ChunkedFieldWriteError, match="`id`"):
+        await update_many_in(table, "id", ["old", "new"], data={"id": "new"}, atomicity="per_chunk_ok", chunk_size=1)
+    assert table.filters == []
+    assert table.rows == [{"id": "old", "team": "a"}, {"id": "new", "team": "b"}]
+
+
+@pytest.mark.parametrize("data", [{"id": "x"}, {"id": {"set": "x"}}, {"team": "x", "id": None}])
+@pytest.mark.parametrize("values", [[], ["id-0"]])
+async def test_writing_the_chunked_field_is_refused_in_any_form(data: Mapping[str, object], values: list[str]) -> None:
+    table = _table(1)
+    with pytest.raises(ChunkedFieldWriteError):
+        await update_many_in(table, "id", values, data=data, atomicity="per_chunk_ok")
+    assert table.filters == []
+
+
+async def test_writing_another_field_that_names_the_chunked_one_is_allowed() -> None:
+    table = _table(1)
+    assert await update_many_in(table, "id", ["id-0"], data={"team": {"set": "id"}}, atomicity="per_chunk_ok") == 1

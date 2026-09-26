@@ -4,8 +4,8 @@ Prisma `{"in": [...]}` filters whose value list may outgrow Postgres's bind-para
 A membership filter binds one parameter per value and Postgres caps a statement at 32,767,
 so each operation here splits the deduplicated values into chunks of `chunk_size` values
 (`IN_LIST_CHUNK_SIZE` by default, at most `MAX_IN_LIST_CHUNK_SIZE` so the rest of the filter
-keeps headroom under the cap), runs them one after another (a transaction handle works as `table`), and combines the
-results. An empty list returns without querying.
+keeps headroom under the cap), runs them one after another (a transaction handle works as
+`table`), and combines the results. An empty list returns without querying.
 
 `not_in` cannot be chunked: a row must be outside every chunk at once. Such sites need
 `<> ALL($1::text[])` in raw SQL or a relation filter instead.
@@ -32,6 +32,10 @@ the caller accepts earlier chunks staying applied when a later one fails."""
 
 class SameFieldFilterError(ValueError):
     pass
+
+
+class ChunkedFieldWriteError(ValueError):
+    """An update that writes the chunked field can move a row into a later chunk, which then updates it again."""
 
 
 def _as_clauses(value: object) -> tuple[object, ...]:
@@ -119,6 +123,10 @@ async def update_many_in(
     where: Mapping[str, object] | None = None,
     chunk_size: int = IN_LIST_CHUNK_SIZE,
 ) -> int:
+    if field in data:
+        raise ChunkedFieldWriteError(
+            f"`data` writes `{field}`, the chunked field; a row it moves can match a later chunk"
+        )
     payload: Final = dict(data)  # mutable-ok: prisma's query builder only accepts dict payloads
     return sum(
         await _each_chunk(field, values, where, lambda chunk: table.update_many(data=payload, where=chunk), chunk_size)
