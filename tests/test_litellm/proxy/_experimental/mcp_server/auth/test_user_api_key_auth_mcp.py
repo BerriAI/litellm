@@ -4708,7 +4708,7 @@ class TestAgentMCPPermissions:
             ),
         )
 
-    async def testget_allowed_mcp_servers_for_agent_includes_toolset_servers(self):
+    async def test_get_allowed_mcp_servers_for_agent_includes_toolset_servers(self):
         """An agent granted only mcp_toolsets reaches the toolset's servers, exactly as a
         key, team, or org granted only toolsets does"""
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
@@ -4777,7 +4777,7 @@ class TestAgentMCPPermissions:
 
         assert result == []
 
-    async def testget_agent_tool_permissions_for_server_unions_direct_and_toolset_tools(self):
+    async def test_get_agent_tool_permissions_for_server_unions_direct_and_toolset_tools(self):
         """The agent's tool ceiling on a server is its direct tool grants plus the tools its
         toolsets grant there, and None only when neither names the server"""
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")

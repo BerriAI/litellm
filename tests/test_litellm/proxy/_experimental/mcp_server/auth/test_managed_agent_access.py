@@ -259,3 +259,43 @@ async def test_tool_policy_outage_after_server_admission_fails_closed(monkeypatc
     with pytest.raises(HTTPException) as failure:
         await MCPRequestHandler.get_allowed_tools_for_server("slack", actor(None, delegated=True))
     assert failure.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", (None, "proxy_admin", "internal_user"))
+@pytest.mark.parametrize("scoped", (False, True))
+async def test_manager_preserves_managed_server_grants_across_open_channels(
+    monkeypatch: pytest.MonkeyPatch, role: str | None, scoped: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    manager.registry = {
+        "open": MCPServer(server_id="open", name="open", transport="http", allow_all_keys=True),
+        "submitted": MCPServer(server_id="submitted", name="submitted", transport="http"),
+        "passthrough": MCPServer(
+            server_id="passthrough", name="passthrough", transport="http", auth_type="true_passthrough"
+        ),
+    }
+    monkeypatch.setattr(db, "get_active_submitted_mcp_server_ids_for_user", AsyncMock(return_value=["submitted"]))
+    auth: Final = actor(None)
+    auth.user_role = role
+    assert not auth.mcp_explicit_grants_only
+    access: Final = MCPServerAccess(server_ids=("slack", "open")) if scoped else None
+    assert set(await manager.get_allowed_mcp_servers(auth, access=access)) == ({"slack"} if scoped else {"slack", "linear"})
+
+
+@pytest.mark.asyncio
+async def test_manager_does_not_replace_managed_policy_failure_with_open_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    manager.registry = {"open": MCPServer(server_id="open", name="open", transport="http", allow_all_keys=True)}
+    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(side_effect=RuntimeError("writer unavailable")))
+    with pytest.raises(HTTPException) as failure:
+        await manager.get_allowed_mcp_servers(actor(None, delegated=True))
+    assert failure.value.status_code == 503

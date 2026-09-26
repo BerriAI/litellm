@@ -3434,6 +3434,10 @@ class MCPServerManager:
         2. If admin and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
+        if user_api_key_auth is not None and user_api_key_auth.managed_agent_policy is not None:
+            managed: Final = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+            return managed if access is None else [server for server in managed if server in access.server_ids]
+
         from litellm.proxy.proxy_server import general_settings as proxy_general_settings
 
         resolved_general_settings: Final = proxy_general_settings if general_settings is None else general_settings
