@@ -212,6 +212,12 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
+test_command=(.venv/bin/python tests/integration/run.py "$suite" --results "$results")
+if [ "$suite" = mcp ]; then
+  test_command=(.venv/bin/python -m coverage run --rcfile=tests/integration/conformance_coverage.toml \
+    tests/integration/run.py "$suite" --results "$results")
+fi
+
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
@@ -226,7 +232,16 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
   MCP_CONFORMANCE_ROOT="${MCP_CONFORMANCE_ROOT:-}" \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results"
+  COVERAGE_FILE="$PWD/$results/.coverage-conformance" "${test_command[@]}"
+
+if [ "$suite" = mcp ]; then
+  export COVERAGE_FILE="$PWD/$results/.coverage-conformance"
+  .venv/bin/python -m coverage run --rcfile=tests/integration/conformance_coverage.toml \
+    -m pytest tests/unit/integration_support/test_conformance.py -q
+  .venv/bin/python -m coverage combine --rcfile=tests/integration/conformance_coverage.toml
+  .venv/bin/python -m coverage xml --rcfile=tests/integration/conformance_coverage.toml \
+    -o "$results/conformance-coverage.xml"
+fi
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do

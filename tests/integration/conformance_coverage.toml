@@ -1,0 +1,9 @@
+[tool.coverage.run]
+branch = true
+parallel = true
+relative_files = true
+patch = ["subprocess"]
+include = ["tests/integration/_support/conformance.py"]
+
+[tool.coverage.report]
+show_missing = true

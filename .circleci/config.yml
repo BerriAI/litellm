@@ -3171,6 +3171,13 @@ jobs:
           name: Run owned integration contracts
           command: bash .circleci/scripts/run_integration.sh << parameters.suite >> << parameters.mode >>
           no_output_timeout: 15m
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - codecov/upload:
+                file: test-results/integration-mcp/conformance-coverage.xml
+                flags: mcp-conformance
       - run:
           name: Stop owned database and Redis
           when: always
