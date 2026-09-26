@@ -36019,6 +36019,15 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
     },
+    "hesperan/hesperan-1": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "hesperan",
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://hesperan.com/pricing",
+        "supports_response_schema": true,
+        "supports_system_messages": true
+    },
     "high/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "input_cost_per_image": 0.167,
