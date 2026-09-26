@@ -3607,6 +3607,7 @@
               "default": [
                 "user_impersonation"
               ],
+              "description": "Required delegated scopes. An empty list accepts any nonempty scope granted for this gateway.",
               "items": {
                 "type": "string"
               },
