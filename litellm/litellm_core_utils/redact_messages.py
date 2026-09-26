@@ -172,6 +172,18 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["input"] = redacted_str
 
 
+def _redacted_responses_api_response(response: Mapping[str, object]) -> dict[str, object]:
+    output: Final = copy.deepcopy(response.get("output"))
+    if isinstance(output, list):
+        _redact_responses_api_output_dict(output, REDACTED_BY_LITELLM)
+    return {
+        **response,
+        "output": output,
+        **({"instructions": REDACTED_BY_LITELLM} if response.get("instructions") is not None else {}),
+        **({"reasoning": None} if response.get("reasoning") is not None else {}),
+    }
+
+
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     """
     Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
@@ -193,10 +205,8 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
     response: Final = standard_logging_object.get("response")
     if response is not None:
         if isinstance(response, dict) and "output" in response:
-            # ResponsesAPIResponse format - redact content in output items
-            if isinstance(response.get("output"), list):
-                _redact_responses_api_output_dict(response["output"], redacted_str)
-            redact_vertex_ai_metadata_from_logged_object(response)
+            standard_logging_object["response"] = _redacted_responses_api_response(response)
+            redact_vertex_ai_metadata_from_logged_object(standard_logging_object["response"])
         elif isinstance(response, dict) and "choices" in response:
             # ModelResponse dict format - redact content in choices
             if isinstance(response.get("choices"), list):
@@ -309,9 +319,10 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
         elif isinstance(_result, dict) and "output" in _result:
-            if isinstance(_result.get("output"), list):
-                _redact_responses_api_output_dict(_result["output"], REDACTED_BY_LITELLM)
+            return _redacted_responses_api_response(_result)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
+            if _result.instructions is not None:
+                _result.instructions = REDACTED_BY_LITELLM
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
             # Redact reasoning field in ResponsesAPIResponse
