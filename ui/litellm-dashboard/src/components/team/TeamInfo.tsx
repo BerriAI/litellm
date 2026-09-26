@@ -118,12 +118,24 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
+import {
+  isValidThreshold,
+  TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
+  teamMemberBudgetAlertEmailsFromRows,
+  teamMemberBudgetAlertRowsFromMetadata,
+  teamMemberBudgetAlertSummary,
+} from "./teamMemberBudgetAlertEmails";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
+import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
+import { useMemberBudgetReset } from "./useMemberBudgetReset";
+import { fetchClient } from "@/lib/http/api";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
   "secret_manager_settings",
   "soft_budget_alerting_emails",
+  TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
   "model_tpm_limit",
   "model_rpm_limit",
   "default_estimated_output_tokens",
@@ -351,6 +363,18 @@ const teamUpdateFieldsSchema = z.object({
   team_member_key_duration: z.string().optional(),
   team_member_tpm_limit: numericInputSchema,
   team_member_rpm_limit: numericInputSchema,
+  team_member_max_budget_alert_emails: z
+    .array(z.object({ threshold: z.number().nullable(), emails: z.string() }))
+    .superRefine((rows, ctx) => {
+      rows.forEach((row, index) => {
+        if (!isValidThreshold(row.threshold)) {
+          ctx.addIssue({ code: "custom", message: "Enter a whole number from 1 to 100", path: [index, "threshold"] });
+        } else if (rows.filter((other) => other.threshold === row.threshold).length > 1) {
+          ctx.addIssue({ code: "custom", message: "Duplicate threshold", path: [index, "threshold"] });
+        }
+      });
+    })
+    .optional(),
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
@@ -418,6 +442,7 @@ const TEAM_MEMBER_SETTINGS_FIELDS = [
   "team_member_key_duration",
   "team_member_tpm_limit",
   "team_member_rpm_limit",
+  "team_member_max_budget_alert_emails",
 ] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 
@@ -433,6 +458,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
   team_member_rpm_limit: undefined,
+  team_member_max_budget_alert_emails: [],
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
@@ -483,6 +509,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
+  team_member_max_budget_alert_emails: [...teamMemberBudgetAlertRowsFromMetadata(info.metadata)],
   budget_duration: info.budget_duration,
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
@@ -568,6 +595,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     append: appendModelLimit,
     remove: removeModelLimit,
   } = useFieldArray({ control: form.control, name: "modelLimits" });
+  const {
+    fields: memberBudgetAlertRows,
+    append: appendMemberBudgetAlertRow,
+    remove: removeMemberBudgetAlertRow,
+  } = useFieldArray({ control: form.control, name: "team_member_max_budget_alert_emails" });
   const [teamMemberSettingsOpen, setTeamMemberSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
@@ -884,17 +916,41 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
     await teamUpdateCall(token, updateData);
     queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-
-    toast.success("Team settings updated successfully");
     setIsEditing(false);
-    fetchTeamInfo();
   };
+
+  const memberBudgetReset = useMemberBudgetReset({
+    saveTeam: async (updateData) => {
+      if (!accessToken) return;
+      setIsTeamSaving(true);
+      try {
+        await persistTeamUpdate(accessToken, updateData);
+      } finally {
+        setIsTeamSaving(false);
+      }
+    },
+    resetMemberBudgets: async (bulkTeamId, userIds) => {
+      const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
+        params: { path: { team_id: bulkTeamId } },
+        body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
+      });
+      return data?.data ?? [];
+    },
+    refreshTeamData,
+  });
+
+  const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
+  useEffect(() => {
+    dismissMemberBudgetReset();
+  }, [teamId, dismissMemberBudgetReset]);
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
     if (!accessToken) return;
     setIsTeamSaving(true);
     try {
       await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+      toast.success("Team settings updated successfully");
+      await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -966,6 +1022,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
           : {};
 
+      const memberBudgetAlertEmails =
+        values.team_member_max_budget_alert_emails !== undefined
+          ? teamMemberBudgetAlertEmailsFromRows(values.team_member_max_budget_alert_emails)
+          : info.metadata?.[TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY];
+      const memberBudgetAlertEmailsMetadata =
+        memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
+          ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
+          : {};
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -997,6 +1062,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   .filter((email: string) => email.length > 0)
               : values.soft_budget_alerting_emails || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
+          ...memberBudgetAlertEmailsMetadata,
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
@@ -1005,8 +1071,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
-      if (values.team_member_budget !== undefined) {
-        updateData.team_member_budget = Number(values.team_member_budget);
+      const newTeamMemberBudget =
+        values.team_member_budget !== undefined ? Number(values.team_member_budget) : undefined;
+      if (newTeamMemberBudget !== undefined) {
+        updateData.team_member_budget = newTeamMemberBudget;
       }
 
       if (values.team_member_key_duration !== undefined) {
@@ -1152,7 +1220,28 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
+      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+      if (
+        newTeamMemberBudget !== undefined &&
+        shouldPromptMemberBudgetReset(
+          newTeamMemberBudget,
+          info.team_member_budget_table?.max_budget,
+          customBudgetUserIds,
+        )
+      ) {
+        const pendingReset = {
+          teamId,
+          updateData,
+          userIds: customBudgetUserIds,
+          newBudget: newTeamMemberBudget,
+        };
+        memberBudgetReset.prompt(pendingReset);
+        return;
+      }
+
       await persistTeamUpdate(accessToken, updateData);
+      toast.success("Team settings updated successfully");
+      await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -1581,6 +1670,71 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} placeholder="e.g., 100" />
                           )}
                         </FormField>
+                        <Field>
+                          <FieldLabel>
+                            {labelWithHint(
+                              "Budget Alert Thresholds",
+                              "Email each member when their spend reaches a percentage of their team member budget. The member is always notified; add comma-separated addresses to notify others as well. Requires email alerting to be configured on the proxy.",
+                            )}
+                          </FieldLabel>
+                          {memberBudgetAlertRows.map((row, index) => (
+                            <div key={row.id} className="mb-2 flex items-start gap-2">
+                              <FormField
+                                control={form.control}
+                                name={`team_member_max_budget_alert_emails.${index}.threshold`}
+                                className="w-32"
+                              >
+                                {({ ref, value, onChange, ...field }) => (
+                                  <NumericalInput
+                                    {...field}
+                                    ref={ref}
+                                    value={value ?? ""}
+                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                      onChange(event.target.value === "" ? null : Number(event.target.value))
+                                    }
+                                    placeholder="% of budget"
+                                    min={1}
+                                    max={100}
+                                    step={1}
+                                  />
+                                )}
+                              </FormField>
+                              <FormField
+                                control={form.control}
+                                name={`team_member_max_budget_alert_emails.${index}.emails`}
+                                className="flex-1"
+                              >
+                                {({ ref, value, ...field }) => (
+                                  <UIInput
+                                    {...field}
+                                    ref={ref}
+                                    value={value ?? ""}
+                                    placeholder="Additional recipients, e.g. finance@example.com"
+                                  />
+                                )}
+                              </FormField>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label="Remove budget alert threshold"
+                                className="mt-1 text-destructive"
+                                onClick={() => removeMemberBudgetAlertRow(index)}
+                              >
+                                <CircleMinus className="size-4" />
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full border-dashed"
+                            onClick={() => appendMemberBudgetAlertRow({ threshold: null, emails: "" })}
+                          >
+                            <Plus className="size-4" />
+                            Add Budget Alert Threshold
+                          </Button>
+                        </Field>
                       </FieldGroup>
                     </CollapsibleContent>
                   </Collapsible>
@@ -2151,6 +2305,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                 <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
                 <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
+                <div>Budget Alert Thresholds: {teamMemberBudgetAlertSummary(info.metadata).join("; ") || "None"}</div>
               </div>
               <div>
                 <p className="font-medium">Router Settings</p>
@@ -2425,6 +2580,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={handleDeleteCancel}
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
+      />
+
+      <ResetMemberBudgetsDialog
+        state={memberBudgetReset.state}
+        onReset={memberBudgetReset.reset}
+        onRetry={memberBudgetReset.retry}
+        onKeep={memberBudgetReset.keepCustom}
+        onDismiss={memberBudgetReset.dismiss}
       />
     </div>
   );

@@ -2634,7 +2634,9 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     }
 
 
-def _build_aggregate_authorization_server_response(request: Request, token_exchange_available: bool) -> dict:
+def _build_aggregate_authorization_server_response(
+    request: Request, token_exchange_available: bool
+) -> dict[str, object]:
     """RFC 8414 metadata for the gateway as the aggregate authorization server.
 
     The issuer is ``{base}/mcp`` and must stay equal to the value the

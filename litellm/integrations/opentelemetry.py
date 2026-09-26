@@ -25,7 +25,7 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
-from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -62,10 +62,10 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span | Any
-    Tracer = _Tracer | Any
-    Context = _Context | Any
-    SpanExporter = _SpanExporter | Any
-    UserAPIKeyAuth = _UserAPIKeyAuth | Any
+    Tracer = _Tracer
+    Context = _Context
+    SpanExporter = _SpanExporter
+    UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload | Any
 else:
     Span = Any
@@ -784,6 +784,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         for key, value in attributes.items():
             self.safe_set_attribute(span=span, key=key, value=value)
+        if payload.caller is not None:
+            self.safe_set_attribute(span=span, key=LiteLLM.SERVICE_CALLER, value=payload.caller)
         return span
 
     async def async_service_success_hook(
@@ -2730,7 +2732,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")
             verbose_logger.exception("OpenTelemetry logging error in set_attributes %s", str(e))
 
-    def _cast_as_primitive_value_type(self, value) -> str | bool | int | float:
+    def _cast_as_primitive_value_type(self, value: object) -> str | bool | int | float:
         """
         Casts the value to a primitive OTEL type if it is not already a primitive type.
 

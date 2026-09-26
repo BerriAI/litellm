@@ -26,6 +26,7 @@ def _install_daily_user_rollup_fault(user_id: str) -> str:
     _execute(
         (
             sql.SQL("CREATE SEQUENCE {}").format(sequence),
+            sql.SQL("GRANT USAGE ON SEQUENCE {} TO PUBLIC").format(sequence),
             sql.SQL(
                 "CREATE FUNCTION {}() RETURNS trigger LANGUAGE plpgsql AS $fault$ "
                 "BEGIN PERFORM nextval({}); "
