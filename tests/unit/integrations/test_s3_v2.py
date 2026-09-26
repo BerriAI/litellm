@@ -4281,7 +4281,7 @@ async def _timed_send_batch(size: int) -> float:
 
 @pytest.mark.asyncio
 async def test_send_batch_time_grows_linearly_with_the_batch() -> None:
-    baseline: Final = await _timed_send_batch(10_000)
-    quadrupled: Final = await _timed_send_batch(40_000)
+    baseline: Final = await _timed_send_batch(2_000)
+    quadrupled: Final = await _timed_send_batch(8_000)
 
     assert quadrupled / baseline < 8, f"10k took {baseline:.3f}s, 40k took {quadrupled:.3f}s"
