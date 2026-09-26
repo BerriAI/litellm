@@ -7,6 +7,7 @@ Pre-built custom code for common guardrails (e.g. response rejection detection)
 is available in response_rejection_code.py.
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -43,9 +44,18 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not custom_code:
         raise ValueError("Custom code guardrail requires 'custom_code' in litellm_params")
 
+    raw_litellm_params: Final = guardrail.get("litellm_params")
+    configured_value: Final[object] = (
+        raw_litellm_params.get("streaming_deliver_ended_rewrites")
+        if isinstance(raw_litellm_params, Mapping)
+        else getattr(litellm_params, "streaming_deliver_ended_rewrites", None)
+    )
+    streaming_deliver_ended_rewrites: Final = configured_value if isinstance(configured_value, bool) else False
+
     custom_code_guardrail: Final = CustomCodeGuardrail(
         guardrail_name=guardrail_name,
         custom_code=custom_code,
+        streaming_deliver_ended_rewrites=streaming_deliver_ended_rewrites,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

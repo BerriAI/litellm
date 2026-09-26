@@ -434,6 +434,82 @@ class UnifiedLLMGuardrails(CustomLogger):
             return None
         return call_type
 
+    @staticmethod
+    def _resolve_buffered_rewrite_call_type(
+        user_api_key_dict: UserAPIKeyAuth,
+        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+    ) -> str | None:
+        """Return the route whose translation can write ended-stream rewrites."""
+        if user_api_key_dict.request_route is None:
+            return None
+        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
+        if not call_types:
+            return None
+        call_type: Final = call_types[0].value
+        try:
+            mapped: Final = CallTypes(call_type)
+        except ValueError:
+            return None
+        handler_cls: Final = mappings.get(mapped)
+        if handler_cls is None or not handler_cls.delivers_ended_stream_rewrites:
+            return None
+        return call_type
+
+    async def _run_buffered_rewrite_stream(
+        self,
+        *,
+        guardrail_to_apply: CustomGuardrail,
+        response: AsyncIterable[object],
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+    ) -> AsyncGenerator[object, None]:
+        """Buffer, rewrite, and replay a stream through its endpoint translation."""
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        responses_so_far: Final[list[object]] = []  # mutable-ok: translation handlers rewrite buffered chunks in place
+        async for item in response:
+            responses_so_far.append(item)
+        if not responses_so_far:
+            return
+
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        try:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                deliver_ended_stream_rewrites=True,
+            )
+        except UndeliverableStreamRewrite as e:
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: guardrail '%s' rewrote the streamed response but the rewrite could not be "
+                "written back to the stream: %s. The buffered response will be rejected",
+                e.guardrail_name,
+                e.reason,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="undeliverable_stream_rewrite: The guardrail rewrite could not be safely applied to the "
+                "streamed response",
+            ) from e
+        except HTTPException as e:
+            async for error_item in self.emit_streaming_http_error(
+                e,
+                call_type,
+                responses_so_far,
+                request_data,
+                endpoint_translation=endpoint_translation,
+            ):
+                yield error_item
+            return
+
+        for item in responses_so_far:
+            yield item
+
     async def emit_streaming_http_error(
         self,
         exc: HTTPException,
@@ -1049,6 +1125,23 @@ class UnifiedLLMGuardrails(CustomLogger):
             return
 
         mappings: Final = load_guardrail_translation_mappings()
+
+        if getattr(guardrail_to_apply, "streaming_deliver_ended_rewrites", False):
+            rewrite_call_type: Final = self._resolve_buffered_rewrite_call_type(
+                user_api_key_dict=user_api_key_dict,
+                mappings=mappings,
+            )
+            if rewrite_call_type is not None:
+                async for rewritten_item in self._run_buffered_rewrite_stream(
+                    guardrail_to_apply=guardrail_to_apply,
+                    response=response,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=rewrite_call_type,
+                    mappings=mappings,
+                ):
+                    yield rewritten_item
+                return
 
         # Streaming text transformation (incremental_diff) diverges enough from the
         # block_only path that it runs as its own iterator. It requires a route we

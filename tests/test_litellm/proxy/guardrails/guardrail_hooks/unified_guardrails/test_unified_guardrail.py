@@ -1,5 +1,6 @@
 """Tests for unified guardrail."""
 
+import json
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
@@ -33,6 +34,7 @@ from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import
     MCPGuardrailTranslationHandler,
 )
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
@@ -939,6 +941,120 @@ def _delta_text(item):
     return item.choices[0].delta.content or ""
 
 
+def test_custom_code_initializer_forwards_streaming_rewrite_setting(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code import initialize_guardrail
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda _: None)
+    params = SimpleNamespace(
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n",
+        mode="post_call",
+        default_on=True,
+    )
+
+    guardrail = initialize_guardrail(
+        params,
+        {
+            "guardrail_name": "custom-code-configured",
+            "litellm_params": {"streaming_deliver_ended_rewrites": False},
+        },
+    )
+
+    assert guardrail.streaming_deliver_ended_rewrites is False
+
+
+def test_custom_code_initializer_keeps_streaming_rewrite_opt_in(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code import initialize_guardrail
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda _: None)
+    params = SimpleNamespace(
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n",
+        mode="post_call",
+        default_on=True,
+    )
+
+    guardrail = initialize_guardrail(params, {"guardrail_name": "custom-code-default"})
+
+    assert guardrail.streaming_deliver_ended_rewrites is False
+
+
+@pytest.mark.parametrize(
+    ("request_route", "mappings", "expected"),
+    [
+        (None, {}, None),
+        ("/v1/chat/completions", {}, None),
+        ("/unknown", {}, None),
+        ("/v1/chat/completions", {CallTypes.acompletion: _NoopTranslation}, None),
+        (
+            "/v1/chat/completions",
+            {CallTypes.acompletion: OpenAIChatCompletionsHandler},
+            CallTypes.acompletion.value,
+        ),
+    ],
+)
+def test_resolve_buffered_rewrite_call_type_handles_route_and_handler_support(
+    monkeypatch, request_route, mappings, expected
+):
+    monkeypatch.setattr(unified_module, "get_call_types_for_route", lambda _: get_call_types_for_route(request_route))
+
+    assert (
+        UnifiedLLMGuardrails._resolve_buffered_rewrite_call_type(UserAPIKeyAuth(request_route=request_route), mappings)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_buffered_rewrite_stream_returns_without_output_for_empty_response():
+    async def empty_stream():
+        if False:
+            yield None
+
+    items = [
+        item
+        async for item in UnifiedLLMGuardrails()._run_buffered_rewrite_stream(
+            guardrail_to_apply=RecordingGuardrail(),
+            response=empty_stream(),
+            request_data={},
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            call_type=CallTypes.completion.value,
+            mappings={CallTypes.completion: _NoopTranslation},
+        )
+    ]
+
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_buffered_rewrite_stream_surfaces_translation_http_error(monkeypatch):
+    class _HTTPErrorTranslation(_NoopTranslation):
+        delivers_ended_stream_rewrites = True
+
+        async def process_output_streaming_response(self, *args, **kwargs):
+            raise unified_module.HTTPException(status_code=400, detail="rewrite failed")
+
+    async def emit_error(*args, **kwargs):
+        yield {"error": "rewrite failed"}
+
+    handler = UnifiedLLMGuardrails()
+    monkeypatch.setattr(handler, "emit_streaming_http_error", emit_error)
+
+    async def response_stream():
+        yield {"id": "response-1"}
+
+    items = [
+        item
+        async for item in handler._run_buffered_rewrite_stream(
+            guardrail_to_apply=RecordingGuardrail(),
+            response=response_stream(),
+            request_data={},
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            call_type=CallTypes.completion.value,
+            mappings={CallTypes.completion: _HTTPErrorTranslation},
+        )
+    ]
+
+    assert items == [{"error": "rewrite failed"}]
+
+
 class TestStreamingTransform:
     """Streaming text-transformation (incremental_diff) path on the OpenAI chat
     completions streaming surface."""
@@ -983,6 +1099,251 @@ class TestStreamingTransform:
         assert streamed == full.upper()
         # No raw lowercase content leaked onto the wire.
         assert "hello" not in streamed
+
+    @pytest.mark.asyncio
+    async def test_custom_code_modify_rewrites_streamed_text(self):
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                "    if input_type == 'response':\n"
+                "        return modify(texts=['restored value'])\n"
+                "    return allow()\n"
+            ),
+            guardrail_name="custom-code-streaming",
+            streaming_deliver_ended_rewrites=True,
+        )
+
+        chunks = [
+            _stream_chunk("PLACEHOLDER "),
+            _stream_chunk("value"),
+            _stream_chunk("", finish_reason="stop"),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        streamed = "".join(_delta_text(item) for item in out)
+
+        assert streamed == "restored value"
+
+    @pytest.mark.asyncio
+    async def test_custom_code_streaming_rewrite_can_be_disabled(self):
+        placeholder = "PLACEHOLDER"
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n    return modify(texts=['restored value'])\n"
+            ),
+            guardrail_name="custom-code-streaming-opt-out",
+            streaming_deliver_ended_rewrites=False,
+        )
+
+        out = await _drive_stream(
+            UnifiedLLMGuardrails(),
+            guardrail,
+            [_stream_chunk(placeholder), _stream_chunk("", finish_reason="stop")],
+        )
+
+        assert "".join(_delta_text(item) for item in out) == placeholder
+
+    @pytest.mark.asyncio
+    async def test_custom_code_shorter_placeholder_rewrite_buffers_fragmented_stream(self):
+        placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
+        replacement = "restored-secret"
+        original = f"before {placeholder} after"
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                f"    return modify(texts=[text.replace('{placeholder}', '{replacement}') for text in inputs['texts']])\n"
+            ),
+            guardrail_name="custom-code-placeholder-rewrite",
+            streaming_deliver_ended_rewrites=True,
+        )
+
+        chunks = [_stream_chunk(original[index : index + 3]) for index in range(0, len(original), 3)]
+        chunks.append(_stream_chunk("", finish_reason="stop"))
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        streamed = "".join(_delta_text(item) for item in out)
+
+        assert placeholder not in streamed
+        assert streamed.count(replacement) == 1
+        assert streamed == original.replace(placeholder, replacement)
+        assert all("stream_transform_underflow" not in repr(item) for item in out)
+
+    @pytest.mark.asyncio
+    async def test_custom_code_rewrites_responses_api_stream(self, monkeypatch):
+        placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
+        replacement = "restored-secret"
+        original = f"before {placeholder} after"
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                f"    return modify(texts=[text.replace('{placeholder}', '{replacement}') for text in inputs['texts']])\n"
+            ),
+            guardrail_name="custom-code-responses-rewrite",
+            streaming_deliver_ended_rewrites=True,
+        )
+        _patch_translation_mappings(
+            monkeypatch,
+            {CallTypes.aresponses: OpenAIResponsesHandler, CallTypes.responses: OpenAIResponsesHandler},
+        )
+
+        chunks = [
+            {"type": "response.created", "sequence_number": 0},
+            {"type": "response.reasoning_summary_text.delta", "sequence_number": 1, "delta": "thinking"},
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": original,
+            },
+            {
+                "type": "response.output_text.done",
+                "sequence_number": 3,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": original,
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 4,
+                "response": {
+                    "model": "gpt-4",
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": original}]}],
+                },
+            },
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+        delta_text = "".join(item.get("delta", "") for item in out if item.get("type") == "response.output_text.delta")
+
+        assert delta_text == original.replace(placeholder, replacement)
+        assert placeholder not in repr(out)
+        assert out[-1]["response"]["output"][0]["content"][0]["text"] == original.replace(placeholder, replacement)
+        assert (
+            next(item for item in out if item["type"] == "response.reasoning_summary_text.delta")["delta"] == "thinking"
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_code_rewrites_streamed_tool_call_arguments(self):
+        from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                '    return modify(tool_calls=[{"id": "call_1", "type": "function", '
+                '"function": {"name": "lookup", "arguments": \'{"value": "restored-secret"}\'}}])\n'
+            ),
+            guardrail_name="custom-code-tool-rewrite",
+            streaming_deliver_ended_rewrites=True,
+        )
+        placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
+        fragments = ['{"value": "', placeholder[:20], placeholder[20:45], placeholder[45:], '"}']
+        chunks = [
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content=None,
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    id="call_1",
+                                    index=0,
+                                    type="function",
+                                    function=Function(name="lookup", arguments=fragment),
+                                )
+                            ],
+                        ),
+                    )
+                ]
+            )
+            for fragment in fragments
+        ]
+        chunks.append(
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[]), finish_reason="tool_calls")
+                ]
+            )
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        arguments = "".join(
+            choice.delta.tool_calls[0].function.arguments or ""
+            for item in out
+            for choice in item.choices
+            if choice.delta.tool_calls
+        )
+
+        assert placeholder not in repr(out)
+        assert json.loads(arguments) == {"value": "restored-secret"}
+
+    @pytest.mark.asyncio
+    async def test_custom_code_undeliverable_multi_choice_tool_rewrite_fails_closed(self, monkeypatch):
+        from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
+
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                '    return modify(tool_calls=[{"id": "call_0", "type": "function", '
+                '"function": {"name": "lookup", "arguments": \'{"value": "rewritten-0"}\'}}, '
+                '{"id": "call_1", "type": "function", "function": {"name": "lookup", '
+                '"arguments": \'{"value": "rewritten-1"}\'}}])\n'
+            ),
+            guardrail_name="custom-code-multi-choice-tool-rewrite",
+            streaming_deliver_ended_rewrites=True,
+        )
+        original_arguments = ('{"value": "original"}', '{"value": "second"}')
+        chunks = [
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=index,
+                        delta=Delta(
+                            content=None,
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    id=f"call_{index}",
+                                    index=0,
+                                    type="function",
+                                    function=Function(name="lookup", arguments=arguments),
+                                )
+                            ],
+                        ),
+                    )
+                    for index, arguments in enumerate(original_arguments)
+                ]
+            ),
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=index, delta=Delta(content=None, tool_calls=[]), finish_reason="tool_calls")
+                    for index in range(2)
+                ]
+            ),
+        ]
+
+        async def response_stream():
+            for chunk in chunks:
+                yield chunk
+
+        with pytest.raises(unified_module.HTTPException) as exc_info:
+            async for _ in UnifiedLLMGuardrails()._run_buffered_rewrite_stream(
+                guardrail_to_apply=guardrail,
+                response=response_stream(),
+                request_data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+                call_type=CallTypes.acompletion.value,
+                mappings={CallTypes.acompletion: OpenAIChatCompletionsHandler},
+            ):
+                pass
+
+        assert exc_info.value.status_code == 400
+        assert str(exc_info.value.detail).startswith("undeliverable_stream_rewrite:")
+        assert "original" not in repr(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_incremental_diff_holdback_boundary(self):
