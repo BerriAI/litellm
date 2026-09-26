@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_daily_usage_timezone
 from litellm.repositories.table_repositories import DailyTagSpendRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -228,7 +229,7 @@ async def get_daily_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on UTC today + 1 day.
+    Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on reporting today + 1 day.
 
     This endpoint efficiently calculates unique users per tag for each of the last {MAX_DAYS} days
     using a single optimized SQL query, perfect for dashboard time series visualization.
@@ -249,10 +250,10 @@ async def get_daily_active_users(
         )
 
     try:
-        # Calculate end_date as UTC today + 1 day
-        from datetime import timezone
-
-        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        # Calculate end_date as reporting today + 1 day
+        end_dt = datetime.now(get_daily_usage_timezone()).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
         end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range (last MAX_DAYS days)
@@ -320,14 +321,14 @@ async def get_weekly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on UTC today + 1 day.
+    Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on reporting today + 1 day.
 
     Shows week-by-week breakdown:
     - Week 1 (Jan 1): Earliest week (7 weeks ago)
     - Week 2 (Jan 8): Next week (6 weeks ago)
     - Week 3 (Jan 15): Next week (5 weeks ago)
     - ... and so on for {MAX_WEEKS} weeks total
-    - Week 7: Most recent week ending on UTC today + 1 day
+    - Week 7: Most recent week ending on reporting today + 1 day
 
     Args:
         tag_filter: Optional filter to specific tag (legacy)
@@ -345,10 +346,10 @@ async def get_weekly_active_users(
         )
 
     try:
-        # Calculate end_date as UTC today + 1 day
-        from datetime import timezone
-
-        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        # Calculate end_date as reporting today + 1 day
+        end_dt = datetime.now(get_daily_usage_timezone()).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
         end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range for all weeks (49 days total)
@@ -441,14 +442,14 @@ async def get_monthly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on UTC today + 1 day.
+    Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on reporting today + 1 day.
 
     Shows month-by-month breakdown:
     - Month 1 (Nov): Earliest month (7 months ago, 30-day period)
     - Month 2 (Dec): Next month (6 months ago)
     - Month 3 (Jan): Next month (5 months ago)
     - ... and so on for {MAX_MONTHS} months total
-    - Month 7: Most recent month ending on UTC today + 1 day
+    - Month 7: Most recent month ending on reporting today + 1 day
 
     Args:
         tag_filter: Optional filter to specific tag (legacy)
@@ -466,10 +467,10 @@ async def get_monthly_active_users(
         )
 
     try:
-        # Calculate end_date as UTC today + 1 day
-        from datetime import timezone
-
-        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        # Calculate end_date as reporting today + 1 day
+        end_dt = datetime.now(get_daily_usage_timezone()).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
         end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range for all months (210 days total)
@@ -672,7 +673,7 @@ async def get_per_user_analytics(
     Get per-user analytics including successful requests, tokens, and spend by individual users.
 
     This endpoint provides usage metrics broken down by individual users based on their
-    tag activity during the last 30 days ending on UTC today + 1 day.
+    tag activity during the last 30 days ending on reporting today + 1 day.
 
     Args:
         tag_filter: Optional filter to specific tag (legacy)
@@ -692,10 +693,10 @@ async def get_per_user_analytics(
         )
 
     try:
-        # Calculate end_date as UTC today + 1 day
-        from datetime import timezone
-
-        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        # Calculate end_date as reporting today + 1 day
+        end_dt = datetime.now(get_daily_usage_timezone()).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
         end_date: Final = end_dt.strftime("%Y-%m-%d")
 
         # Calculate date range (last 30 days)

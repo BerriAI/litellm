@@ -37,6 +37,49 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start_time, reporting_timezone, expected_date",
+    [
+        ("2026-09-25T17:00:00Z", "Asia/Singapore", "2026-09-26"),
+        (datetime(2026, 9, 25, 17, tzinfo=timezone.utc), "Asia/Singapore", "2026-09-26"),
+        (datetime(2026, 9, 30, 16), "Asia/Singapore", "2026-10-01"),
+        ("2026-09-30T15:59:59.999999Z", "Asia/Singapore", "2026-09-30"),
+        ("2026-09-25T17:00:00Z", None, "2026-09-25"),
+        ("2026-07-25T22:00:00-07:00", None, "2026-07-25"),
+    ],
+)
+async def test_daily_usage_reporting_calendar(
+    monkeypatch: pytest.MonkeyPatch,
+    start_time: str | datetime,
+    reporting_timezone: str | None,
+    expected_date: str,
+) -> None:
+    monkeypatch.setattr(litellm, "daily_usage_timezone", reporting_timezone, raising=False)
+    monkeypatch.setattr(litellm, "timezone", "Asia/Singapore", raising=False)
+    prisma: Final = MagicMock()
+    prisma.get_request_status.return_value = "success"
+    payload: Final = {
+        "user": "reporting-user",
+        "startTime": start_time,
+        "api_key": "reporting-key",
+        "model": "gpt-4o-mini",
+        "model_group": "gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.25,
+        "metadata": "{}",
+    }
+    transaction: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload, prisma_client=prisma
+    )
+    assert transaction is not None
+    assert transaction["date"] == expected_date
+    assert transaction["spend"] == 0.25
+    assert payload["startTime"] == start_time
+
+
+@pytest.mark.asyncio
 async def test_daily_spend_tracking_with_disabled_spend_logs():
     """
     Test that add_spend_log_transaction_to_daily_user_transaction is still called

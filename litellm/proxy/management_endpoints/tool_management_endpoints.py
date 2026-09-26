@@ -11,7 +11,7 @@ POST /v1/tool/policy            - Update the input_policy / output_policy for a 
 
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Final, Protocol, TypeAlias, TypeVar, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,6 +31,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import TOOL_SPEND_TOP_TOOLS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_daily_usage_timezone
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import (
     DailyToolSpendRepository,
@@ -208,7 +209,7 @@ def _parse_day_start(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(value.strip(), "%Y-%m-%d").replace(tzinfo=get_daily_usage_timezone())
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -269,7 +270,7 @@ async def get_tool_spend(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    end_day: Final = _parse_day_start(end_date) or datetime.now(timezone.utc)
+    end_day: Final = _parse_day_start(end_date) or datetime.now(get_daily_usage_timezone())
     start_day: Final = _parse_day_start(start_date) or end_day - timedelta(days=30)
     start_str: Final = start_day.strftime("%Y-%m-%d")
     end_str: Final = end_day.strftime("%Y-%m-%d")
@@ -432,21 +433,21 @@ async def get_tool_usage_logs(
             if start_date:
                 try:
                     start_time_filter = datetime.strptime(start_date + "T00:00:00", "%Y-%m-%dT%H:%M:%S").replace(
-                        tzinfo=timezone.utc
+                        tzinfo=get_daily_usage_timezone()
                     )
                 except ValueError:
                     pass
             if end_date:
                 try:
-                    end_time_filter = datetime.strptime(end_date + "T23:59:59", "%Y-%m-%dT%H:%M:%S").replace(
-                        tzinfo=timezone.utc
-                    )
+                    end_time_filter = datetime.strptime(end_date + "T00:00:00", "%Y-%m-%dT%H:%M:%S").replace(
+                        tzinfo=get_daily_usage_timezone()
+                    ) + timedelta(days=1)
                 except ValueError:
                     pass
             if start_time_filter is not None or end_time_filter is not None:
                 where["start_time"] = {
                     key: value
-                    for key, value in (("gte", start_time_filter), ("lte", end_time_filter))
+                    for key, value in (("gte", start_time_filter), ("lt", end_time_filter))
                     if value is not None
                 }
 

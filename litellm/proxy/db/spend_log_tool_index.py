@@ -21,8 +21,10 @@ from datetime import datetime, timezone
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final
 
+import litellm
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
+from litellm.proxy.common_utils.timezone_utils import get_daily_spend_bucket_date
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
@@ -71,8 +73,8 @@ def build_tool_usage_transaction(
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
     on a response object, so they are normalized through the same owner by
     wrapping them in the chat-completion shape. Date derivation must match the
-    daily spend writer's ``startTime.split("T")[0]`` so rollup rows land in the
-    same UTC day bucket as LiteLLM_DailyUserSpend."""
+    daily spend writer so rollup rows land in the same reporting day bucket as
+    LiteLLM_DailyUserSpend."""
     mcp_names: Final = (
         (mcp_namespaced_tool_name.strip(),) if mcp_namespaced_tool_name and mcp_namespaced_tool_name.strip() else ()
     )
@@ -90,7 +92,7 @@ def build_tool_usage_transaction(
         return None
     return ToolUsageTransaction(
         request_id=request_id,
-        date=start_time_iso.split("T")[0],
+        date=get_daily_spend_bucket_date(start_time_iso, litellm.daily_usage_timezone),
         start_time=start_time if start_time.tzinfo else start_time.replace(tzinfo=timezone.utc),
         tool_names=tool_names,
         spend=spend,

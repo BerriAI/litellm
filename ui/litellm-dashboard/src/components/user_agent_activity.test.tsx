@@ -4,13 +4,17 @@ import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
 
 // Mock the networking module
-vi.mock("./networking", () => ({
-  userAgentSummaryCall: vi.fn(),
-  tagDauCall: vi.fn(),
-  tagWauCall: vi.fn(),
-  tagMauCall: vi.fn(),
-  tagDistinctCall: vi.fn(),
-}));
+vi.mock("./networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./networking")>();
+  return {
+    formatDate: actual.formatDate,
+    userAgentSummaryCall: vi.fn(),
+    tagDauCall: vi.fn(),
+    tagWauCall: vi.fn(),
+    tagMauCall: vi.fn(),
+    tagDistinctCall: vi.fn(),
+  };
+});
 
 // Mock PerUserUsage component
 vi.mock("./per_user_usage", () => ({
@@ -293,5 +297,24 @@ describe("UserAgentActivity", () => {
     });
 
     expectStackedTwoCategoryChart(chartForTitle("Monthly Active Users - Last 7 Months"), "Month 1");
+  });
+
+  it("renders the configured reporting day when Singapore's calendar date is ahead of UTC", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-25T17:00:00Z"));
+    try {
+      mockTagDauCall.mockResolvedValue({
+        results: [
+          { tag: "User-Agent: Chrome/1.0", active_users: 4000, date: "2026-09-26" },
+          { tag: "User-Agent: Firefox/2.0", active_users: 2600, date: "2026-09-26" },
+        ],
+      });
+      render(<UserAgentActivity {...defaultProps} reportingTimezone="Asia/Singapore" />);
+      await waitFor(() =>
+        expectStackedTwoCategoryChart(chartForTitle("Daily Active Users - Last 7 Days"), "2026-09-20"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

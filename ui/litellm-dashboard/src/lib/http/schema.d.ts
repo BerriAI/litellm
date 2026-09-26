@@ -15191,7 +15191,7 @@ export interface paths {
         };
         /**
          * Get Daily Active Users
-         * @description Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on UTC today + 1 day.
+         * @description Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on reporting today + 1 day.
          *
          *     This endpoint efficiently calculates unique users per tag for each of the last {MAX_DAYS} days
          *     using a single optimized SQL query, perfect for dashboard time series visualization.
@@ -15313,14 +15313,14 @@ export interface paths {
         };
         /**
          * Get Monthly Active Users
-         * @description Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on UTC today + 1 day.
+         * @description Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on reporting today + 1 day.
          *
          *     Shows month-by-month breakdown:
          *     - Month 1 (Nov): Earliest month (7 months ago, 30-day period)
          *     - Month 2 (Dec): Next month (6 months ago)
          *     - Month 3 (Jan): Next month (5 months ago)
          *     - ... and so on for {MAX_MONTHS} months total
-         *     - Month 7: Most recent month ending on UTC today + 1 day
+         *     - Month 7: Most recent month ending on reporting today + 1 day
          *
          *     Args:
          *         tag_filter: Optional filter to specific tag (legacy)
@@ -15449,7 +15449,7 @@ export interface paths {
          * @description Get per-user analytics including successful requests, tokens, and spend by individual users.
          *
          *     This endpoint provides usage metrics broken down by individual users based on their
-         *     tag activity during the last 30 days ending on UTC today + 1 day.
+         *     tag activity during the last 30 days ending on reporting today + 1 day.
          *
          *     Args:
          *         tag_filter: Optional filter to specific tag (legacy)
@@ -15478,14 +15478,14 @@ export interface paths {
         };
         /**
          * Get Weekly Active Users
-         * @description Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on UTC today + 1 day.
+         * @description Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on reporting today + 1 day.
          *
          *     Shows week-by-week breakdown:
          *     - Week 1 (Jan 1): Earliest week (7 weeks ago)
          *     - Week 2 (Jan 8): Next week (6 weeks ago)
          *     - Week 3 (Jan 15): Next week (5 weeks ago)
          *     - ... and so on for {MAX_WEEKS} weeks total
-         *     - Week 7: Most recent week ending on UTC today + 1 day
+         *     - Week 7: Most recent week ending on reporting today + 1 day
          *
          *     Args:
          *         tag_filter: Optional filter to specific tag (legacy)

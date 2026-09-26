@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolSpendResponse } from "@/components/networking";
@@ -101,6 +101,7 @@ interface RenderOptions {
   from?: Date;
   to?: Date;
   userRole?: string;
+  reportingTimezone?: string;
 }
 
 const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
@@ -109,6 +110,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
     from = new Date(2026, 6, 1),
     to = new Date(2026, 6, 14),
     userRole = "Admin",
+    reportingTimezone,
   } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
   useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
@@ -117,6 +119,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
       accessToken="test-token"
       activity={{
         dateValue: { from, to },
+        reportingTimezone,
         onDateChange: vi.fn(),
         results,
         loading: false,
@@ -438,4 +441,14 @@ describe("UsageTab", () => {
       expect(mockGetToolSpend).toHaveBeenCalled();
     });
   });
+});
+
+it("labels configured reporting days and sends the selected calendar dates to tool spend", async () => {
+  renderWith([], {
+    reportingTimezone: "Asia/Singapore",
+    from: new Date(2026, 8, 26),
+    to: new Date(2026, 8, 26),
+  });
+  expect(screen.getByText("Spend is bucketed by Asia/Singapore day")).toBeInTheDocument();
+  await waitFor(() => expect(mockGetToolSpend).toHaveBeenCalledWith("test-token", "2026-09-26", "2026-09-26"));
 });

@@ -3190,3 +3190,15 @@ async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
     header: Final = _team_export_csv("daily", rows).splitlines()[0]
     assert "Flat Cost" not in header
     assert "Total Cost" not in header
+
+
+@pytest.mark.parametrize("browser_offset", [-480, 420, None])
+def test_reporting_buckets_do_not_extend_to_utc_today(
+    monkeypatch: pytest.MonkeyPatch, browser_offset: int | None
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", "America/Los_Angeles")
+    assert _adjust_dates_for_timezone(
+        "2026-09-25", "2026-09-25", browser_offset, True, datetime(2026, 9, 26, 2, tzinfo=timezone.utc)
+    ) == ("2026-09-25", "2026-09-25")

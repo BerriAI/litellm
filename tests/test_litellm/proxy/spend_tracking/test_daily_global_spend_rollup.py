@@ -530,3 +530,38 @@ def test_advance_marker_sql_only_ever_moves_the_stored_marker_forward(_rollup_po
 
     _execute_dollar_sql(conn, _ADVANCE_MARKER_SQL, (param, "2026-09-15", "2026-09-16 00:30:00.75"))
     assert stored() == {"reconciled_through": "2026-09-15", "scanned_at": "2026-09-16 00:30:00.75"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "zone, expected_day",
+    [(None, "2026-09-26"), ("America/Los_Angeles", "2026-09-25"), ("Asia/Singapore", "2026-09-26")],
+)
+async def test_global_rollup_uses_database_clock_in_reporting_timezone(
+    monkeypatch: pytest.MonkeyPatch, zone: str | None, expected_day: str
+) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.daily_global_spend_rollup import _db_now
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", zone)
+    prisma: Final = MagicMock()
+    prisma.db.query_raw = AsyncMock(return_value=[{"now": "2026-09-26 02:00:00", "today": "2026-09-26"}])
+    result: Final = await _db_now(prisma)
+    assert result.today == expected_day
+    assert result.now == "2026-09-26 02:00:00"
+
+
+@pytest.mark.asyncio
+async def test_reporting_rollup_never_reads_an_active_day_from_an_old_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    import litellm
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", "America/Los_Angeles")
+    prisma: Final = _FakePrisma(user_days=())
+    prisma.db.litellm_config.rows[DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM] = {
+        "reconciled_through": "2999-01-01",
+        "scanned_at": "2026-09-26 02:00:00",
+    }
+    expected: Final = (datetime.now(ZoneInfo("America/Los_Angeles")).date() - timedelta(days=1)).isoformat()
+    assert await reconciled_through(prisma) == expected

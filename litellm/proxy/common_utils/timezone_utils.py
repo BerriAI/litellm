@@ -1,9 +1,34 @@
 from datetime import datetime, time, timezone
+from typing import Final
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+
+
+def parse_daily_usage_timezone(raw: object) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        raise ValueError("daily_usage_timezone must be an IANA timezone, e.g. Asia/Singapore")
+    ZoneInfo(raw)
+    return raw
+
+
+def get_daily_usage_timezone() -> ZoneInfo:
+    return ZoneInfo(litellm.daily_usage_timezone or "UTC")
+
+
+def get_daily_spend_bucket_date(start_time: datetime | str, timezone_name: str | None) -> str:
+    if timezone_name is None:
+        return (start_time.isoformat() if isinstance(start_time, datetime) else start_time).split("T")[0]
+    parsed: Final = (
+        datetime.fromisoformat(start_time.replace("Z", "+00:00")) if isinstance(start_time, str) else start_time
+    )
+    aware: Final = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return aware.astimezone(ZoneInfo(timezone_name)).date().isoformat()
 
 
 class BudgetResetSettings(BaseModel):

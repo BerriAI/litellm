@@ -31,6 +31,7 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_GATEWAY_REQUESTS_BUFFER_KEY
+from litellm.proxy.common_utils.timezone_utils import get_daily_usage_timezone
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
 from litellm.types.proxy.gateway_requests import (
@@ -54,8 +55,9 @@ _BUFFERED_ENTRIES: Final = TypeAdapter(tuple[str | bytes, ...])
 _NO_COUNTS: Final[GatewayRequestSnapshot] = MappingProxyType({})
 
 
-def _utc_date() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+def _reporting_date(now: datetime | None = None) -> str:
+    instant: Final = now if now is not None else datetime.now(timezone.utc)
+    return instant.astimezone(get_daily_usage_timezone()).date().isoformat()
 
 
 class GatewayRequestAccumulator:
@@ -65,7 +67,7 @@ class GatewayRequestAccumulator:
         self._counts: dict[GatewayRequestKey, GatewayRequestCounts] = {}  # mutable-ok: bounded fold, drained per flush
 
     def record(self, *, category: BillableCategory, route: str, status_code: int) -> None:
-        key: Final = GatewayRequestKey(date=_utc_date(), category=category.value, route=route)
+        key: Final = GatewayRequestKey(date=_reporting_date(), category=category.value, route=route)
         self._counts[key] = self._counts.get(key, _EMPTY).plus(succeeded=200 <= status_code < 300)
 
     def drain(self) -> GatewayRequestSnapshot:

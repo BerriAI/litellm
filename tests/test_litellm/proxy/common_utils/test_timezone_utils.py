@@ -1,4 +1,5 @@
 from datetime import datetime, time, timezone
+from typing import Final
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -12,7 +13,44 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
     get_budget_reset_timezone,
     parse_budget_reset_time,
+    get_daily_spend_bucket_date,
+    get_daily_usage_timezone,
+    parse_daily_usage_timezone,
 )
+
+
+@pytest.mark.parametrize(
+    "timestamp, zone, expected",
+    [
+        ("2026-12-31T16:00:00Z", "Asia/Singapore", "2027-01-01"),
+        ("2026-09-25T18:15:00Z", "Asia/Kathmandu", "2026-09-26"),
+        ("2026-03-08T07:59:59Z", "America/Los_Angeles", "2026-03-07"),
+        ("2026-03-08T08:00:00Z", "America/Los_Angeles", "2026-03-08"),
+        ("2026-11-01T08:30:00Z", "America/Los_Angeles", "2026-11-01"),
+        ("2026-11-01T09:30:00Z", "America/Los_Angeles", "2026-11-01"),
+        ("2026-07-25T22:00:00-07:00", "UTC", "2026-07-26"),
+        ("2026-07-25T22:00:00-07:00", None, "2026-07-25"),
+    ],
+)
+def test_reporting_date_boundaries(timestamp: str, zone: str | None, expected: str) -> None:
+    assert get_daily_spend_bucket_date(timestamp, zone) == expected
+
+
+@pytest.mark.parametrize("raw", [False, 8, "", "Not/AZone"])
+def test_reporting_timezone_rejects_invalid_config(raw: object) -> None:
+    with pytest.raises((ValueError, KeyError)):
+        parse_daily_usage_timezone(raw)
+
+
+def test_reporting_timezone_is_independent_of_budget_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "timezone", "Asia/Singapore", raising=False)
+    monkeypatch.setattr(litellm, "daily_usage_timezone", None)
+    assert parse_daily_usage_timezone(None) is None
+    assert get_daily_usage_timezone().key == "UTC"
+    configured: Final = parse_daily_usage_timezone("America/Los_Angeles")
+    monkeypatch.setattr(litellm, "daily_usage_timezone", configured)
+    assert get_daily_usage_timezone().key == "America/Los_Angeles"
+    assert get_budget_reset_timezone() == "Asia/Singapore"
 
 
 def _restore_attr(obj, name, original):

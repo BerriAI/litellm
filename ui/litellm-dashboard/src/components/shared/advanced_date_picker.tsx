@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
+import { usageCalendarDate } from "@/utils/usageTimezone";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface AdvancedDatePickerProps {
@@ -11,54 +12,55 @@ interface AdvancedDatePickerProps {
   label?: string;
   className?: string;
   showTimeRange?: boolean;
+  reportingTimezone?: string;
   align?: "left" | "right";
 }
 
 interface RelativeTimeOption {
   label: string;
   shortLabel: string;
-  getValue: () => { from: Date; to: Date };
+  getValue: (reportingTimezone?: string) => { from: Date; to: Date };
 }
 
 const relativeTimeOptions: RelativeTimeOption[] = [
   {
     label: "Today",
     shortLabel: "today",
-    getValue: () => ({
-      from: moment().startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
+    getValue: (reportingTimezone) => ({
+      from: moment(usageCalendarDate(new Date(), reportingTimezone)).startOf("day").toDate(),
+      to: moment(usageCalendarDate(new Date(), reportingTimezone)).endOf("day").toDate(),
     }),
   },
   {
     label: "Last 7 days",
     shortLabel: "7d",
-    getValue: () => ({
-      from: moment().subtract(7, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
+    getValue: (reportingTimezone) => ({
+      from: moment(usageCalendarDate(new Date(), reportingTimezone)).subtract(7, "days").startOf("day").toDate(),
+      to: moment(usageCalendarDate(new Date(), reportingTimezone)).endOf("day").toDate(),
     }),
   },
   {
     label: "Last 30 days",
     shortLabel: "30d",
-    getValue: () => ({
-      from: moment().subtract(30, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
+    getValue: (reportingTimezone) => ({
+      from: moment(usageCalendarDate(new Date(), reportingTimezone)).subtract(30, "days").startOf("day").toDate(),
+      to: moment(usageCalendarDate(new Date(), reportingTimezone)).endOf("day").toDate(),
     }),
   },
   {
     label: "Month to date",
     shortLabel: "MTD",
-    getValue: () => ({
-      from: moment().startOf("month").toDate(),
-      to: moment().endOf("day").toDate(),
+    getValue: (reportingTimezone) => ({
+      from: moment(usageCalendarDate(new Date(), reportingTimezone)).startOf("month").toDate(),
+      to: moment(usageCalendarDate(new Date(), reportingTimezone)).endOf("day").toDate(),
     }),
   },
   {
     label: "Year to date",
     shortLabel: "YTD",
-    getValue: () => ({
-      from: moment().startOf("year").toDate(),
-      to: moment().endOf("day").toDate(),
+    getValue: (reportingTimezone) => ({
+      from: moment(usageCalendarDate(new Date(), reportingTimezone)).startOf("year").toDate(),
+      to: moment(usageCalendarDate(new Date(), reportingTimezone)).endOf("day").toDate(),
     }),
   },
 ];
@@ -72,6 +74,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   label = "Select Time Range",
   className,
   showTimeRange = true,
+  reportingTimezone,
   align = "right",
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -85,23 +88,26 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Function to check if current value matches a relative time option
-  const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
-    if (!currentValue.from || !currentValue.to) return null;
+  const getMatchingOption = useCallback(
+    (currentValue: DateRangePickerValue): string | null => {
+      if (!currentValue.from || !currentValue.to) return null;
 
-    for (const option of relativeTimeOptions) {
-      const optionRange = option.getValue();
+      for (const option of relativeTimeOptions) {
+        const optionRange = option.getValue(reportingTimezone);
 
-      // Compare dates with some tolerance (to account for time differences)
-      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
-      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
+        // Compare dates with some tolerance (to account for time differences)
+        const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
+        const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
 
-      if (fromMatches && toMatches) {
-        return option.shortLabel;
+        if (fromMatches && toMatches) {
+          return option.shortLabel;
+        }
       }
-    }
 
-    return null;
-  }, []);
+      return null;
+    },
+    [reportingTimezone],
+  );
 
   // Update selected option when value changes
   useEffect(() => {
@@ -200,7 +206,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   }, []);
 
   const handleRelativeTimeSelect = (option: RelativeTimeOption) => {
-    const { from, to } = option.getValue();
+    const { from, to } = option.getValue(reportingTimezone);
     const newValue = { from, to };
 
     // Update local state to reflect the selection (don't apply immediately)

@@ -12,7 +12,7 @@ and the endpoint is restricted to proxy admin roles.
 """
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +21,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_daily_usage_timezone
 from litellm.types.proxy.gateway_requests import (
     GatewayRequestActivityResponse,
     GatewayRequestBreakdownEntry,
@@ -58,7 +59,7 @@ _ROWS_ADAPTER: Final = TypeAdapter(tuple[_AggregateRow, ...])
 
 
 def _default_range() -> tuple[str, str]:
-    end: Final = datetime.now(timezone.utc)
+    end: Final = datetime.now(get_daily_usage_timezone())
     start: Final = end - timedelta(days=_DEFAULT_LOOKBACK_DAYS)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 

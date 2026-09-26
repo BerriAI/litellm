@@ -236,3 +236,26 @@ describe("AdvancedDatePicker", () => {
     });
   });
 });
+
+describe("reporting timezone presets", () => {
+  it.each([
+    ["Todaytoday", new Date(2026, 9, 1)],
+    ["Month to dateMTD", new Date(2026, 9, 1)],
+  ])("uses Singapore's calendar for %s across the UTC month boundary", (preset, expectedStart) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T17:00:00Z"));
+    try {
+      const onValueChange = vi.fn();
+      render(<AdvancedDatePicker value={{}} onValueChange={onValueChange} reportingTimezone="Asia/Singapore" />);
+      fireEvent.click(screen.getByRole("button", { expanded: false }));
+      fireEvent.click(screen.getByRole("button", { name: preset }));
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+      expect(onValueChange).toHaveBeenCalledWith({
+        from: expectedStart,
+        to: new Date(2026, 9, 1, 23, 59, 59, 999),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

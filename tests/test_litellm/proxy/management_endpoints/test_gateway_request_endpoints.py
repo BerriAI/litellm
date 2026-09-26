@@ -1,5 +1,7 @@
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Patching ``litellm.proxy.proxy_server.prisma_client`` imports that module, whose
@@ -301,3 +303,13 @@ class TestGatewayDailyActivityRoute:
                 }
             ],
         }
+
+
+def test_default_range_uses_the_reporting_calendar(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints import gateway_request_endpoints
+
+    instant: Final = datetime(2026, 9, 25, 17, tzinfo=timezone.utc)
+    monkeypatch.setattr(litellm, "daily_usage_timezone", "Asia/Singapore")
+    monkeypatch.setattr(gateway_request_endpoints, "datetime", SimpleNamespace(now=lambda zone: instant.astimezone(zone)))
+    assert _default_range() == ("2026-08-27", "2026-09-26")

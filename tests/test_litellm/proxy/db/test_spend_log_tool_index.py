@@ -377,3 +377,23 @@ class TestFlushToolUsageTransactions:
         with pytest.raises((httpx.ReadTimeout, httpx.ReadError)):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
+
+
+def test_tool_spend_uses_reporting_day_without_changing_instant(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+    from typing import Final
+    import litellm
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", "Asia/Singapore")
+    transaction: Final = build_tool_usage_transaction(
+        request_id="reporting-tool-request",
+        start_time_iso="2026-09-25T17:00:00Z",
+        mcp_namespaced_tool_name="server/tool",
+        spend=0.25,
+        total_tokens=15,
+        completion_response=None,
+    )
+    assert transaction is not None
+    assert transaction.date == "2026-09-26"
+    assert transaction.start_time == datetime(2026, 9, 25, 17, tzinfo=timezone.utc)
+    assert transaction.spend == 0.25

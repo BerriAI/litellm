@@ -4919,3 +4919,24 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", ["Asia/Singapore", "Not/AZone"])
+async def test_load_config_validates_daily_usage_timezone(tmp_path, monkeypatch, configured: str) -> None:
+    from pathlib import Path
+    from typing import Final
+
+    config: Final[Path] = tmp_path / "reporting.yaml"
+    config.write_text(f"model_list: []\nlitellm_settings:\n  daily_usage_timezone: {configured}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "daily_usage_timezone", None)
+    if configured == "Not/AZone":
+        with pytest.raises(Exception, match="Not/AZone"):
+            await ProxyConfig().load_config(router=None, config_file_path=str(config))
+        assert litellm.daily_usage_timezone is None
+    else:
+        await ProxyConfig().load_config(router=None, config_file_path=str(config))
+        assert litellm.daily_usage_timezone == "Asia/Singapore"

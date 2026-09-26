@@ -16,7 +16,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BarChart } from "@/components/shared/charts";
-import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
+import { usageCalendarDate } from "@/utils/usageTimezone";
+import { formatDate, userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { ChartLoader } from "./shared/chart_loader";
@@ -53,13 +54,20 @@ interface DistinctTagResponse {
 }
 
 interface UserAgentActivityProps {
+  reportingTimezone?: string;
   accessToken: string | null;
   userRole: string | null;
   dateValue: DateRangePickerValue;
   onDateChange?: (value: DateRangePickerValue) => void; // Optional - not used anymore
 }
 
-const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole, dateValue, onDateChange }) => {
+const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
+  accessToken,
+  userRole,
+  dateValue,
+  onDateChange,
+  reportingTimezone,
+}) => {
   const anchor = useComboboxAnchor();
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
@@ -84,7 +92,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Use today's date as the end date for all API calls
-  const today = new Date();
+  const today = usageCalendarDate(new Date(), reportingTimezone);
 
   const fetchAvailableTags = async () => {
     if (!accessToken) return;
@@ -245,13 +253,13 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   // Prepare daily chart data (DAU) - always show last 7 days
   const generateDailyChartData = () => {
     const chartData: any[] = [];
-    const endDate = new Date();
+    const endDate = usageCalendarDate(new Date(), reportingTimezone);
 
     // Generate all 7 days
     for (let i = 6; i >= 0; i--) {
       const date = new Date(endDate);
       date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD format
+      const dateStr = reportingTimezone ? formatDate(date) : date.toISOString().split("T")[0];
 
       const dayEntry: any = { date: dateStr };
 

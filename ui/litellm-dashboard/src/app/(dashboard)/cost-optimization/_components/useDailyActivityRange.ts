@@ -1,12 +1,13 @@
+import moment from "moment";
 import { useMemo, useState } from "react";
+import { useDailyUsageTimezone } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { usageCalendarDate } from "@/utils/usageTimezone";
 
 import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
 import { ApiKeyTruncation, getApiKeyTruncation } from "@/components/EntityUsageExport/exportBlockedReason";
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
-
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface DateRange {
   from?: Date;
@@ -24,6 +25,7 @@ export interface DailyActivityRange {
   failed: boolean;
   cancel: () => void;
   apiKeyTruncation?: ApiKeyTruncation;
+  reportingTimezone?: string;
 }
 
 /**
@@ -40,19 +42,24 @@ export interface DailyActivityScope {
   apiKey?: string | null;
 }
 
-export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange">;
+export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange" | "reportingTimezone">;
 
 export const useActivityDateRange = (): ActivityDateRange => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
-  return { dateValue, onDateChange: setDateValue };
+  const reportingTimezone = useDailyUsageTimezone();
+  const initialTo = useMemo(() => usageCalendarDate(new Date(), reportingTimezone), [reportingTimezone]);
+  const initialFrom = useMemo(() => moment(initialTo).subtract(30, "days").toDate(), [initialTo]);
+  const [selectedRange, setDateValue] = useState<DateRange | null>(null);
+  const dateValue = useMemo(
+    () => selectedRange ?? { from: initialFrom, to: initialTo },
+    [selectedRange, initialFrom, initialTo],
+  );
+  return { dateValue, onDateChange: setDateValue, reportingTimezone };
 };
 
 export const useScopedDailyActivityRange = (
   accessToken: string | null,
   scope: DailyActivityScope,
-  { dateValue, onDateChange }: ActivityDateRange,
+  { dateValue, onDateChange, reportingTimezone }: ActivityDateRange,
 ): DailyActivityRange => {
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -75,6 +82,7 @@ export const useScopedDailyActivityRange = (
   return {
     dateValue,
     onDateChange,
+    reportingTimezone,
     results: data.results as DailyData[],
     loading: loading || waitingForRange,
     isFetchingMore,

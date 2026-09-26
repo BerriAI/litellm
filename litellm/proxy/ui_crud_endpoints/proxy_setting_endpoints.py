@@ -367,12 +367,13 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
 APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: Final = "apply_user_budget_to_team_keys"
+DAILY_USAGE_TIMEZONE_UI_SETTING: Final = "daily_usage_timezone"
 
 # UI settings derived from the deployment environment. Deliberately kept out of
 # ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
 # rejects them so an admin cannot flip an env-gated feature at runtime.
 _DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset(
-    {ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING, APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING}
+    {ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING, APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING, DAILY_USAGE_TIMEZONE_UI_SETTING}
 )
 
 
@@ -388,6 +389,8 @@ def _derived_ui_setting_value(key: str) -> object:
     a client that edited one setting and sent the rest back unchanged got a 400 and lost
     the edit it actually wanted.
     """
+    if key == DAILY_USAGE_TIMEZONE_UI_SETTING:
+        return litellm.daily_usage_timezone
     if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
         return is_ptu_cost_attribution_enabled()
     if key == APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING:
@@ -789,6 +792,8 @@ def _ui_setting_source(
     settings: SettingsStore,
     settings_class: type[BaseModel],
 ) -> FieldSource:
+    if key == DAILY_USAGE_TIMEZONE_UI_SETTING:
+        return "config" if value is not None else "default"
     if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
         configured_value: Final = get_secret(PTU_COST_ATTRIBUTION_ENV_VAR, None)
         return "config" if configured_value is not None or value is True else "default"
@@ -1799,6 +1804,7 @@ async def get_ui_settings():
     values: Final[Mapping[str, object]] = MappingProxyType(
         {
             **resolved_settings.values,
+            DAILY_USAGE_TIMEZONE_UI_SETTING: litellm.daily_usage_timezone,
             ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
             APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: _derived_ui_setting_value(
                 APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING

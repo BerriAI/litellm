@@ -1,4 +1,4 @@
-"""Roll closed UTC days of ``LiteLLM_DailyUserSpend`` up into ``LiteLLM_DailyGlobalSpend``.
+"""Roll closed reporting days of ``LiteLLM_DailyUserSpend`` up into ``LiteLLM_DailyGlobalSpend``.
 
 Only days that are over get rolled up, so a pod still flushing per-key spend for the current
 day can never leave the global table short; usage reads serve days through the recorded
@@ -12,17 +12,19 @@ a large deployment the first backfill is minutes of work.
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
     DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS,
     DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM,
 )
+from litellm.proxy.common_utils.timezone_utils import get_daily_spend_bucket_date, get_daily_usage_timezone
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -95,7 +97,7 @@ _ADVANCE_MARKER_SQL: Final = (
 
 
 class ReconciledThrough(BaseModel):
-    """``reconciled_through`` is the last closed UTC day the global table covers. ``scanned_at`` is
+    """``reconciled_through`` is the last closed reporting day the global table covers. ``scanned_at`` is
     the database clock when the scan behind the last fully successful run started: every per-key
     row written before it, on any day through the marker, is in the global table."""
 
@@ -157,9 +159,14 @@ async def read_marker(prisma_client: "PrismaClient") -> ReconciledThrough | None
 
 
 async def reconciled_through(prisma_client: "PrismaClient") -> str | None:
-    """The last UTC day ``LiteLLM_DailyGlobalSpend`` is known to cover, or None before the first run."""
+    """The last reporting day ``LiteLLM_DailyGlobalSpend`` is known to cover, or None before the first run."""
     marker: Final = await read_marker(prisma_client)
-    return None if marker is None else marker.reconciled_through
+    if marker is None:
+        return None
+    if litellm.daily_usage_timezone is None:
+        return marker.reconciled_through
+    last_closed_day: Final = (datetime.now(get_daily_usage_timezone()).date() - timedelta(days=1)).isoformat()
+    return min(marker.reconciled_through, last_closed_day)
 
 
 async def _advance_marker(prisma_client: "PrismaClient", days: tuple[str, ...], *, scanned_at: str | None) -> None:
@@ -178,11 +185,17 @@ async def _advance_marker(prisma_client: "PrismaClient", days: tuple[str, ...], 
 
 async def _db_now(prisma_client: "PrismaClient") -> _NowRow:
     rows: Final = await prisma_client.db.query_raw(_DB_NOW_SQL)
-    return _NowRow.model_validate(rows[0])
+    clock: Final = _NowRow.model_validate(rows[0])
+    if litellm.daily_usage_timezone is None:
+        return clock
+    return _NowRow(
+        now=clock.now,
+        today=get_daily_spend_bucket_date(datetime.fromisoformat(clock.now), litellm.daily_usage_timezone),
+    )
 
 
 async def _scan_pending(prisma_client: "PrismaClient") -> _PendingScan:
-    """Every closed UTC day (strictly before the database's today) still to roll up, oldest first:
+    """Every closed reporting day (strictly before the database's today) still to roll up, oldest first:
     days past the marker, plus any day with per-key rows written since the scan behind the marker.
     Before a run has fully succeeded there is no such scan, so every closed day is rolled up."""
     marker: Final = await read_marker(prisma_client)

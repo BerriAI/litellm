@@ -10,7 +10,7 @@ imports these inside function bodies to avoid circular imports.
 import inspect
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -424,3 +424,50 @@ class TestToolManagementEndpoints:
             resp = client.get("/v1/tool/spend")
         assert resp.status_code == 403
         prisma.db.litellm_dailytoolspend.group_by.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "day, zone, expected_utc",
+    [
+        ("2026-09-26", "Asia/Singapore", datetime(2026, 9, 25, 16, tzinfo=timezone.utc)),
+        ("2026-03-08", "America/Los_Angeles", datetime(2026, 3, 8, 8, tzinfo=timezone.utc)),
+        ("2026-03-09", "America/Los_Angeles", datetime(2026, 3, 9, 7, tzinfo=timezone.utc)),
+    ],
+)
+def test_tool_reporting_day_starts_at_local_midnight(
+    monkeypatch: pytest.MonkeyPatch, day: str, zone: str, expected_utc: datetime
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.tool_management_endpoints import _parse_day_start
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", zone)
+    assert _parse_day_start(day) == expected_utc
+
+
+@pytest.mark.parametrize(
+    "zone, day, start, end",
+    [
+        ("Asia/Singapore", "2026-09-26", "2026-09-25T16:00:00+00:00", "2026-09-26T16:00:00+00:00"),
+        ("America/Los_Angeles", "2026-03-08", "2026-03-08T08:00:00+00:00", "2026-03-09T07:00:00+00:00"),
+        ("America/Los_Angeles", "2026-11-01", "2026-11-01T07:00:00+00:00", "2026-11-02T08:00:00+00:00"),
+        (None, "2026-09-26", "2026-09-26T00:00:00+00:00", "2026-09-27T00:00:00+00:00"),
+    ],
+)
+def test_tool_logs_use_exclusive_next_reporting_midnight(
+    monkeypatch: pytest.MonkeyPatch, zone: str | None, day: str, start: str, end: str
+) -> None:
+    import litellm
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", zone)
+    app: Final = _make_app()
+    app.dependency_overrides[user_api_key_auth] = _override_auth
+    prisma: Final = MagicMock()
+    prisma.db.litellm_spendlogtoolindex.count = AsyncMock(return_value=0)
+    prisma.db.litellm_spendlogtoolindex.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    response: Final = TestClient(app).get(f"/v1/tool/my_tool/logs?start_date={day}&end_date={day}")
+    assert response.status_code == 200
+    bounds: Final = prisma.db.litellm_spendlogtoolindex.find_many.await_args.kwargs["where"]["start_time"]
+    assert bounds == {"gte": datetime.fromisoformat(start), "lt": datetime.fromisoformat(end)}
+    assert bounds["gte"] <= datetime.fromisoformat(end) - timedelta(microseconds=1) < bounds["lt"]

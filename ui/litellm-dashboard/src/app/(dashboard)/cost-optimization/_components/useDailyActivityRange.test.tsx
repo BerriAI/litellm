@@ -1,9 +1,10 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const mockUsePaginatedDailyActivity = vi.fn();
 
 const mockCancel = vi.fn();
+let mockReportingTimezone: string | undefined;
 let mockMetadata: Record<string, number> = {};
 
 vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", () => ({
@@ -97,4 +98,27 @@ describe("useDailyActivityRange", () => {
 
     expect(result.current.apiKeyTruncation).toBeUndefined();
   });
+});
+
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useDailyUsageTimezone: () => mockReportingTimezone,
+}));
+
+it("loads reporting defaults without overwriting a manually chosen range", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-25T17:00:00Z"));
+  try {
+    const { result, rerender } = renderHook(() => useActivityDateRange());
+    mockReportingTimezone = "Asia/Singapore";
+    rerender();
+    expect(result.current.dateValue.to).toEqual(new Date(2026, 8, 26));
+    const selected = { from: new Date(2026, 7, 1), to: new Date(2026, 7, 31) };
+    act(() => result.current.onDateChange(selected));
+    mockReportingTimezone = "America/Los_Angeles";
+    rerender();
+    expect(result.current.dateValue).toEqual(selected);
+  } finally {
+    mockReportingTimezone = undefined;
+    vi.useRealTimers();
+  }
 });

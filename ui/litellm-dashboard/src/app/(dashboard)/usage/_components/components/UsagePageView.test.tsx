@@ -1366,3 +1366,7 @@ describe("UsagePage", () => {
     });
   });
 });
+
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useDailyUsageTimezone: () => undefined,
+}));

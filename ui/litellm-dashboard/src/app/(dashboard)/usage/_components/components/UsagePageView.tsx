@@ -1,3 +1,4 @@
+import moment from "moment";
 /**
  * New Usage Page
  *
@@ -41,6 +42,8 @@ import {
   userDailyActivityCall,
   userDailyActivityKeySearchCall,
 } from "@/components/networking";
+import { useDailyUsageTimezone } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { usageCalendarDate, usageTimezoneLabel } from "@/utils/usageTimezone";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tag } from "@/components/tag_management/types";
@@ -90,15 +93,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Separate loading states for better UX
   const [isDateChanging, setIsDateChanging] = useState(false);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
+  const reportingTimezone = useDailyUsageTimezone();
+  const initialToDate = useMemo(() => usageCalendarDate(new Date(), reportingTimezone), [reportingTimezone]);
+  const initialFromDate = useMemo(() => moment(initialToDate).subtract(7, "days").toDate(), [initialToDate]);
 
   // Single date state that directly triggers data fetching
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFromDate,
-    to: initialToDate,
-  });
+  const [selectedDateRange, setDateValue] = useState<DateRangePickerValue | null>(null);
+  const dateValue = useMemo(
+    () => selectedDateRange ?? { from: initialFromDate, to: initialToDate },
+    [selectedDateRange, initialFromDate, initialToDate],
+  );
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
   // No [] default: an unresolved query must stay undefined so the customer
@@ -466,7 +470,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <span className="text-sm text-muted-foreground">Daily usage: {usageTimezoneLabel(reportingTimezone)}</span>
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              reportingTimezone={reportingTimezone}
+            />
           </div>
           <PaginationStatusAlerts
             isFetchingMore={paginatedResult.isFetchingMore}
@@ -1007,7 +1016,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
-            <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
+            <UserAgentActivity
+              accessToken={accessToken}
+              userRole={userRole}
+              dateValue={dateValue}
+              reportingTimezone={reportingTimezone}
+            />
           )}
         </div>
       </div>

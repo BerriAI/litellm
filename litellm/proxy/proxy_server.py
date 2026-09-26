@@ -6296,6 +6296,10 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(
                         "%s Enabled JSON logging via config%s", blue_color_code, reset_color_code
                     )
+                elif key == "daily_usage_timezone":
+                    from litellm.proxy.common_utils.timezone_utils import parse_daily_usage_timezone
+
+                    litellm.daily_usage_timezone = parse_daily_usage_timezone(value)
                 elif key == "budget_reset_time":
                     from litellm.proxy.common_utils.timezone_utils import (
                         parse_budget_reset_time,

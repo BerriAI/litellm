@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useUISettings } from "./useUISettings";
+import { useDailyUsageTimezone, useUISettings } from "./useUISettings";
 
 // Mock the networking function
 vi.mock("@/components/networking", () => ({
@@ -115,5 +115,21 @@ describe("useUISettings", () => {
 
     expect(result.current.error).toEqual(timeoutError);
     expect(result.current.data).toBeUndefined();
+  });
+
+  it("loads the reporting timezone after settings arrive", async () => {
+    vi.mocked(getUiSettings).mockResolvedValue({ values: { daily_usage_timezone: "Asia/Singapore" } });
+    const { result } = renderHook(() => useDailyUsageTimezone(), { wrapper });
+    expect(result.current).toBeUndefined();
+    await waitFor(() => expect(result.current).toBe("Asia/Singapore"));
+  });
+
+  it.each([null, 8, false])("ignores a non-string reporting timezone %s", async (value) => {
+    vi.mocked(getUiSettings).mockResolvedValue({ values: { daily_usage_timezone: value } });
+    const { result } = renderHook(() => ({ timezone: useDailyUsageTimezone(), settings: useUISettings() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.settings.isSuccess).toBe(true));
+    expect(result.current.timezone).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 from fastapi import HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import CommonProxyErrors
@@ -576,9 +577,9 @@ def _adjust_dates_for_timezone(
     utc_now: datetime | None = None,
 ) -> tuple[str, str]:
     """
-    Map a caller-local date range onto UTC bucket keys, extending only the live end.
+    Preserve configured reporting dates; extend only the live end of legacy UTC ranges.
 
-    The aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
+    By default, the aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
     buckets keyed on date as YYYY-MM-DD. Any conversion of an interior local-day
     boundary using only date arithmetic must round to whole UTC days, allowing up to
     24h of slop at each boundary. A previous implementation expanded the SQL range by
@@ -605,7 +606,7 @@ def _adjust_dates_for_timezone(
     whose axis or reconciliation expects the range to stop at the requested end date
     keeps today's byte-for-byte behaviour; the cost optimization dashboard opts in.
     """
-    if not include_current_utc_day or timezone_offset_minutes is None:
+    if litellm.daily_usage_timezone is not None or not include_current_utc_day or timezone_offset_minutes is None:
         return start_date, end_date
     now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
     caller_local_today: Final = (now - timedelta(minutes=timezone_offset_minutes)).date().isoformat()

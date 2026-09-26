@@ -4076,3 +4076,27 @@ class TestSyncUiSettingsToGeneralSettings:
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
 
+
+
+@pytest.mark.parametrize("zone, source", [(None, "default"), ("Asia/Singapore", "config")])
+def test_daily_reporting_timezone_is_derived_read_only(mock_auth, monkeypatch, zone, source):
+    import litellm
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", zone)
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    prisma = TestPtuCostAttributionUISetting._mock_prisma(monkeypatch)
+    response = client.get("/get/ui_settings")
+    assert response.status_code == 200
+    assert response.json()["values"]["daily_usage_timezone"] == zone
+    assert response.json()["source"]["daily_usage_timezone"] == source
+    rejected = client.patch("/update/ui_settings", json={"daily_usage_timezone": "America/New_York"})
+    assert rejected.status_code == 400
+    prisma.db.litellm_uisettings.upsert.assert_not_called()

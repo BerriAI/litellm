@@ -1,5 +1,7 @@
 "use client";
 
+import { usageTimezoneLabel } from "@/utils/usageTimezone";
+
 import React, { useEffect, useMemo, useState } from "react";
 
 import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
@@ -41,23 +43,21 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   end_date: null,
 };
 
-const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
-
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore, reportingTimezone } = activity;
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
 
   const canViewProxyWideCostData = useCan("viewProxyWideCostData");
   const toolSpendEnabled = canViewProxyWideCostData && !!accessToken && !!startTime && !!endTime;
-  const rangeKey = startTime && endTime ? `${isoDay(startTime)}|${isoDay(endTime)}` : "";
+  const rangeKey = startTime && endTime ? `${localIsoDay(startTime)}|${localIsoDay(endTime)}` : "";
   const [toolSpendState, setToolSpendState] = useState<{ key: string; data: ToolSpendResponse } | null>(null);
 
   useEffect(() => {
     if (!canViewProxyWideCostData || !accessToken || !startTime || !endTime) return;
     let cancelled = false;
-    getToolSpend(accessToken, isoDay(startTime), isoDay(endTime))
+    getToolSpend(accessToken, localIsoDay(startTime), localIsoDay(endTime))
       .then((res) => {
         if (!cancelled) setToolSpendState({ key: rangeKey, data: res });
       })
@@ -88,7 +88,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
     accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
-    rangeLabel && `${rangeLabel} (UTC)`,
+    rangeLabel && `${rangeLabel} (${usageTimezoneLabel(reportingTimezone)})`,
   ]
     .filter(Boolean)
     .join(" \u00b7 ");
@@ -126,8 +126,10 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-center justify-end gap-4">
-        <span className="text-sm text-muted-foreground">Spend is bucketed by UTC day</span>
-        <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
+        <span className="text-sm text-muted-foreground">
+          Spend is bucketed by {usageTimezoneLabel(reportingTimezone)} day
+        </span>
+        <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} reportingTimezone={reportingTimezone} />
       </div>
 
       <SavingsTiles results={results} isLoading={loading || isFetchingMore} />

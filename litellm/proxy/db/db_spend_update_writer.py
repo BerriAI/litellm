@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
+from litellm.proxy.common_utils.timezone_utils import get_daily_spend_bucket_date
 from litellm.proxy.common_utils.user_api_key_cache import project_cache_key
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
@@ -2711,11 +2712,8 @@ class DBSpendUpdateWriter:
         verbose_proxy_logger.debug("Logged request status: %s", request_status)
         _metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
         usage_obj: Final = _metadata.get("usage_object", {}) or {}
-        if isinstance(payload["startTime"], datetime):
-            start_time: Final = payload["startTime"].isoformat()
-            date = start_time.split("T")[0]
-        elif isinstance(payload["startTime"], str):
-            date = payload["startTime"].split("T")[0]
+        if isinstance(payload["startTime"], (datetime, str)):
+            date: Final = get_daily_spend_bucket_date(payload["startTime"], litellm.daily_usage_timezone)
         else:
             verbose_proxy_logger.debug(
                 "Invalid start time: %s, skipping from daily_user_spend_transactions", payload["startTime"]

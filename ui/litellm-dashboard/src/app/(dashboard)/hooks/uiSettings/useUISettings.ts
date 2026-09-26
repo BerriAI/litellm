@@ -22,3 +22,9 @@ export const useUISettings = (options?: { staleTime?: number; refetchInterval?: 
     refetchInterval: options?.refetchInterval,
   });
 };
+
+export const useDailyUsageTimezone = (): string | undefined => {
+  const { data } = useUISettings();
+  const configured: unknown = data?.values?.daily_usage_timezone;
+  return typeof configured === "string" ? configured : undefined;
+};

@@ -512,3 +512,12 @@ def test_failed_redis_push_keeps_counts_locally_for_the_next_flush():
             GatewayRequestCounts(successful_requests=1, failed_requests=1)
         )
     }
+
+
+@pytest.mark.parametrize("zone, expected", [(None, "2026-09-25"), ("Asia/Singapore", "2026-09-26")])
+def test_gateway_reporting_day(monkeypatch: pytest.MonkeyPatch, zone: str | None, expected: str) -> None:
+    import litellm
+    from litellm.proxy.db.gateway_request_tracking import _reporting_date
+
+    monkeypatch.setattr(litellm, "daily_usage_timezone", zone)
+    assert _reporting_date(datetime(2026, 9, 25, 17, tzinfo=timezone.utc)) == expected

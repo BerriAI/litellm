@@ -404,6 +404,7 @@ model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
 budget_exceeded_status_code: int = 422  # set to 429 to restore the pre-422 budget_exceeded response code
+daily_usage_timezone: str | None = None
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
