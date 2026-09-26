@@ -900,6 +900,31 @@ class TestKeyDeletionAuditLog:
         _assert_key_deleted(client, created.key)
         _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
 
+    @pytest.mark.covers("mgmt.team.member_delete.audit_logs_keys")
+    def test_scim_group_member_removal_attributes_deleted_member_keys(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        team_id = _create_team(client, resources, f"e2e-audit-team-{unique_marker()}", [])
+        user_id = _create_user(
+            client,
+            resources,
+            UserNewBody(user_email=f"e2e-audit-{unique_marker()}@example.com", user_role="internal_user"),
+        )
+        client.add_team_member(team_id, user_id)
+        created = _generate_response(client, resources, KeyGenerateBody(user_id=user_id, team_id=team_id))
+        token = _token_of(created)
+
+        client.scim_remove_group_member(team_id, user_id)
+
+        _assert_key_deleted(client, created.key)
+        info = unwrap(client.key_info_as(created.key)).info
+        assert info.status == "deleted", info
+        assert info.deleted_by == "litellm_scim", info
+        assert info.deleted_by_api_key == "litellm_scim", info
+        audit_page = _await_deleted_audit_rows(client, token)
+        _assert_single_deleted_row(audit_page, token)
+        assert audit_page.audit_logs[0].changed_by == "litellm_scim", audit_page
+
     @pytest.mark.covers("mgmt.team.delete.audit_logs_keys")
     def test_team_delete_writes_audit_row_for_team_keys(
         self, client: ManagementClient, resources: ResourceManager

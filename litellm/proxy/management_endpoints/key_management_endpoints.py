@@ -5110,6 +5110,8 @@ def _transform_verification_tokens_to_deleted_records(
     if not keys:
         return []
 
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
     deleted_at: Final = datetime.now(timezone.utc)
     records: Final = []
     for key in keys:
@@ -5118,7 +5120,7 @@ def _transform_verification_tokens_to_deleted_records(
             {
                 **key_payload,
                 "deleted_at": deleted_at,
-                "deleted_by": user_api_key_dict.user_id,
+                "deleted_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "deleted_by_api_key": user_api_key_dict.api_key,
                 "litellm_changed_by": litellm_changed_by,
             }

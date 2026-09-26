@@ -3438,6 +3438,24 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
+    @classmethod
+    def get_litellm_scim_user_api_key_auth(cls) -> "UserAPIKeyAuth":
+        """
+        Returns a `UserAPIKeyAuth` object for the SCIM provisioning endpoints.
+
+        This is used to track actions performed by SCIM provisioning on behalf of the IdP.
+        """
+        from litellm.constants import LITELLM_SCIM_SERVICE_ACCOUNT_NAME
+
+        return cls(
+            api_key=LITELLM_SCIM_SERVICE_ACCOUNT_NAME,
+            team_id="system",
+            key_alias=LITELLM_SCIM_SERVICE_ACCOUNT_NAME,
+            team_alias="system",
+            user_id=LITELLM_SCIM_SERVICE_ACCOUNT_NAME,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
     @property
     def is_team_service_account(self) -> bool:
         return (

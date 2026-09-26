@@ -1670,6 +1670,7 @@ except (ValueError, TypeError):
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME: Final = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME: Final = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME: Final = "litellm_internal_jobs"
+LITELLM_SCIM_SERVICE_ACCOUNT_NAME: Final = "litellm_scim"
 # Stable identifier substituted in place of the master key on UserAPIKeyAuth
 # objects so the master key (or its hash) never propagates to spend logs,
 # Prometheus metrics, audit trails, or any other downstream consumer.

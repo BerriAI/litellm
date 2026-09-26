@@ -164,6 +164,8 @@ class LiteLLMBudgetTable(BaseModel):
 class KeyInfo(BaseModel):
     key_alias: str | None = None
     status: str | None = None
+    deleted_by: str | None = None
+    deleted_by_api_key: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
@@ -1352,6 +1354,28 @@ class CredentialCreateBody(BaseModel):
 
 class CredentialCreateResponse(BaseModel):
     success: bool
+
+
+# ---------- scim ----------
+
+
+class ScimGroupMemberValue(BaseModel):
+    value: str
+
+
+class ScimPatchOperationBody(BaseModel):
+    op: str
+    path: str | None = None
+    value: list[ScimGroupMemberValue] | None = None
+
+
+class ScimGroupPatchBody(BaseModel):
+    schemas: tuple[str, ...] = ("urn:ietf:params:scim:api:messages:2.0:PatchOp",)
+    Operations: list[ScimPatchOperationBody]
+
+
+class ScimGroupResponse(BaseModel):
+    id: str
 
 
 # ---------- key / team / user / organization management ----------
