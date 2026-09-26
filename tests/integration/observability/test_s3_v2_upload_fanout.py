@@ -119,8 +119,8 @@ BATCH_KEY: Final = re.compile(
 )
 
 
-@pytest.mark.covers("other.observability.s3_v2.flush_bounds_concurrent_puts_to_default_and_keeps_every_log")
-def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_of_sixteen(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.covers("other.observability.s3_v2.flush_bounds_concurrent_puts_to_default_ceiling_and_keeps_every_log")
+def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_ceiling(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3fan" + uuid.uuid4().hex[:8]
     sink: Final = S3Sink()
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
@@ -134,7 +134,9 @@ def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_of_sixteen(gateway: G
             ids: Final = _burst(candidate, model, key, marker)
             puts: Final = _collect(bucket, count_lines=False, expected=REQUESTS)
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
-    assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the default bound for {REQUESTS} queued logs"
+    assert sink.peak <= 16, (
+        f"peak concurrent PUTs {sink.peak} exceeded the default width of 16 for {REQUESTS} queued logs"
+    )
     assert all(PER_REQUEST_KEY.match(put.target) for put in puts), [put.target for put in puts]
     assert frozenset(json.loads(put.body)["id"] for put in puts) == ids
     assert len({put.target for put in puts}) == REQUESTS
@@ -272,7 +274,7 @@ def test_s3_v2_upstream_failure_events_land_alongside_successes(gateway: Gateway
     assert all("synthetic upstream rejection" in json.dumps(payload["error_information"]) for payload in failures)
 
 
-@pytest.mark.covers("other.observability.s3_v2.invalid_or_empty_bound_falls_back_to_sixteen")
+@pytest.mark.covers("other.observability.s3_v2.invalid_or_empty_bound_falls_back_to_default_ceiling")
 @pytest.mark.parametrize(
     ("bad", "warns"),
     [
@@ -281,7 +283,7 @@ def test_s3_v2_upstream_failure_events_land_alongside_successes(gateway: Gateway
         pytest.param("", False, id="empty"),
     ],
 )
-def test_s3_v2_invalid_or_empty_bound_falls_back_to_sixteen(
+def test_s3_v2_invalid_or_empty_bound_falls_back_to_default_ceiling(
     gateway: Gateway, tmp_path: Path, bad: JsonValue, warns: bool
 ) -> None:
     marker: Final = "s3bound" + uuid.uuid4().hex[:8]
@@ -305,14 +307,14 @@ def test_s3_v2_invalid_or_empty_bound_falls_back_to_sixteen(
             else:
                 assert "s3_max_concurrent_uploads" not in owned.log.read_text()
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
-    assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the fallback bound"
+    assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the fallback width of 16"
     assert frozenset(payload["id"] for payload in payloads) == ids
 
 
 @pytest.mark.covers("other.observability.s3_v2.sink_rejection_requeues_and_delivers_every_id_once")
 def test_s3_v2_sink_rejection_requeues_and_delivers_every_id_once(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3deny" + uuid.uuid4().hex[:8]
-    sink: Final = RecordingS3Sink(fail_status=403, delay_seconds=0.2)
+    sink: Final = RecordingS3Sink(fail_status=503, delay_seconds=0.2)
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
         config: Final = _s3_config(tmp_path, bucket.url, {})
         with (
@@ -334,6 +336,227 @@ def test_s3_v2_sink_rejection_requeues_and_delivers_every_id_once(gateway: Gatew
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert len(sink.objects()) == REQUESTS
     assert frozenset(payload["id"] for payload in payloads) == ids
+
+
+@dataclass(slots=True)
+class RejectingS3Sink:
+    """Answers every PUT whose body carries `reject_marker` with `reject_status`, accepts the rest,
+    and counts the rejected attempts so a test can see whether the proxy keeps re-sending them."""
+
+    reject_marker: str
+    reject_status: int
+    reject_code: str = "AccessDenied"
+    reject_until: float = float("inf")
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    rejected_attempts: int = 0
+    store: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: later PUTs must be visible to earlier polls
+
+    def respond(self, request: Request) -> Reply:
+        assert request.method == "PUT", request.method
+        with self.lock:
+            if self.reject_marker.encode() in request.body and time.time() < self.reject_until:
+                self.rejected_attempts += 1
+                return Reply(status=self.reject_status, body=f"<Error><Code>{self.reject_code}</Code></Error>".encode())
+            self.store[request.target] = request.body
+        return Reply()
+
+    def landed_ids(self) -> frozenset[str]:
+        with self.lock:
+            bodies: Final = tuple(self.store.values())
+        return frozenset(json.loads(line)["id"] for body in bodies for line in body.splitlines())
+
+
+def _send(candidate: Gateway, model: str, key: str, identity: str) -> None:
+    response: Final = candidate.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": identity}], "cache": {"no-cache": True}},
+        key=key,
+    )
+    assert response.status_code == 200, response.text
+
+
+def _send_and_wait_until_landed(candidate: Gateway, model: str, key: str, sink: RejectingS3Sink, identity: str) -> None:
+    _send(candidate, model, key, identity)
+    eventually(sink.landed_ids, lambda landed: identity in landed, seconds=60)
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        pytest.param(403, "AccessDenied", id="access_denied"),
+        pytest.param(404, "NoSuchBucket", id="no_such_bucket"),
+        pytest.param(400, "KMS.DisabledException", id="kms_disabled"),
+    ],
+)
+def test_s3_v2_object_rejected_with_a_bucket_wide_code_is_delivered_once_the_fault_clears(
+    gateway: Gateway, tmp_path: Path, status: int, code: str
+) -> None:
+    marker: Final = "s3fault" + uuid.uuid4().hex[:8]
+    sink: Final = RejectingS3Sink(reject_marker=f"{marker}-denied", reject_status=status, reject_code=code)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, f"{marker}-denied")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-first-flush")
+            eventually(lambda: sink.rejected_attempts, lambda attempts: attempts >= 2, seconds=30)
+            sink.reject_until = time.time()
+            eventually(sink.landed_ids, lambda landed: f"{marker}-denied" in landed, seconds=60)
+            readiness: Final = candidate.client.get("/health/readiness")
+            assert readiness.status_code == 200, readiness.text
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 2
+    assert sink.landed_ids() == {f"{marker}-denied", f"{marker}-first-flush"}
+
+
+def test_s3_v2_terminal_object_is_put_once_and_dropped_by_default(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3toolarge" + uuid.uuid4().hex[:8]
+    sink: Final = RejectingS3Sink(reject_marker=f"{marker}-huge", reject_status=400, reject_code="EntityTooLarge")
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, f"{marker}-huge")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-sibling")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-second-flush")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-third-flush")
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 4
+    assert sink.rejected_attempts == 1, (
+        f"an EntityTooLarge object was PUT {sink.rejected_attempts} times next to delivered siblings; "
+        "with the default s3_drop_on_terminal_error it must be attempted once and dropped"
+    )
+
+
+def test_s3_v2_terminal_object_keeps_retrying_when_opted_out(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3keep" + uuid.uuid4().hex[:8]
+    sink: Final = RejectingS3Sink(reject_marker=f"{marker}-huge", reject_status=400, reject_code="EntityTooLarge")
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(
+            tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_drop_on_terminal_error": False}
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, f"{marker}-huge")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-sibling")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-second-flush")
+            eventually(lambda: sink.rejected_attempts, lambda attempts: attempts >= 2, seconds=30)
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 3
+
+
+def test_s3_v2_aged_out_object_is_dropped_next_to_delivered_siblings(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3aged" + uuid.uuid4().hex[:8]
+    sink: Final = RejectingS3Sink(reject_marker=f"{marker}-doomed", reject_status=503, reject_code="InternalError")
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_max_retry_age_seconds": 1})
+        with (
+            owned_proxy_process(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(owned.gateway, model, key, f"{marker}-doomed")
+            _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-sibling")
+            _send(owned.gateway, model, key, f"{marker}-trigger")
+            eventually(
+                lambda: owned.log.read_text(),
+                lambda text: "retrying longer than s3_max_retry_age_seconds=1)" in text,
+                seconds=60,
+            )
+            exhausted: Final = sink.rejected_attempts
+            _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-one-flush-later")
+            _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-two-flushes-later")
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 5
+    assert 3 <= exhausted <= 3 * 3, f"{exhausted} PUTs for an object that aged out after its second flush"
+    assert sink.rejected_attempts == exhausted, (
+        f"a 503 object kept being PUT after ageing out: {exhausted} -> {sink.rejected_attempts}"
+    )
+
+
+def test_s3_v2_aged_out_object_stays_queued_while_the_whole_sink_is_down(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3down" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_status=503, delay_seconds=0.1)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_max_retry_age_seconds": 1})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            sink.fail_until = time.time() + 12
+            ids: Final = _push(candidate, model, key, marker, 4)
+            payloads: Final = collect_payloads(sink, 4, seconds=90)
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 4
+    assert frozenset(payload["id"] for payload in payloads) == ids, (
+        "a bucket-wide outage longer than the age budget lost events"
+    )
+
+
+def test_s3_v2_failing_sink_trims_the_oldest_failed_events_past_the_queue_cap(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3cap" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_status=503, delay_seconds=0.05)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_max_queue_size": 4})
+        with (
+            owned_proxy_process(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            sink.fail_until = time.time() + 15
+            _send(owned.gateway, model, key, f"{marker}-probe")
+            eventually(lambda: owned.log.read_text(), lambda text: "S3BatchUploadError" in text, seconds=30)
+            for index in range(24):
+                _send(owned.gateway, model, key, f"{marker}-{index}")
+            eventually(
+                lambda: owned.log.read_text(),
+                lambda text: "after a failed flush, dropped" in text,
+                seconds=30,
+            )
+            payloads: Final = collect_payloads(sink, 4, seconds=90)
+            landed: Final = frozenset(payload["id"] for payload in payloads)
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 25
+    assert len(landed) == 4, f"{len(landed)} objects landed with s3_max_queue_size=4"
+    assert f"{marker}-probe" not in landed and f"{marker}-0" not in landed, (
+        f"the oldest events survived the cap: {landed}"
+    )
+    assert f"{marker}-23" in landed, f"the newest event was dropped: {landed}"
+
+
+def test_s3_v2_default_config_retries_access_denied_and_every_event_lands(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3denied" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_status=403, fail_code="AccessDenied", delay_seconds=0.05)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            sink.fail_until = time.time() + 20
+            ids: Final = _push(candidate, model, key, marker, 8)
+            payloads: Final = collect_payloads(sink, 8, seconds=120)
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 8
+    assert frozenset(payload["id"] for payload in payloads) == ids, (
+        f"a default-config run lost events through a 20s AccessDenied outage: {len(payloads)} landed"
+    )
+    attempt_totals: Final = tuple(sorted(sink.attempt_counts.values()))
+    assert len(attempt_totals) == 8 and all(count >= 4 for count in attempt_totals), (
+        f"each object must see at least one full 3-PUT retry burst before landing: {attempt_totals}"
+    )
 
 
 @pytest.mark.covers("other.observability.s3_v2.batch_retry_resends_identical_key_and_body")
@@ -628,3 +851,187 @@ def test_s3_v2_sigterm_mid_burst_loses_only_inflight_without_duplicates(gateway:
     )
     targets: Final = tuple(sink.objects())
     assert len(set(targets)) == len(targets), "the same object was PUT more than once"
+
+
+RAMP_REQUESTS: Final = 400
+RAMP_PUT_DELAY_SECONDS: Final = 1.0
+
+
+def _push(candidate: Gateway, model: str, key: str, marker: str, count: int) -> frozenset[str]:
+    ids: Final = tuple(f"{marker}-{index}" for index in range(count))
+
+    def request(identity: str) -> str:
+        response: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": identity}], "cache": {"no-cache": True}},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["id"]
+
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        returned: Final = frozenset(pool.map(request, ids))
+    assert returned == frozenset(ids)
+    return returned
+
+
+def test_s3_v2_slow_sink_ramps_concurrency_and_drains_the_backlog(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3ramp" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(delay_seconds=RAMP_PUT_DELAY_SECONDS)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(
+            tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_adaptive_concurrency": True}
+        )
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1", "DEFAULT_S3_BATCH_SIZE": "5000"},
+                config=config,
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            ids: Final = _push(candidate, model, key, marker, RAMP_REQUESTS)
+            drain_started: Final = time.monotonic()
+            payloads: Final = collect_payloads(sink, RAMP_REQUESTS, seconds=180)
+            drained_seconds: Final = time.monotonic() - drain_started
+    fixed_sixteen_estimate: Final = RAMP_REQUESTS * RAMP_PUT_DELAY_SECONDS / 16
+    assert sum(1 for r in provider.drain() if r.method == "POST") == RAMP_REQUESTS
+    assert frozenset(payload["id"] for payload in payloads) == ids
+    assert sink.peak > 16, f"adaptive limiter never ramped past the old fixed bound: peak {sink.peak}"
+    assert drained_seconds < 2 * fixed_sixteen_estimate, (
+        f"backlog of {RAMP_REQUESTS} drained in {drained_seconds:.1f}s with peak concurrency {sink.peak}; "
+        f"even a fixed bound of 16 would need only ~{fixed_sixteen_estimate:.1f}s, so the uploads stalled"
+    )
+
+
+def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3throt" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_status=503, fail_code="SlowDown", delay_seconds=0.3)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(
+            tmp_path,
+            bucket.url,
+            {"s3_batch_file_upload": False, "s3_adaptive_concurrency": True, "s3_max_concurrent_uploads": 4},
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            healthy_ids: Final = _push(candidate, model, key, f"{marker}-healthy", REQUESTS)
+            collect_payloads(sink, REQUESTS)
+            healthy_peak: Final = sink.peak
+            window_start: Final = time.time()
+            sink.fail_until = window_start + 60
+            throttled_ids: Final = _push(candidate, model, key, f"{marker}-throttled", REQUESTS)
+            first_fail_at: Final = eventually(
+                lambda: next((when for when, _ in sink.attempt_log if when >= window_start), None),
+                lambda when: when is not None,
+                seconds=30,
+            )
+            window_end: Final = first_fail_at + 8.0
+            sink.fail_until = window_end
+            payloads: Final = collect_payloads(sink, 2 * REQUESTS, seconds=120)
+            throttled_peak: Final = sink.peak_between(first_fail_at + 5.0, window_end)
+            throttled_attempts: Final = sum(
+                1 for when, _ in sink.attempt_log if first_fail_at + 5.0 <= when < window_end
+            )
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 2 * REQUESTS
+    assert healthy_peak > 4, (
+        f"healthy peak {healthy_peak} never rose above the configured width 4; nothing to back off from"
+    )
+    assert throttled_attempts > 0, (
+        "no PUTs observed in the measured SlowDown window; the back-off assertion would be vacuous"
+    )
+    assert throttled_peak < healthy_peak, (
+        f"in-flight PUTs during the SlowDown window peaked at {throttled_peak}, not below the healthy peak "
+        f"{healthy_peak}; the limiter did not back off"
+    )
+    assert frozenset(payload["id"] for payload in payloads) == healthy_ids | throttled_ids
+    assert len(sink.objects()) == 2 * REQUESTS
+
+
+def test_s3_v2_coded_403_is_transient_and_every_id_lands_once(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3coded" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink(fail_attempts=3, fail_status=403, fail_code="RequestTimeout", delay_seconds=0.1)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            ids: Final = _push(candidate, model, key, marker, 4)
+            payloads: Final = collect_payloads(sink, 4)
+    assert frozenset(payload["id"] for payload in payloads) == ids
+    assert sink.attempts >= 7, (
+        f"only {sink.attempts} PUT attempts for 4 objects whose first 3 uploads 403 RequestTimeout; "
+        "coded 403s must be retried"
+    )
+
+
+def test_s3_v2_success_callback_mode_logs_only_successes(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3succ" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink()
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _recording_s3_config(
+            tmp_path,
+            bucket.url,
+            {},
+            {"callbacks": [], "success_callback": ["s3_v2"]},
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            ghost: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": f"ghost-{uuid.uuid4().hex}", "messages": [{"role": "user", "content": "hi"}]},
+                key=key,
+            )
+            assert ghost.status_code in (400, 403, 404), ghost.text
+            _send(candidate, model, key, marker)
+            payloads: Final = collect_payloads(sink, 1)
+    assert len(payloads) == 1
+    assert payloads[0]["id"] == marker
+    assert payloads[0]["status"] == "success"
+
+
+def test_s3_v2_failure_callback_mode_logs_only_failures(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3failcb" + uuid.uuid4().hex[:8]
+    sink: Final = RecordingS3Sink()
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _recording_s3_config(
+            tmp_path,
+            bucket.url,
+            {},
+            {"callbacks": [], "failure_callback": ["s3_v2"]},
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, marker)
+            ghost: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": f"ghost-{uuid.uuid4().hex}", "messages": [{"role": "user", "content": "hi"}]},
+                key=key,
+            )
+            assert ghost.status_code in (400, 403, 404), ghost.text
+            payloads: Final = collect_payloads(sink, 1)
+    assert len(payloads) == 1
+    assert payloads[0]["status"] == "failure"
+    assert payloads[0]["id"] != marker
+    assert isinstance(payloads[0]["litellm_call_id"], str) and payloads[0]["litellm_call_id"]

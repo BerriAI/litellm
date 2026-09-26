@@ -36,22 +36,86 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
         return True
 
 
-def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
+def _resolve_positive_int(setting: str, configured: object, fallback: int, *, reject_bool: bool) -> int:
     if configured is None or configured == "":
+        return fallback
+    if reject_bool and isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: %s=%r is a boolean, not an integer, using %s", setting, configured, fallback
+        )
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning("s3 logging: %s=%r is not an integer, using %s", setting, configured, fallback)
+        return fallback
+    if bound < 1:
+        verbose_logger.warning("s3 logging: %s=%r must be at least 1, using %s", setting, configured, fallback)
+        return fallback
+    return bound
+
+
+def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_concurrent_uploads", configured, fallback, reject_bool=False)
+
+
+def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_queue_size", configured, fallback, reject_bool=True)
+
+
+def resolve_s3_max_retry_age_seconds(configured: object, fallback: int | None) -> int | None:
+    if configured is None or configured == "":
+        return None
+    if isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is a boolean, not an integer, falling back to %r",
+            configured,
+            fallback,
+        )
         return fallback
     try:
         bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
     except ValidationError:
         verbose_logger.warning(
-            "s3 logging: s3_max_concurrent_uploads=%r is not an integer, using %s", configured, fallback
+            "s3 logging: s3_max_retry_age_seconds=%r is not an integer, falling back to %r", configured, fallback
         )
         return fallback
-    if bound < 1:
+    if bound < 0:
         verbose_logger.warning(
-            "s3 logging: s3_max_concurrent_uploads=%r must be at least 1, using %s", configured, fallback
+            "s3 logging: s3_max_retry_age_seconds=%r must be at least 0, falling back to %r", configured, fallback
         )
         return fallback
-    return bound
+    return bound or None
+
+
+def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_adaptive_concurrency", configured, fallback, reject_bool=True)
+
+
+def resolve_s3_drop_on_terminal_error(configured: object) -> bool:
+    if configured is None or configured == "":
+        return True
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_drop_on_terminal_error=%r is not a boolean, dropping terminal-failed uploads",
+            configured,
+        )
+        return True
+
+
+def resolve_s3_adaptive_concurrency(configured: object) -> bool:
+    if configured is None or configured == "":
+        return False
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_adaptive_concurrency=%r is not a boolean, keeping the fixed upload width",
+            configured,
+        )
+        return False
 
 
 def resolve_s3_batch_file_upload(configured: object) -> bool:
