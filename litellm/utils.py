@@ -9243,6 +9243,10 @@ class ProviderConfigManager:
             return litellm.TopazModelInfo()
         elif LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicModelInfo()
+        elif LlmProviders.GITHUB_COPILOT == provider:
+            from litellm.llms.github_copilot.model_info import GithubCopilotModelInfo
+
+            return GithubCopilotModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
