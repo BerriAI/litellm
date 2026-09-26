@@ -1078,20 +1078,19 @@ def _countable_json_node(obj: Mapping[str, object]) -> Mapping[str, object]:
     return _elide_data_key({key: value for key, value in obj.items() if key not in _OPAQUE_BLOCK_KEYS})
 
 
-def _countable_block(block: object) -> object:
-    if not isinstance(block, Mapping):
-        return block
-    if block.get("type") == "tool_result" and isinstance(block.get("content"), list):
-        return {
-            **block,
-            "content": [_countable_block(item) for item in block["content"]],
-        }
-    if block.get("type") in _LOCALLY_COUNTABLE_BLOCK_TYPES:
+def _countable_leaf_block(block: object) -> object:
+    if not isinstance(block, Mapping) or block.get("type") in _LOCALLY_COUNTABLE_BLOCK_TYPES:
         return block
     return {
         "type": "text",
         "text": json.dumps(json.loads(json.dumps(block, default=str), object_hook=_countable_json_node), default=str),
     }
+
+
+def _countable_block(block: object) -> object:
+    if isinstance(block, Mapping) and block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+        return {**block, "content": [_countable_leaf_block(item) for item in block["content"]]}
+    return _countable_leaf_block(block)
 
 
 def _countable_message(message: object) -> object:
