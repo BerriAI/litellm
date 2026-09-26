@@ -1109,6 +1109,20 @@ _BUDGET_NUMERIC_KEYS = frozenset(
 )
 
 
+def _key_expiration_exceeds_limit(
+    data: GenerateKeyRequest | UpdateKeyRequest, maximum_duration: str, fill_defaults: bool
+) -> bool:
+    if data.duration:
+        return False
+    if not fill_defaults and data.duration is None and "duration" in data.model_fields_set:
+        return True
+    if data.expires is None:
+        return not fill_defaults and "expires" in data.model_fields_set
+    expires: Final = data.expires if data.expires.tzinfo is not None else data.expires.replace(tzinfo=timezone.utc)
+    maximum_expiration: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(maximum_duration))
+    return expires > maximum_expiration
+
+
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
@@ -1135,40 +1149,41 @@ def _enforce_upperbound_key_params(
     if litellm.upperbound_key_generate_params is None:
         return
 
+    maximum_duration: Final = litellm.upperbound_key_generate_params.duration
+    if maximum_duration is not None and _key_expiration_exceeds_limit(data, maximum_duration, fill_defaults):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"expires is over max limit set in config - max_duration={maximum_duration}"},
+        )
+
     for elem in data:
         key, value = elem
-        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
-        if upperbound_value is not None:
-            if value is None:
-                if fill_defaults:
-                    setattr(data, key, upperbound_value)
-            else:
-                if key in [
-                    "max_budget",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                ]:
-                    if value > upperbound_value:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
-                elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
-                    if value == "-1":
-                        user_duration = float("inf")
-                    else:
-                        user_duration = duration_in_seconds(duration=value)
-                    if user_duration > upperbound_duration:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
+        if (upperbound_value := getattr(litellm.upperbound_key_generate_params, key, None)) is None:
+            continue
+        if value is None:
+            if fill_defaults and not (key == "duration" and data.expires is not None):
+                setattr(data, key, upperbound_value)
+            continue
+        if key in ["max_budget", "max_parallel_requests", "tpm_limit", "rpm_limit"]:
+            if value > upperbound_value:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                    },
+                )
+        elif key in ["budget_duration", "duration"]:
+            upperbound_duration, user_duration = (
+                duration_in_seconds(duration=upperbound_value),
+                float("inf") if value == "-1" else duration_in_seconds(duration=value),
+            )
+            if user_duration > upperbound_duration:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                    },
+                )
 
 
 async def _common_key_generation_helper(
@@ -1242,6 +1257,7 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (key != "duration" or data.expires is None)
                 and key
                 in [
                     "max_budget",
