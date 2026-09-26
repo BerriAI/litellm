@@ -139,6 +139,10 @@ from litellm.proxy.utils import (
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassThroughAuthMode,
+    pass_through_auth_mode,
+)
 from litellm.types.services import ServiceTypes
 
 try:
@@ -873,12 +877,7 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
                 ## IF AUTH DISABLED
-                # Default to True: a config dict with no ``auth`` key
-                # otherwise produced an unauthenticated forwarder. The
-                # Pydantic ``PassThroughGenericEndpoint.auth`` default
-                # is also True, but raw config dicts skip that path —
-                # so this runtime check has to default to True too.
-                if endpoint.get("auth", True) is not True:
+                if pass_through_auth_mode(endpoint.get("auth")) is PassThroughAuthMode.PUBLIC:
                     return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
@@ -2732,16 +2731,12 @@ async def _run_centralized_common_checks(
     if route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route):
         return
 
-    # User-configured pass-through endpoints with ``auth: false`` are
-    # explicitly unauthenticated — the builder returns an empty
-    # UserAPIKeyAuth() and the request is forwarded as-is. Running
-    # common_checks on the empty token would reject the request as
-    # admin-only. The "auth" flag on the endpoint config is the
-    # contract; honor it.
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
+            if not isinstance(endpoint, dict) or endpoint.get("path", "") != route:
+                continue
+            if pass_through_auth_mode(endpoint.get("auth")) is PassThroughAuthMode.PUBLIC:
                 return
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth

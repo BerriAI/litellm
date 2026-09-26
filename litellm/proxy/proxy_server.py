@@ -729,6 +729,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
+from litellm.proxy.pass_through_endpoints.common_utils import (
+    warn_pass_through_entries_without_auth,
+)
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
@@ -5133,6 +5136,7 @@ class ProxyConfig:
             if isinstance(yaml_endpoints, list)
             else None
         )
+        warn_pass_through_entries_without_auth(config_passthrough_endpoints or ())
 
     def _config_with_resolved_settings(self, config: Mapping[str, object]) -> dict[str, object]:
         return {  # mutable-ok: get_config preserves the mutable mapping contract used by existing loaders

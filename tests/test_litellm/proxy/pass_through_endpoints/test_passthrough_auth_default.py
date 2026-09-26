@@ -19,18 +19,36 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+import logging
+import uuid
+from typing import Final, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 
-
-from litellm.proxy._types import PassThroughGenericEndpoint
+from litellm.caching.caching import DualCache
+from litellm.exceptions import BudgetExceededError
+from litellm.proxy._types import (
+    ConfigFieldInfo,
+    LiteLLMRoutes,
+    PassThroughGenericEndpoint,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _run_centralized_common_checks,
     check_api_key_for_custom_headers_or_pass_through_endpoints,
 )
+from litellm.proxy.pass_through_endpoints.common_utils import _warn_once_per_process
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
+    _get_pass_through_endpoints_from_db,
     _register_pass_through_endpoint,
+)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassThroughAuthMode,
+    pass_through_auth_mode,
 )
 
 
@@ -131,3 +149,190 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
     )
 
     assert isinstance(result, UserAPIKeyAuth)
+
+
+_OMITTED: Final = object()
+
+
+def _config_entry(path: str, auth: object) -> dict[str, object]:
+    base: Final[dict[str, object]] = {"path": path, "target": "https://example.com", "include_subpath": True}
+    return base if auth is _OMITTED else {**base, "auth": auth}
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected"),
+    [
+        (True, PassThroughAuthMode.GRANTED_KEYS),
+        ("true", PassThroughAuthMode.GRANTED_KEYS),
+        (" TRUE ", PassThroughAuthMode.GRANTED_KEYS),
+        (False, PassThroughAuthMode.PUBLIC),
+        ("false", PassThroughAuthMode.PUBLIC),
+        ("False", PassThroughAuthMode.PUBLIC),
+        ("yes", PassThroughAuthMode.GRANTED_KEYS),
+        ("on", PassThroughAuthMode.GRANTED_KEYS),
+        (1, PassThroughAuthMode.GRANTED_KEYS),
+        ("no", PassThroughAuthMode.PUBLIC),
+        ("off", PassThroughAuthMode.PUBLIC),
+        ("0", PassThroughAuthMode.PUBLIC),
+        (0, PassThroughAuthMode.PUBLIC),
+        (None, PassThroughAuthMode.ANY_KEY),
+        ("", PassThroughAuthMode.ANY_KEY),
+        ("maybe", PassThroughAuthMode.ANY_KEY),
+        (2, PassThroughAuthMode.ANY_KEY),
+    ],
+)
+def test_pass_through_auth_mode_reads_every_config_spelling(auth: object, expected: PassThroughAuthMode) -> None:
+    assert pass_through_auth_mode(auth) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth", "policy_checked", "grant_gated"),
+    [
+        (_OMITTED, True, False),
+        (None, True, False),
+        ("maybe", True, False),
+        (True, True, True),
+        ("true", True, True),
+        ("yes", True, True),
+        (1, True, True),
+        (False, False, False),
+        ("false", False, False),
+        ("no", False, False),
+        (0, False, False),
+    ],
+)
+async def test_register_pass_through_endpoint_auth_tiers(auth: object, policy_checked: bool, grant_gated: bool) -> None:
+    app = MagicMock(spec=FastAPI)
+    path: Final = f"/lit8631-{uuid.uuid4().hex}"
+    entry: Final = _config_entry(path, auth)
+    await _register_pass_through_endpoint(endpoint=entry, app=app, premium_user=False, visited_endpoints=set())
+    try:
+        assert (path in LiteLLMRoutes.openai_routes.value) is policy_checked
+        assert (f"{path}/*" in LiteLLMRoutes.openai_routes.value) is policy_checked
+        assert RouteChecks.is_auth_enforced_pass_through_route(path) is grant_gated
+        assert RouteChecks.is_auth_enforced_pass_through_route(f"{path}/sub") is grant_gated
+        dependencies: Final = {
+            bool(call.kwargs["dependencies"]) for call in app.add_api_route.call_args_list  # pyright: ignore[reportAny]  # MagicMock call record
+        }
+        assert dependencies == {grant_gated}
+    finally:
+        InitPassThroughEndpointHelpers.remove_endpoint_routes(cast(str, entry["id"]))
+        assert path not in LiteLLMRoutes.openai_routes.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth", [_OMITTED, "maybe", "yes", 1, "true", True])
+async def test_runtime_check_requires_a_key_unless_auth_is_false(auth: object) -> None:
+    request = MagicMock()
+    request.headers = {}
+    result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/forwarder",
+        pass_through_endpoints=[_config_entry("/forwarder", auth)],
+        api_key="sk-1234",
+    )
+    assert result == "sk-1234"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth", ["false", "no", "off", 0])
+async def test_runtime_check_every_false_spelling_is_public(auth: object) -> None:
+    request = MagicMock()
+    request.headers = {}
+    result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/public-webhook",
+        pass_through_endpoints=[_config_entry("/public-webhook", auth)],
+        api_key="",
+    )
+    assert isinstance(result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth", "policy_enforced"),
+    [(_OMITTED, True), ("maybe", True), ("yes", True), (True, True), (False, False), ("false", False), ("no", False), (0, False)],
+)
+async def test_over_budget_team_is_blocked_on_every_authenticated_pass_through(
+    auth: object, policy_enforced: bool
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_module
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    route: Final = "/lit8631-policy"
+    attrs: Final = {
+        "prisma_client": None,
+        "user_api_key_cache": DualCache(),
+        "proxy_logging_obj": MagicMock(),
+        "general_settings": {"pass_through_endpoints": [_config_entry(route, auth)]},
+        "llm_router": None,
+        "user_custom_auth": None,
+        "litellm_proxy_admin_name": "admin",
+        "master_key": "sk-test-master",
+    }
+    originals: Final = {name: getattr(proxy_server_module, name, None) for name in attrs}
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+    over_budget: Final = BudgetExceededError(current_cost=2.0, max_budget=1.0)
+    try:
+        for name, value in attrs.items():
+            setattr(proxy_server_module, name, value)
+        with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new=AsyncMock(side_effect=over_budget)):
+            run: Final = _run_centralized_common_checks(
+                user_api_key_auth_obj=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+                request=request,
+                request_data={},
+                route=route,
+            )
+            if policy_enforced:
+                with pytest.raises(BudgetExceededError):
+                    await run
+            else:
+                assert await run is None
+    finally:
+        for name, value in originals.items():
+            setattr(proxy_server_module, name, value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("source", "expected_paths"), [("config", []), ("db", ["/from-db"]), ("unset", ["/from-db"])])
+async def test_db_reader_never_mirrors_config_owned_entries(source: str, expected_paths: list[str]) -> None:
+    field: Final = ConfigFieldInfo(
+        field_name="pass_through_endpoints",
+        field_value=[{"path": "/from-db", "target": "https://example.com"}],
+        source=source,
+    )
+    with patch("litellm.proxy.proxy_server.get_config_general_settings", new=AsyncMock(return_value=field)):
+        endpoints: Final = await _get_pass_through_endpoints_from_db()
+    assert [endpoint.path for endpoint in endpoints] == expected_paths
+
+
+def test_yaml_load_warns_once_per_process_per_entry_without_auth(caplog: pytest.LogCaptureFixture) -> None:
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    _warn_once_per_process.cache_clear()
+    original: Final = proxy_server_module.config_passthrough_endpoints
+    entries: Final = [
+        _config_entry("/no-auth-key", _OMITTED),
+        _config_entry("/granted", True),
+        _config_entry("/public", False),
+        _config_entry("/also-no-auth-key", None),
+        _config_entry("/typo", "maybe"),
+    ]
+    reloaded: Final = [*reversed(entries), _config_entry("/added-later", _OMITTED)]
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            proxy_server_module.ProxyConfig()._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": entries}})
+            proxy_server_module.ProxyConfig()._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": entries}})
+            proxy_server_module.ProxyConfig()._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": reloaded}})
+    finally:
+        proxy_server_module.config_passthrough_endpoints = original
+    warnings: Final = [record.getMessage() for record in caplog.records if "pass_through_endpoints entry" in record.getMessage()]
+    missing: Final = [message.split("'")[1] for message in warnings if "sets no `auth`" in message]
+    invalid: Final = [message for message in warnings if "is not a boolean" in message]
+    assert missing == ["/no-auth-key", "/also-no-auth-key", "/added-later"]
+    assert [message.split("'")[1] for message in invalid] == ["/typo"]
+    assert "`auth: 'maybe'`" in invalid[0]
+    assert all("`auth: false`" in message and "`auth: true`" in message for message in warnings)
