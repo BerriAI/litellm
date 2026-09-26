@@ -22,6 +22,7 @@ from litellm.proxy.agent_endpoints.endpoints import (
     user_api_key_auth,
 )
 from litellm.types.agents import AgentResponse
+from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
 
 def _sample_agent_card_params() -> dict:
@@ -1357,3 +1358,34 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
     assert internal.status_code == 200, internal.text
     assert internal.json()["kill_switch"] is None
     assert "tok-real" not in internal.text
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+@pytest.mark.parametrize("path", ["/v1/agents", "/v1/agents/agent-123"])
+def test_agent_identity_configuration_is_only_returned_to_admins(role, path, monkeypatch):
+    from litellm.proxy.agent_endpoints import agent_registry
+
+    binding = AgentIdentityBinding(
+        agent_id="agent-123", provider="microsoft_entra", tenant_id="tenant", client_id="client",
+        issuer="https://login.microsoftonline.com/tenant/v2.0", revision="revision",
+    )
+    agent = _sample_agent_response().model_copy(update={"identity": binding})
+    registry = MagicMock()
+    registry.get_agent_by_id.return_value = agent
+    registry.get_agent_list.return_value = [agent]
+    registry.ids_for_agent.return_value = frozenset({agent.agent_id})
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+        AsyncMock(return_value=RestrictedAgentAccess(frozenset({agent.agent_id}))),
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client") as prisma:
+        prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+        prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        response = _make_app_with_role(role).get(path, headers={"Authorization": "Bearer k"})
+    assert response.status_code == 200
+    payload = response.json()[0] if path == "/v1/agents" else response.json()
+    assert payload["identity"] == (binding.model_dump(mode="json") if role == LitellmUserRoles.PROXY_ADMIN else None)
+    assert agent.identity == binding

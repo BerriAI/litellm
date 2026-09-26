@@ -186,6 +186,7 @@ def _redact_sensitive_agent_fields(
             copy.extra_headers = None
             copy.keys = None
             copy.kill_switch = None
+            copy.identity = None
         if copy.litellm_params:
             copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
         copy.kill_switch = redact_kill_switch(copy.kill_switch)
