@@ -335,6 +335,14 @@ mod tests {
     #[rstest]
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
+    #[case::request_decoding(
+        Error::RequestDecoding(serde_json::from_value::<()>(json!("x")).unwrap_err().into()),
+        true,
+    )]
+    #[case::response_decoding(
+        Error::ResponseDecoding(serde_json::from_value::<()>(json!("x")).unwrap_err().into()),
+        false,
+    )]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
