@@ -159,6 +159,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
+        caller: str | None = None,
     ):
         """
         Handles both sync and async monitoring by checking for existing event loop.
@@ -172,6 +173,7 @@ class ServiceLogging(CustomLogger):
                 service=service,
                 duration=duration,
                 call_type=call_type,
+                caller=caller,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
@@ -187,6 +189,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
+        caller: str | None = None,
     ):
         """
         Handles both sync and async monitoring by checking for existing event loop.
@@ -200,6 +203,7 @@ class ServiceLogging(CustomLogger):
                 duration=duration,
                 error=error,
                 call_type=call_type,
+                caller=caller,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
@@ -215,6 +219,7 @@ class ServiceLogging(CustomLogger):
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
         event_metadata: dict | None = None,
+        caller: str | None = None,
     ):
         """
         - For counting if the redis, postgres call is successful
@@ -228,6 +233,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            caller=caller,
             event_metadata=event_metadata,
         )
 
@@ -313,6 +319,7 @@ class ServiceLogging(CustomLogger):
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
         event_metadata: dict | None = None,
+        caller: str | None = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
@@ -332,6 +339,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            caller=caller,
             event_metadata=event_metadata,
         )
 

@@ -28239,6 +28239,11 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Fail Closed Rate Limit Enforcement
+             * @description reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times the limit across N pods)
+             */
+            fail_closed_rate_limit_enforcement?: boolean | null;
+            /**
              * Failed Login Block Seconds
              * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
              */
@@ -33025,6 +33030,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -33105,6 +33112,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -33230,6 +33239,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -46835,6 +46846,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -46915,6 +46928,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -47040,6 +47055,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */

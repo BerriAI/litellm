@@ -80,13 +80,20 @@ fn decode_ssl_verify(field: &Field<'_>) -> Result<Option<SslVerify>, ProjectionE
     Err(field.invalid("a Boolean, Boolean string, CA path, or None"))
 }
 
-static POOL: LazyLock<HttpClientPool> =
-    LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
+static RESOURCES: LazyLock<litellm_core::resources::CoreResources> = LazyLock::new(|| {
+    litellm_core::resources::CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
+        PublicDnsResolver,
+    ))))
+});
+
+pub(crate) fn resources() -> &'static litellm_core::resources::CoreResources {
+    &RESOURCES
+}
 
 static REPORTED_UNSUPPORTED: LazyLock<Mutex<HashSet<Unsupported>>> = LazyLock::new(Mutex::default);
 
 pub(crate) fn pool() -> &'static HttpClientPool {
-    &POOL
+    &resources().pool
 }
 
 pub(crate) fn call_config(

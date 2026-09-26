@@ -1,0 +1,28 @@
+[package]
+name = "litellm-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum.workspace = true
+http-body-util = "0.1"
+litellm-core.workspace = true
+litellm-gateway-inference.workspace = true
+litellm-gateway-auth.workspace = true
+litellm-config.workspace = true
+litellm-http.workspace = true
+litellm-llms.workspace = true
+litellm-secrets.workspace = true
+litellm-tracing.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+rstest.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tower = { version = "0.5", features = ["util"] }
