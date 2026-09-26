@@ -196,7 +196,9 @@ def normalize_gemini_speech_config(
         if isinstance(nested_config, Mapping)
         else value
     )
-    normalized: Final = _normalize_gemini_speech_config_item(config)
+    normalized: Final = _normalize_gemini_speech_config_item(
+        {key: item for key, item in config.items() if key != "format"}
+    )
     voice_name: Final = next(
         (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
         None,

@@ -90,6 +90,26 @@ def test_gemini_request_keeps_voice_beside_nested_speech_config() -> None:
     }
 
 
+@pytest.mark.parametrize("wrapper", (None, "speech_config", "speechConfig"))
+def test_gemini_request_keeps_voice_and_language_without_audio_format(wrapper: str | None) -> None:
+    voice: Final = {"language_code": "fr-FR", "voice": "Kore", "format": "pcm16"}
+    request: Final = SpeechToCompletionBridgeTransformationHandler().transform_request(
+        model=GEMINI_TTS_MODEL,
+        input="Bonjour",
+        voice=voice if wrapper is None else {wrapper: voice},
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+
+    assert request["audio"]["speech_config"] == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
 @pytest.mark.parametrize("response_format", ["mp3", "flac", "opus", "aac"])
 def test_gemini_tts_request_rejects_formats_gemini_cannot_produce(response_format: str) -> None:
     with pytest.raises(litellm.BadRequestError) as excinfo:
