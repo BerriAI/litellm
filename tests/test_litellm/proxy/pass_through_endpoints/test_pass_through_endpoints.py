@@ -8503,7 +8503,7 @@ async def test_upstream_error_body_for_log_masks_a_pem_after_a_json_escaped_newl
     "body",
     [
         '{"error":{"message":"-----BEGIN PRIVATE KEY----- header is missing from the uploaded credentials file please re-upload it"}}',
-        "-----BEGIN PRIVATE KEY----- misconfigurationdetected in the uploaded credentials file",
+        "-----BEGIN PRIVATE KEY----- misconfigurationdetected within the uploaded credentials file",
         "-----BEGIN PRIVATE KEY----- header missing see https://cloud.google.com/docs/authentication/getting-started for details",
         "Invalid JWT Signature. The private_key field must start with -----BEGIN PRIVATE KEY----- and contain the PEM encoded key from your service account JSON file",
         "-----BEGIN RSA PRIVATE KEY----- block could not be parsed",
