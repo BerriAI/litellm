@@ -8,8 +8,6 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
-from typing_extensions import assert_never
-
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -116,7 +114,7 @@ def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "User
     stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
 
     def stamped_str(field: str) -> str | None:
-        value: Final = request_data.get(field, stamped.get(field))
+        value: Final = stamped.get(field)
         return value if isinstance(value, str) else None
 
     return UserAPIKeyAuth(
@@ -875,21 +873,17 @@ class CustomGuardrail(CustomLogger):
         except Exception as e:
             enrich_http_exception_with_guardrail_context(e, self)
             raise
-        match result:
-            case None:
-                return tuple(messages)
-            case dict():
-                scanned: Final = result.get("messages")
-                return tuple(scanned) if isinstance(scanned, list) else tuple(messages)
-            case str():
-                rejection: Final = pre_call_rejection(result, self.guardrail_name)
-                enrich_http_exception_with_guardrail_context(rejection, self)
-                raise rejection
-            case Exception():
-                enrich_http_exception_with_guardrail_context(result, self)
-                raise result
-            case _:
-                assert_never(result)
+        if result is None:
+            return tuple(messages)
+        if isinstance(result, dict):
+            scanned: Final = result.get("messages")
+            return tuple(scanned) if isinstance(scanned, list) else tuple(messages)
+        if isinstance(result, str):
+            rejection: Final = pre_call_rejection(result, self.guardrail_name)
+            enrich_http_exception_with_guardrail_context(rejection, self)
+            raise rejection
+        enrich_http_exception_with_guardrail_context(result, self)
+        raise result
 
     async def async_post_call_success_deployment_hook(
         self,
@@ -900,8 +894,6 @@ class CustomGuardrail(CustomLogger):
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
-        from litellm.proxy._types import UserAPIKeyAuth
-
         # should run guardrail
         litellm_guardrails: Final = request_data.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -915,13 +907,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
             result: Final = await target.async_post_call_success_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id=request_data.get("user_api_key_user_id"),
-                    team_id=request_data.get("user_api_key_team_id"),
-                    end_user_id=request_data.get("user_api_key_end_user_id"),
-                    api_key=request_data.get("user_api_key_hash"),
-                    request_route=request_data.get("user_api_key_request_route"),
-                ),
+                user_api_key_dict=_user_api_key_auth_from_request(request_data),
                 data=request_data,
                 response=response,
             )

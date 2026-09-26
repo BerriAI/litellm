@@ -818,6 +818,28 @@ async def test_the_scan_runs_under_the_identity_the_proxy_stamped_on_the_request
 
 
 @pytest.mark.asyncio
+async def test_a_team_id_typed_into_the_request_body_never_outranks_the_stamped_identity(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_with("vs-healthy")
+    guardrail = ScanningGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=RecordingRouter())),
+        ["vs-healthy"],
+        FakeLoggingObj({}),
+        request_params={
+            "user_api_key_team_id": "team-typed-into-the-request-body",
+            "metadata": {"user_api_key_team_id": "team-a"},
+        },
+    )
+
+    assert guardrail.seen_team_ids == ["team-a"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("poisoned", "expected_status"),
     [(False, "success"), (True, "guardrail_intervened")],
