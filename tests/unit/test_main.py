@@ -26,6 +26,7 @@ from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues
@@ -4405,10 +4406,10 @@ def test_completion_carries_the_control_options_into_the_logged_litellm_params()
         mock_response="hi",
         litellm_logging_obj=logging_obj,
     )
-    assert logging_obj.litellm_params[CONTROL_OPTIONS_KEY] == ControlOptions(stream_chunk_size=64)
+    assert stored_control_options(logging_obj.litellm_params) == ControlOptions(stream_chunk_size=64)
 
 
-def test_completion_replaces_a_caller_supplied_control_options_key() -> None:
+def test_completion_ignores_a_caller_supplied_control_options_key() -> None:
     logging_obj: Final = _completion_logging_obj("control-params-injection")
     litellm.completion(
         model="openai/gpt-4.1-mini",
@@ -4417,7 +4418,7 @@ def test_completion_replaces_a_caller_supplied_control_options_key() -> None:
         litellm_logging_obj=logging_obj,
         **{CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}},
     )
-    assert CONTROL_OPTIONS_KEY not in logging_obj.litellm_params
+    assert stored_control_options(logging_obj.litellm_params) == ControlOptions()
 
 
 @pytest.mark.parametrize("drop_params", [True, "true"])
@@ -4431,7 +4432,7 @@ def test_drop_params_drops_an_invalid_stream_chunk_size_instead_of_rejecting_it(
         mock_response="hi",
         litellm_logging_obj=logging_obj,
     )
-    assert CONTROL_OPTIONS_KEY not in logging_obj.litellm_params
+    assert stored_control_options(logging_obj.litellm_params) == ControlOptions()
 
 
 def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_request(
@@ -4480,7 +4481,7 @@ async def test_global_drop_params_drops_an_invalid_stream_chunk_size_on_acomplet
         mock_response="hi",
         litellm_logging_obj=logging_obj,
     )
-    assert CONTROL_OPTIONS_KEY not in logging_obj.litellm_params
+    assert stored_control_options(logging_obj.litellm_params) == ControlOptions()
 
 
 def test_completion_rejects_an_invalid_stream_chunk_size_before_the_mcp_gateway() -> None:

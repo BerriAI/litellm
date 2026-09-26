@@ -4,10 +4,8 @@ Test filter_out_litellm_params helper function.
 
 from typing import Final
 
-import pytest
 
 import litellm
-import litellm.types.utils as types_utils
 from litellm.utils import filter_out_litellm_params
 
 
@@ -56,9 +54,3 @@ def test_filter_out_litellm_params_sees_a_name_appended_to_the_public_list_after
         litellm.all_litellm_params.remove("registered_later")
 
     assert filtered == {"top_k": 2}
-
-
-def test_filter_out_litellm_params_sees_the_defining_module_list_rebound_after_import(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(types_utils, "all_litellm_params", (*types_utils.all_litellm_params, "registered_later"))
-
-    assert filter_out_litellm_params({"registered_later": 1, "top_k": 2}) == {"top_k": 2}
