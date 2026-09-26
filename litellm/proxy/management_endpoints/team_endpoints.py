@@ -130,6 +130,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
     get_daily_activity_export_rows,
+    get_daily_activity_model_top_api_keys,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
@@ -202,6 +203,8 @@ from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
+    ModelTopApiKeysGroupBy,
+    ModelTopApiKeysResponse,
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
@@ -7092,6 +7095,65 @@ async def search_team_daily_activity_keys(
         exclude_entity_ids=scope.exclude_team_ids,
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/team/daily/activity/aggregated/model_top_keys",
+    response_model=ModelTopApiKeysResponse,
+    tags=["team management"],  # mutable-ok: FastAPI route tags must be a list
+)
+async def get_team_daily_activity_model_top_keys(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    model: str = fastapi.Query(
+        ...,
+        min_length=1,
+        description="Model or model group to rank keys by spend for",
+    ),
+    group_by: ModelTopApiKeysGroupBy = "model",
+    team_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_team_ids: str | None = None,
+    timezone: int | None = None,
+) -> ModelTopApiKeysResponse:
+    """Top keys by spend on one model or model group, across every key the caller may
+    see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend."""
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None or start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+
+    scope: Final = await _resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=exclude_team_ids,
+        api_key=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return await get_daily_activity_model_top_api_keys(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=scope.team_ids,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+        model=model,
+        api_key=scope.api_key_filter,
+        exclude_entity_ids=scope.exclude_team_ids,
+        timezone_offset_minutes=timezone,
     )
 
 

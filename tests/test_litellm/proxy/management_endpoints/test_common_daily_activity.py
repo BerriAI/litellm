@@ -14,18 +14,21 @@ from pytest_postgresql import factories
 from litellm.constants import (
     DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM,
     PTU_SENTINEL_API_KEY,
+    USAGE_MODEL_TOP_API_KEYS_LIMIT,
     USAGE_TOP_API_KEYS_LIMIT,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
     _build_entity_rollup_sql_query,
+    _build_model_top_api_keys_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
     get_daily_activity_export_rows,
+    get_daily_activity_model_top_api_keys,
     global_rollup_reconciled_through,
     update_metrics,
 )
@@ -3190,3 +3193,197 @@ async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
     header: Final = _team_export_csv("daily", rows).splitlines()[0]
     assert "Flat Cost" not in header
     assert "Total Cost" not in header
+
+
+def test_model_top_api_keys_sql_ranks_over_all_keys_not_the_global_top_n():
+    """Regression for the per-model Top Keys list: the aggregated response only
+    carries the global USAGE_TOP_API_KEYS_LIMIT spenders, so a model whose top
+    key is outside that cap was mis-ranked client-side. The per-model query must
+    filter on the model column and never consult the capped top_api_keys CTE."""
+    sql, params = _build_model_top_api_keys_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=["team-1"],
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        group_by="model",
+        model="claude-sonnet-4-5",
+        api_key=["hash-a", "hash-b"],
+    )
+
+    assert params == [
+        "2024-01-01",
+        "2024-01-31",
+        "team-1",
+        "hash-a",
+        "hash-b",
+        "claude-sonnet-4-5",
+        PTU_SENTINEL_API_KEY,
+        USAGE_MODEL_TOP_API_KEYS_LIMIT,
+    ]
+    assert "model = $6" in sql
+    assert "api_key <> $7" in sql
+    assert "LIMIT $8" in sql
+    assert "ORDER BY SUM(spend) DESC, api_key" in sql
+    assert sql.index("api_key IN ($4, $5)") < sql.index("model = $6")
+    assert "top_api_keys" not in sql
+    assert str(USAGE_TOP_API_KEYS_LIMIT) not in sql
+
+
+def test_model_top_api_keys_sql_group_by_model_group_uses_coalesce():
+    sql, params = _build_model_top_api_keys_sql_query(
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        group_by="model_group",
+        model="claude-sonnet-4-5",
+        api_key=None,
+    )
+
+    assert "COALESCE(NULLIF(model_group, ''), model) = $3" in sql
+    assert "model = $3" not in sql
+    assert params == [
+        "2024-01-01",
+        "2024-01-31",
+        "claude-sonnet-4-5",
+        PTU_SENTINEL_API_KEY,
+        USAGE_MODEL_TOP_API_KEYS_LIMIT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_top_api_keys_maps_rows_in_sql_order_with_key_metadata():
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {"api_key": "hash-c", "spend": 50.0, "api_requests": 5, "total_tokens": 750},
+            {"api_key": "hash-a", "spend": 0.1, "api_requests": 1, "total_tokens": 2},
+        ]
+    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(token="hash-c", key_alias="key-c", team_id="team-8618", user_id="u1"),
+            SimpleNamespace(token="hash-a", key_alias="key-a", team_id="team-8618", user_id="u1"),
+        ]
+    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_model_top_api_keys(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=["team-8618"],
+        start_date="2026-09-24",
+        end_date="2026-09-24",
+        group_by="model",
+        model="claude-sonnet-4-5",
+    )
+
+    assert result.model == "claude-sonnet-4-5"
+    assert result.group_by == "model"
+    assert result.limit == USAGE_MODEL_TOP_API_KEYS_LIMIT
+    assert [key.api_key for key in result.api_keys] == ["hash-c", "hash-a"]
+    first = result.api_keys[0]
+    assert first.key_alias == "key-c"
+    assert first.team_id == "team-8618"
+    assert first.spend == 50.0
+    assert first.api_requests == 5
+    assert first.total_tokens == 750
+
+
+@pytest.mark.asyncio
+async def test_model_top_api_keys_ranks_a_key_the_global_cap_dropped(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """A key outside the global USAGE_TOP_API_KEYS_LIMIT spenders is absent from the
+    aggregated model breakdown but must rank first in the per-model top keys."""
+    n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 2
+    key_rows: Final = [
+        (
+            f"row-{i:03d}",
+            f"user-{i:03d}",
+            "2026-06-01",
+            f"key-{i:03d}",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            float(i + 1),
+            1,
+            1,
+        )
+        for i in range(n_keys)
+    ]
+    claude_rows: Final = [
+        (
+            "row-top-claude",
+            f"user-{n_keys - 1:03d}",
+            "2026-06-01",
+            f"key-{n_keys - 1:03d}",
+            "claude-sonnet-4-5",
+            "",
+            "anthropic",
+            "/v1/chat/completions",
+            2,
+            0.1,
+            1,
+            1,
+        ),
+        (
+            "row-outlier",
+            "user-outlier",
+            "2026-06-01",
+            "key-outlier",
+            "claude-sonnet-4-5",
+            "",
+            "anthropic",
+            "/v1/chat/completions",
+            500,
+            0.5,
+            5,
+            5,
+        ),
+    ]
+    _seed_daily_user_spend(_aggregated_postgresql, [*key_rows, *claude_rows])
+
+    row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, row_counts)
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+
+    aggregated = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key=None,
+    )
+    claude_breakdown: Final = aggregated.results[0].breakdown.models["claude-sonnet-4-5"].api_key_breakdown
+    assert "key-outlier" not in claude_breakdown, set(claude_breakdown)
+    assert f"key-{n_keys - 1:03d}" in claude_breakdown
+
+    top = await get_daily_activity_model_top_api_keys(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        group_by="model",
+        model="claude-sonnet-4-5",
+    )
+    assert [(k.api_key, k.spend) for k in top.api_keys] == [("key-outlier", 0.5), (f"key-{n_keys - 1:03d}", 0.1)]
+    assert top.api_keys[0].api_requests == 5
+    assert top.api_keys[0].total_tokens == 500

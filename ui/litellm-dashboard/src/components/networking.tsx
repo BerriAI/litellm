@@ -1523,6 +1523,35 @@ export const teamDailyActivityKeySearchCall = async (
   }
 };
 
+export type ModelTopApiKeysResponse = components["schemas"]["ModelTopApiKeysResponse"];
+export type ModelTopApiKeysGroupBy = "model" | "model_group";
+
+export const teamDailyActivityModelTopKeysCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [model: string, groupBy: ModelTopApiKeysGroupBy, teamIds?: string[] | null]
+): Promise<ModelTopApiKeysResponse> => {
+  const [model, groupBy, teamIds = null] = options;
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated/model_top_keys`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        model,
+        group_by: groupBy,
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch team daily activity model top keys:", error);
+    throw error;
+  }
+};
+
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (
@@ -2638,6 +2667,37 @@ export const userDailyActivityKeySearchCall = async (
     });
   } catch (error) {
     console.error("Failed to search user daily activity keys:", error);
+    throw error;
+  }
+};
+
+export const userDailyActivityModelTopKeysCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [model: string, groupBy: ModelTopApiKeysGroupBy, userId?: string | null]
+): Promise<ModelTopApiKeysResponse> => {
+  const [model, groupBy, userId = null] = options;
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/user/daily/activity/aggregated/model_top_keys`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        model,
+        group_by: groupBy,
+        user_id: userId || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch user daily activity model top keys:", error);
     throw error;
   }
 };

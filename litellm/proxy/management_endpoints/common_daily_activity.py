@@ -8,10 +8,15 @@ from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_LIMIT
+from litellm.constants import (
+    PTU_SENTINEL_API_KEY,
+    USAGE_MODEL_TOP_API_KEYS_LIMIT,
+    USAGE_TOP_API_KEYS_LIMIT,
+)
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import GLOBAL_SPEND_TABLE_NAME, reconciled_through
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
@@ -35,6 +40,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     KeyMetadata,
     KeyMetricWithMetadata,
     MetricWithMetadata,
+    ModelTopApiKey,
+    ModelTopApiKeysGroupBy,
+    ModelTopApiKeysResponse,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
@@ -205,7 +213,7 @@ class _AggregatedQueryKwargs(TypedDict):
     include_current_utc_day: ReadOnly[bool]
 
 
-_SqlQuery = tuple[str, Sequence[str]]
+_SqlQuery = tuple[str, Sequence[str | int]]
 
 
 async def _query_raw_optional(
@@ -928,6 +936,64 @@ def _build_aggregated_sql_query(
     return sql_query, [*where_params, PTU_SENTINEL_API_KEY, *marker_params]
 
 
+def _build_model_top_api_keys_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    group_by: ModelTopApiKeysGroupBy,
+    model: str,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    limit: int = USAGE_MODEL_TOP_API_KEYS_LIMIT,
+) -> tuple[str, list[str | int]]:  # mutable-ok: SQL text plus its ordered $N params
+    """Top keys by spend for ONE model or model group, ranked over every key.
+
+    The aggregated response carries only the global USAGE_TOP_API_KEYS_LIMIT
+    spenders, so a model whose heaviest keys fall outside that cap shows the
+    wrong ranking client-side. This per-model query has no such cap: every key
+    matching the caller's scope competes, and the top `limit` come back.
+    """
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
+
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=None,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+    )
+
+    p: Final = len(where_params) + 1
+    group_expr: Final = "model" if group_by == "model" else _MODEL_GROUP_EXPR
+
+    sql_query: Final = f"""
+        SELECT api_key,
+               SUM(spend)::float AS spend,
+               SUM(api_requests)::bigint AS api_requests,
+               (SUM(prompt_tokens) + SUM(completion_tokens))::bigint AS total_tokens
+        FROM "{pg_table}"
+        WHERE {where_clause} AND {group_expr} = ${p} AND api_key <> ${p + 1}
+        GROUP BY api_key
+        ORDER BY SUM(spend) DESC, api_key
+        LIMIT ${p + 2}::int
+    """
+
+    return sql_query, [*where_params, model, PTU_SENTINEL_API_KEY, limit]
+
+
 def _build_entity_rollup_sql_query(
     *,
     table_name: str,
@@ -1036,6 +1102,13 @@ def _build_export_sql_query(
     """
 
     return sql_query, (*where_params, *sentinel_params)
+
+
+class _ModelTopApiKeyRow(BaseModel):
+    api_key: str
+    spend: float
+    api_requests: int
+    total_tokens: int
 
 
 class _ExportRow(_RollupMetricsRow):
@@ -1265,6 +1338,70 @@ async def get_daily_activity_export_rows(
             lambda: tuple(_export_key_row(record, entity_metadata_field, api_key_metadata) for record in records)
         )
     return await asyncio.to_thread(_fold_export_users, records, entity_metadata_field, api_key_metadata)
+
+
+async def get_daily_activity_model_top_api_keys(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    group_by: ModelTopApiKeysGroupBy,
+    model: str,
+    api_key: str | list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    limit: int = USAGE_MODEL_TOP_API_KEYS_LIMIT,
+) -> ModelTopApiKeysResponse:
+    """The top `limit` keys by spend on one model or model group, over every key."""
+    sql_query, sql_params = _build_model_top_api_keys_sql_query(
+        table_name=table_name,
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+        model=model,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+        timezone_offset_minutes=timezone_offset_minutes,
+        include_current_utc_day=include_current_utc_day,
+        limit=limit,
+    )
+    raw_rows: Final = await _query_raw_optional(prisma_client, (sql_query, sql_params))
+    rows: Final = tuple(_ModelTopApiKeyRow.model_validate(row) for row in (raw_rows or ()))
+
+    api_keys: Final = frozenset(row.api_key for row in rows)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
+    api_key_metadata: Final = (
+        await get_api_key_metadata(
+            prisma_client, api_keys, _spend_logs_window(frozenset((adjusted_start, adjusted_end)))
+        )
+        if api_keys
+        else _EMPTY_KEY_METADATA
+    )
+    metadata: Final = {row.api_key: _key_metadata(api_key_metadata, row.api_key) for row in rows}
+    return ModelTopApiKeysResponse(
+        model=model,
+        group_by=group_by,
+        limit=limit,
+        api_keys=[
+            ModelTopApiKey(
+                api_key=row.api_key,
+                key_alias=metadata[row.api_key].key_alias,
+                team_id=metadata[row.api_key].team_id,
+                spend=row.spend,
+                api_requests=row.api_requests,
+                total_tokens=row.total_tokens,
+            )
+            for row in rows
+        ],
+    )
 
 
 def _aggregate_spend_records_sync(

@@ -1,6 +1,6 @@
 from datetime import date
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -147,3 +147,22 @@ class LiteLLM_DailyUserSpend(BaseModel):
 class GroupedData(TypedDict):
     metrics: SpendMetrics
     breakdown: BreakdownMetrics
+
+
+ModelTopApiKeysGroupBy = Literal["model", "model_group"]
+
+
+class ModelTopApiKey(BaseModel):
+    api_key: str
+    key_alias: str | None = None
+    team_id: str | None = None
+    spend: float = Field(default=0.0)
+    api_requests: int = Field(default=0)
+    total_tokens: int = Field(default=0)
+
+
+class ModelTopApiKeysResponse(BaseModel):
+    model: str
+    group_by: ModelTopApiKeysGroupBy
+    limit: int
+    api_keys: list[ModelTopApiKey] = Field(default_factory=list)
