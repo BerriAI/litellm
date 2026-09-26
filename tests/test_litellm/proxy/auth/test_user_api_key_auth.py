@@ -9327,7 +9327,8 @@ async def test_centralized_authorization_preserves_database_free_config_agents(m
 
 
 @pytest.mark.asyncio
-async def test_managed_virtual_key_cannot_access_provider_resource_routes(monkeypatch):
+@pytest.mark.parametrize("verified_identity", [False, True])
+async def test_managed_actor_cannot_access_provider_resource_routes(monkeypatch, verified_identity: bool):
     from litellm.proxy import proxy_server
     from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
     from litellm.types.agents import AgentResponse
@@ -9359,7 +9360,15 @@ async def test_managed_virtual_key_cannot_access_provider_resource_routes(monkey
         monkeypatch.setattr(proxy_server, name, value)
     request = _alias_request("/v1/files", {})
     request.scope["method"] = "GET"
-    auth = UserAPIKeyAuth(agent_id="managed", api_key="persisted-key", models=["test-model"])
+    from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+    auth = UserAPIKeyAuth(
+        agent_id="managed", api_key="persisted-key", models=["test-model"],
+        managed_agent_context=(
+            ManagedAgentContext(agent_id="managed", binding_revision="revision", mode="autonomous")
+            if verified_identity else None
+        ),
+    )
     with pytest.raises(ProxyException) as denied:
         await _authorize_authenticated_request(auth, request, {}, "/v1/files", "persisted-key")
     assert denied.value.code == "403"
@@ -9438,3 +9447,46 @@ async def test_managed_agent_cannot_bypass_grants_with_server_default(
         )
     reserve.assert_awaited_once()
     assert reserve.call_args.kwargs["request_body"]["model"] == "forbidden-model"
+
+
+@pytest.mark.asyncio
+async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    binding: Final = AgentIdentityBinding(
+        agent_id="managed", provider="microsoft_entra", issuer="issuer", tenant_id="tenant",
+        client_id="client", service_principal_id="principal", revision="current",
+    )
+    agent: Final = AgentResponse(
+        agent_id="managed", agent_name="Managed", agent_card_params={},
+        identity_managed=True, identity=binding, execution_mode="autonomous",
+    )
+    client: Final = MagicMock()
+    client.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
+    client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    handler: Final = MagicMock()
+    handler.is_jwt.return_value = True
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="sub")
+    handler.auth_jwt = AsyncMock(return_value={
+        "iss": "issuer", "tid": "tenant", "azp": "client", "oid": "principal", "sub": "mapped-key",
+    })
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "general_settings": {"enable_jwt_auth": True}, "premium_user": True,
+        "prisma_client": client, "jwt_handler": handler, "user_api_key_cache": DualCache(),
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    with pytest.raises(ProxyException) as failure:
+        await _user_api_key_auth_builder(
+            request=_alias_request("/v1/chat/completions", {}), api_key="Bearer verified.jwt.token",
+            azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
+            azure_apim_header=None, request_data={},
+        )
+    assert failure.value.code == "403"
+    assert "without virtual-key mapping" in failure.value.message
+    client.writer_db.litellm_agentstable.find_unique.assert_awaited_once()
