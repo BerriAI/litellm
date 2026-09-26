@@ -25,7 +25,7 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
-from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -784,6 +784,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         for key, value in attributes.items():
             self.safe_set_attribute(span=span, key=key, value=value)
+        if payload.caller is not None:
+            self.safe_set_attribute(span=span, key=LiteLLM.SERVICE_CALLER, value=payload.caller)
         return span
 
     async def async_service_success_hook(

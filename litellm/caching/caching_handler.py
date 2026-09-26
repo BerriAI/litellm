@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm._internal_context import post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
@@ -158,7 +159,8 @@ async def _complete_cache_write_despite_cancellation(write_factory: Callable[[],
 
 
 def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
-    task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
+    with post_response_phase():
+        task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
     _PENDING_CACHE_WRITES.add(task)
     task.add_done_callback(_PENDING_CACHE_WRITES.discard)
     return task
