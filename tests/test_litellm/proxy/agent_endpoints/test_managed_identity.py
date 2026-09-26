@@ -2,7 +2,8 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
+from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject, managed_write_fields
+from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import (
     AgentExecutionMode,
     AgentIdentityBinding,
@@ -91,6 +92,118 @@ def test_native_facet_absence_does_not_establish_human_identity() -> None:
     )
     assert isinstance(result, AgentSubject)
     assert result.kind == "delegated_subject"
+
+
+def managed_agent() -> AgentResponse:
+    return AgentResponse(
+        agent_id="agent-one", agent_name="Research", agent_card_params={}, identity=BINDING, identity_managed=True
+    )
+
+
+def test_unbinding_keeps_managed_state_and_disables_agent() -> None:
+    result: Final = managed_write_fields({"identity": None, "enabled": True}, managed_agent(), "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["identity_managed"] is True
+    assert result["enabled"] is False
+    assert result["identity"]["update"]["active"] is False
+    assert result["identity"]["update"]["last_authenticated_at"] is None
+    assert result["identity"]["update"]["revision"] != BINDING.revision
+
+
+def test_rename_does_not_rewrite_binding_or_evidence() -> None:
+    assert managed_write_fields({"agent_name": "Renamed"}, managed_agent(), "admin") == {}
+
+
+def test_autonomous_binding_requires_enterprise_application_object_id() -> None:
+    result: Final = managed_write_fields(
+        {"identity": {"provider": "microsoft_entra", "tenant_id": TENANT, "client_id": CLIENT}}, None, "admin"
+    )
+    assert isinstance(result, AgentIdentityFailure)
+    assert "service-principal" in result.message
+
+
+def test_rebinding_clears_evidence_and_uses_atomic_nested_write() -> None:
+    result: Final = managed_write_fields(
+        {
+            "identity": {
+                "provider": "microsoft_entra",
+                "tenant_id": TENANT,
+                "client_id": CLIENT,
+                "service_principal_id": PRINCIPAL,
+            }
+        },
+        managed_agent(),
+        "admin",
+    )
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["identity_managed"] is True
+    assert "upsert" in result["identity"]
+    assert result["identity"]["upsert"]["update"]["revision"] != BINDING.revision
+    assert result["identity"]["upsert"]["update"]["last_authenticated_at"] is None
+
+
+def test_unbound_identity_can_be_reactivated_with_the_same_application() -> None:
+    disabled: Final = managed_agent().model_copy(
+        update={"identity": BINDING.model_copy(update={"active": False}), "enabled": False}
+    )
+    configuration: Final = BINDING.model_dump(
+        exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
+    )
+    result: Final = managed_write_fields({"identity": configuration, "enabled": True}, disabled, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["enabled"] is True
+    assert result["identity"]["upsert"]["update"]["active"] is True
+    assert result["identity"]["upsert"]["update"]["revision"] != BINDING.revision
+
+
+def test_each_application_binding_records_its_history_atomically() -> None:
+    configuration: Final = BINDING.model_dump(
+        exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
+    )
+    created: Final = managed_write_fields({"identity": configuration}, None, "admin")
+    assert not isinstance(created, AgentIdentityFailure)
+    assert created["retired_identities"]["connectOrCreate"]["create"]["client_id"] == CLIENT
+    replacement: Final = managed_write_fields(
+        {"identity": {**configuration, "client_id": HUMAN}}, managed_agent(), "admin"
+    )
+    assert not isinstance(replacement, AgentIdentityFailure)
+    assert replacement["retired_identities"]["connectOrCreate"]["create"]["client_id"] == HUMAN
+
+
+def test_unchanged_binding_preserves_revision_and_authentication_evidence() -> None:
+    configuration: Final = BINDING.model_dump(
+        exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
+    )
+    assert managed_write_fields({"identity": configuration}, managed_agent(), "admin") == {}
+
+
+@pytest.mark.parametrize("identity", [None, BINDING.model_copy(update={"active": False})])
+def test_enabling_unbound_or_inactive_identity_requires_rebinding(identity: AgentIdentityBinding | None) -> None:
+    agent: Final = managed_agent().model_copy(update={"identity": identity, "enabled": False})
+    result: Final = managed_write_fields({"enabled": True}, agent, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Bind an identity" in result.message
+
+
+def test_delegated_identity_requires_a_scope() -> None:
+    agent: Final = managed_agent().model_copy(update={"identity": BINDING.model_copy(update={"required_scopes": ()})})
+    result: Final = managed_write_fields({"execution_mode": "delegated"}, agent, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "delegated scope" in result.message
+
+
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        {"identity": {"provider": "microsoft_entra", "tenant_id": "invalid", "client_id": CLIENT}},
+        {"execution_mode": "unknown"},
+    ],
+)
+def test_invalid_identity_configuration_returns_a_public_validation_failure(incoming: dict[str, object]) -> None:
+    result: Final = managed_write_fields(incoming, None, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "identity_denied"
+    assert result.message.startswith("Invalid agent identity configuration:")
 
 
 @pytest.mark.parametrize("roles", ["Agent.Invoke", [42], None])
