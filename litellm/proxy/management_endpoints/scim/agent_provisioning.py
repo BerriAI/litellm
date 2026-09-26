@@ -531,7 +531,7 @@ class AgentProvisioningService:
             SCIMResourceRepository(self.client, use_writer=True).table,
             "id",
             members,
-            where={"source_id": self.source.source_id, "kind": "Users", "deleted": False},
+            where=LiteLLM_SCIMResourceWhereInput(source_id=self.source.source_id, kind="Users", deleted=False),
         )
         if count != len(frozenset(members)):
             raise HTTPException(400, "Group members must exist in this provisioning source")
@@ -552,14 +552,14 @@ class AgentProvisioningService:
             raise HTTPException(409, "Directory group externalId is immutable")
         members: Final = tuple(dict.fromkeys(member.value for member in updated.members or ()))
         await self._validate_members(members)
-        data: Final[LiteLLM_SCIMResourceUpdateInput] = {
-            "display_name": updated.displayName,
-            "document": Json(updated.model_dump(by_alias=True, mode="json", exclude_none=True)),
-            "member_ids": list(members),
-        }
+        data: Final = LiteLLM_SCIMResourceUpdateInput(
+            display_name=updated.displayName,
+            document=Json(updated.model_dump(by_alias=True, mode="json", exclude_none=True)),
+            member_ids=list(members),
+        )
         async with self.client.tx() as tx:
             count: Final = await tx.litellm_scimresource.update_many(
-                where={"id": old.id, "updated_at": old.updated_at}, data=data
+                where=LiteLLM_SCIMResourceWhereInput(id=old.id, updated_at=old.updated_at), data=data
             )
             if count != 1:
                 raise HTTPException(409, "The group changed concurrently; retry")
