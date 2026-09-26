@@ -47134,6 +47134,21 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "SCIMAgentUser": {
+          "additionalProperties": false,
+          "properties": {
+            "identityParentId": {
+              "format": "uuid",
+              "title": "Identityparentid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "identityParentId"
+          ],
+          "title": "SCIMAgentUser",
+          "type": "object"
+        },
         "SCIMEnterpriseUser": {
           "properties": {
             "costCenter": {
@@ -47794,6 +47809,16 @@
               "anyOf": [
                 {
                   "$ref": "#/components/schemas/SCIMEnterpriseUser"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "urn:ietf:params:scim:schemas:extension:litellmAgent:2.0:User": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SCIMAgentUser"
                 },
                 {
                   "type": "null"
