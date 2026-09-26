@@ -11,6 +11,7 @@ Has 4 primary methods:
 import logging
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
@@ -45,6 +46,16 @@ class LimitedSizeOrderedDict(OrderedDict):
         if len(self) >= self.max_size:
             self.popitem(last=False)
         super().__setitem__(key, value)
+
+
+@dataclass(frozen=True)
+class PendingBatchRead:
+    """A batch read that has consulted the in-memory tier and reserved its Redis keys, but not hit Redis yet."""
+
+    keys: list[str]
+    result: list[object | None]
+    redis_keys: list[str]
+    previous_access_times: dict[str, float | None]
 
 
 class DualCache(BaseCache):
@@ -301,6 +312,40 @@ class DualCache(BaseCache):
                 else:
                     self.last_redis_batch_access_time[key] = previous_time
 
+    async def _prepare_batch_get(self, keys: list, local_only: bool, **kwargs) -> PendingBatchRead:
+        result: list[object | None] = [None] * len(keys)
+        if self.in_memory_cache is not None:
+            in_memory_result: Final = await self.in_memory_cache.async_batch_get_cache(keys, **kwargs)
+
+            if in_memory_result is not None:
+                result = in_memory_result
+
+        redis_keys: list[str] = []
+        previous_access_times: dict[str, float | None] = {}
+        if None in result and self.redis_cache is not None and local_only is False:
+            redis_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+        return PendingBatchRead(
+            keys=keys, result=result, redis_keys=redis_keys, previous_access_times=previous_access_times
+        )
+
+    async def _apply_batch_get(
+        self, pending: PendingBatchRead, redis_result: dict | None, **kwargs
+    ) -> list[object | None]:
+        # Short-circuit if redis_result is None or contains only None values
+        if redis_result is None or all(v is None for v in redis_result.values()):
+            return pending.result
+
+        # Pre-compute key-to-index mapping for O(1) lookup
+        key_to_index: Final = {key: i for i, key in enumerate(pending.keys)}
+
+        # Update both result and in-memory cache in a single loop
+        for key, value in redis_result.items():
+            pending.result[key_to_index[key]] = value
+
+            if value is not None and self.in_memory_cache is not None:
+                await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
+        return pending.result
+
     async def async_batch_get_cache(
         self,
         keys: list,
@@ -309,51 +354,22 @@ class DualCache(BaseCache):
         **kwargs,
     ):
         try:
-            result = [None] * len(keys)
-            if self.in_memory_cache is not None:
-                in_memory_result: Final = await self.in_memory_cache.async_batch_get_cache(keys, **kwargs)
-
-                if in_memory_result is not None:
-                    result = in_memory_result
-
-            if None in result and self.redis_cache is not None and local_only is False:
-                """
-                - for the none values in the result
-                - check the redis cache
-                """
-                current_time: Final = time.time()
-                sublist_keys, previous_access_times = self._reserve_redis_batch_keys(current_time, keys, result)
-
-                # Only hit Redis if enough time has passed since last access.
-                if len(sublist_keys) > 0:
-                    try:
-                        # If not found in in-memory cache, try fetching from Redis
-                        redis_result: Final = await self.redis_cache.async_batch_get_cache(
-                            sublist_keys, parent_otel_span=parent_otel_span
-                        )
-                    except Exception as e:
-                        # Do not throttle subsequent callers if the Redis read fails.
-                        self._rollback_redis_batch_key_reservations(previous_access_times)
-                        if isinstance(e, RedisCircuitBreakerOpenError):
-                            verbose_logger.debug("LiteLLM Cache: async_batch_get_cache served from memory only: %s", e)
-                            return result
-                        raise
-
-                    # Short-circuit if redis_result is None or contains only None values
-                    if redis_result is None or all(v is None for v in redis_result.values()):
-                        return result
-
-                    # Pre-compute key-to-index mapping for O(1) lookup
-                    key_to_index: Final = {key: i for i, key in enumerate(keys)}
-
-                    # Update both result and in-memory cache in a single loop
-                    for key, value in redis_result.items():
-                        result[key_to_index[key]] = value
-
-                        if value is not None and self.in_memory_cache is not None:
-                            await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
-
-            return result
+            pending: Final = await self._prepare_batch_get(keys, local_only, **kwargs)
+            # Only hit Redis for keys memory could not serve and enough time has passed since last access.
+            if not pending.redis_keys or self.redis_cache is None:
+                return pending.result
+            try:
+                redis_result: Final = await self.redis_cache.async_batch_get_cache(
+                    pending.redis_keys, parent_otel_span=parent_otel_span
+                )
+            except Exception as e:
+                # Do not throttle subsequent callers if the Redis read fails.
+                self._rollback_redis_batch_key_reservations(pending.previous_access_times)
+                if isinstance(e, RedisCircuitBreakerOpenError):
+                    verbose_logger.debug("LiteLLM Cache: async_batch_get_cache served from memory only: %s", e)
+                    return pending.result
+                raise
+            return await self._apply_batch_get(pending, redis_result, **kwargs)
         except Exception as e:
             log_redis_failure(
                 verbose_logger,
@@ -362,6 +378,60 @@ class DualCache(BaseCache):
                 e,
                 with_traceback=True,
             )
+
+    @staticmethod
+    async def async_batch_get_cache_shared(
+        reads: Sequence[tuple["DualCache", list[str]]],
+        parent_otel_span: Span | None = None,
+    ) -> list[list[object | None] | None]:
+        """
+        `async_batch_get_cache` for several caches in one Redis round trip.
+
+        Each cache still serves what it can from its own in-memory tier, applies its own Redis read
+        throttle and backfills its own memory; only the Redis MGET is shared. A failed MGET is reported
+        to every cache that took part in it exactly as its own failed `async_batch_get_cache` would be:
+        None when the read raised, the in-memory result when the circuit breaker is open. A cache whose
+        Redis client is not the one the first cache uses falls back to its own read.
+        """
+        results: Final[list[list[object | None] | None]] = [None] * len(reads)
+        shared_redis: Final = reads[0][0].redis_cache if reads else None
+        pendings: Final[list[tuple[int, DualCache, PendingBatchRead]]] = []
+        for index, (cache, keys) in enumerate(reads):
+            if shared_redis is None or cache.redis_cache is not shared_redis:
+                results[index] = await cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+                continue
+            pending = await cache._prepare_batch_get(keys, local_only=False)
+            pendings.append((index, cache, pending))
+            results[index] = pending.result
+
+        redis_keys: Final = list(dict.fromkeys(key for _, _, pending in pendings for key in pending.redis_keys))
+        if shared_redis is None or not redis_keys:
+            return results
+        try:
+            redis_result: Final = await shared_redis.async_batch_get_cache(
+                redis_keys, parent_otel_span=parent_otel_span
+            )
+        except Exception as e:
+            for index, cache, pending in pendings:
+                cache._rollback_redis_batch_key_reservations(pending.previous_access_times)
+                if pending.redis_keys and not isinstance(e, RedisCircuitBreakerOpenError):
+                    results[index] = None
+            if isinstance(e, RedisCircuitBreakerOpenError):
+                verbose_logger.debug("LiteLLM Cache: async_batch_get_cache_shared served from memory only: %s", e)
+            else:
+                log_redis_failure(
+                    verbose_logger,
+                    logging.ERROR,
+                    "LiteLLM Cache: exception in async_batch_get_cache_shared",
+                    e,
+                    with_traceback=True,
+                )
+            return results
+
+        for index, cache, pending in pendings:
+            own_result = {key: redis_result[key] for key in pending.redis_keys if key in redis_result}
+            results[index] = await cache._apply_batch_get(pending, own_result)
+        return results
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")

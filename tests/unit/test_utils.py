@@ -30,7 +30,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm.caching.caching import Cache
-from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES, LLMCachingHandler
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -6347,3 +6347,33 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.asyncio
+async def test_aresponses_reads_the_response_cache_once_and_only_asynchronously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`aresponses` runs the sync `responses` in a worker thread; the sync wrapper must not read the cache
+    there, since the async wrapper already did on the event loop."""
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    reads: Final[list[str]] = []
+    original_sync_read: Final = LLMCachingHandler._sync_get_cache
+    original_async_read: Final = LLMCachingHandler._async_get_cache
+
+    def _recording_sync_read(self: LLMCachingHandler, *args, **kwargs):
+        reads.append("sync")
+        return original_sync_read(self, *args, **kwargs)
+
+    async def _recording_async_read(self: LLMCachingHandler, *args, **kwargs):
+        reads.append("async")
+        return await original_async_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(LLMCachingHandler, "_sync_get_cache", _recording_sync_read)
+    monkeypatch.setattr(LLMCachingHandler, "_async_get_cache", _recording_async_read)
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-4o-mini", input="ping", api_key="test", mock_response="pong"
+    )
+
+    assert response.output[0].content[0].text == "pong"
+    assert reads == ["async"], "the worker thread must not issue a second, blocking cache read"

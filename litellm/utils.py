@@ -1738,6 +1738,7 @@ def client(original_function):
                 and kwargs.get("aimg_generation", False) is not True
                 and kwargs.get("atranscription", False) is not True
                 and kwargs.get("arerank", False) is not True
+                and kwargs.get("aresponses", False) is not True
                 and kwargs.get("_arealtime", False) is not True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
