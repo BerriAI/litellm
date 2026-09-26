@@ -223,4 +223,8 @@ def _relayed_image_pixels(value: object) -> int | None:
     if not isinstance(value, str):
         return None
     data_url_header, separator, _ = value[:_DATA_URL_HEADER_MAX_CHARS].partition("base64,")
-    return base64_image_pixels(value, start=len(data_url_header) + len(separator) if separator else 0)
+    return base64_image_pixels(
+        value,
+        start=len(data_url_header) + len(separator) if separator else 0,
+        read_whole_jpeg=False,
+    )

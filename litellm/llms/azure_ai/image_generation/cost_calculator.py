@@ -138,7 +138,7 @@ def _generated_pixels(
 def _billed_output_pixels(model: str, b64_json: str | None, requested_pixels: int) -> int:
     if not b64_json:
         return requested_pixels
-    pixels: Final = base64_image_pixels(b64_json)
+    pixels: Final = base64_image_pixels(b64_json, read_whole_jpeg=True)
     if pixels is None:
         verbose_logger.warning(
             "Could not read the dimensions of the image %s returned, billing %d pixels instead", model, requested_pixels
@@ -147,13 +147,17 @@ def _billed_output_pixels(model: str, b64_json: str | None, requested_pixels: in
     return pixels
 
 
-def base64_image_pixels(encoded_image: str, start: int = 0) -> int | None:
+def base64_image_pixels(encoded_image: str, start: int = 0, *, read_whole_jpeg: bool) -> int | None:
     header_end: Final = start + IMAGE_HEADER_BASE64_PREFIX_CHARS
     header_bytes: Final = _decoded(encoded_image[start:header_end])
     header_pixels: Final = image_pixels_from_bytes(header_bytes)
     if header_pixels is not None or len(encoded_image) <= header_end or get_image_type(header_bytes) != "jpeg":
         return header_pixels
-    return image_pixels_from_bytes(_decoded(encoded_image[start : start + JPEG_HEADER_BASE64_PREFIX_CHARS]))
+    jpeg_prefix_end: Final = start + JPEG_HEADER_BASE64_PREFIX_CHARS
+    prefix_pixels: Final = image_pixels_from_bytes(_decoded(encoded_image[start:jpeg_prefix_end]))
+    if prefix_pixels is not None or not read_whole_jpeg or len(encoded_image) <= jpeg_prefix_end:
+        return prefix_pixels
+    return image_pixels_from_bytes(_decoded(encoded_image[start:]))
 
 
 def _decoded(encoded_image: str) -> bytes:

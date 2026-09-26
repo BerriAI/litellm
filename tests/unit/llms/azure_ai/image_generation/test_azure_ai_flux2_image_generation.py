@@ -485,7 +485,7 @@ def test_flux2_pro_measures_a_returned_jpeg_whose_frame_header_sits_past_the_dec
     assert cost == pytest.approx(first + additional * 3)
 
 
-def test_flux2_pro_bills_the_requested_size_for_a_returned_jpeg_whose_frame_header_is_past_any_header_prefix() -> None:
+def test_flux2_pro_measures_a_returned_jpeg_whose_frame_header_comes_after_half_a_megabyte_of_metadata() -> None:
     first, additional = _pro_megapixel_rates()
     app_segments: Final = b"".join(b"\xff\xe2" + struct.pack(">H", 65_535) + b"\x00" * 65_533 for _ in range(8))
     jpeg: Final = (
@@ -504,7 +504,8 @@ def test_flux2_pro_bills_the_requested_size_for_a_returned_jpeg_whose_frame_head
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(first + additional)
+    assert len(base64.b64encode(jpeg)) > 512 * 1024
+    assert cost == pytest.approx(first + additional * 3)
 
 
 @pytest.mark.parametrize(

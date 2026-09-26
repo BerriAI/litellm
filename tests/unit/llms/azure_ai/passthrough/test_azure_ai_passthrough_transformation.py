@@ -545,15 +545,21 @@ def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
     assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
 
 
-def _jpeg_b64(width: int, height: int) -> str:
-    jpeg = b"\xff\xd8\xff\xc0\x00\x11\x08" + struct.pack(">HH", height, width) + b"\x03\x01\x22\x00"
-    return base64.b64encode(jpeg).decode()
+def _jpeg_b64(width: int, height: int, metadata_segments: int = 0) -> str:
+    metadata = b"".join(b"\xff\xe2" + struct.pack(">H", 65_535) + b"\x00" * 65_533 for _ in range(metadata_segments))
+    frame = b"\xff\xc0\x00\x11\x08" + struct.pack(">HH", height, width) + b"\x03\x01\x22\x00"
+    return base64.b64encode(b"\xff\xd8" + metadata + frame).decode()
 
 
 @pytest.mark.parametrize(
     ("references", "billed_reference_megapixels"),
     (
         pytest.param({"input_image": _jpeg_b64(4032, 3024)}, 4, id="lone-photo-capped-at-four-megapixels"),
+        pytest.param(
+            {"input_image": _jpeg_b64(4032, 3024, metadata_segments=8)},
+            1,
+            id="lone-photo-with-its-frame-header-past-the-scan-limit-as-one-megapixel",
+        ),
         pytest.param(
             {"input_image": "data:image/jpeg;base64," + _jpeg_b64(4032, 3024)}, 4, id="lone-photo-as-a-data-url"
         ),
