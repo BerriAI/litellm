@@ -7969,6 +7969,29 @@ def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_th
     assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 
+@pytest.mark.parametrize(
+    "override_key",
+    (
+        "output_cost_per_token_above_200k_tokens_batches",
+        "cache_read_input_token_cost_above_200k_tokens_batches",
+        "cache_creation_input_token_cost_above_200k_tokens_batches",
+    ),
+)
+def test_deployment_pricing_model_info_honors_a_200k_tier_batch_override(
+    _published_batch_model: None, override_key: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info: Final = deployment_pricing_model_info(_batch_deployment_id({override_key: 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT)
+    carried_keys: Final = tuple(
+        key for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS) if key != override_key
+    )
+
+    assert info is not None
+    assert info[override_key] == 1e-3
+    assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
+
+
 def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervened():
     """LIT-6894: a non-blocking flagged verdict must outrank success in the
     request-level guardrail_status but never mask an intervention."""
