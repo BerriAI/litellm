@@ -1015,6 +1015,19 @@ def _convert_schema_types(schema, depth=0):
                 "minProperties",
                 "maxProperties",
             }
+            # Constraint keywords that apply to primitive types and should move
+            # into the anyOf branch with the type. Without this they are left on
+            # the parent next to anyOf and dropped by _filter_anyof_fields.
+            scalar_constraint_fields: Final = {
+                "enum",
+                "pattern",
+                "minLength",
+                "maxLength",
+                "minimum",
+                "maximum",
+                "multipleOf",
+                "format",
+            }
 
             any_of: Final[list[dict[str, object]]] = []
             for t in type_val:
@@ -1034,13 +1047,21 @@ def _convert_schema_types(schema, depth=0):
                             item_schema[field] = deepcopy(schema[field])
                     any_of.append(item_schema)
                 else:
-                    # For primitive types, only include the type
-                    any_of.append({"type": t})
+                    # For primitive types, carry the scalar constraint keywords
+                    # into the branch so they survive _filter_anyof_fields
+                    item_schema: dict[str, object] = {"type": t}
+                    for field in scalar_constraint_fields:
+                        if field in schema:
+                            item_schema[field] = deepcopy(schema[field])
+                    any_of.append(item_schema)
 
             # Remove type-specific fields from parent if we moved them into anyOf
             has_object_or_array: Final = any(t in ("object", "array") for t in type_val if isinstance(t, str))
             if has_object_or_array:
                 for field in type_specific_fields:
+                    schema.pop(field, None)
+            else:
+                for field in scalar_constraint_fields:
                     schema.pop(field, None)
 
             schema["anyOf"] = any_of
