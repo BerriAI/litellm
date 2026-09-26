@@ -7,7 +7,7 @@ the litellm_responses bridge provider, which calls litellm.responses() internall
 
 import os
 
-from tests.test_litellm.interactions.base_interactions_test import (
+from tests.llm_translation.interactions.base_interactions_test import (
     BaseInteractionsTest,
 )
 

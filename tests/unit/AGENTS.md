@@ -30,7 +30,7 @@ Green if `send_batched` drops every row. pydantic doubles in 12 of 203 files, fa
 ## Where it goes
 
 `tests/unit/<path>` mirrors `litellm/<path>`, so a changed file selects its tests by path, not a mapping
-file. Empty today; new unit tests go here. The examples above live in `tests/test_litellm`
+file. New unit tests go here
 
 ## Writing it so a human can read it
 
