@@ -642,7 +642,8 @@ class OCIChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -682,7 +683,8 @@ class OCIChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
