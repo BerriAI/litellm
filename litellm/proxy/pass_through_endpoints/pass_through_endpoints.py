@@ -44,6 +44,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_SCAN_BYTES,
     PASSTHROUGH_UPSTREAM_ERROR_REDACT_MARGIN_CHARS,
     PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME,
     REDACTED_BY_LITELLM,
@@ -863,13 +864,10 @@ def _resolve_team_callback_wiring(
     )
 
 
-def _truncate_upstream_error_body(body: str) -> str:
-    if len(body) <= PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+def _truncate_upstream_error_body(body: str, *, truncated: bool) -> str:
+    if not truncated:
         return body
-    return (
-        f"{body[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]}... "
-        f"(truncated at {PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} chars)"
-    )
+    return f"{body}... (truncated at {PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} chars)"
 
 
 def _sanitize_upstream_error_body(body: str) -> str:
@@ -949,12 +947,35 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
-_DANGLING_PRIVATE_KEY: Final = re.compile(r"-----BEGIN[A-Z \-]*PRIVATE KEY-----")
+_DANGLING_PRIVATE_KEY: Final = re.compile(r"-----BEGIN[A-Z \-]*PRIVATE KEY----- ?[A-Za-z0-9+/= ]{32,}")
 
 
 def _mask_dangling_private_key(text: str) -> str:
     match: Final = _DANGLING_PRIVATE_KEY.search(text)
     return text if match is None else text[: match.start()] + REDACTED
+
+
+def _redact_preview_head(text: str, redact: Callable[[str], str]) -> str:
+    head: Final = text[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]
+    margin: Final = text[
+        PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS : PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS
+        + PASSTHROUGH_UPSTREAM_ERROR_REDACT_MARGIN_CHARS
+    ]
+    redacted_head: Final = redact(head)
+    if not margin or redact(head + margin) == redacted_head + redact(margin):
+        return redacted_head
+    return redacted_head[: redacted_head.rfind(" ") + 1] + REDACTED
+
+
+def _upstream_error_body_for_log(preview: bytes, encoding: str, redact: Callable[[str], str]) -> str:
+    sanitized: Final = _sanitize_upstream_error_body(
+        preview[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_SCAN_BYTES].decode(encoding, errors="replace")
+    )
+    return _truncate_upstream_error_body(
+        _mask_dangling_private_key(_redact_preview_head(sanitized, redact)),
+        truncated=len(preview) > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_SCAN_BYTES
+        or len(sanitized) > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    )
 
 
 def _passthrough_upstream_failure_reporter(
@@ -967,17 +988,10 @@ def _passthrough_upstream_failure_reporter(
     redact: Callable[[str], str] = redact_secrets,
 ) -> _ReportPreview:
     async def report(preview: bytes) -> None:
-        preview_text: Final = preview[
-            : (PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS + PASSTHROUGH_UPSTREAM_ERROR_REDACT_MARGIN_CHARS) * 4
-        ].decode(response.encoding or "utf-8", errors="replace")[
-            : PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS + PASSTHROUGH_UPSTREAM_ERROR_REDACT_MARGIN_CHARS
-        ]
         upstream_error_body: Final = (
             REDACTED_BY_LITELLM
             if should_redact_message_logging(logging_obj.model_call_details)
-            else _truncate_upstream_error_body(
-                _sanitize_upstream_error_body(_mask_dangling_private_key(redact(preview_text)))
-            )
+            else _upstream_error_body_for_log(preview, response.encoding or "utf-8", redact)
         )
         log_warning(
             "pass_through_endpoint: upstream %s %s returned %s: %s",
