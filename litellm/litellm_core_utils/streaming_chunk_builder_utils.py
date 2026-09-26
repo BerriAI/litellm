@@ -715,12 +715,26 @@ class ChunkProcessor:
                                     )
                                 )
                         else:
-                            thinking_text = thinking_block.get("thinking", None)
-                            if thinking_text:
-                                current_thinking_text_parts.append(thinking_text)
                             signature = thinking_block.get("signature", None)
+                            thinking_text = thinking_block.get("thinking", None)
+                            if thinking_text and not signature:
+                                # Regular streaming delta: accumulate its text.
+                                current_thinking_text_parts.append(thinking_text)
                             if signature:
                                 current_signature = signature
+                                # The signature entry closes the block. Providers do
+                                # not send *new* reasoning text on it: the Anthropic
+                                # stream handler sets its `thinking` to the FULL block
+                                # text (the join of every prior delta), and Bedrock
+                                # sends it empty. Appending it unconditionally doubled
+                                # the reasoning text on the streaming /v1/responses
+                                # path (https://github.com/BerriAI/litellm/issues/43010).
+                                # Keep the signature entry's text only when it differs
+                                # from what the deltas already accumulated -- i.e. when
+                                # the full text arrived solely on the signature entry.
+                                # This neither doubles (Anthropic) nor truncates.
+                                if thinking_text and thinking_text != "".join(current_thinking_text_parts):
+                                    current_thinking_text_parts.append(thinking_text)
                                 _flush_thinking_block()
 
         _flush_thinking_block()
