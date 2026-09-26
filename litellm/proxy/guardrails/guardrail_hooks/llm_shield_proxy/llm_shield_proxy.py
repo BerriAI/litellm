@@ -533,22 +533,22 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         # guardrail's posture everywhere else.
         pending: Final[list] = []  # mutable-ok: local accumulator, frozen before use.
         for choice in choices:
-            message: Final = getattr(choice, "message", None)
+            message = getattr(choice, "message", None)
             if message is None:
                 continue
-            content: Final = getattr(message, "content", None)
+            content = getattr(message, "content", None)
             if isinstance(content, str) and content:
                 pending.append((content, lambda new, m=message: setattr(m, "content", new)))
             # A tool call's `arguments` is model-generated text and the request path
             # redacts it, so leaving it unrestored hands the application a placeholder to
             # invoke a tool with. These are Pydantic objects on this path, not dicts.
             for tool_call in getattr(message, "tool_calls", None) or ():
-                function: Final = getattr(tool_call, "function", None)
-                arguments: Final = getattr(function, "arguments", None) if function is not None else None
+                function = getattr(tool_call, "function", None)
+                arguments = getattr(function, "arguments", None) if function is not None else None
                 if isinstance(arguments, str) and arguments:
                     pending.append((arguments, lambda new, f=function: setattr(f, "arguments", new)))
-            legacy: Final = getattr(message, "function_call", None)
-            legacy_arguments: Final = getattr(legacy, "arguments", None) if legacy is not None else None
+            legacy = getattr(message, "function_call", None)
+            legacy_arguments = getattr(legacy, "arguments", None) if legacy is not None else None
             if isinstance(legacy_arguments, str) and legacy_arguments:
                 pending.append((legacy_arguments, lambda new, fn=legacy: setattr(fn, "arguments", new)))
         if not pending:
@@ -582,7 +582,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         for block in response["content"]:
             if not isinstance(block, dict):
                 continue
-            kind: Final = block.get("type")
+            kind = block.get("type")
             if kind == "text" and isinstance(block.get("text"), str) and block["text"]:
                 slots.append((block["text"], lambda new, b=block: b.__setitem__("text", new)))
             elif kind == "tool_use" and isinstance(block.get("input"), dict):
@@ -612,11 +612,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         slots: Final[list] = []  # mutable-ok: accumulator, frozen on return.
         for item in getattr(response, "output", None) or ():
             for block in getattr(item, "content", None) or ():
-                text: Final = _read_field(block, "text")
+                text = _read_field(block, "text")
                 if isinstance(text, str) and text:
                     slots.append((text, lambda new, b=block: _write_field(b, "text", new)))
             for field in ("arguments", "output"):
-                value: Final = _read_field(item, field)
+                value = _read_field(item, field)
                 if isinstance(value, str) and value:
                     slots.append((value, lambda new, i=item, f=field: _write_field(i, f, new)))
         return tuple(slots)
@@ -879,8 +879,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         spans: Final[list] = list(text_list)  # mutable-ok: ordered batch, frozen before the call.
         writers: Final[list] = []  # mutable-ok: one per span appended below.
         for call in restored_calls:
-            function: Final = _read_field(call, "function")
-            arguments: Final = _read_field(function, "arguments") if function is not None else None
+            function = _read_field(call, "function")
+            arguments = _read_field(function, "arguments") if function is not None else None
             if isinstance(arguments, str) and arguments:
                 spans.append(arguments)
                 writers.append(lambda new, f=function: _write_field(f, "arguments", new))
