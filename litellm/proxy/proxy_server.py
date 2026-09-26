@@ -213,6 +213,8 @@ try:
     import orjson
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import STATE_STOPPED
+    from apscheduler.triggers.base import BaseTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
@@ -5073,6 +5075,20 @@ def _current_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
+_CLEANUP_SCHEDULE_KEYS: Final = (
+    "maximum_spend_logs_retention_period",
+    "maximum_autorouter_session_retention_period",
+    "maximum_health_check_retention_period",
+    "maximum_daily_tag_spend_retention_period",
+    "maximum_spend_logs_cleanup_cron",
+    "maximum_spend_logs_retention_interval",
+)
+
+
+def _cleanup_schedule_of(settings: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(settings.get(key) for key in _CLEANUP_SCHEDULE_KEYS)
+
+
 @lru_cache(maxsize=4096)
 def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     verbose_proxy_logger.warning(
@@ -5095,6 +5111,8 @@ class ProxyConfig:
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
+        self._cleanup_reschedule_failed: bool = False
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7450,69 +7468,67 @@ class ProxyConfig:
         if scheduler is None:
             return
 
-        # Remove existing job if it exists
-        try:
-            scheduler.remove_job("spend_log_cleanup_job")
-            verbose_proxy_logger.info("Removed existing spend log cleanup job")
-        except Exception:
-            pass  # Job might not exist, which is fine
-
-        # Schedule new job if retention period is set (not None)
-        retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
-        autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
-        health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
-        if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-                SpendLogCleanup,
+        wants_job: Final = any(
+            general_settings.get(key) is not None
+            for key in (
+                "maximum_spend_logs_retention_period",
+                "maximum_autorouter_session_retention_period",
+                "maximum_health_check_retention_period",
+                "maximum_daily_tag_spend_retention_period",
             )
+        )
+        if not wants_job:
+            if scheduler.get_job("spend_log_cleanup_job") is not None:
+                scheduler.remove_job("spend_log_cleanup_job")
+                verbose_proxy_logger.info("Removed existing spend log cleanup job")
+            return
 
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+        trigger: Final = self._spend_log_cleanup_trigger()
+        if trigger is None:
+            return
+        from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+            SpendLogCleanup,
+        )
 
-            if cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
+        scheduler.add_job(
+            SpendLogCleanup().cleanup_old_spend_logs,
+            trigger,
+            args=[prisma_client],
+            id="spend_log_cleanup_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import (
-                    duration_in_seconds,
-                )
+    def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
+        cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
+        if cleanup_cron:
+            from apscheduler.triggers.cron import CronTrigger
 
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    # this runs against a started scheduler, which the startup stagger sweep
-                    # cannot reach, so the offset is applied here or the job reconverges across
-                    # replicas the first time an admin edits the retention settings
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        stagger_trigger(
-                            job_id="spend_log_cleanup_job",
-                            trigger=IntervalTrigger(seconds=interval_seconds),
-                            period_seconds=interval_seconds,
-                            settings=parse_stagger_settings(general_settings),
-                        ),
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with interval: %s", retention_interval)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+            try:
+                cron_trigger: Final[BaseTrigger] = CronTrigger.from_crontab(cleanup_cron)
+            except (ValueError, TypeError, AttributeError):
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
+                return None
+            return cron_trigger
+        retention_interval: Final[object] = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+        if not isinstance(retention_interval, str):
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
+        # this runs against a started scheduler, which the startup stagger sweep
+        # cannot reach, so the offset is applied here or the job reconverges across
+        # replicas the first time an admin edits the retention settings
+        try:
+            interval_seconds: Final = duration_in_seconds(retention_interval)
+            return stagger_trigger(
+                job_id="spend_log_cleanup_job",
+                trigger=IntervalTrigger(seconds=interval_seconds),
+                period_seconds=interval_seconds,
+                settings=parse_stagger_settings(general_settings),
+            )
+        except (ValueError, OverflowError):
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
         global general_settings
@@ -7521,32 +7537,28 @@ class ProxyConfig:
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
-        previous_retention_values: Final = self._resolved_retention_values()
+        previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
         self.settings.apply_db_row("general_settings", db_general_settings)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
             cache_size_was_db,
-            previous_retention_values,
+            previous_cleanup_schedule,
             previous_pass_through_endpoints,
         )
 
-    def _resolved_retention_values(self) -> tuple[SettingsJsonValue | None, ...]:
-        return tuple(
-            self.settings.get(key)
-            for key in (
-                "maximum_spend_logs_retention_period",
-                "maximum_autorouter_session_retention_period",
-                "maximum_health_check_retention_period",
-            )
-        )
+    def _resolved_cleanup_schedule(self) -> tuple[object, ...]:
+        return _cleanup_schedule_of(self.settings)
+
+    def record_cleanup_schedule_attempt(self, settings: Mapping[str, object]) -> None:
+        self._last_cleanup_schedule_attempt = _cleanup_schedule_of(settings)
 
     async def _apply_general_settings_side_effects(
         self,
         db_values: Mapping[str, SettingsJsonValue],
         cache_size_was_db: bool,
-        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[object, ...],
         previous_pass_through_endpoints: SettingsJsonValue | None,
     ) -> None:
         effects: Final = (
@@ -7555,7 +7567,7 @@ class ProxyConfig:
             self._apply_boolean_settings,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
-            partial(self._apply_retention_settings, previous_retention_values=previous_retention_values),
+            partial(self._apply_retention_settings, previous_cleanup_schedule=previous_cleanup_schedule),
             self._apply_ssrf_settings,
         )
         for effect in effects:
@@ -7650,10 +7662,36 @@ class ProxyConfig:
     async def _apply_retention_settings(
         self,
         db_values: Mapping[str, SettingsJsonValue],
-        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[object, ...],
     ) -> None:
-        if previous_retention_values != self._resolved_retention_values():
+        # while the scheduler is still stopped the startup block owns the first registration
+        if scheduler is not None and scheduler.state == STATE_STOPPED:
+            return
+        schedule: Final = self._resolved_cleanup_schedule()
+        wants_job: Final = any(value is not None for value in schedule[:4])
+        has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
+        baseline: Final = (
+            self._last_cleanup_schedule_attempt
+            if has_job and self._last_cleanup_schedule_attempt is not None
+            else previous_cleanup_schedule
+        )
+        retry_due: Final = (
+            wants_job
+            and (not has_job or self._cleanup_reschedule_failed)
+            and schedule != self._last_cleanup_schedule_attempt
+        )
+        if not (baseline != schedule or retry_due or (has_job and not wants_job)):
+            return
+        try:
             await self._reschedule_spend_log_cleanup_job()
+        except Exception as exc:
+            self._cleanup_reschedule_failed = True
+            verbose_proxy_logger.exception(
+                "Spend log cleanup could not be rescheduled, will retry on next sync: %s", exc
+            )
+            return
+        self._cleanup_reschedule_failed = False
+        self._last_cleanup_schedule_attempt = schedule
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         _apply_ssrf_general_settings(db_values)
@@ -10516,15 +10554,19 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
+        cleanup_settings: Final = _current_general_settings()
         if (
-            general_settings.get("maximum_spend_logs_retention_period") is not None
-            or general_settings.get("maximum_autorouter_session_retention_period") is not None
-            or general_settings.get("maximum_health_check_retention_period") is not None
+            cleanup_settings.get("maximum_spend_logs_retention_period") is not None
+            or cleanup_settings.get("maximum_autorouter_session_retention_period") is not None
+            or cleanup_settings.get("maximum_health_check_retention_period") is not None
+            or cleanup_settings.get("maximum_daily_tag_spend_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+            cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
 
-            if cleanup_cron:
+            if cleanup_cron and not isinstance(cleanup_cron, str):
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %r", cleanup_cron)
+            elif isinstance(cleanup_cron, str) and cleanup_cron:
                 from apscheduler.triggers.cron import CronTrigger
 
                 try:
@@ -10542,8 +10584,10 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
             else:
                 # Interval-based scheduling (existing behavior)
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+                retention_interval: Final = cleanup_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
+                    if not isinstance(retention_interval, str):
+                        raise ValueError(retention_interval)
                     interval_seconds: Final = duration_in_seconds(retention_interval)
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
@@ -10554,8 +10598,11 @@ class ProxyStartupEvent:
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+                except (ValueError, OverflowError):
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
+                    )
+            proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
@@ -17890,6 +17937,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_prompts_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
+        "maximum_daily_tag_spend_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",
         "maximum_spend_logs_cleanup_max_batches": "Integer",
         "maximum_spend_logs_cleanup_run_budget": "String",
