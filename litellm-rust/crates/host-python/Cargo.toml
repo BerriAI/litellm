@@ -16,5 +16,10 @@ serde.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
+criterion.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "stream_bridge"
+harness = false

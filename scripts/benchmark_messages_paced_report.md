@@ -61,6 +61,26 @@ The excess CPU is approximately 50 to 60 microseconds per synthetic delta at con
 
 These are source-level findings, not sampled CPU attribution. The first optimization experiment should amortize suspended-read bridge setup across a stream, preserving backpressure and cancellation, and compare CPU profiles before attempting zero-copy output
 
+## Bridge floor benchmark
+
+`litellm-rust/crates/host-python/benches/stream_bridge.rs` isolates the stream bridge: one native call streams 1,500 chunks of the same `content_block_delta` frame the mock emits through `run_call`, the `Execution` handle and `lifecycle.Stream` to an asyncio consumer, with no HTTP, routing or logging. `native/ready` delivers every chunk from a future that is complete on its first poll. `native/pending` yields to Tokio once before each chunk, so every read suspends through the future bridge. A validation pass before timing confirmed the design: both modes take 1,503 driver resumes, `ready` hands Python 0 awaitables and `pending` hands it exactly 1,500. `python/*` is the same consumer loop over a pure-Python async generator, with `asyncio.sleep(0)` as the pending analogue
+
+Apple M5 Max, release profile, Python 3.12.13. Criterion medians per 1,500-chunk stream, with the per-chunk figure derived from them
+
+| Case | Wall per stream | Wall per chunk | Process CPU per stream |
+| --- | ---: | ---: | ---: |
+| native/ready | 0.94 ms | 0.63 µs | 1.63 ms |
+| native/pending | 50.99 ms | 33.99 µs | 55.39 ms |
+| native/sync | 0.89 ms | 0.59 µs | 0.91 ms |
+| python/ready | 0.12 ms | 0.08 µs | 0.10 ms |
+| python/pending | 19.84 ms | 13.23 µs | 3.33 ms |
+
+A suspended read costs about 34 µs of wall time and about 37 µs of process CPU, against 0.6 µs for a ready read. That is roughly 2.5 asyncio loop turns, and the CPU figure shows the handoff is busy work spread across the consumer thread, the Tokio workers and the blocking pool rather than idle waiting. Every real socket read that arrives after the consumer asks for it takes this path, so this one mechanism accounts for most of the 50 to 60 µs per delta excess measured at the proxy. The remaining gap is the outer proxy and logging, which this bench excludes
+
+The byte copy in `chunk` is not a factor at the measured payload size. Ready-mode streams of the 155 byte frame and of 1 KiB chunks cost the same 0.92 ms, 16 KiB chunks cost 1.72 ms and 256 KiB chunks cost 6.46 ms, so the copy only registers above about 16 KiB per chunk
+
+The process CPU clock on macOS is coarse: `native/ready` reads more CPU than wall time, so treat the CPU column as indicative and the wall column as the measurement. Run the bench with `cargo bench --manifest-path litellm-rust/Cargo.toml -p litellm-host-python --bench stream_bridge`, pointing `PYO3_PYTHON` at the interpreter to link. The next experiment is a persistent per-stream reader that parks once on the native side and completes reads through a single long-lived Python future or queue, so a stream pays bridge setup once instead of once per suspended chunk. It must preserve cancellation, backpressure and final billing, and `native/pending` is the number it has to move
+
 ## Reproduction
 
 Use the repository Python environment with `aiohttp`, `psutil`, and the proxy dependencies installed. Build a release native extension and enable the rule before comparing modes

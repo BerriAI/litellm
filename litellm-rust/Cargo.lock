@@ -3189,6 +3189,7 @@ name = "litellm-host-python"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "criterion",
  "futures-util",
  "litellm-host",
  "pyo3",
