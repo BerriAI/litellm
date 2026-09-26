@@ -136,6 +136,7 @@ class SupportedGuardrailIntegrations(Enum):
     DEEPKEEP = "deepkeep"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
+    ATR = "atr"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
     SINGULR = "singulr"
@@ -825,6 +826,19 @@ class JavelinGuardrailConfigModel(BaseModel):
     config: dict | None = Field(default=None, description="Additional configuration for the guardrail")
 
 
+class ATRGuardrailLitellmParams(BaseModel):
+    """LitellmParams fields specific to the ATR guardrail."""
+
+    rules_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filesystem path to a directory containing ATR rule YAML files. "
+            "If omitted, the rules bundled with pyatr are loaded. Falls back "
+            "to the ATR_RULES_PATH environment variable."
+        ),
+    )
+
+
 class ContentFilterAction(str, Enum):
     """Action to take when content filter detects a match"""
 
@@ -1196,6 +1210,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
+    ATRGuardrailLitellmParams,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
     Agent365GuardrailConfigModel,
