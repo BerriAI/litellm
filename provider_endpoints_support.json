@@ -6,6 +6,7 @@
       "url": "Link to provider documentation",
       "endpoints": {
         "chat_completions": "Supports /chat/completions endpoint",
+        "systemone": "Supports System One choice questions for decision model classifiers",
         "messages": "Supports /messages endpoint (Anthropic format)",
         "responses": "Supports /responses endpoint (OpenAI/Anthropic unified)",
         "embeddings": "Supports /embeddings endpoint",
@@ -1458,6 +1459,13 @@
         "rerank": false
       }
     },
+    "laya": {
+      "display_name": "Laya (`laya`)",
+      "url": "https://github.com/BerriAI/litellm/blob/main/cookbook/decision_model_classifier.md",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "lambda_ai": {
       "display_name": "Lambda AI (`lambda_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/lambda_ai",
@@ -2554,6 +2562,13 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "typesafe": {
+      "display_name": "TypeSafe (`typesafe`)",
+      "url": "https://docs.litellm.ai/docs/pass_through/typesafe",
+      "endpoints": {
+        "systemone": true
       }
     },
     "v0": {

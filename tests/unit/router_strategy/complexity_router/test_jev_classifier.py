@@ -491,6 +491,55 @@ async def test_laya_routes_with_its_own_credentials_and_logs_the_selected_checkp
     assert recorder.calls[0]["response_cost"] == pytest.approx(expected_cost)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["explicit", "environment", "default"])
+async def test_jev_connection_settings_still_reach_the_selected_typesafe_server(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-environment-key")
+    monkeypatch.delenv("TYPESAFE_API_BASE", raising=False)
+    if source == "environment":
+        monkeypatch.setenv("TYPESAFE_API_BASE", "https://environment.typesafe.test")
+    config: Final = (
+        {"api_base": "https://explicit.typesafe.test", "api_key": "synthetic-explicit-key"}
+        if source == "explicit" else {}
+    )
+    base: Final = {
+        "explicit": "https://explicit.typesafe.test",
+        "environment": "https://environment.typesafe.test",
+        "default": "https://api.typesafe.ai",
+    }[source]
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(f"{base}/v1/systemone").mock(
+            return_value=httpx.Response(200, json={"answers": {"tier": _answer().model_dump()}})
+        )
+        router: Final = ComplexityRouter(
+            "jev-router", litellm.Router(model_list=[]),
+            {"classifier_type": "jev", "jev_classifier_config": config, "tiers": {"SIMPLE": "cheap"}},
+            derive_savings_baseline=False,
+        )
+        result: Final = await router.async_pre_routing_hook(
+            model="jev-router", messages=[{"role": "user", "content": "Say hello"}], request_kwargs={}
+        )
+        assert result is not None and result.model == "cheap"
+        assert route.call_count == 1
+        assert route.calls.last.request.headers["Authorization"] == (
+            "Bearer synthetic-explicit-key" if source == "explicit" else "Bearer synthetic-environment-key"
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+
+
+def test_jev_without_a_key_keeps_rejecting_an_unusable_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="TYPESAFE_API_KEY is required"):
+        ComplexityRouter(
+            "jev-router", litellm.Router(model_list=[]),
+            {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
+            derive_savings_baseline=False,
+        )
+
+
 def test_laya_requires_its_own_endpoint_instead_of_falling_back_to_typesafe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-typesafe-key")
     with pytest.raises(ValueError, match="laya_api_base is required"):
