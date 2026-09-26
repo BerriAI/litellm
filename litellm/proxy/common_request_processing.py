@@ -1147,21 +1147,20 @@ async def _aclose_late_response(produced: Response) -> None:
     Closing an already-closed async generator is a no-op, so this is safe to call
     from both the relay's own teardown and the outer one.
     """
-    if not isinstance(produced, StreamingResponse):
-        return
-    targets: Final = (
-        (produced.body_iterator, produced.upstream_generator)
-        if isinstance(produced, _UpstreamClosingStreamingResponse)
-        else (produced.body_iterator,)
-    )
-    for target in targets:
-        aclose = getattr(target, "aclose", None)
-        if aclose is None:
-            continue
-        try:
-            await aclose()
-        except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
-            verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
+    if isinstance(produced, StreamingResponse):
+        targets: Final = (
+            (produced.body_iterator, produced.upstream_generator)
+            if isinstance(produced, _UpstreamClosingStreamingResponse)
+            else (produced.body_iterator,)
+        )
+        for target in targets:
+            aclose = getattr(target, "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await aclose()
+            except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
+                verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
     if produced.background is not None:
         try:
             await produced.background()

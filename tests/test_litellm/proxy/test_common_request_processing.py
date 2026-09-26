@@ -10245,3 +10245,20 @@ async def test_aclose_late_response_runs_background_task():
     produced: Final = StreamingResponse(body(), background=BackgroundTask(mark))
     await _aclose_late_response(produced)
     assert ran == [True]
+
+
+@pytest.mark.asyncio
+async def test_aclose_late_response_runs_background_task_for_non_streaming_response():
+    from starlette.background import BackgroundTask
+    from starlette.responses import Response as StarletteResponse
+
+    from litellm.proxy.common_request_processing import _aclose_late_response
+
+    ran: list[bool] = []
+
+    async def mark() -> None:
+        ran.append(True)
+
+    produced: Final = StarletteResponse(content=b"{}", background=BackgroundTask(mark))
+    await _aclose_late_response(produced)
+    assert ran == [True]
