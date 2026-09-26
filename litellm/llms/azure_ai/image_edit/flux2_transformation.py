@@ -148,23 +148,21 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         _rewind(image)
         image_data: Final[object] = read()
         _rewind(image)
-        match image_data:
-            case bytes() | bytearray() | memoryview() if len(image_data) > 0:
-                return bytes(image_data)
-            case bytes() | bytearray() | memoryview():
-                raise litellm.BadRequestError(
-                    message=f"FLUX.2 reference image read from {type(image).__name__} is empty. A stream that can't "
-                    "seek is consumed by the first attempt, so pass bytes or a seekable file to allow retries",
-                    model=model,
-                    llm_provider="azure_ai",
-                )
-            case _:
-                raise litellm.BadRequestError(
-                    message=f"FLUX.2 reference image {type(image).__name__}.read() returned "
-                    f"{type(image_data).__name__}, not bytes. Pass bytes or a synchronous file opened in binary mode",
-                    model=model,
-                    llm_provider="azure_ai",
-                )
+        if not isinstance(image_data, (bytes, bytearray, memoryview)):
+            raise litellm.BadRequestError(
+                message=f"FLUX.2 reference image {type(image).__name__}.read() returned "
+                f"{type(image_data).__name__}, not bytes. Pass bytes or a synchronous file opened in binary mode",
+                model=model,
+                llm_provider="azure_ai",
+            )
+        if len(image_data) == 0:
+            raise litellm.BadRequestError(
+                message=f"FLUX.2 reference image read from {type(image).__name__} is empty. A stream that can't "
+                "seek is consumed by the first attempt, so pass bytes or a seekable file to allow retries",
+                model=model,
+                llm_provider="azure_ai",
+            )
+        return bytes(image_data)
 
     def transform_image_edit_response(
         self,

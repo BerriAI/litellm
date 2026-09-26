@@ -72,6 +72,8 @@ _IMAGE_PRICING_FIELDS: Final = MappingProxyType(
             "output_cost_per_image_1536",
             "input_cost_per_pixel",
             "output_cost_per_pixel",
+            "input_cost_per_image_token",
+            "output_cost_per_image_token",
         ),
         True,
     )
