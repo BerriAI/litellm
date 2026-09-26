@@ -75,6 +75,7 @@ def _make_user_api_key_cache(get_value=None, get_side_effect=None, redis_batch_g
     cache.async_set_cache_pipeline = AsyncMock()
     in_memory = MagicMock()
     in_memory.get_cache = MagicMock(return_value=None)
+    cache.in_memory_cache = in_memory
     cache.in_memory_cache_for = MagicMock(return_value=in_memory)
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_batch_get_cache = AsyncMock(return_value=redis_batch_get or {})
@@ -1573,7 +1574,7 @@ async def test_update_cache_updates_spend_on_entities_served_by_the_batch(monkey
     assert writes["team_id:t1"]["spend"] == 1.5
     assert writes["tag:x"]["spend"] == 2.5
 
-    backfilled = fake_user_cache.in_memory_cache_for.return_value.set_cache.call_args_list
+    backfilled = fake_user_cache.in_memory_cache.set_cache.call_args_list
     assert {call.kwargs["key"] for call in backfilled} == {"team_id:t1", "tag:x"}
 
 

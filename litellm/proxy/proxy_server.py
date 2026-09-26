@@ -268,6 +268,7 @@ import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -3740,12 +3741,18 @@ async def increment_spend_counters_pipeline(
     return tuple(float(values[index]) if index < len(values) else None for index in range(len(pending)))
 
 
+def _in_memory_entity_partition(cache: DualCache, key: str) -> InMemoryCache:
+    if isinstance(cache, UserApiKeyCache):
+        return cache.in_memory_cache_for(key)
+    return cache.in_memory_cache
+
+
 async def _read_cached_entities(cache_keys: Sequence[str]) -> Mapping[str, object]:
     """One Redis MGET for every entity key missing from this pod's in-memory cache; misses map to None."""
     in_memory: Final[dict[str, object]] = {
         key: value
         for key in cache_keys
-        if (value := user_api_key_cache.in_memory_cache_for(key).get_cache(key=key)) is not None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+        if (value := _in_memory_entity_partition(user_api_key_cache, key).get_cache(key=key)) is not None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
     }
     missing: Final = tuple(key for key in cache_keys if key not in in_memory)
     redis_cache: Final = user_api_key_cache.redis_cache
@@ -3760,7 +3767,7 @@ async def _read_cached_entities(cache_keys: Sequence[str]) -> Mapping[str, objec
 _CACHED_ENTITY_VALUES: Final = TypeAdapter(dict[str, object])
 
 
-async def _redis_cached_entities(user_api_key_cache: UserApiKeyCache, missing: Sequence[str]) -> Mapping[str, object]:
+async def _redis_cached_entities(user_api_key_cache: DualCache, missing: Sequence[str]) -> Mapping[str, object]:
     redis_cache: Final = user_api_key_cache.redis_cache
     if redis_cache is None:
         return {}
@@ -3777,7 +3784,7 @@ async def _redis_cached_entities(user_api_key_cache: UserApiKeyCache, missing: S
     )
     for key, value in result.items():
         if value is not None:
-            user_api_key_cache.in_memory_cache_for(key).set_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped cache API
+            _in_memory_entity_partition(user_api_key_cache, key).set_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped cache API
                 key=key, value=value, **backfill_kwargs
             )
     return result

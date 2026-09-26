@@ -874,20 +874,20 @@ async def test_team_cache_update_called():
         cache,
     )
 
-    with patch.object(cache, "async_get_cache", new=AsyncMock()) as mock_call_cache:
-        cache.async_get_cache = mock_call_cache
-        # Call the function under test
-        await litellm.proxy.proxy_server.update_cache(
-            token=None,
-            user_id=None,
-            end_user_id=None,
-            team_id="1234",
-            response_cost=20,
-            parent_otel_span=None,
-        )  # type: ignore
+    batch_get = AsyncMock(return_value={})
+    cache.redis_cache = MagicMock(async_batch_get_cache=batch_get)
+    # Call the function under test
+    await litellm.proxy.proxy_server.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id="1234",
+        response_cost=20,
+        parent_otel_span=None,
+    )  # type: ignore
 
-        await asyncio.sleep(3)
-        mock_call_cache.assert_awaited_once()
+    assert batch_get.await_count == 1
+    assert "team_id:1234" in batch_get.await_args.kwargs["key_list"]
 
 
 @pytest.fixture
