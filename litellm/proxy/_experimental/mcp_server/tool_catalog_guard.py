@@ -1,11 +1,11 @@
 """Discovery-time guard for an MCP server's tool catalog.
 
-Two checks run on the tools an upstream returns from ``tools/list`` before the gateway
-serves them. The guardrail scan hands each tool's description and input schema to the
+Every ``tools/list`` hands each upstream tool's description and input schema to the
 ``pre_mcp_call`` guardrails as a ``list_mcp_tools`` payload: a blocked tool leaves the
-listing and a masked description is what the client sees. A pinned catalog replaces the
-scan for servers whose admin snapshotted the tool list: only pinned tools are served, with
-their pinned descriptions, and any upstream drift is reported once per distinct diff.
+listing and a masked description is what the client sees. A pinned catalog is then applied
+on top for servers whose admin snapshotted the tool list: only pinned tools are served, a
+tool whose description or input schema drifted is served with its pinned text, and the
+drift is reported once per distinct diff.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._experimental.mcp_server.utils import logging_safe_mcp_headers
 from litellm.types.mcp import MCPPreCallRequestObject
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
@@ -114,17 +114,13 @@ class PinnedCatalogDrift:
 
 
 def pin_tool_catalog(
-    tools: Sequence[MCPTool], pinned_tools: Mapping[str, str]
+    tools: Sequence[MCPTool], pinned_tools: Mapping[str, PinnedMCPTool]
 ) -> tuple[tuple[MCPTool, ...], PinnedCatalogDrift | None]:
     upstream: Final = MappingProxyType({tool.name: tool for tool in tools})
     added: Final = tuple(sorted(name for name in upstream if name not in pinned_tools))
     removed: Final = tuple(sorted(name for name in pinned_tools if name not in upstream))
     changed: Final = tuple(
-        sorted(
-            name
-            for name, tool in upstream.items()
-            if name in pinned_tools and (tool.description or "") != pinned_tools[name]
-        )
+        sorted(name for name, tool in upstream.items() if name in pinned_tools and _drifted(tool, pinned_tools[name]))
     )
     served: Final = tuple(
         _pinned_tool(tool, pinned_tools[tool.name]) if tool.name in changed else tool
@@ -135,8 +131,15 @@ def pin_tool_catalog(
     return served, drift
 
 
-def _pinned_tool(tool: MCPTool, description: str) -> MCPTool:
-    entry: Final[_ServedCatalogEntry] = {"description": description}
+def _drifted(tool: MCPTool, pinned: PinnedMCPTool) -> bool:
+    return (tool.description or "") != pinned.description or tool.input_schema != pinned.input_schema
+
+
+def _pinned_tool(tool: MCPTool, pinned: PinnedMCPTool) -> MCPTool:
+    entry: Final[_ServedCatalogEntry] = {
+        "description": pinned.description or None,
+        "input_schema": pinned.input_schema,
+    }
     return _with_served_entry(tool, entry)
 
 

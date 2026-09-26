@@ -15,7 +15,7 @@ from pydantic import Field, ValidationInfo, field_validator
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool, parse_pinned_tools
 
 
 class MCPEnvVarScope(str, enum.Enum):
@@ -69,7 +69,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     allowed_tools: list[str] = Field(default_factory=list)
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
-    pinned_tools: dict[str, str] | None = None
+    pinned_tools: dict[str, PinnedMCPTool] | None = None
     extra_headers: list[str] = Field(default_factory=list)
     mcp_info: MCPInfo | None = None
     static_headers: dict[str, str] | None = None
@@ -119,6 +119,11 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
     review_notes: str | None = None
+
+    @field_validator("pinned_tools", mode="before")
+    @classmethod
+    def decode_stored_pinned_tools(cls, value: object) -> dict[str, PinnedMCPTool] | None:
+        return parse_pinned_tools(value)
 
     @field_validator("static_headers", "env", mode="before")
     @classmethod

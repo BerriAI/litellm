@@ -55,6 +55,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
+from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
 
 if TYPE_CHECKING:
     from prisma import models as prisma_db_models
@@ -365,7 +366,6 @@ def _prepare_mcp_server_data(
         for json_map_field in (
             "tool_name_to_display_name",
             "tool_name_to_description",
-            "pinned_tools",
         ):
             if json_map_field in data_dict and data_dict[json_map_field] is None:
                 data_dict[json_map_field] = {}
@@ -415,9 +415,6 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
     if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(data_dict["tool_name_to_description"] or {})
-    if "pinned_tools" in data_dict:
-        data_dict["pinned_tools"] = safe_dumps(data_dict["pinned_tools"] or {})
-
     # mcp_access_groups is already List[str], no serialization needed
 
     # On create, force is_byok so a False value is always written to the DB. On
@@ -2171,6 +2168,28 @@ async def approve_mcp_server(
             "reviewed_at": now,
             "updated_by": touched_by,
         },
+    )
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
+
+
+async def set_mcp_server_pinned_tools(
+    prisma_client: PrismaClient,
+    server_id: str,
+    pinned_tools: Mapping[str, PinnedMCPTool] | None,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable | None:
+    """Replace the server's pinned catalog; ``None`` unpins. Only this write path sets the pin."""
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    if await _db_find_mcp_server_row(prisma_client, server_id) is None:
+        return None
+    snapshot: Final = {name: tool.model_dump() for name, tool in (pinned_tools or {}).items()}
+    updated: Final = await _db_update_mcp_server_row(
+        prisma_client,
+        server_id,
+        {"pinned_tools": safe_dumps(snapshot), "updated_by": touched_by},
     )
     table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)

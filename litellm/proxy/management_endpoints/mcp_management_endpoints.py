@@ -160,6 +160,7 @@ if MCP_AVAILABLE:
         merge_user_env_vars,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
+        set_mcp_server_pinned_tools,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -235,7 +236,7 @@ if MCP_AVAILABLE:
         MCPGatewaySessionsTerminateResponse,
         normalize_upstream_header_name,
     )
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
     @dataclass
     class _TemporaryMCPServerEntry:
@@ -1515,18 +1516,18 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/{server_id}/pin",
         description=(
-            "Pin the server's current upstream tool list and descriptions (admin only). tools/list serves the "
-            "pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert."
+            "Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list "
+            "serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert."
         ),
         dependencies=[Depends(user_api_key_auth)],
-        response_model=dict[str, str],
+        response_model=dict[str, PinnedMCPTool],
     )
     @management_endpoint_wrapper
     async def pin_mcp_server_tools(
         server_id: str,
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
-    ) -> dict[str, str]:
+    ) -> dict[str, PinnedMCPTool]:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1540,16 +1541,32 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found in the database."},
             )
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_server_auth_header,
+            _get_user_oauth_extra_headers,
+        )
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         upstream_tools: Final = await global_mcp_server_manager._get_tools_from_server(
             server=server.model_copy(update={"pinned_tools": None}),
+            mcp_auth_header=_get_server_auth_header(
+                server,
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(request.headers),
+                MCPRequestHandler._get_mcp_auth_header_from_headers(request.headers),
+            ),
+            extra_headers=await _get_user_oauth_extra_headers(server, user_api_key_dict),
             add_prefix=False,
             raw_headers=dict(request.headers),
             user_api_key_auth=user_api_key_dict,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
             proxy_logging_obj=proxy_logging_obj,
         )
-        snapshot: Final = {tool.name: tool.description or "" for tool in upstream_tools}
+        snapshot: Final = {
+            tool.name: PinnedMCPTool(description=tool.description or "", input_schema=tool.input_schema)
+            for tool in upstream_tools
+        }
         if not snapshot:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1586,16 +1603,16 @@ if MCP_AVAILABLE:
         return {"server_id": server_id, "status": "unpinned"}
 
     async def _store_pinned_tools(
-        server_id: str, pinned_tools: dict[str, str] | None, user_api_key_dict: UserAPIKeyAuth
+        server_id: str, pinned_tools: Mapping[str, PinnedMCPTool] | None, user_api_key_dict: UserAPIKeyAuth
     ) -> None:
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        record: Final = await update_mcp_server(
+        record: Final = await set_mcp_server_pinned_tools(
             prisma_client,
-            UpdateMCPServerRequest(server_id=server_id, pinned_tools=pinned_tools),
+            server_id,
+            pinned_tools,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            fields_set={"server_id", "pinned_tools"},
         )
-        if record is None or isinstance(record, McpIdentifierConflict):
+        if record is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server '{server_id}' not found in the database."},

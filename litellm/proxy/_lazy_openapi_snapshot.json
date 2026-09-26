@@ -30263,20 +30263,6 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
-            "pinned_tools": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Pinned Tools"
-            },
             "registration_url": {
               "anyOf": [
                 {
@@ -32096,7 +32082,7 @@
               "anyOf": [
                 {
                   "additionalProperties": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/PinnedMCPTool"
                   },
                   "type": "object"
                 },
@@ -32992,20 +32978,6 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
-            "pinned_tools": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Pinned Tools"
-            },
             "registration_url": {
               "anyOf": [
                 {
@@ -33206,6 +33178,24 @@
             }
           },
           "title": "NewMCPServerRequest",
+          "type": "object"
+        },
+        "PinnedMCPTool": {
+          "additionalProperties": false,
+          "description": "One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.",
+          "properties": {
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "input_schema": {
+              "additionalProperties": true,
+              "title": "Input Schema",
+              "type": "object"
+            }
+          },
+          "title": "PinnedMCPTool",
           "type": "object"
         },
         "RegisterGuardrailRequest": {
@@ -35180,7 +35170,7 @@
               "anyOf": [
                 {
                   "additionalProperties": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/PinnedMCPTool"
                   },
                   "type": "object"
                 },
@@ -36920,20 +36910,6 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
-            "pinned_tools": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Pinned Tools"
-            },
             "registration_url": {
               "anyOf": [
                 {
@@ -37166,6 +37142,24 @@
             "toolset_name"
           ],
           "title": "NewMCPToolsetRequest",
+          "type": "object"
+        },
+        "PinnedMCPTool": {
+          "additionalProperties": false,
+          "description": "One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.",
+          "properties": {
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "input_schema": {
+              "additionalProperties": true,
+              "title": "Input Schema",
+              "type": "object"
+            }
+          },
+          "title": "PinnedMCPTool",
           "type": "object"
         },
         "RejectMCPServerRequest": {
@@ -37458,20 +37452,6 @@
               "default": false,
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
-            },
-            "pinned_tools": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Pinned Tools"
             },
             "registration_url": {
               "anyOf": [
@@ -38777,7 +38757,7 @@
           ]
         },
         "post": {
-          "description": "Pin the server's current upstream tool list and descriptions (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.",
+          "description": "Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.",
           "operationId": "pin_mcp_server_tools_v1_mcp_server__server_id__pin_post",
           "parameters": [
             {
@@ -38796,7 +38776,7 @@
                 "application/json": {
                   "schema": {
                     "additionalProperties": {
-                      "type": "string"
+                      "$ref": "#/components/schemas/PinnedMCPTool"
                     },
                     "title": "Response Pin Mcp Server Tools V1 Mcp Server  Server Id  Pin Post",
                     "type": "object"
@@ -40272,20 +40252,6 @@
               "default": false,
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
-            },
-            "pinned_tools": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Pinned Tools"
             },
             "registration_url": {
               "anyOf": [

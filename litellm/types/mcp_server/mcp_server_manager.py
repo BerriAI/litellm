@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
@@ -67,6 +68,23 @@ class MCPOAuthIdentityBinding(BaseModel):
     require_email_verified: bool = True
 
 
+class PinnedMCPTool(BaseModel):
+    """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    description: str = ""
+    input_schema: dict[str, object] = Field(default_factory=dict)
+
+
+_PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter(dict[str, PinnedMCPTool] | None)
+
+
+def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
+    decoded: Final = json.loads(value) if isinstance(value, str) and value else value
+    return _PINNED_TOOLS.validate_python(decoded or None)
+
+
 class MCPServer(BaseModel):
     server_id: str
     name: str
@@ -87,7 +105,7 @@ class MCPServer(BaseModel):
     disallowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
-    pinned_tools: dict[str, str] | None = None
+    pinned_tools: dict[str, PinnedMCPTool] | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.

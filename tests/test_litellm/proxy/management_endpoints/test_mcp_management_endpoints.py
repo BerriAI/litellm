@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth, MCPCredentials
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
 
 def generate_mock_mcp_server_db_record(
@@ -8172,7 +8172,7 @@ class TestPinMCPServerTools:
     """POST/DELETE /v1/mcp/server/{server_id}/pin snapshot and clear the served tool catalog."""
 
     @staticmethod
-    def _pin_patches(stored, update_mock, manager):
+    def _pin_patches(stored, store_mock, manager):
         return (
             patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True),
             patch(
@@ -8183,9 +8183,12 @@ class TestPinMCPServerTools:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
                 AsyncMock(return_value=stored),
             ),
-            patch("litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server", update_mock),
+            patch("litellm.proxy.management_endpoints.mcp_management_endpoints.set_mcp_server_pinned_tools", store_mock),
             patch("litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager", manager),
-            patch.dict(sys.modules, {"litellm.proxy.proxy_server": types.SimpleNamespace(proxy_logging_obj=MagicMock())}),
+            patch.dict(
+                sys.modules,
+                {"litellm.proxy.proxy_server": types.SimpleNamespace(proxy_logging_obj=MagicMock(), general_settings={})},
+            ),
         )
 
     @staticmethod
@@ -8195,39 +8198,49 @@ class TestPinMCPServerTools:
         manager = MagicMock()
         manager.get_mcp_server_by_id = MagicMock(
             return_value=generate_mock_mcp_server_config_record(server_id="srv-1", name="notes").model_copy(
-                update={"pinned_tools": {"stale": "Stale pin"}}
+                update={"pinned_tools": {"stale": PinnedMCPTool(description="Stale pin")}}
             )
         )
         manager._get_tools_from_server = AsyncMock(
-            return_value=[MCPTool(name=name, description=description, inputSchema={}) for name, description in upstream_tools]
+            return_value=[
+                MCPTool(name=name, description=description, inputSchema=schema)
+                for name, description, schema in upstream_tools
+            ]
         )
         manager.update_server = AsyncMock()
         manager.reload_servers_from_database = AsyncMock()
         return manager
 
     @pytest.mark.asyncio
-    async def test_pin_snapshots_the_guarded_upstream_catalog(self):
+    async def test_pin_snapshots_the_guarded_upstream_catalog_listed_with_the_callers_credentials(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import pin_mcp_server_tools
 
         stored = generate_mock_mcp_server_db_record(server_id="srv-1")
-        update_mock = AsyncMock(return_value=stored)
-        manager = self._manager([("list_notes", "List notes"), ("read_note", None)])
+        store_mock = AsyncMock(return_value=stored)
+        manager = self._manager([("list_notes", "List notes", {"type": "object"}), ("read_note", None, {})])
         admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+        request = _make_mock_request(ip="10.1.2.3")
+        request.headers = {"x-mcp-notes-authorization": "Bearer upstream-token", "x-litellm-api-key": "sk-caller"}
 
         with ExitStack() as stack:
-            for p in self._pin_patches(stored, update_mock, manager):
+            for p in self._pin_patches(stored, store_mock, manager):
                 stack.enter_context(p)
-            result = await pin_mcp_server_tools(server_id="srv-1", request=_make_mock_request(), user_api_key_dict=admin)
+            result = await pin_mcp_server_tools(server_id="srv-1", request=request, user_api_key_dict=admin)
 
-        assert result == {"list_notes": "List notes", "read_note": ""}
+        expected = {
+            "list_notes": PinnedMCPTool(description="List notes", input_schema={"type": "object"}),
+            "read_note": PinnedMCPTool(description="", input_schema={}),
+        }
+        assert result == expected
         listing = manager._get_tools_from_server.await_args.kwargs
         assert listing["server"].pinned_tools is None
         assert listing["add_prefix"] is False
         assert listing["user_api_key_auth"] is admin
-        payload = update_mock.await_args.args[1]
-        assert payload.pinned_tools == {"list_notes": "List notes", "read_note": ""}
-        assert update_mock.await_args.kwargs["fields_set"] == {"server_id", "pinned_tools"}
-        assert update_mock.await_args.kwargs["touched_by"] == "admin"
+        assert listing["mcp_auth_header"] == {"Authorization": "Bearer upstream-token"}
+        assert listing["raw_headers"] == request.headers
+        assert listing["client_ip"] == "10.1.2.3"
+        assert store_mock.await_args.args[1:] == ("srv-1", expected)
+        assert store_mock.await_args.kwargs == {"touched_by": "admin"}
         manager.update_server.assert_awaited_once_with(stored)
         manager.reload_servers_from_database.assert_awaited_once()
 
@@ -8236,21 +8249,38 @@ class TestPinMCPServerTools:
         from litellm.proxy.management_endpoints.mcp_management_endpoints import unpin_mcp_server_tools
 
         stored = generate_mock_mcp_server_db_record(server_id="srv-1")
-        update_mock = AsyncMock(return_value=stored)
+        store_mock = AsyncMock(return_value=stored)
         manager = self._manager([])
         admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
 
         with ExitStack() as stack:
-            for p in self._pin_patches(stored, update_mock, manager):
+            for p in self._pin_patches(stored, store_mock, manager):
                 stack.enter_context(p)
             result = await unpin_mcp_server_tools(server_id="srv-1", user_api_key_dict=admin)
 
         assert result == {"server_id": "srv-1", "status": "unpinned"}
-        payload = update_mock.await_args.args[1]
-        assert payload.pinned_tools is None
-        assert update_mock.await_args.kwargs["fields_set"] == {"server_id", "pinned_tools"}
+        assert store_mock.await_args.args[1:] == ("srv-1", None)
+        assert store_mock.await_args.kwargs == {"touched_by": "admin"}
         manager._get_tools_from_server.assert_not_awaited()
         manager.reload_servers_from_database.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unpin_of_a_server_deleted_mid_request_is_404(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import unpin_mcp_server_tools
+
+        stored = generate_mock_mcp_server_db_record(server_id="srv-1")
+        store_mock = AsyncMock(return_value=None)
+        manager = self._manager([])
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+        with ExitStack() as stack:
+            for p in self._pin_patches(stored, store_mock, manager):
+                stack.enter_context(p)
+            with pytest.raises(HTTPException) as exc:
+                await unpin_mcp_server_tools(server_id="srv-1", user_api_key_dict=admin)
+
+        assert exc.value.status_code == 404
+        manager.reload_servers_from_database.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
@@ -8261,12 +8291,12 @@ class TestPinMCPServerTools:
         )
 
         stored = generate_mock_mcp_server_db_record(server_id="srv-1")
-        update_mock = AsyncMock(return_value=stored)
-        manager = self._manager([("list_notes", "List notes")])
+        store_mock = AsyncMock(return_value=stored)
+        manager = self._manager([("list_notes", "List notes", {})])
         user = generate_mock_user_api_key_auth(user_role=role, user_id="user")
 
         with ExitStack() as stack:
-            for p in self._pin_patches(stored, update_mock, manager):
+            for p in self._pin_patches(stored, store_mock, manager):
                 stack.enter_context(p)
             with pytest.raises(HTTPException) as pin_exc:
                 await pin_mcp_server_tools(server_id="srv-1", request=_make_mock_request(), user_api_key_dict=user)
@@ -8274,7 +8304,7 @@ class TestPinMCPServerTools:
                 await unpin_mcp_server_tools(server_id="srv-1", user_api_key_dict=user)
 
         assert (pin_exc.value.status_code, unpin_exc.value.status_code) == (403, 403)
-        update_mock.assert_not_awaited()
+        store_mock.assert_not_awaited()
         manager._get_tools_from_server.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -8284,12 +8314,12 @@ class TestPinMCPServerTools:
             unpin_mcp_server_tools,
         )
 
-        update_mock = AsyncMock()
-        manager = self._manager([("list_notes", "List notes")])
+        store_mock = AsyncMock()
+        manager = self._manager([("list_notes", "List notes", {})])
         admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
 
         with ExitStack() as stack:
-            for p in self._pin_patches(None, update_mock, manager):
+            for p in self._pin_patches(None, store_mock, manager):
                 stack.enter_context(p)
             with pytest.raises(HTTPException) as pin_exc:
                 await pin_mcp_server_tools(server_id="missing", request=_make_mock_request(), user_api_key_dict=admin)
@@ -8297,23 +8327,23 @@ class TestPinMCPServerTools:
                 await unpin_mcp_server_tools(server_id="missing", user_api_key_dict=admin)
 
         assert (pin_exc.value.status_code, unpin_exc.value.status_code) == (404, 404)
-        update_mock.assert_not_awaited()
+        store_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_pin_refuses_an_empty_guarded_catalog(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import pin_mcp_server_tools
 
         stored = generate_mock_mcp_server_db_record(server_id="srv-1")
-        update_mock = AsyncMock(return_value=stored)
+        store_mock = AsyncMock(return_value=stored)
         manager = self._manager([])
         admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
 
         with ExitStack() as stack:
-            for p in self._pin_patches(stored, update_mock, manager):
+            for p in self._pin_patches(stored, store_mock, manager):
                 stack.enter_context(p)
             with pytest.raises(HTTPException) as exc:
                 await pin_mcp_server_tools(server_id="srv-1", request=_make_mock_request(), user_api_key_dict=admin)
 
         assert exc.value.status_code == 400
         assert "nothing to pin" in exc.value.detail["error"]
-        update_mock.assert_not_awaited()
+        store_mock.assert_not_awaited()

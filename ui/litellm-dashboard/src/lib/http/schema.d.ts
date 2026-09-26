@@ -19638,7 +19638,7 @@ export interface paths {
         put?: never;
         /**
          * Pin Mcp Server Tools
-         * @description Pin the server's current upstream tool list and descriptions (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.
+         * @description Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.
          */
         post: operations["pin_mcp_server_tools_v1_mcp_server__server_id__pin_post"];
         /**
@@ -32500,7 +32500,7 @@ export interface components {
             per_server_oauth_discovery: boolean;
             /** Pinned Tools */
             pinned_tools?: {
-                [key: string]: string;
+                [key: string]: components["schemas"]["PinnedMCPTool"];
             } | null;
             /** Registration Url */
             registration_url?: string | null;
@@ -36296,10 +36296,6 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
-            /** Pinned Tools */
-            pinned_tools?: {
-                [key: string]: string;
-            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -37867,6 +37863,21 @@ export interface components {
          * @enum {string}
          */
         PiiEntityType: "CREDIT_CARD" | "CRYPTO" | "DATE_TIME" | "EMAIL_ADDRESS" | "IBAN_CODE" | "IP_ADDRESS" | "NRP" | "LOCATION" | "PERSON" | "PHONE_NUMBER" | "MEDICAL_LICENSE" | "URL" | "MAC_ADDRESS" | "UUID" | "US_BANK_NUMBER" | "US_DRIVER_LICENSE" | "US_ITIN" | "US_PASSPORT" | "US_SSN" | "US_MBI" | "US_NPI" | "UK_NHS" | "UK_NINO" | "UK_PASSPORT" | "UK_POSTCODE" | "UK_VEHICLE_REGISTRATION" | "UK_DRIVING_LICENCE" | "ES_NIF" | "ES_NIE" | "ES_PASSPORT" | "IT_FISCAL_CODE" | "IT_DRIVER_LICENSE" | "IT_VAT_CODE" | "IT_PASSPORT" | "IT_IDENTITY_CARD" | "PL_PESEL" | "SG_NRIC_FIN" | "SG_UEN" | "AU_ABN" | "AU_ACN" | "AU_TFN" | "AU_MEDICARE" | "IN_PAN" | "IN_AADHAAR" | "IN_VEHICLE_REGISTRATION" | "IN_VOTER" | "IN_PASSPORT" | "IN_GSTIN" | "FI_PERSONAL_IDENTITY_CODE" | "DE_TAX_ID" | "DE_TAX_NUMBER" | "DE_VAT_ID" | "DE_PASSPORT" | "DE_ID_CARD" | "DE_FUEHRERSCHEIN" | "DE_SOCIAL_SECURITY" | "DE_HEALTH_INSURANCE" | "DE_LANR" | "DE_BSNR" | "DE_KFZ" | "DE_HANDELSREGISTER" | "DE_PLZ" | "KR_RRN" | "KR_FRN" | "KR_PASSPORT" | "KR_DRIVER_LICENSE" | "KR_BRN" | "CA_SIN" | "SE_PERSONNUMMER" | "SE_ORGANISATIONSNUMMER" | "TH_TNIN" | "TR_NATIONAL_ID" | "TR_LICENSE_PLATE" | "NG_NIN" | "NG_VEHICLE_REGISTRATION" | "PH_TIN" | "PH_UMID" | "PH_PASSPORT" | "ZA_ID_NUMBER";
+        /**
+         * PinnedMCPTool
+         * @description One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.
+         */
+        PinnedMCPTool: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PipelineTestRequest
          * @description Request body for testing a guardrail pipeline with sample messages.
@@ -44791,10 +44802,6 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
-            /** Pinned Tools */
-            pinned_tools?: {
-                [key: string]: string;
-            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -72588,7 +72595,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: components["schemas"]["PinnedMCPTool"];
                     };
                 };
             };
