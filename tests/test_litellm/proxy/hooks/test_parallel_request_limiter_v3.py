@@ -6740,7 +6740,7 @@ class _ScriptedRedis:
                 raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
             if script == v3.BATCH_RATE_LIMITER_SCRIPT:
                 self.batch_calls += 1
-                return [value for _ in range(0, len(keys), 2) for value in (args[0], self.batch_calls)]
+                return [args[0], self.batch_calls] * (len(keys) // 2)
             if script == v3.PARALLEL_ACQUIRE_SCRIPT:
                 return [0, *[1 for _ in keys]]
             if script == v3.PARALLEL_RELEASE_SCRIPT:

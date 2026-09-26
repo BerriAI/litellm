@@ -1333,11 +1333,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: Exception) -> None:
         if not self._fail_closed_resolver():
             return
-        verbose_proxy_logger.warning(
-            "fail_closed_rate_limit_enforcement: rejecting request, %s could not verify the counters against "
-            "Redis (%s: %s)",
-            failed_operation,
-            type(error).__name__,
+        log_redis_failure(
+            verbose_proxy_logger,
+            logging.WARNING,
+            f"fail_closed_rate_limit_enforcement: rejecting request, {failed_operation} could not verify the "
+            "counters against Redis",
             error,
         )
         raise HTTPException(
@@ -1374,10 +1374,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
+                self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 log_redis_failure(
                     verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
                 )
-                self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -1657,13 +1657,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
+                self._reject_if_rate_limit_unverifiable("parallel_acquire_script", e)
                 log_redis_failure(
                     verbose_proxy_logger,
                     logging.WARNING,
                     "parallel_acquire_script failed, falling back to in-memory gauge",
                     e,
                 )
-                self._reject_if_rate_limit_unverifiable("parallel_acquire_script", e)
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1992,16 +1992,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # state ambiguous. Refund any prior groups so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
+                await self._refund_applied_descriptor_groups(applied)
+                self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", e)
                 log_redis_failure(
                     verbose_proxy_logger,
                     logging.ERROR,
-                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunding "
+                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunded "
                     f"{len(applied)} prior descriptors and falling back to in-memory enforcement, counters will "
                     f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
                 )
-                await self._refund_applied_descriptor_groups(applied)
-                self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", e)
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
