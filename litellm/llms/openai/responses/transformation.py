@@ -151,6 +151,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
+    def _is_unsupported_reasoning_effort(model: str, effort: str | None) -> bool:
+        """Apply the GPT-5 reasoning-effort capability flags used by chat completions."""
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.is_reasoning_effort_unsupported(model, effort)
+
+    @staticmethod
     def _supports_reasoning_param(model: str) -> bool:
         from litellm.utils import _get_model_info_helper
 
@@ -214,7 +221,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         GPT-5 models have restrictions on temperature and top_p (only temperature=1
         is accepted, and top_p is rejected, unless reasoning.effort resolves to
-        'none' on models that support it).
+        'none' on models that support it). Reasoning effort values the model map
+        disables are rejected or dropped first, mirroring chat completions.
         Apply the same validation used by the chat completions path.
         """
         params: Final = dict(response_api_optional_params)
@@ -243,8 +251,27 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
             effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            unsupported_effort: Final = self._is_unsupported_reasoning_effort(lookup_name, effort)
+            should_drop_effort: Final = unsupported_effort and (drop_params or litellm.drop_params)
+
+            if unsupported_effort:
+                if should_drop_effort:
+                    if isinstance(reasoning, dict):
+                        updated_reasoning: Final = reasoning.copy()
+                        updated_reasoning.pop("effort", None)
+                        if updated_reasoning:
+                            params["reasoning"] = updated_reasoning
+                        else:
+                            params.pop("reasoning", None)
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=f"reasoning.effort={effort} is not supported for this model.",
+                        status_code=400,
+                    )
+
+            effective_effort: Final = None if should_drop_effort else effort
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
-            effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
+            effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effective_effort)
 
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:

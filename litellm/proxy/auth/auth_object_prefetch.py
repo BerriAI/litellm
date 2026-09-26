@@ -14,7 +14,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -190,14 +189,17 @@ def _iter_entries(refs: AuthObjectRefs, management_ttl: float) -> Iterator[_Cach
             None,
         )
     if refs.organization_id is not None:
+        # Organization entries use the management TTL like every other prefetched object: a
+        # 5s fuse expires before slow requests reach the getters, sending them back to
+        # the DB the prefetch was meant to spare.
         yield _CacheEntry(
-            f"org_id:{refs.organization_id}", "organization_row", LiteLLM_OrganizationTable, DEFAULT_IN_MEMORY_TTL
+            f"org_id:{refs.organization_id}", "organization_row", LiteLLM_OrganizationTable, management_ttl
         )
         yield _CacheEntry(
             f"org_id:{refs.organization_id}:with_budget",
             "organization_row",
             LiteLLM_OrganizationTable,
-            DEFAULT_IN_MEMORY_TTL,
+            management_ttl,
         )
     if refs.project_id is not None:
         yield _CacheEntry(f"project_id:{refs.project_id}", "project_row", LiteLLM_ProjectTableCachedObj, management_ttl)
