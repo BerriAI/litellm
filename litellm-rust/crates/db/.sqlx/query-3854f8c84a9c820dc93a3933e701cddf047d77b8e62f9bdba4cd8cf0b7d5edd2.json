@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH candidates AS (\n    SELECT scope FROM \"LiteLLM_AutoRouterBaselineComparison\"\n    WHERE NOT retired AND revision <> published_revision\n      AND (attempted_at IS NULL OR attempted_at < CURRENT_TIMESTAMP - INTERVAL '30 seconds')\n    ORDER BY attempted_at NULLS FIRST, updated_at, scope LIMIT 32 FOR UPDATE SKIP LOCKED\n)\nUPDATE \"LiteLLM_AutoRouterBaselineComparison\" AS comparison\nSET attempted_at = CURRENT_TIMESTAMP FROM candidates\nWHERE comparison.scope = candidates.scope RETURNING comparison.scope\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineComparison\"",
+            "name": "scope"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3854f8c84a9c820dc93a3933e701cddf047d77b8e62f9bdba4cd8cf0b7d5edd2"
+}

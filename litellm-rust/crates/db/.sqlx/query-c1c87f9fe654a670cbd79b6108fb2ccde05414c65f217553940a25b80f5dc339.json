@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AutoRouterBaselineComparison\"\nSET published_revision = revision, history = $2\nWHERE scope = $1\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c1c87f9fe654a670cbd79b6108fb2ccde05414c65f217553940a25b80f5dc339"
+}

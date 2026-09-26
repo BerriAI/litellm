@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_AutoRouterBaselineComparison\"\n    (scope, api_key, session_id, router_name, initial_equivalent)\nVALUES ($1, $2, $3, $4, NOT EXISTS (\n    SELECT 1 FROM \"LiteLLM_AutoRouterSession\"\n    WHERE api_key = $2 AND session_id = $3 AND router_name = $4\n)) ON CONFLICT (scope) DO NOTHING\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "deea46b3a597ae9d4b6d5119181b17cc823158bb1a033c1247037d100e677eb1"
+}

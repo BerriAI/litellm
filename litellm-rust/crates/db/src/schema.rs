@@ -23,11 +23,14 @@ pub async fn schema_compatibility(
     )
     .fetch_one(executor)
     .await?;
-    Ok(if applied {
+
+    let compat = if applied {
         SchemaCompatibility::Compatible
     } else {
         SchemaCompatibility::Behind {
             required: required.to_owned(),
         }
-    })
+    };
+
+    Ok(compat)
 }

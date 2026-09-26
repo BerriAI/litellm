@@ -7,8 +7,10 @@ repository.workspace = true
 
 [features]
 postgres-tests = []
+schema = ["dep:schemars"]
 
 [dependencies]
+schemars = { workspace = true, optional = true, features = ["chrono04"] }
 sqlx.workspace = true
 thiserror.workspace = true
 

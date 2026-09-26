@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_AutoRouterBaselineObservation\"\n    (request_id, scope, started_at, revision, data)\nVALUES ($1, $2, $3::float8, $4::bigint, $5)\nON CONFLICT (request_id) DO NOTHING\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "33c28ae76992a4056dd00a1188261b77cac82cf82949c03ae53d0e74107687e7"
+}

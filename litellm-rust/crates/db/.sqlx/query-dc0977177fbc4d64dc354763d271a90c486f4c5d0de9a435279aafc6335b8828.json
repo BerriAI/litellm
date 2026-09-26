@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT revision, published_revision, initial_equivalent, retired, history\nFROM \"LiteLLM_AutoRouterBaselineComparison\" WHERE scope = $1 FOR UPDATE\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineComparison\"",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "published_revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineComparison\"",
+            "name": "published_revision"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "initial_equivalent",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineComparison\"",
+            "name": "initial_equivalent"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "retired",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineComparison\"",
+            "name": "retired"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "history",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineComparison\"",
+            "name": "history"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "dc0977177fbc4d64dc354763d271a90c486f4c5d0de9a435279aafc6335b8828"
+}

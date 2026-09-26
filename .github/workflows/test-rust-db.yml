@@ -96,7 +96,7 @@ jobs:
 
       - name: Lint the database tests
         working-directory: litellm-rust
-        run: cargo clippy -p litellm-db --all-targets --locked --features postgres-tests -- -D warnings
+        run: cargo clippy -p litellm-db --all-targets --locked --features postgres-tests,schema -- -D warnings
 
       - name: Run the database tests
         working-directory: litellm-rust

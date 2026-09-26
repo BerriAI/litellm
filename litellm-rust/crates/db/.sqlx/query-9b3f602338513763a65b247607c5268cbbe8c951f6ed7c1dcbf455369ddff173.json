@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT data, publication, conflicted, started_at\nFROM \"LiteLLM_AutoRouterBaselineObservation\"\nWHERE request_id = $1 AND scope = $2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "publication",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "publication"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "conflicted",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "conflicted"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "started_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "9b3f602338513763a65b247607c5268cbbe8c951f6ed7c1dcbf455369ddff173"
+}

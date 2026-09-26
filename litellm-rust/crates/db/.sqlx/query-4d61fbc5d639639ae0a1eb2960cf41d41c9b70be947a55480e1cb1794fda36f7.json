@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH changes AS (\n    SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(\n        user_id text, api_key text, session_id text, router_name text, baseline_model text,\n        covered_delta int, actual_delta float8, savings_delta float8\n    )\n), totals AS (\n    SELECT api_key, session_id, router_name, SUM(covered_delta)::int AS covered_delta,\n        SUM(actual_delta) AS actual_delta, SUM(savings_delta) AS savings_delta\n    FROM changes GROUP BY api_key, session_id, router_name\n), models AS (\n    SELECT api_key, session_id, router_name, jsonb_object_agg(baseline_model, delta) AS deltas\n    FROM (\n        SELECT api_key, session_id, router_name, baseline_model, SUM(covered_delta)::int AS delta\n        FROM changes GROUP BY api_key, session_id, router_name, baseline_model\n    ) grouped GROUP BY api_key, session_id, router_name\n)\nUPDATE \"LiteLLM_AutoRouterSession\" AS session\nSET saved_spend = session.saved_spend + totals.savings_delta,\n    savings_estimated_turns = session.savings_estimated_turns + totals.covered_delta,\n    savings_estimated_actual_spend = session.savings_estimated_actual_spend + totals.actual_delta,\n    savings_estimated_saved_spend = session.savings_estimated_saved_spend + totals.savings_delta,\n    savings_estimated_baseline_models = (\n        SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb) FROM (\n            SELECT key, SUM(value::int)::int AS value FROM (\n                SELECT * FROM jsonb_each_text(session.savings_estimated_baseline_models)\n                UNION ALL SELECT * FROM jsonb_each_text(models.deltas)\n            ) combined GROUP BY key HAVING SUM(value::int) > 0\n        ) counts\n    )\nFROM totals JOIN models USING (api_key, session_id, router_name)\nWHERE session.api_key = totals.api_key AND session.session_id = totals.session_id\n    AND session.router_name = totals.router_name\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4d61fbc5d639639ae0a1eb2960cf41d41c9b70be947a55480e1cb1794fda36f7"
+}

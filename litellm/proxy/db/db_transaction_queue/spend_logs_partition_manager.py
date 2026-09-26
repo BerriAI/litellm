@@ -216,7 +216,7 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
                 break
             try:
-                await self._execute_bounded_ddl(
+                await self._execute_bounded_ddl(  # dynamic-sql-ok: partition name and bounds are identifiers
                     prisma_client,
                     f'CREATE TABLE IF NOT EXISTS "{name}" '
                     f'PARTITION OF "{SPEND_LOGS_TABLE}" '
@@ -265,7 +265,9 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
                 break
             try:
-                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+                await self._execute_bounded_ddl(  # dynamic-sql-ok: partition name is an identifier
+                    prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms
+                )
                 dropped.append(name)
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)

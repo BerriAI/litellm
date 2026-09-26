@@ -191,7 +191,7 @@ from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
     parse_iam_endpoint_from_url,
 )
-from litellm.proxy.db.queries import KEY_AUTH_COMBINED_VIEW
+from litellm.proxy.db.queries.keys import KEY_AUTH_COMBINED_VIEW
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.db.spend_log_batching import (
     spend_log_queue_within_budget,

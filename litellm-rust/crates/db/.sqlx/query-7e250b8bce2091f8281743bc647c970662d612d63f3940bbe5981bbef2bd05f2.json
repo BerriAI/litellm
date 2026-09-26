@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AutoRouterBaselineObservation\"\nSET conflicted = TRUE, revision = $4::bigint\nWHERE request_id = $1 AND scope = $2 AND data <> $3 AND NOT conflicted\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7e250b8bce2091f8281743bc647c970662d612d63f3940bbe5981bbef2bd05f2"
+}

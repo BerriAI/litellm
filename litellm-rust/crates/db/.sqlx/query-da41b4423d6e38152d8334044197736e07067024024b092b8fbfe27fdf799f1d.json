@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH expired AS (\n    SELECT scope FROM \"LiteLLM_AutoRouterBaselineComparison\"\n    WHERE NOT retired AND updated_at < $1::timestamptz\n    ORDER BY updated_at LIMIT $2::int FOR UPDATE SKIP LOCKED\n)\nUPDATE \"LiteLLM_AutoRouterBaselineComparison\" AS comparison\nSET retired = TRUE, history = NULL\nFROM expired WHERE comparison.scope = expired.scope\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da41b4423d6e38152d8334044197736e07067024024b092b8fbfe27fdf799f1d"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT 1 AS found FROM \"LiteLLM_AutoRouterBaselineObservation\" AS observation\nWHERE scope = $1 AND publication IS NULL AND NOT EXISTS (\n    SELECT 1 FROM \"LiteLLM_SpendLogs\" AS log WHERE log.request_id = observation.request_id\n)\nLIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ac985396475cf6723265271a1ee1e59878e2e65bf9cbf8ab8857906c0a7eaae8"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM \"LiteLLM_AutoRouterBaselineObservation\" WHERE request_id IN (\n    SELECT event.request_id FROM \"LiteLLM_AutoRouterBaselineObservation\" AS event\n    JOIN \"LiteLLM_AutoRouterBaselineComparison\" AS comparison USING (scope)\n    WHERE comparison.retired AND comparison.updated_at < $1::timestamptz\n    LIMIT $2::int\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19b8b62d06d383ad11dc9367c09bbfb60361fa14f591f46efdfde99dc60a3f52"
+}

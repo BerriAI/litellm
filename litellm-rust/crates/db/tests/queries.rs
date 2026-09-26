@@ -9,7 +9,7 @@ use sqlx::{Column, Executor, Postgres, SqlSafeStr, Transaction};
 use support::transaction;
 
 const KEY_AUTH_COMBINED_VIEW: &str =
-    include_str!("../../../../litellm/proxy/db/queries/key_auth_combined_view.sql");
+    include_str!("../../../../litellm/proxy/db/queries/keys/key_auth_combined_view.sql");
 
 #[rstest]
 #[tokio::test]

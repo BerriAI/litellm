@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT 1 AS found FROM \"LiteLLM_AutoRouterBaselineObservation\"\nWHERE scope = $1 AND revision > $2::bigint AND started_at <= $3::float8\nLIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5fa55748c9ae3e33ac56047f2d0deb663b4cf6d439dcdaa31f1716acacce6de7"
+}

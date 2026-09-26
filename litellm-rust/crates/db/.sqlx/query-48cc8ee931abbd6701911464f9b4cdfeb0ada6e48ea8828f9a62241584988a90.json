@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH changes AS (\n    SELECT request_id, publication::jsonb AS publication\n    FROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)\n)\nUPDATE \"LiteLLM_SpendLogs\" AS logs\nSET metadata = (COALESCE(logs.metadata::jsonb, '{}'::jsonb) - 'autorouter_baseline_observation') || jsonb_build_object(\n    'autorouter_savings_estimate', changes.publication,\n    'autorouter_savings', CASE WHEN changes.publication->>'status' = 'estimated' THEN\n        (changes.publication->>'baseline_spend')::float8 - (changes.publication->>'actual_spend')::float8\n        ELSE NULL END\n)\nFROM changes WHERE logs.request_id = changes.request_id\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "48cc8ee931abbd6701911464f9b4cdfeb0ada6e48ea8828f9a62241584988a90"
+}

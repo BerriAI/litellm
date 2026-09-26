@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH times AS (\n    SELECT DISTINCT started_at FROM \"LiteLLM_AutoRouterBaselineObservation\"\n    WHERE scope = $1 AND revision > $2::bigint\n      AND ($3::float8 IS NULL OR started_at > $3::float8)\n      AND ($5::float8 IS NULL OR (\n          started_at >= $5::float8 AND publication::jsonb->>'status' = 'estimated'\n      ))\n    ORDER BY started_at LIMIT $4::int\n)\nSELECT data, publication, conflicted, started_at\nFROM \"LiteLLM_AutoRouterBaselineObservation\"\nWHERE scope = $1 AND revision > $2::bigint\n  AND started_at IN (SELECT started_at FROM times)\n  AND ($5::float8 IS NULL OR publication::jsonb->>'status' = 'estimated')\nORDER BY started_at, request_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "publication",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "publication"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "conflicted",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "conflicted"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AutoRouterBaselineObservation\"",
+            "name": "started_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Float8",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "b6e7db4dbfc29cb8062c7b7b4e4e47689c7453573ba9ba2f1aa192b10f204bb4"
+}

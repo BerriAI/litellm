@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AutoRouterBaselineComparison\"\nSET revision = $2::bigint, updated_at = CURRENT_TIMESTAMP, attempted_at = NULL\nWHERE scope = $1\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc390d0ce068ab45e93319e21e3dc13b88143319fd4cc5830300f77516e95a7c"
+}

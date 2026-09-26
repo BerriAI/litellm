@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AutoRouterBaselineObservation\" AS observations\nSET publication = x.publication::text\nFROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)\nWHERE observations.request_id = x.request_id\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2615afc03bd512841daa87567242d011974ecd54e5115d2bcac8dd83bdbee4b1"
+}

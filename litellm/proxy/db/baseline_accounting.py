@@ -25,6 +25,26 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     build_bulk_upsert,
     merge_by_conflict_key,
 )
+from litellm.proxy.db.queries.autorouter import (
+    ADVANCE_BASELINE_COMPARISON_REVISION,
+    APPLY_BASELINE_SESSION_CORRECTIONS,
+    APPLY_BASELINE_USER_SESSION_CORRECTIONS,
+    CLAIM_DIRTY_BASELINE_COMPARISONS,
+    CREATE_BASELINE_COMPARISON,
+    DELETE_RETIRED_BASELINE_OBSERVATIONS,
+    FIND_BASELINE_OBSERVATION_CHANGED_BEFORE,
+    FIND_BASELINE_OBSERVATION_WITHOUT_SPEND_LOG,
+    INSERT_BASELINE_OBSERVATION,
+    LOCK_BASELINE_COMPARISON,
+    MARK_BASELINE_OBSERVATION_CONFLICTED,
+    PUBLISH_BASELINE_COMPARISON_HISTORY,
+    PUBLISH_BASELINE_TO_SPEND_LOGS,
+    READ_BASELINE_OBSERVATION,
+    READ_BASELINE_OBSERVATION_PAGE,
+    RETIRE_EXPIRED_BASELINE_COMPARISONS,
+    STORE_BASELINE_PUBLICATIONS,
+)
+from litellm.proxy.db.queries.transaction import SET_LOCK_TIMEOUT, SET_STATEMENT_TIMEOUT
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.spend_tracking.baseline_accounting import (
     BaselineEstimate,
@@ -197,113 +217,6 @@ _HISTORY: Final = TypeAdapter(BaselineHistory)
 _PAGE_TIMESTAMPS: Final = 128
 _TRANSACTION_TIMEOUT: Final = timedelta(seconds=10)
 
-_CREATE_COMPARISON: Final = """
-INSERT INTO "LiteLLM_AutoRouterBaselineComparison"
-    (scope, api_key, session_id, router_name, initial_equivalent)
-VALUES ($1, $2, $3, $4, NOT EXISTS (
-    SELECT 1 FROM "LiteLLM_AutoRouterSession"
-    WHERE api_key = $2 AND session_id = $3 AND router_name = $4
-)) ON CONFLICT (scope) DO NOTHING
-"""
-_LOCK_COMPARISON: Final = """
-SELECT revision, published_revision, initial_equivalent, retired, history
-FROM "LiteLLM_AutoRouterBaselineComparison" WHERE scope = $1 FOR UPDATE
-"""
-_INSERT_RECORD: Final = """
-INSERT INTO "LiteLLM_AutoRouterBaselineObservation"
-    (request_id, scope, started_at, revision, data)
-VALUES ($1, $2, $3::float8, $4::bigint, $5)
-ON CONFLICT (request_id) DO NOTHING
-"""
-_MARK_CONFLICT: Final = """
-UPDATE "LiteLLM_AutoRouterBaselineObservation"
-SET conflicted = TRUE, revision = $4::bigint
-WHERE request_id = $1 AND scope = $2 AND data <> $3 AND NOT conflicted
-"""
-_READ_PAGE: Final = """
-WITH times AS (
-    SELECT DISTINCT started_at FROM "LiteLLM_AutoRouterBaselineObservation"
-    WHERE scope = $1 AND revision > $2::bigint
-      AND ($3::float8 IS NULL OR started_at > $3::float8)
-      AND ($5::float8 IS NULL OR (
-          started_at >= $5::float8 AND publication::jsonb->>'status' = 'estimated'
-      ))
-    ORDER BY started_at LIMIT $4::int
-)
-SELECT data, publication, conflicted, started_at
-FROM "LiteLLM_AutoRouterBaselineObservation"
-WHERE scope = $1 AND revision > $2::bigint
-  AND started_at IN (SELECT started_at FROM times)
-  AND ($5::float8 IS NULL OR publication::jsonb->>'status' = 'estimated')
-ORDER BY started_at, request_id
-"""
-_UPDATE_LOGS: Final = """
-WITH changes AS (
-    SELECT request_id, publication::jsonb AS publication
-    FROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)
-)
-UPDATE "LiteLLM_SpendLogs" AS logs
-SET metadata = (COALESCE(logs.metadata::jsonb, '{}'::jsonb) - 'autorouter_baseline_observation') || jsonb_build_object(
-    'autorouter_savings_estimate', changes.publication,
-    'autorouter_savings', CASE WHEN changes.publication->>'status' = 'estimated' THEN
-        (changes.publication->>'baseline_spend')::float8 - (changes.publication->>'actual_spend')::float8
-        ELSE NULL END
-)
-FROM changes WHERE logs.request_id = changes.request_id
-"""
-_UPDATE_PUBLICATIONS: Final = """
-UPDATE "LiteLLM_AutoRouterBaselineObservation" AS observations
-SET publication = x.publication::text
-FROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)
-WHERE observations.request_id = x.request_id
-"""
-
-
-def _session_correction_sql(*, user_scoped: bool) -> str:
-    table_name: Final = "LiteLLM_AutoRouterUserSession" if user_scoped else "LiteLLM_AutoRouterSession"
-    identity_columns: Final = ("user_id, " if user_scoped else "") + "api_key, session_id, router_name"
-    user_filter: Final = "WHERE user_id <> ''" if user_scoped else ""
-    user_match: Final = "session.user_id = totals.user_id AND " if user_scoped else ""
-    return f"""
-WITH changes AS (
-    SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(
-        user_id text, api_key text, session_id text, router_name text, baseline_model text,
-        covered_delta int, actual_delta float8, savings_delta float8
-    )
-    {user_filter}
-), totals AS (
-    SELECT {identity_columns}, SUM(covered_delta)::int AS covered_delta,
-        SUM(actual_delta) AS actual_delta, SUM(savings_delta) AS savings_delta
-    FROM changes GROUP BY {identity_columns}
-), models AS (
-    SELECT {identity_columns}, jsonb_object_agg(baseline_model, delta) AS deltas
-    FROM (
-        SELECT {identity_columns}, baseline_model, SUM(covered_delta)::int AS delta
-        FROM changes GROUP BY {identity_columns}, baseline_model
-    ) grouped GROUP BY {identity_columns}
-)
-UPDATE "{table_name}" AS session
-SET saved_spend = session.saved_spend + totals.savings_delta,
-    savings_estimated_turns = session.savings_estimated_turns + totals.covered_delta,
-    savings_estimated_actual_spend = session.savings_estimated_actual_spend + totals.actual_delta,
-    savings_estimated_saved_spend = session.savings_estimated_saved_spend + totals.savings_delta,
-    savings_estimated_baseline_models = (
-        SELECT COALESCE(jsonb_object_agg(key, value), '{{}}'::jsonb) FROM (
-            SELECT key, SUM(value::int)::int AS value FROM (
-                SELECT * FROM jsonb_each_text(session.savings_estimated_baseline_models)
-                UNION ALL SELECT * FROM jsonb_each_text(models.deltas)
-            ) combined GROUP BY key HAVING SUM(value::int) > 0
-        ) counts
-    )
-FROM totals JOIN models USING ({identity_columns})
-WHERE {user_match}session.api_key = totals.api_key AND session.session_id = totals.session_id
-    AND session.router_name = totals.router_name
-"""
-
-
-_UPDATE_SESSIONS: Final = _session_correction_sql(user_scoped=False)
-_UPDATE_USER_SESSIONS: Final = _session_correction_sql(user_scoped=True)
-
 
 def _primary_transaction(client: PrismaClient) -> _TransactionManager:
     primary: Final = cast(_TransactionalDatabase, writer_wrapper(client.db))
@@ -369,10 +282,10 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
     if not changes:
         return
     serialized: Final = json.dumps(tuple(change.model_dump(mode="json") for change in changes), separators=(",", ":"))
-    await db.execute_raw(_UPDATE_LOGS, serialized)
-    await db.execute_raw(_UPDATE_SESSIONS, serialized)
+    await db.execute_raw(PUBLISH_BASELINE_TO_SPEND_LOGS, serialized)
+    await db.execute_raw(APPLY_BASELINE_SESSION_CORRECTIONS, serialized)
     if any(change.user_id for change in changes):
-        await db.execute_raw(_UPDATE_USER_SESSIONS, serialized)
+        await db.execute_raw(APPLY_BASELINE_USER_SESSION_CORRECTIONS, serialized)
     for entity, table in DAILY_SPEND_TABLES.items():
         if adjustments := tuple(
             change.daily.adjustment(target, change.savings_delta, change.request_id)
@@ -383,7 +296,7 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
         ):
             statement, values = build_bulk_upsert(table, merge_by_conflict_key(table, adjustments))
             await db.execute_raw(statement, *values)
-    await db.execute_raw(_UPDATE_PUBLICATIONS, serialized)
+    await db.execute_raw(STORE_BASELINE_PUBLICATIONS, serialized)
 
 
 class BaselineAccountingStore:
@@ -402,18 +315,20 @@ class BaselineAccountingStore:
     ) -> Literal["recorded", "retired", "conflict", "unavailable"]:
         try:
             async with self.transaction() as db:
-                await db.execute_raw("SET LOCAL statement_timeout = 5000")
-                await db.execute_raw("SET LOCAL lock_timeout = 1000")
+                await db.execute_raw(SET_STATEMENT_TIMEOUT, "5000")
+                await db.execute_raw(SET_LOCK_TIMEOUT, "1000")
                 await db.execute_raw(
-                    _CREATE_COMPARISON, record.scope, record.api_key, record.session_id, record.router_name
+                    CREATE_BASELINE_COMPARISON, record.scope, record.api_key, record.session_id, record.router_name
                 )
-                rows: Final = _COMPARISONS.validate_python(tuple(await db.query_raw(_LOCK_COMPARISON, record.scope)))
+                rows: Final = _COMPARISONS.validate_python(
+                    tuple(await db.query_raw(LOCK_BASELINE_COMPARISON, record.scope))
+                )
                 if not rows:
                     return "unavailable"
                 revision: Final = rows[0].revision + 1
                 data: Final = _serialized(record)
                 inserted: Final = await db.execute_raw(
-                    _INSERT_RECORD,
+                    INSERT_BASELINE_OBSERVATION,
                     record.observation.request_id,
                     record.scope,
                     record.observation.started_at,
@@ -426,15 +341,18 @@ class BaselineAccountingStore:
                     0
                     if inserted
                     else await db.execute_raw(
-                        _MARK_CONFLICT, record.observation.request_id, record.scope, data, revision
+                        MARK_BASELINE_OBSERVATION_CONFLICTED,
+                        record.observation.request_id,
+                        record.scope,
+                        data,
+                        revision,
                     )
                 )
                 canonical: Final = (
                     _RECORDS.validate_python(
                         tuple(
                             await db.query_raw(
-                                'SELECT data, publication, conflicted, started_at FROM "LiteLLM_AutoRouterBaselineObservation" '
-                                "WHERE request_id=$1 AND scope=$2",
+                                READ_BASELINE_OBSERVATION,
                                 record.observation.request_id,
                                 record.scope,
                             )
@@ -473,8 +391,7 @@ class BaselineAccountingStore:
                         db, record.scope, canonical[0].started_at if canonical else record.observation.started_at
                     )
                     await db.execute_raw(
-                        'UPDATE "LiteLLM_AutoRouterBaselineComparison" SET revision = $2::bigint, '
-                        "updated_at = CURRENT_TIMESTAMP, attempted_at = NULL WHERE scope = $1",
+                        ADVANCE_BASELINE_COMPARISON_REVISION,
                         record.scope,
                         revision,
                     )
@@ -488,7 +405,11 @@ class BaselineAccountingStore:
     ) -> AsyncIterator[tuple[_StoredRecord, ...]]:
         cursor: float | None = None  # rebind-ok: keyset pagination advances after each complete timestamp group
         while page := _RECORDS.validate_python(
-            tuple(await db.query_raw(_READ_PAGE, scope, after_revision, cursor, _PAGE_TIMESTAMPS, withdraw_from))
+            tuple(
+                await db.query_raw(
+                    READ_BASELINE_OBSERVATION_PAGE, scope, after_revision, cursor, _PAGE_TIMESTAMPS, withdraw_from
+                )
+            )
         ):
             yield page
             cursor = page[-1].started_at
@@ -516,23 +437,15 @@ class BaselineAccountingStore:
 
     async def retire_before(self, cutoff: datetime, batch_size: int, timeout_ms: int) -> None:
         async with self.transaction() as db:
-            await db.execute_raw(f"SET LOCAL statement_timeout = {max(1, timeout_ms)}")
-            await db.execute_raw(f"SET LOCAL lock_timeout = {max(1, timeout_ms)}")
+            await db.execute_raw(SET_STATEMENT_TIMEOUT, str(max(1, timeout_ms)))
+            await db.execute_raw(SET_LOCK_TIMEOUT, str(max(1, timeout_ms)))
             await db.execute_raw(
-                'WITH expired AS (SELECT scope FROM "LiteLLM_AutoRouterBaselineComparison" '
-                "WHERE NOT retired AND updated_at < $1::timestamptz ORDER BY updated_at "
-                "LIMIT $2::int FOR UPDATE SKIP LOCKED) "
-                'UPDATE "LiteLLM_AutoRouterBaselineComparison" AS comparison '
-                "SET retired=TRUE, history=NULL FROM expired WHERE comparison.scope=expired.scope",
+                RETIRE_EXPIRED_BASELINE_COMPARISONS,
                 cutoff,
                 batch_size,
             )
             await db.execute_raw(
-                'DELETE FROM "LiteLLM_AutoRouterBaselineObservation" WHERE request_id IN ('
-                'SELECT event.request_id FROM "LiteLLM_AutoRouterBaselineObservation" AS event '
-                'JOIN "LiteLLM_AutoRouterBaselineComparison" AS comparison USING (scope) '
-                "WHERE comparison.retired AND comparison.updated_at < $1::timestamptz "
-                "LIMIT $2::int)",
+                DELETE_RETIRED_BASELINE_OBSERVATIONS,
                 cutoff,
                 batch_size,
             )
@@ -540,15 +453,13 @@ class BaselineAccountingStore:
     async def project(self, scope: str) -> Literal["published", "unchanged", "unavailable"]:
         try:
             async with self.transaction() as db:
-                await db.execute_raw("SET LOCAL statement_timeout = 5000")
-                await db.execute_raw("SET LOCAL lock_timeout = 1000")
-                rows: Final = _COMPARISONS.validate_python(tuple(await db.query_raw(_LOCK_COMPARISON, scope)))
+                await db.execute_raw(SET_STATEMENT_TIMEOUT, "5000")
+                await db.execute_raw(SET_LOCK_TIMEOUT, "1000")
+                rows: Final = _COMPARISONS.validate_python(tuple(await db.query_raw(LOCK_BASELINE_COMPARISON, scope)))
                 if not rows or rows[0].retired or rows[0].revision == rows[0].published_revision:
                     return "unchanged"
                 missing_log: Final = await db.query_raw(
-                    'SELECT 1 FROM "LiteLLM_AutoRouterBaselineObservation" AS observation '
-                    'WHERE scope=$1 AND publication IS NULL AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SpendLogs" AS log '
-                    "WHERE log.request_id=observation.request_id) LIMIT 1",
+                    FIND_BASELINE_OBSERVATION_WITHOUT_SPEND_LOG,
                     scope,
                 )
                 if missing_log:
@@ -560,8 +471,7 @@ class BaselineAccountingStore:
                     else BaselineHistory(equivalent=state.initial_equivalent)
                 )
                 changed: Final = await db.query_raw(
-                    'SELECT 1 FROM "LiteLLM_AutoRouterBaselineObservation" '
-                    "WHERE scope = $1 AND revision > $2::bigint AND started_at <= $3::float8 LIMIT 1",
+                    FIND_BASELINE_OBSERVATION_CHANGED_BEFORE,
                     scope,
                     state.published_revision,
                     checkpoint.last_at,
@@ -575,8 +485,7 @@ class BaselineAccountingStore:
                     )
                     await _publish(db, updates)
                 await db.execute_raw(
-                    'UPDATE "LiteLLM_AutoRouterBaselineComparison" '
-                    "SET published_revision = revision, history = $2 WHERE scope = $1",
+                    PUBLISH_BASELINE_COMPARISON_HISTORY,
                     scope,
                     _HISTORY.dump_json(history).decode(),
                 )
@@ -591,17 +500,6 @@ class _Scope(BaseModel):
 
 
 _SCOPES: Final = TypeAdapter(tuple[_Scope, ...])
-_CLAIM_DIRTY: Final = """
-WITH candidates AS (
-    SELECT scope FROM "LiteLLM_AutoRouterBaselineComparison"
-    WHERE NOT retired AND revision <> published_revision
-      AND (attempted_at IS NULL OR attempted_at < CURRENT_TIMESTAMP - INTERVAL '30 seconds')
-    ORDER BY attempted_at NULLS FIRST, updated_at, scope LIMIT 32 FOR UPDATE SKIP LOCKED
-)
-UPDATE "LiteLLM_AutoRouterBaselineComparison" AS comparison
-SET attempted_at = CURRENT_TIMESTAMP FROM candidates
-WHERE comparison.scope = candidates.scope RETURNING comparison.scope
-"""
 
 
 async def _flush_records(
@@ -639,8 +537,8 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
         request_spend_log_flush(client)
     try:
         async with store.transaction() as db:
-            await db.execute_raw("SET LOCAL statement_timeout = 1000")
-            scopes: Final = _SCOPES.validate_python(tuple(await db.query_raw(_CLAIM_DIRTY)))
+            await db.execute_raw(SET_STATEMENT_TIMEOUT, "1000")
+            scopes: Final = _SCOPES.validate_python(tuple(await db.query_raw(CLAIM_DIRTY_BASELINE_COMPARISONS)))
         slots: Final = asyncio.Semaphore(4)
 
         async def project(item: _Scope) -> str:
