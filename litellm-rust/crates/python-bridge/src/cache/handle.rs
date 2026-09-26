@@ -1,3 +1,4 @@
+use crate::http::host_client;
 use crate::logger::run_sync_value;
 use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
@@ -19,7 +20,6 @@ use super::{
     config::{QdrantSemanticCacheConfig, project_redis_semantic},
     embedder::PythonEmbedder,
     facade::FacadeGuard,
-    host_client,
     native::NativeResponseCache,
     request::duration,
 };

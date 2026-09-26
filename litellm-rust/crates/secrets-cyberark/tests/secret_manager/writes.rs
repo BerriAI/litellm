@@ -166,7 +166,7 @@ async fn writes_match_python_parity_fixture(parity_fixture: ParityFixture) {
         .mount(&server)
         .await;
     let manager = CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         parity_fixture.account,
         parity_fixture.username,
@@ -230,7 +230,7 @@ async fn live_conjur_round_trip() {
             .as_nanos()
     );
     let manager = CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         endpoint.clone(),
         account.clone(),
         username.clone(),
@@ -245,7 +245,7 @@ async fn live_conjur_round_trip() {
             .await
             .unwrap();
         let verifier = CyberArkSecretManager::with_client(
-            reqwest::Client::new(),
+            litellm_http::Client::plain_for_test(),
             endpoint.clone(),
             account.clone(),
             username.clone(),

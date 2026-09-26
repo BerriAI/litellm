@@ -5,8 +5,8 @@ use litellm_cache::{
     BaseCache, BatchCache, BatchEntry, CacheCodec, DisconnectCache, Error, ExactCacheContext,
     FlushCache,
 };
+use litellm_http::Client;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
-use reqwest::Client;
 
 use crate::{GcpTokenSource, TokenSource};
 

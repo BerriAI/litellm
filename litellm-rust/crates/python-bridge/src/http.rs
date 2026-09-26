@@ -6,8 +6,8 @@ use std::{
 
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
-    HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    TlsSource, Unsupported,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer,
+    Resolution, SslVerify, TlsSource, Unsupported,
     media::{PublicDnsResolver, UrlPolicy},
 };
 use pyo3::{
@@ -97,7 +97,10 @@ pub(crate) fn call_config(
     let settings = HttpSettings::from_layers([
         for_call(call_ssl_verify(kwargs)?, asynchronous),
         HttpSettingsLayer::from_environment(&ProcessEnvironment),
-        configured(&PythonSettings::Http.read(py)?)?,
+        match PythonSettings::Http.read_or_unset(py)? {
+            Some(snapshot) => configured(&snapshot)?,
+            None => HttpSettingsLayer::default(),
+        },
     ])
     .without_missing_files(&|path: &Path| path.exists());
     let resolution = Resolution::from(&settings);
@@ -105,6 +108,11 @@ pub(crate) fn call_config(
         crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
     }
     Ok(resolution.config)
+}
+
+pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {
+    let config = call_config(py, &PyDict::new(py), true)?;
+    pool().client(&config, variant).map_err(client_error)
 }
 
 pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
@@ -143,7 +151,10 @@ fn unreported(
 }
 
 pub(crate) fn url_policy(py: Python<'_>) -> PyResult<UrlPolicy> {
-    project_url_policy(&PythonSettings::UrlPolicy.read(py)?)
+    match PythonSettings::UrlPolicy.read_or_unset(py)? {
+        Some(snapshot) => project_url_policy(&snapshot),
+        None => Ok(UrlPolicy::default()),
+    }
 }
 
 fn project_url_policy(snapshot: &Snapshot<'_>) -> PyResult<UrlPolicy> {

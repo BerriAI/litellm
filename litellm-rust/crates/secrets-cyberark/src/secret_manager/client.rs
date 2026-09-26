@@ -2,7 +2,7 @@ use super::*;
 
 impl CyberArkSecretManager {
     pub fn with_client(
-        client: reqwest::Client,
+        client: Client,
         endpoint: reqwest::Url,
         account: String,
         username: String,
@@ -30,6 +30,8 @@ impl CyberArkSecretManager {
     }
 
     pub fn new(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
         environment: Arc<dyn Lookup + Send + Sync>,
         enterprise_enabled: bool,
     ) -> Result<Self, Error> {
@@ -46,21 +48,34 @@ impl CyberArkSecretManager {
             .get(CYBERARK_SSL_VERIFY)
             .map(|value| !value.trim().eq_ignore_ascii_case("false"))
             .unwrap_or(true);
-        let mut builder = reqwest::Client::builder();
         if !verify {
             litellm_tracing::warn!(
                 "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
             );
-            builder = builder.danger_accept_invalid_certs(true);
         }
-        if !cert.is_empty() && !key.is_empty() {
-            let certificate = fs::read(cert).map_err(|_| Error::ClientCertificate)?;
-            let private_key = fs::read(key).map_err(|_| Error::ClientCertificate)?;
-            let identity = reqwest::Identity::from_pem(&[certificate, private_key].concat())
-                .map_err(|_| Error::ClientCertificate)?;
-            builder = builder.identity(identity);
-        }
-        let client = builder.build()?;
+        let config = HttpClientConfig {
+            verify: effective_verify(verify, &config.verify),
+            client_certificate: (!cert.is_empty() && !key.is_empty()).then(|| {
+                ClientIdentity::Split {
+                    certificate: cert.into(),
+                    key: key.into(),
+                }
+            }),
+            ..config.clone()
+        };
+        let client =
+            pool.client(&config, ClientVariant::Provider)
+                .map_err(|error| match error {
+                    litellm_http::Error::Read {
+                        tls_source: TlsSource::ClientIdentity,
+                        ..
+                    }
+                    | litellm_http::Error::InvalidPem {
+                        tls_source: TlsSource::ClientIdentity,
+                        ..
+                    } => Error::ClientCertificate,
+                    other => Error::Client(Box::new(other)),
+                })?;
         let endpoint = reqwest::Url::parse(
             &environment
                 .get(CYBERARK_API_BASE)
@@ -139,9 +154,35 @@ impl CyberArkSecretManager {
     }
 }
 
+fn effective_verify(cyberark_verify: bool, host: &Verify) -> Verify {
+    match (cyberark_verify, host) {
+        (false, _) => Verify::Disabled,
+        (true, Verify::Disabled) => Verify::BuiltInRoots,
+        (true, host) => host.clone(),
+    }
+}
+
 fn normalize_endpoint(mut endpoint: reqwest::Url) -> reqwest::Url {
     if !endpoint.path().ends_with('/') {
         endpoint.set_path(&format!("{}/", endpoint.path()));
     }
     endpoint
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn cyberark_verification_does_not_follow_a_host_that_disabled_it() {
+        let bundle = Verify::CaBundle(PathBuf::from("/ca.pem"));
+        assert_eq!(
+            effective_verify(true, &Verify::Disabled),
+            Verify::BuiltInRoots
+        );
+        assert_eq!(effective_verify(true, &bundle), bundle);
+        assert_eq!(effective_verify(false, &bundle), Verify::Disabled);
+    }
 }

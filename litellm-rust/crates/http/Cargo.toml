@@ -22,5 +22,7 @@ veil.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+rcgen = "0.14.10"
+tempfile.workspace = true
 rstest.workspace = true
 tokio.workspace = true

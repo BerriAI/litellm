@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-http.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-types.workspace = true
 litellm-cache.workspace = true
@@ -19,6 +20,7 @@ tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache-response.workspace = true
 litellm-cache-testing.workspace = true
 rstest.workspace = true

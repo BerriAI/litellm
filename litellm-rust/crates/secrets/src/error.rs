@@ -10,6 +10,8 @@ pub enum Error {
     InvalidCiphertext,
     #[error("decrypted value is not UTF-8")]
     Utf8,
+    #[error(transparent)]
+    Client(#[from] litellm_http::Error),
     #[error("unsupported OIDC provider or missing build feature")]
     UnsupportedOidc,
     #[error("OIDC reference requires a provider and audience")]

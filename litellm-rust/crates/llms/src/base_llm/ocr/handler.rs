@@ -5,7 +5,7 @@ use futures_util::future::BoxFuture;
 use litellm_auth_gcp::VertexAuth;
 use litellm_host::event::WireRequest;
 use litellm_http::{
-    ClientVariant, HttpClientConfig, HttpClientPool,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
     outbound::{OutboundRequest, RequestSigner},
     transport,
@@ -33,8 +33,8 @@ pub trait CallHooks<E>: Send + Sync {
 
 #[derive(Clone)]
 pub struct OcrClient {
-    provider_http: reqwest::Client,
-    polling_http: reqwest::Client,
+    provider_http: Client,
+    polling_http: Client,
     document_fetcher: MediaFetcher,
     vertex_auth: VertexAuth,
     settings: OcrSettings,
@@ -60,11 +60,11 @@ impl OcrClient {
         })
     }
 
-    pub fn provider_http(&self) -> &reqwest::Client {
+    pub fn provider_http(&self) -> &Client {
         &self.provider_http
     }
 
-    pub fn polling_http(&self) -> &reqwest::Client {
+    pub fn polling_http(&self) -> &Client {
         &self.polling_http
     }
 
@@ -85,17 +85,18 @@ impl OcrClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
+    pub fn for_test(provider_http: Client, no_redirect_http: Client) -> Self {
         Self {
+            secrets: Arc::new(
+                litellm_secrets::source::EnvironmentSecrets::python_compatible(
+                    provider_http.clone(),
+                ),
+            ),
             provider_http,
-            polling_http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("test polling client builds"),
-            document_fetcher: MediaFetcher::for_test(document_http),
+            polling_http: no_redirect_http.clone(),
+            document_fetcher: MediaFetcher::for_test(no_redirect_http),
             vertex_auth: VertexAuth::default(),
             settings: OcrSettings::default(),
-            secrets: Arc::new(litellm_secrets::source::EnvironmentSecrets::default()),
         }
     }
 
@@ -311,7 +312,7 @@ mod tests {
             let _connection = listener.accept().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let error = reqwest::Client::new()
+        let error = litellm_http::Client::plain_for_test()
             .get(format!("http://{address}"))
             .timeout(Duration::from_millis(10))
             .send()

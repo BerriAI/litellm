@@ -3,15 +3,26 @@
 
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
+use litellm_http::{
+    HttpClientConfig, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
+};
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
 /// A port nothing listens on, for calls that must fail before any request is sent.
 pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
+
+pub fn http_pool() -> HttpClientPool {
+    HttpClientPool::new(Arc::new(PublicDnsResolver))
+}
+
+pub fn http_config() -> HttpClientConfig {
+    Resolution::from(&HttpSettings::default()).config
+}
 
 /// Starts an upstream that answers its n-th request with the n-th response and 404s after.
 pub async fn upstream(responses: impl IntoIterator<Item = ResponseTemplate>) -> MockServer {

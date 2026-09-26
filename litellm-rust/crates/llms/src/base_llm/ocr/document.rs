@@ -184,16 +184,21 @@ mod tests {
             reqwest::header::AUTHORIZATION,
             reqwest::header::HeaderValue::from_static("Bearer provider-secret"),
         );
-        let provider_http = reqwest::Client::builder()
-            .default_headers(provider_headers)
-            .build()
-            .unwrap();
-        let document_http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        let client =
-            crate::base_llm::ocr::handler::OcrClient::for_test(provider_http, document_http);
+        #[expect(
+            clippy::disallowed_methods,
+            clippy::disallowed_types,
+            reason = "the pool has no default-header setting to stand in for provider credentials"
+        )]
+        let provider_http = litellm_http::Client::for_test(
+            reqwest::Client::builder()
+                .default_headers(provider_headers)
+                .build()
+                .unwrap(),
+        );
+        let client = crate::base_llm::ocr::handler::OcrClient::for_test(
+            provider_http,
+            litellm_http::Client::no_redirect_for_test(),
+        );
         let converted = inline_remote_document(
             client.document_fetcher(),
             OcrDocument::ImageUrl {

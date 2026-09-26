@@ -36,6 +36,7 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-auth-gcp.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

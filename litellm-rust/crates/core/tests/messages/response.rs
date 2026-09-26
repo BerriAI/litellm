@@ -190,29 +190,40 @@ fn facade_request(body: Value, api_base: &str) -> MessagesRequest<'_> {
 }
 
 #[tokio::test]
-async fn the_facade_runs_the_route_in_process() {
+async fn the_facade_sends_through_the_injected_http_pool_configuration() {
     let upstream = upstream([message_response()]).await;
     let base = upstream.uri();
+    let settings = HttpSettings {
+        user_agent: Some("host-owned/1".into()),
+        ..HttpSettings::default()
+    };
 
-    let message = messages(facade_request(
-        json!({"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}),
-        &base,
-    ))
+    let message = messages(
+        &http_pool(),
+        &Resolution::from(&settings).config,
+        facade_request(
+            json!({"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}),
+            &base,
+        ),
+    )
     .await
     .expect("messages request succeeds");
 
     assert_eq!(message.id, "msg_1");
-    assert_eq!(
-        only_request(&upstream).await.header("x-api-key"),
-        Some("sk-ant")
-    );
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.header("x-api-key"), Some("sk-ant"));
+    assert_eq!(sent.header("user-agent"), Some("host-owned/1"));
 }
 
 #[tokio::test]
 async fn the_facade_rejects_a_body_that_is_not_an_object() {
-    let error = messages(facade_request(json!([]), UNREACHABLE_BASE))
-        .await
-        .expect_err("a non-object body is rejected");
+    let error = messages(
+        &http_pool(),
+        &http_config(),
+        facade_request(json!([]), UNREACHABLE_BASE),
+    )
+    .await
+    .expect_err("a non-object body is rejected");
 
     assert_eq!(
         error,
