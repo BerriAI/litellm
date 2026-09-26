@@ -115,7 +115,7 @@ describe("AgentInfoView settings", () => {
   it("saves unrelated settings when the existing card has no description", async () => {
     const actual = await vi.importActual<typeof import("./agent_form_fields")>("./agent_form_fields");
     vi.mocked(AgentFormFields).mockImplementation(actual.default);
-    const { description: _description, ...card } = agent.agent_card_params;
+    const { description: _description, ...card } = agent.agent_card_params ?? {};
     vi.mocked(networking.getAgentInfo).mockResolvedValue({ ...agent, agent_card_params: card });
     render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
     fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
@@ -126,7 +126,7 @@ describe("AgentInfoView settings", () => {
     await waitFor(() => expect(networking.patchAgentCall).toHaveBeenCalledOnce());
     const [, , payload] = vi.mocked(networking.patchAgentCall).mock.calls[0];
     expect(payload.tpm_limit).toBe(42);
-    expect(payload.agent_card_params.description).toBe("");
+    expect(payload.agent_card_params?.description).toBe("");
   });
 
   it("sends the newly attached access group in the update payload", async () => {
