@@ -18,7 +18,7 @@ canary where the slot delivers it. Sensitivity control: the marker sent in the s
 be in the spend-log row of every outcome and in a sink event of every outcome, and each sweep must
 report it where stored prompts belong. The route sweep fills its request-id routes with the
 successful row, so the Logs drawer and the spend-log filter are also read for each failed row,
-where the marker must show too. Then no sweep may find the slot's canary anywhere.
+and the marker must show in both. Then no sweep may find the slot's canary anywhere.
 
 The requests go one at a time, and each waits for its sink event before the next is sent. The
 ``generic_api`` logger clears its whole queue after a batch POST, so an event queued while a POST
@@ -130,6 +130,7 @@ def _forward_client_headers(config: dict[str, object]) -> None:
 
 
 OPENAI_ROUTES: Final = ("chat", "chat_stream", "messages", "responses", "embeddings")
+# Slots carried by a forwarded provider auth header run on the chat-family routes.
 FORWARDED_HEADER_ROUTES: Final = ("chat", "chat_stream", "messages", "responses")
 ANTHROPIC_ROUTES: Final = ("messages", "messages_stream", "chat", "responses")
 
@@ -146,7 +147,7 @@ REQUEST_SLOTS: Final = MappingProxyType(
         ),
         "D2": RequestSlot(
             OPENAI_MODEL,
-            OPENAI_ROUTES,
+            FORWARDED_HEADER_ROUTES,
             _no_body,
             lambda value, key: {"Authorization": f"Bearer {key}", "x-api-key": value.value},
             _authorization,
@@ -476,10 +477,14 @@ def test_request_credential_reaches_only_the_provider(
         assert_marker_seen(report, {"S2": f"GET /spend/logs?{urlencode({'request_id': request_id})} as admin -> 200"})
         failure_rows: Final = _request_row_hits(rig, caller.callers(rig), failed_ids, (marker, credential))
         for failed_id in failed_ids:
-            drawer = f"GET /spend/logs/ui/{quote(failed_id, safe='')} as admin -> 200"
-            assert any(hit.slot == MARKER and hit.location == drawer for hit in failure_rows), (
-                f"Sensitivity control: the marker is missing from {drawer}"
-            )
+            for path in (
+                f"/spend/logs/ui/{quote(failed_id, safe='')}",
+                f"/spend/logs?{urlencode({'request_id': failed_id})}",
+            ):
+                where = f"GET {path} as admin -> 200"
+                assert any(hit.slot == MARKER and hit.location == where for hit in failure_rows), (
+                    f"Sensitivity control: the marker is missing from {where}"
+                )
         assert_no_hits(
             (*report.credential_hits(), *(hit for hit in failure_rows if hit.slot != MARKER)),
             f"slot {slot_id}, {endpoint.path} ({route})",
