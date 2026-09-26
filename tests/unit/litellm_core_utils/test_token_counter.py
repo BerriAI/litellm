@@ -30,7 +30,6 @@ import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
-    MAX_JPEG_FILL_BYTES,
     MAX_JPEG_HEADER_SEGMENTS,
     _get_exact_count_function,
     _get_extrapolating_count_function,
@@ -1579,19 +1578,18 @@ def test_image_dimensions_from_bytes_reads_at_most_the_segment_limit(
     assert image_dimensions_from_bytes(image) == expected
 
 
-@pytest.mark.parametrize(
-    ("fill_bytes", "expected"),
-    [
-        pytest.param(MAX_JPEG_FILL_BYTES - 1, (800, 600), id="marker-is-the-last-byte-read"),
-        pytest.param(MAX_JPEG_FILL_BYTES, None, id="marker-is-past-the-fill-byte-limit"),
-    ],
-)
-def test_image_dimensions_from_bytes_reads_at_most_the_fill_byte_limit(
-    fill_bytes: int, expected: tuple[int, int] | None
-) -> None:
-    image: Final = b"\xff\xd8" + b"\xff" * fill_bytes + _jpeg_sof(800, 600)[1:]
+def test_image_dimensions_from_bytes_reads_a_marker_that_directly_follows_a_segment() -> None:
+    image: Final = b"\xff\xd8" + _jpeg_segment(b"\xe0", b"JFIF\x00") + _jpeg_sof(800, 600)[1:]
 
-    assert image_dimensions_from_bytes(image) == expected
+    assert image_dimensions_from_bytes(image) == (800, 600)
+
+
+@pytest.mark.parametrize("fill_bytes", [0, 1, 1024, 1025, 4 * 1024 * 1024])
+def test_image_dimensions_from_bytes_skips_any_number_of_fill_bytes_before_a_marker(fill_bytes: int) -> None:
+    image: Final = b"\xff\xd8" + b"\xff" * fill_bytes + _jpeg_sof(800, 600)
+
+    assert image_dimensions_from_bytes(image) == (800, 600)
+    assert get_image_dimensions(data="data:image/jpeg;base64," + base64.b64encode(image).decode()) == (800, 600)
 
 
 def test_image_dimensions_from_bytes_gives_up_on_a_segment_length_below_two() -> None:
@@ -1603,6 +1601,8 @@ def test_image_dimensions_from_bytes_gives_up_on_a_segment_length_below_two() ->
     [
         pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00", id="png-truncated"),
         pytest.param(b"\xff\xd8\xff\xe0\x00\x10JFIF", id="jpeg-truncated"),
+        pytest.param(b"\xff\xd8" + b"\xff" * 10, id="jpeg-ends-in-a-short-fill-run"),
+        pytest.param(b"\xff\xd8" + b"\xff" * 2000, id="jpeg-ends-in-a-long-fill-run"),
     ],
 )
 def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes) -> None:
@@ -1617,9 +1617,6 @@ def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes)
         pytest.param(
             b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * MAX_JPEG_HEADER_SEGMENTS + _jpeg_sof(800, 600),
             id="too-many-jpeg-segments",
-        ),
-        pytest.param(
-            b"\xff\xd8" + b"\xff" * MAX_JPEG_FILL_BYTES + _jpeg_sof(800, 600)[1:], id="too-many-jpeg-fill-bytes"
         ),
         pytest.param(b"\xff\xd8\xff\xe0\x00\x01\x02" + _jpeg_sof(800, 600), id="jpeg-segment-length-one"),
     ],

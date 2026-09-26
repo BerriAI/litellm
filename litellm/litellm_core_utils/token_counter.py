@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for token counting
 import base64
-import io
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
@@ -55,7 +55,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Message, SelectTokenizerResponse
 
 MAX_JPEG_HEADER_SEGMENTS: Final = 1024
-MAX_JPEG_FILL_BYTES: Final = 1024
+_JPEG_MARKER_BYTE: Final = re.compile(rb"[^\xff]")
 
 
 def get_modified_max_tokens(
@@ -293,29 +293,23 @@ def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
 
 
 def _jpeg_dimensions(img_data: bytes) -> tuple[int, int] | None:
-    with io.BytesIO(img_data) as fhandle:
-        fhandle.seek(2)
-        for _ in range(MAX_JPEG_HEADER_SEGMENTS):
-            marker = _next_jpeg_marker(fhandle)
-            if marker is None:
-                return None
-            segment_length = _unpack_ints(">H", fhandle.read(2))[0]
-            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                fhandle.seek(1, 1)
-                h, w = _unpack_ints(">HH", fhandle.read(4))
-                return w, h
-            if segment_length < 2:
-                return None
-            fhandle.seek(segment_length - 2, 1)
+    position = 2
+    for _ in range(MAX_JPEG_HEADER_SEGMENTS):
+        marker_offset = _next_jpeg_marker_offset(img_data, position)
+        marker = ord(img_data[marker_offset : marker_offset + 1])
+        segment_length = _unpack_ints(">H", img_data[marker_offset + 1 : marker_offset + 3])[0]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            h, w = _unpack_ints(">HH", img_data[marker_offset + 4 : marker_offset + 8])
+            return w, h
+        if segment_length < 2:
+            return None
+        position = marker_offset + 1 + segment_length
     return None
 
 
-def _next_jpeg_marker(fhandle: io.BytesIO) -> int | None:
-    for _ in range(MAX_JPEG_FILL_BYTES):
-        byte = fhandle.read(1)
-        if byte != b"\xff":
-            return ord(byte)
-    return None
+def _next_jpeg_marker_offset(img_data: bytes, position: int) -> int:
+    marker_byte: Final = _JPEG_MARKER_BYTE.search(img_data, position)
+    return len(img_data) if marker_byte is None else marker_byte.start()
 
 
 def calculate_img_tokens(
