@@ -695,6 +695,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         tools: list | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
+        on_messages_route: bool = False,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -704,10 +705,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         envelope. Configured injection points are an explicit instruction and are
         applied alongside the client's marks, bounded by the provider cap.
         """
-        return (
-            AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
-            + AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs)
-        ) > 0
+        external_breakpoints: Final = (
+            AnthropicCacheControlHook.count_external_cache_breakpoints_on_messages_route(
+                tools, cache_control, request_kwargs
+            )
+            if on_messages_route
+            else AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs)
+        )
+        return AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) + external_breakpoints > 0
 
     @staticmethod
     def get_default_injection_points(
@@ -719,6 +724,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         enable_prompt_caching: bool | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
+        on_messages_route: bool = False,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -739,7 +745,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_anthropic_cache_control(model, custom_llm_provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control, request_kwargs):
+        if AnthropicCacheControlHook._request_has_cache_control(
+            messages, system, tools, cache_control, request_kwargs, on_messages_route
+        ):
             return []
 
         if is_claude_code_one_shot_subagent_request(
@@ -968,6 +976,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 enable_prompt_caching=enable_prompt_caching,
                 cache_control=cache_control,
                 request_kwargs=kwargs,
+                on_messages_route=True,
             )
             if model is not None
             else ()
