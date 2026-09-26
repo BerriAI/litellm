@@ -1,6 +1,8 @@
 import { ImageIcon } from "lucide-react";
 import React, { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+
 type MarkdownImageProps = Pick<React.ComponentPropsWithoutRef<"img">, "src" | "alt" | "title">;
 
 type ImageSource = { readonly label: string; readonly tooltip: string | undefined };
@@ -27,19 +29,21 @@ export function MarkdownImage({ src, alt, title }: MarkdownImageProps) {
 
   const source = describeImageSource(src);
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="sm"
       onClick={(event) => {
         event.preventDefault();
         setLoaded(true);
       }}
       title={source.tooltip}
-      className="inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-sm text-foreground hover:bg-accent"
+      className="max-w-full font-normal"
     >
-      <ImageIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <ImageIcon className="text-muted-foreground" aria-hidden="true" />
       <span className="truncate">{alt || "Image"}</span>{" "}
       <span className="truncate text-muted-foreground">{source.label}</span>{" "}
       <span className="shrink-0 font-medium">Load image</span>
-    </button>
+    </Button>
   );
 }
