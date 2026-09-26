@@ -87,7 +87,7 @@ fn sse_response() -> ResponseTemplate {
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
 #[rstest]

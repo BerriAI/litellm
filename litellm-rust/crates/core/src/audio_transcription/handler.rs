@@ -1,10 +1,16 @@
-use litellm_http::request::truncate_error_body;
+use std::time::Duration;
+
+use litellm_http::{Client, request::truncate_error_body};
 use serde_json::Value;
 
-use super::{Error, client::http_client};
-use crate::audio_transcription::types::ProviderAudioTranscriptionRequest;
+use super::Error;
+use crate::{
+    audio_transcription::types::ProviderAudioTranscriptionRequest,
+    constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS,
+};
 
 pub async fn execute_audio_transcription_provider_call(
+    http: &Client,
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
     let response = crate::outbound::outbound_request::<Error>(
@@ -12,11 +18,15 @@ pub async fn execute_audio_transcription_provider_call(
         request.url.clone(),
         request.upstream_headers.clone(),
         &request.body,
-        request.timeout,
+        Some(
+            request
+                .timeout
+                .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
+        ),
         &request.optional_params,
     )
     .await?
-    .send(http_client())
+    .send(http)
     .await
     .map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))

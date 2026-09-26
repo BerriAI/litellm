@@ -2,10 +2,13 @@ mod client;
 mod read;
 mod write;
 
-use std::{fs, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
+use litellm_http::{
+    Client, ClientIdentity, ClientVariant, HttpClientConfig, HttpClientPool, TlsSource, Verify,
+};
 use litellm_secrets_types::{
     BaseSecretManager, CyberarkOperationContext, RotationError, SecretCache, SecretDeleter,
     SecretRotator, SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret,
@@ -37,7 +40,7 @@ const SECRET_NAME_SAFE: &AsciiSet = &NON_ALPHANUMERIC
 
 #[derive(Clone)]
 pub struct CyberArkSecretManager {
-    client: reqwest::Client,
+    client: Client,
     endpoint: reqwest::Url,
     account: String,
     username: String,

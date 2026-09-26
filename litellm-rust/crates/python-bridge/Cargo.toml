@@ -62,6 +62,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 url.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-secrets-aws.workspace = true
 serde.workspace = true
 serde_with.workspace = true

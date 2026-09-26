@@ -450,7 +450,7 @@ fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, E
 }
 
 async fn read_operation_response(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     response: reqwest::Response,
     original_url: &str,
     headers: &[(String, String)],
@@ -489,7 +489,7 @@ async fn read_operation_response(
 }
 
 async fn poll_operation(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     url: Url,
     headers: &[(String, String)],
     connection: &OcrConnection,

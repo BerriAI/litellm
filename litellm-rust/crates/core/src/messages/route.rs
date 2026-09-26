@@ -12,6 +12,7 @@ use litellm_host::{
     machine::{CallMachine, HostChannel, MachineFault},
     protocol::Protocol,
 };
+use litellm_http::{Client, ClientVariant, HttpClientConfig, HttpClientPool};
 use litellm_secrets::source::SecretSource;
 use litellm_types::{
     llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
@@ -108,12 +109,20 @@ impl Host<Messages> for LocalMessagesHost {
     }
 }
 
-pub fn messages_machine(secrets: Arc<dyn SecretSource>) -> MessagesMachine {
-    CallMachine::new(move |host| Box::pin(execute(host, secrets.clone())))
+pub fn messages_machine(
+    pool: &HttpClientPool,
+    config: &HttpClientConfig,
+    secrets: Arc<dyn SecretSource>,
+) -> Result<MessagesMachine, litellm_http::Error> {
+    let http = pool.client(config, ClientVariant::Provider)?;
+    Ok(CallMachine::new(move |host| {
+        Box::pin(execute(host, http.clone(), secrets.clone()))
+    }))
 }
 
 async fn execute(
     host: MessagesHost,
+    http: Client,
     secrets: Arc<dyn SecretSource>,
 ) -> Result<MessagesOutput, Error> {
     let call = host.project().await?;
@@ -164,7 +173,7 @@ async fn execute(
             context,
         )
         .await?;
-    let response = send(&wire.url, &wire.headers, &wire.body, request.timeout).await?;
+    let response = send(&http, &wire.url, &wire.headers, &wire.body, request.timeout).await?;
     if !response.status().is_success() {
         return Err(provider_error(response).await);
     }

@@ -1,4 +1,4 @@
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyModuleNotFoundError, prelude::*};
 
 use crate::coercion::{FieldSpec, ProjectionError};
 
@@ -38,6 +38,16 @@ impl PythonSettings {
     pub(crate) fn read(self, py: Python<'_>) -> PyResult<Snapshot<'_>> {
         let value = py.import(MODULE)?.getattr(self.name())?.call0()?;
         Ok(Snapshot { group: self, value })
+    }
+
+    /// Reads the accessor, or `None` when the litellm package is not installed
+    /// (a bare extension module), meaning there are no configured values.
+    pub(crate) fn read_or_unset(self, py: Python<'_>) -> PyResult<Option<Snapshot<'_>>> {
+        match self.read(py) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(error) if error.is_instance_of::<PyModuleNotFoundError>(py) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     #[cfg(test)]
