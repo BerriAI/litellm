@@ -3328,7 +3328,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, browser]
+              suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, security, browser]
       - integration_contracts:
           name: integration-<< matrix.suite >>-replica
           matrix:
