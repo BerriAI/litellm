@@ -29,6 +29,9 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
+    CacheLeakageKeyRow,
+    CacheLeakageMetadata,
+    CacheLeakageResponse,
     DailySpendData,
     DailySpendMetadata,
     GroupedData,
@@ -1834,3 +1837,143 @@ async def get_daily_activity_aggregated(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
         )
+
+
+class _CacheLeakageRow(SimpleNamespace):
+    api_key: str
+    prompt_tokens: int | None
+    cache_read_input_tokens: int | None
+    cache_creation_input_tokens: int | None
+    prompt_caching_savings_spend: float | None
+    uncached_prompt_tokens: int | None
+    total_api_keys: int | None
+    total_cached_tokens: int | None
+    total_prompt_caching_savings_spend: float | None
+
+
+def _build_cache_leakage_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    limit: int,
+) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
+    """Rank every matching key by uncached prompt tokens, on the aggregated path's WHERE clause.
+
+    The window totals run before LIMIT, so total_api_keys, total_cached_tokens and
+    total_prompt_caching_savings_spend cover the whole visible key set, not only the
+    rows the limit returns. That is what the aggregated path cannot answer: its
+    per-key arm ranks by spend and caps at USAGE_TOP_API_KEYS_LIMIT, hiding a
+    low-spend key that leaks the most.
+    """
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=None,
+        api_key=None,
+        exclude_entity_ids=None,
+    )
+    sentinel_param: Final = f"${len(where_params) + 1}"
+
+    sql_query: Final = f"""
+        WITH per_key AS (
+            SELECT api_key,
+                COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+                COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read_input_tokens,
+                COALESCE(SUM(cache_creation_input_tokens), 0)::bigint AS cache_creation_input_tokens,
+                COALESCE(SUM(prompt_caching_savings_spend), 0)::double precision AS prompt_caching_savings_spend
+            FROM "{pg_table}"
+            WHERE {where_clause} AND api_key <> {sentinel_param}
+            GROUP BY api_key
+        )
+        SELECT api_key, prompt_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+            prompt_caching_savings_spend,
+            GREATEST(prompt_tokens - cache_read_input_tokens - cache_creation_input_tokens, 0) AS uncached_prompt_tokens,
+            COUNT(*) OVER () AS total_api_keys,
+            SUM(cache_read_input_tokens + cache_creation_input_tokens) OVER () AS total_cached_tokens,
+            SUM(prompt_caching_savings_spend) OVER () AS total_prompt_caching_savings_spend
+        FROM per_key
+        ORDER BY uncached_prompt_tokens DESC, api_key
+        LIMIT {int(limit)}
+    """
+
+    return sql_query, [*where_params, PTU_SENTINEL_API_KEY]
+
+
+def _cache_leakage_key_row(
+    record: _CacheLeakageRow,
+    api_key_metadata: Mapping[str, _KeyMetadataDict],
+) -> CacheLeakageKeyRow:
+    prompt_tokens: Final = record.prompt_tokens or 0
+    cache_read_tokens: Final = record.cache_read_input_tokens or 0
+    metadata: Final = _key_metadata(api_key_metadata, record.api_key)
+    return CacheLeakageKeyRow(
+        api_key=record.api_key,
+        key_alias=metadata.key_alias,
+        team_id=metadata.team_id,
+        prompt_tokens=prompt_tokens,
+        cache_read_input_tokens=cache_read_tokens,
+        cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        uncached_prompt_tokens=record.uncached_prompt_tokens or 0,
+        cache_hit_ratio=(cache_read_tokens / prompt_tokens) if prompt_tokens > 0 else 0.0,
+        prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0.0,
+    )
+
+
+async def get_daily_activity_cache_leakage(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    limit: int,
+) -> CacheLeakageResponse:
+    sql_query, sql_params = _build_cache_leakage_sql_query(
+        table_name=table_name,
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_offset_minutes=timezone_offset_minutes,
+        include_current_utc_day=include_current_utc_day,
+        limit=limit,
+    )
+    raw_rows: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+    records: Final = tuple(_CacheLeakageRow(**row) for row in (raw_rows or ()))
+
+    api_keys: Final = frozenset(record.api_key for record in records)
+    api_key_metadata: Final = (
+        await get_api_key_metadata(prisma_client, api_keys, _spend_logs_window(frozenset({start_date, end_date})))
+        if api_keys
+        else _EMPTY_KEY_METADATA
+    )
+
+    first: Final = records[0] if records else None
+    return CacheLeakageResponse(
+        results=[_cache_leakage_key_row(record, api_key_metadata) for record in records],
+        metadata=CacheLeakageMetadata(
+            total_api_keys=(first.total_api_keys or 0) if first is not None else 0,
+            limit=limit,
+            total_cached_tokens=(first.total_cached_tokens or 0) if first is not None else 0,
+            total_prompt_caching_savings_spend=(first.total_prompt_caching_savings_spend or 0.0)
+            if first is not None
+            else 0.0,
+        ),
+    )

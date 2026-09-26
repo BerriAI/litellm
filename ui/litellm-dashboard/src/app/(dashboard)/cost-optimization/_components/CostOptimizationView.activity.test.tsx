@@ -20,6 +20,7 @@ vi.mock("@/components/networking", () => ({
   getToolSpend: vi.fn().mockResolvedValue(mockToolSpendResponse),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   organizationListCall: vi.fn().mockResolvedValue([]),
+  formatDate: vi.fn((d: Date) => d.toISOString().slice(0, 10)),
 }));
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({

@@ -16,9 +16,10 @@ import { DailyActivityRange } from "./useDailyActivityRange";
 interface PromptCachingTabProps {
   accessToken: string | null;
   activity: DailyActivityRange;
+  scopeUserId: string | null;
 }
 
-const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activity }) => {
+const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activity, scopeUserId }) => {
   const [settings, setSettings] = useState<generalSettingsItem[]>([]);
 
   const loadSettings = useCallback(() => {
@@ -55,7 +56,7 @@ const PromptCachingTab: React.FC<PromptCachingTabProps> = ({ accessToken, activi
         <AdvancedDatePicker value={activity.dateValue} onValueChange={activity.onDateChange} />
       </div>
       <PromptCachingRequestsTable accessToken={accessToken} dateValue={activity.dateValue} />
-      <CacheLeakageCard activity={activity} />
+      <CacheLeakageCard activity={activity} accessToken={accessToken} scopeUserId={scopeUserId} />
     </div>
   );
 };
