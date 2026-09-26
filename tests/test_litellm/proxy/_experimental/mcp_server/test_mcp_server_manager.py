@@ -7088,6 +7088,9 @@ class TestMCPServerManager:
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm"),
             )
 
+        caller: Final = ListedToolsCaller(mcp_auth_header="Bearer hdr")
+        listed = manager.get_listed_tool(server, "turn", caller)
+        assert listed is not None and listed.description == "t"
         assert manager._create_mcp_client.await_args.kwargs["mcp_auth_header"] == "Bearer hdr"
 
     @pytest.mark.parametrize(
