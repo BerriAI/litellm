@@ -1,20 +1,24 @@
-use litellm_http::{outbound::OutboundRequest, request::truncate_error_body};
+use std::time::Duration;
+
+use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
 use litellm_llms::base_llm::chat::transformation::ProviderChatResponseData;
 use litellm_types::utils::ChatCompletionsResponse;
 use serde_json::Value;
 
-use super::{Error, client::http_client, prepare::prepare_provider_request};
-use crate::chat_completions::types::{
-    ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
+use super::{Error, prepare::prepare_provider_request};
+use crate::{
+    chat_completions::types::{ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest},
+    constants::CHAT_COMPLETIONS_TIMEOUT_SECS,
 };
 
 pub(super) async fn execute_chat_completions_provider_call(
+    http: &Client,
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
     let outbound = outbound_request(&request).await?;
 
-    let response = outbound.send(http_client()).await.map_err(|err| {
+    let response = outbound.send(http).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.
@@ -72,7 +76,11 @@ pub(super) async fn outbound_request(
         request.url.clone(),
         request.upstream_headers.clone(),
         &request.body,
-        request.timeout,
+        Some(
+            request
+                .timeout
+                .unwrap_or(Duration::from_secs(CHAT_COMPLETIONS_TIMEOUT_SECS)),
+        ),
         &request.optional_params,
     )
     .await
@@ -84,4 +92,30 @@ pub(super) async fn outbound_request(
         }
         other => other,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, as_response_error};
+
+    #[test]
+    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
+        for original in [
+            Error::MissingField("usage"),
+            Error::Unsupported("non-text response content block"),
+            Error::InvalidRequest("whatever".to_string()),
+            Error::Auth(litellm_auth::Error::InvalidHeader),
+        ] {
+            let label = format!("{original:?}");
+            assert!(
+                matches!(as_response_error(original), Error::InvalidResponse(_)),
+                "{label} must not stay retryable once the provider has answered"
+            );
+        }
+        let upstream = Error::Transport(litellm_http::transport::Error::Http {
+            status: 500,
+            body: "boom".to_string(),
+        });
+        assert_eq!(as_response_error(upstream.clone()), upstream);
+    }
 }

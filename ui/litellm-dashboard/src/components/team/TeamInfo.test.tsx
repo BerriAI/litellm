@@ -55,6 +55,12 @@ vi.mock("@/components/networking", () => ({
   getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
 }));
 
+const { bulkUpdatePOST } = vi.hoisted(() => ({ bulkUpdatePOST: vi.fn() }));
+vi.mock("@/lib/http/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/http/api")>();
+  return { ...actual, fetchClient: { ...actual.fetchClient, POST: bulkUpdatePOST } };
+});
+
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
