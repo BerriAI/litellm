@@ -605,10 +605,11 @@ class ScanningGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
-        messages = list(data["messages"])
+    ) -> Exception | str | dict[str, object] | None:
+        messages = data["messages"]
+        assert isinstance(messages, list)
         self.seen_messages.append(messages)
         self.seen_team_ids.append(user_api_key_dict.team_id)
         self.seen_requests.append(dict(data))
