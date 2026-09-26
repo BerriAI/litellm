@@ -1,15 +1,4 @@
-"""Discovery-time guard for an MCP server's tool catalog.
-
-Every ``tools/list`` turns the upstream catalog into the served one in three steps. The
-pinned catalog comes first for servers whose admin snapshotted the upstream tool list: only
-pinned tools are served, a tool whose upstream description or input schema drifted is served
-with its pinned text, and the drift is reported once per distinct diff. The admin's
-description overrides are applied next, on top of the pin, so editing one never reads as
-drift and an upstream swap is reported even when an override hides it. The ``pre_mcp_call``
-guardrails then scan what is about to be served, each tool's description and input schema as
-a ``list_mcp_tools`` payload, so a blocked tool leaves the listing and a masked description
-is what the client sees whatever text it came from.
-"""
+"""Discovery-time guard for an MCP server's tool catalog."""
 
 from __future__ import annotations
 

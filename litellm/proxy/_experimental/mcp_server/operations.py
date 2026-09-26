@@ -614,9 +614,7 @@ def apply_display_name_overrides(
     tools: list[MCPTool],
     mcp_server: MCPServer,
 ) -> list[MCPTool]:
-    """Apply admin-configured display name overrides, keyed by the unprefixed tool
-    name like allowed_tools. Description overrides are applied by the catalog guard
-    before the discovery scan, so the guardrails see the text the client will."""
+    """Apply admin-configured display name overrides, keyed by the unprefixed tool name like allowed_tools."""
     display_name_map: Final = mcp_server.tool_name_to_display_name or {}
     if not display_name_map:
         return tools
