@@ -1681,7 +1681,7 @@ class LiteLLMCompletionResponsesConfig:
                 type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=serialize_tool_call_arguments(function.get("arguments")),
+                    arguments=serialize_tool_call_arguments(function.get("arguments"), "{}"),
                 ),
                 index=0,
             )
@@ -2774,7 +2774,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=serialize_tool_call_arguments(tool_call.get("arguments")),
+                arguments=serialize_tool_call_arguments(tool_call.get("arguments"), "{}"),
             ),
         )
 

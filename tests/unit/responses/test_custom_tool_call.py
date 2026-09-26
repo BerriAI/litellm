@@ -18,6 +18,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import (
+    serialize_tool_call_arguments,
     extract_custom_tool_names,
     is_custom_tool_call,
     openai_shaped_tool_call_item_id,
@@ -89,6 +90,15 @@ class TestCustomToolUtilities:
         custom_names = {"apply_patch"}
         assert is_custom_tool_call("regular_tool", custom_names) is False
         assert is_custom_tool_call("unknown_tool", custom_names) is False
+
+    def test_serialize_tool_call_arguments_empty_defaults_to_json_object(self):
+        """Test that empty, None, and dict arguments serialize to valid JSON '{}' when requested."""
+        assert serialize_tool_call_arguments(None) == ""
+        assert serialize_tool_call_arguments(None, "{}") == "{}"
+        assert serialize_tool_call_arguments("", "{}") == "{}"
+        assert serialize_tool_call_arguments({}) == "{}"
+        assert serialize_tool_call_arguments('{"key": "value"}') == '{"key": "value"}'
+        assert serialize_tool_call_arguments({"key": "value"}) == '{"key": "value"}'
 
     def test_unwrap_custom_tool_arguments(self):
         """Test unwrapping of JSON-wrapped arguments."""
