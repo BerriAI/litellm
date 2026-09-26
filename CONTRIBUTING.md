@@ -14,7 +14,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
-  - [ ] [The tests covering your change](#running-unit-tests) pass, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. CI runs the full unit test matrix, so you don't need to run the whole suite locally
+  - [ ] [The tests covering your change](#running-unit-tests) pass, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. CI runs the full unit test matrix, so you don't need to run the whole suite locally
 
 #### UI PRs
 
@@ -72,7 +72,7 @@ make format
 make lint
 
 # Run the tests covering your change (CI runs the full suite)
-uv run pytest tests/test_litellm/<your_test_file>.py -v
+uv run pytest tests/unit/<your_test_file>.py -v
 
 # Commit your changes (must follow Conventional Commits — see above)
 git add .
@@ -88,7 +88,7 @@ git push origin feature/your-feature
 
 ### Where to Add Tests
 
-Add your tests to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/test_litellm).
+Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litellm/tree/main/tests/unit).
 
 - This directory mirrors the structure of the `litellm/` directory
 - **Only add mocked tests** - no real LLM API calls in this directory
@@ -96,10 +96,10 @@ Add your tests to the [`tests/test_litellm/` directory](https://github.com/Berri
 
 ### File Naming Convention
 
-The `tests/test_litellm/` directory follows the same structure as `litellm/`:
+The `tests/unit/` directory follows the same structure as `litellm/`:
 
 - `litellm/proxy/caching_routes.py` → `tests/test_litellm/proxy/test_caching_routes.py`
-- `litellm/utils.py` → `tests/test_litellm/test_utils.py`
+- `litellm/utils.py` → `tests/unit/test_utils.py`
 
 ### Example Test
 
@@ -125,10 +125,10 @@ def test_your_feature():
 
 Run the tests covering your change:
 ```bash
-uv run pytest tests/test_litellm/test_your_file.py -v
+uv run pytest tests/unit/test_your_file.py -v
 ```
 
-`tests/test_litellm` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
+`tests/unit` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
 
 If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
 
