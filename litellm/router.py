@@ -69,6 +69,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
@@ -7196,7 +7197,7 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None:
+        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e):
             raise e
 
         input_kwargs: Final = {
@@ -7610,6 +7611,8 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
+            if is_guardrail_intervention(e):
+                raise
             current_attempt = None
             original_exception = e
             deployment_num_retries: Final = getattr(e, "num_retries", None)

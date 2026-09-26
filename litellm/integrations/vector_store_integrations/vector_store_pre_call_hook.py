@@ -46,6 +46,16 @@ else:
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
 _FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
+_STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _scan_request(model: str, non_default_params: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        proxy_request: Final = _STR_KEYED_ADAPTER.validate_python(non_default_params.get("proxy_server_request"))
+        client_body: Final = _STR_KEYED_ADAPTER.validate_python(proxy_request.get("body"))
+    except ValidationError:
+        return {**non_default_params, "model": model}
+    return {**non_default_params, **client_body}
 
 
 class ProxyRuntime(Protocol):
@@ -192,15 +202,15 @@ class VectorStorePreCallHook(CustomLogger):
         non_default_params: Mapping[str, object],
         context_messages: Sequence[AllMessageValues],
     ) -> tuple[AllMessageValues, ...]:
+        request_data: Final = _scan_request(model, non_default_params)
         guardrails: Final = tuple(
             callback
             for callback in litellm.callbacks
             if isinstance(callback, CustomGuardrail)
-            and callback.should_run_guardrail(data=non_default_params, event_type=GuardrailEventHooks.pre_call)
+            and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.pre_call)
         )
         if not guardrails:
             return tuple(context_messages)
-        request_data: Final = {**non_default_params, "model": model}
         scanned: Final = [
             await self._scan_through(guardrails=guardrails, request_data=request_data, messages=(context_message,))
             for context_message in context_messages

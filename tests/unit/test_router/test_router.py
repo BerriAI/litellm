@@ -24,7 +24,7 @@ import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -18315,3 +18315,37 @@ def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_co
 
     assert router._has_content_policy_fallback("claude-sonnet-4-6", {}) is True
     assert router._has_content_policy_fallback("claude-haiku-4-5", {}) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        GuardrailRaisedException(guardrail_name="chunk-scanner", message="blocked"),
+        HTTPException(status_code=403, detail={"error": "blocked", "guardrail_name": "chunk-scanner"}),
+        ModifyResponseException(
+            message="blocked", model="primary", request_data={}, guardrail_name="chunk-scanner"
+        ),
+    ],
+)
+async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: Exception) -> None:
+    async def fake_acompletion(**kwargs):
+        if kwargs["metadata"]["model_group"] == "primary":
+            raise verdict
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-sibling", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1"]}],
+        num_retries=2,
+    )
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as mock_acompletion:
+        with pytest.raises(type(verdict)):
+            await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]

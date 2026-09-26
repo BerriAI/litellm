@@ -870,6 +870,14 @@ class CustomGuardrail(CustomLogger):
                 data=scan_request,
                 call_type="acompletion",
             )
+        except SensitiveDataRouteException as e:
+            unroutable: Final = pre_call_rejection(
+                f"{e.guardrail_name or self.guardrail_name} asked to reroute the request to {e.route_to_model} "
+                "over retrieved content; a request cannot be rerouted after retrieval, so it was blocked",
+                self.guardrail_name,
+            )
+            enrich_http_exception_with_guardrail_context(unroutable, self)
+            raise unroutable from e
         except Exception as e:
             enrich_http_exception_with_guardrail_context(e, self)
             raise
