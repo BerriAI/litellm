@@ -8503,12 +8503,22 @@ async def test_upstream_error_body_for_log_masks_a_pem_after_a_json_escaped_newl
     "body",
     [
         '{"error":{"message":"-----BEGIN PRIVATE KEY----- header is missing from the uploaded credentials file please re-upload it"}}',
+        "-----BEGIN PRIVATE KEY----- misconfigurationdetected in the uploaded credentials file",
+        "-----BEGIN PRIVATE KEY----- header missing see https://cloud.google.com/docs/authentication/getting-started for details",
         "Invalid JWT Signature. The private_key field must start with -----BEGIN PRIVATE KEY----- and contain the PEM encoded key from your service account JSON file",
         "-----BEGIN RSA PRIVATE KEY----- block could not be parsed",
         "No key could be detected. Expected -----BEGIN PRIVATE KEY----- header in the service account JSON field private_key",
         "private_key must start with -----BEGIN PRIVATE KEY----- and end with -----END PRIVATE KEY-----",
     ],
-    ids=["missing-header", "jwt-signature", "rsa-parse", "expected-header", "must-start-with"],
+    ids=[
+        "missing-header",
+        "one-token-then-prose",
+        "header-then-url",
+        "jwt-signature",
+        "rsa-parse",
+        "expected-header",
+        "must-start-with",
+    ],
 )
 async def test_upstream_error_body_for_log_keeps_prose_mentioning_a_pem_header(body: str):
     """Error prose that mentions a PEM header without key material must reach the
@@ -8517,6 +8527,28 @@ async def test_upstream_error_body_for_log_keeps_prose_mentioning_a_pem_header(b
     output: Final = _upstream_error_body_for_log(body.encode(), "utf-8", redact_secrets)
     expected: Final = redact_secrets(_sanitize_upstream_error_body(body))
     assert output == expected, output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("escaping", ["real-newlines", "json-escaped"], ids=["real-newlines", "json-escaped"])
+async def test_upstream_error_body_for_log_masks_a_pem_wrapped_in_short_lines(escaping: str):
+    """A PEM wrapped at 20-24 chars per line sanitizes into space-separated
+    base64 tokens; the mask must still find it and cut the whole block."""
+    line_len: Final = 20 if escaping == "real-newlines" else 24
+    separator: Final = "\n" if escaping == "real-newlines" else "\\n"
+    key_body: Final = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7" * 85
+    lines: Final = tuple(key_body[i : i + line_len] for i in range(0, len(key_body), line_len))
+    pem: Final = (
+        "-----BEGIN PRIVATE KEY-----" + separator + separator.join(lines) + separator + "-----END PRIVATE KEY-----"
+    )
+    preview: Final = ('{"error":{"detail":"bad credentials ' + pem + '","status":500}}').encode()
+    assert len(pem) > 4352, len(pem)
+    output: Final = _upstream_error_body_for_log(preview, "utf-8", redact_secrets)
+    assert "MIIE" not in output, output
+    assert lines[0] not in output, output
+    assert "-----BEGIN" not in output, output
+    assert "bad credentials" in output, output
+    assert output.removesuffix(_TRUNCATION_MARKER).rstrip().endswith("REDACTED"), output
 
 
 @pytest.mark.asyncio
