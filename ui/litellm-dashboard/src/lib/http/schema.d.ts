@@ -41723,6 +41723,14 @@ export interface components {
             /** Run Id */
             run_id: string;
         };
+        /** SCIMAgentUser */
+        SCIMAgentUser: {
+            /**
+             * Identityparentid
+             * Format: uuid
+             */
+            identityParentId: string;
+        };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
             /** Costcenter */
@@ -41936,6 +41944,7 @@ export interface components {
             /** Schemas */
             schemas: string[];
             "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"?: components["schemas"]["SCIMEnterpriseUser"] | null;
+            "urn:ietf:params:scim:schemas:extension:litellmAgent:2.0:User"?: components["schemas"]["SCIMAgentUser"] | null;
             /** Username */
             userName?: string | null;
         };
