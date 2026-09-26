@@ -69,13 +69,10 @@ impl Host<Messages> for RecordingStreamHost {
 }
 
 fn streaming(call: MessagesCall, api_base: String) -> MessagesCall {
-    let mut body = call.body.clone();
-    body.insert("stream".into(), json!(true));
     MessagesCall {
         api_key: Some("sk-ant".into()),
         api_base: Some(api_base),
-        body,
-        ..call
+        ..with_fields(call, json!({"stream": true}))
     }
 }
 
@@ -243,7 +240,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
 
 #[rstest]
 #[tokio::test]
-async fn streaming_is_refused_for_providers_that_cannot_stream(call: MessagesCall) {
+async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
     let upstream = upstream([sse_response()]).await;
     let host = RecordingStreamHost::new(
         MessagesCall {
@@ -253,14 +250,17 @@ async fn streaming_is_refused_for_providers_that_cannot_stream(call: MessagesCal
         usize::MAX,
     );
 
-    let error = stream_through(&host)
-        .await
-        .err()
-        .expect("azure streaming is refused");
+    let outcome = stream_through(&host).await.expect("azure streams");
 
-    assert_eq!(
-        error,
-        Error::Unsupported("streaming messages for this provider")
-    );
-    assert!(received(&upstream).await.is_empty());
+    assert!(matches!(outcome, MessagesOutput::Streamed));
+    let seen = host.seen.into_inner().unwrap();
+    let delivered: Vec<u8> = seen
+        .iter()
+        .filter_map(|step| match step {
+            Seen::Deliver(chunk) => Some(chunk.to_vec()),
+            Seen::Open(_) => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(delivered, SSE_BODY.as_bytes());
 }

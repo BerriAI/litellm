@@ -1,3 +1,4 @@
+use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
@@ -9,13 +10,22 @@ use litellm_types::{
 use serde_json::{Map, Value, json};
 
 use crate::{
+    Error,
     anthropic::{
         ANTHROPIC_OAUTH_TOKEN_PREFIX,
+        chat::handler::ModelResponseIterator,
         messages::transformation::{complete_anthropic_url, resolve_anthropic_api_key},
     },
-    base_llm::chat::transformation::{
-        BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,
-        Unsupported, unsupported_message, unsupported_param,
+    base_llm::{
+        anthropic_messages::streaming::anthropic_sse_event_stream,
+        auth::AuthScheme,
+        chat::{
+            streaming::{ChatStream, StreamShape},
+            transformation::{
+                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+            },
+        },
     },
 };
 
@@ -40,6 +50,15 @@ pub struct AnthropicConfig;
 
 pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicConfig = AnthropicConfig;
 
+fn forwards_oauth_bearer(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization")
+            && value
+                .strip_prefix("Bearer ")
+                .is_some_and(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
+    })
+}
+
 impl BaseConfig for AnthropicConfig {
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
@@ -63,6 +82,7 @@ impl BaseConfig for AnthropicConfig {
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
             body: anthropic_body(model, &build_conversation(&messages), optional_params),
+            stream_shape: StreamShape::default(),
         })
     }
 
@@ -129,17 +149,35 @@ impl BaseConfig for AnthropicConfig {
         })
     }
 
-    fn auth(
+    /// A forwarded OAuth bearer is the whole credential: Python pops `x-api-key` for it,
+    /// so the resolved key is not applied over it. Any other forwarded header loses to
+    /// the deployment's key, which Python writes last.
+    fn validate_environment(
         &self,
+        headers: Headers,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<RequestAuth, Error> {
-        Ok(RequestAuth::Header {
-            name: "x-api-key",
-            value: resolve_anthropic_api_key(api_key, env_lookup)?,
-        })
+    ) -> Result<ValidatedEnvironment, Error> {
+        if forwards_oauth_bearer(&headers) {
+            return Ok(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Forwarded,
+            });
+        }
+        let auth = AuthScheme::Credential {
+            placement: CredentialPlacement::Header("x-api-key"),
+            secret: SecretValue::new(resolve_anthropic_api_key(api_key, env_lookup)?),
+        };
+        Ok(ValidatedEnvironment { headers, auth })
+    }
+
+    fn model_response_iterator(&self, shape: StreamShape) -> Option<ChatStream> {
+        Some(ChatStream::new(
+            anthropic_sse_event_stream,
+            ModelResponseIterator::new(shape),
+        ))
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -154,15 +192,6 @@ impl BaseConfig for AnthropicConfig {
     /// the resolved key must not be applied over the top. Any other forwarded
     /// `authorization` is unrelated to this header and does not defer, which is
     /// also what Python does: it sends the deployment's `x-api-key` alongside.
-    fn defers_to_forwarded_auth(&self, headers: &[(String, String)]) -> bool {
-        headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("authorization")
-                && value
-                    .strip_prefix("Bearer ")
-                    .is_some_and(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
-        })
-    }
-
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
