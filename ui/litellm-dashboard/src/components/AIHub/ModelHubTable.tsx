@@ -359,10 +359,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (accessToken) {
       const fetchMcpData = async () => {
         try {
+          setMcpLoading(true);
           const response = await fetchMCPServers(accessToken);
           setMcpHubData(response);
         } catch (error) {
+          setMcpHubData(null);
           console.error("Error refreshing MCP server data:", error);
+        } finally {
+          setMcpLoading(false);
         }
       };
       fetchMcpData();
@@ -567,7 +571,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
+                      <Button onClick={() => handleMakeMcpPublicPage()} disabled={mcpLoading || mcpHubData === null}>
+                        Manage MCP Hub Visibility
+                      </Button>
                     </div>
                   )}
 

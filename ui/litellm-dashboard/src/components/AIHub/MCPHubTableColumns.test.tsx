@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DataTable } from "@/components/shared/DataTable";
@@ -28,10 +28,10 @@ const mockServer: MCPServerData = {
   env: {},
 };
 
-function renderTable(onServerClick = vi.fn()) {
+function renderTable(onServerClick = vi.fn(), servers = [mockServer]) {
   render(
     <DataTable
-      data={[mockServer]}
+      data={servers}
       columns={getMCPHubTableColumns({ onServerClick })}
       getRowId={(server) => server.server_id}
       sortingMode="client"
@@ -52,6 +52,23 @@ describe("getMCPHubTableColumns", () => {
     expect(screen.getByText("Server Name")).toBeInTheDocument();
     expect(screen.getByText("Transport")).toBeInTheDocument();
     expect(screen.getByText("Auth Type")).toBeInTheDocument();
+  });
+
+  it("shows hub membership separately from the network setting", () => {
+    renderTable(vi.fn(), [
+      { ...mockServer, available_on_public_internet: false, mcp_info: { is_public: true } },
+      {
+        ...mockServer,
+        server_id: "network-only",
+        server_name: "Network-only server",
+        available_on_public_internet: true,
+        mcp_info: { is_public: false },
+      },
+    ]);
+
+    expect(screen.getByText("Hub listing")).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /exa_test/ })).getByText("Listed")).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /Network-only server/ })).getByText("Unlisted")).toBeInTheDocument();
   });
 
   it("does not expose a URL column", () => {
