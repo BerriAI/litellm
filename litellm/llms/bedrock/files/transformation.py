@@ -58,7 +58,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums, all_litellm_params
+from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums, is_litellm_owned_kwarg
 from litellm.utils import get_llm_provider, get_optional_params
 
 from ..base_aws_llm import BaseAWSLLM
@@ -907,7 +907,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     {
                         k: v
                         for k, v in optional_params.items()
-                        if k not in all_litellm_params or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
+                        if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
                     }
                 ),
             )
