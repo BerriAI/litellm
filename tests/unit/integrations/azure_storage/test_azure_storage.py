@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.integrations.azure_storage.azure_storage import (
     AzureBlobStorageLogger,
     _cached_credential_chain_token_provider,
@@ -365,3 +366,59 @@ async def test_service_client_defaults_to_commercial_endpoint(mock_env_vars):
         fake_aio_module.DataLakeServiceClient.call_args.kwargs["account_url"]
         == "https://test-account.dfs.core.windows.net"
     )
+
+
+def _fake_datalake_module() -> MagicMock:
+    fake_aio_module = MagicMock()
+    fake_aio_module.DataLakeServiceClient.side_effect = lambda **_: MagicMock(close=AsyncMock())
+    return fake_aio_module
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_reused_until_its_ttl_elapses(mock_env_vars):
+    """Within the TTL every upload must share one live client; closing a client
+    that is still in use by a concurrent upload fails that upload with an Azure
+    AuthenticationFailed error and drops the audit record"""
+    fake_aio_module = _fake_datalake_module()
+    now = 1_000_000.0
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: now)
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is first, "a second call inside the TTL must return the same client"
+    first.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_replaced_once_its_ttl_elapses(mock_env_vars):
+    fake_aio_module = _fake_datalake_module()
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS + 1, 2_000_000.0))
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: next(ticks))
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is not first, "an expired client must be closed and rebuilt"
+    first.close.assert_awaited_once()
+    second.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_replaced_at_the_exact_ttl_boundary(mock_env_vars):
+    fake_aio_module = _fake_datalake_module()
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS, 2_000_000.0))
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: next(ticks))
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is not first, "a call exactly at the TTL must rebuild the client"
+    first.close.assert_awaited_once()
+    second.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 2
