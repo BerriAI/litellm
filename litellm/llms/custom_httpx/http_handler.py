@@ -630,6 +630,17 @@ async def _wire_bounded(response: httpx.Response, limit: int) -> AsyncGenerator[
         yield chunk
 
 
+def _already_read_within(response: httpx.Response, max_bytes: int) -> httpx.Response:
+    if len(response.content) > max_bytes:
+        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+    return httpx.Response(
+        response.status_code,
+        headers=_headers_of_the_decoded_body(response.headers),
+        content=response.content,
+        request=response.request,
+    )
+
+
 async def _decoded_within(response: httpx.Response, wire: AsyncGenerator[bytes, None], max_bytes: int) -> bytes:
     decoding: Final = httpx.Response(
         response.status_code, headers=response.headers, content=wire, request=response.request
@@ -817,6 +828,8 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
+            if response.is_stream_consumed:
+                return _already_read_within(response, max_bytes)
             wire_limit: Final = _wire_byte_limit(response.headers, max_bytes)
             if int(response.headers.get("content-length", "0")) > wire_limit:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")

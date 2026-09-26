@@ -1840,6 +1840,45 @@ async def test_bounded_get_caps_the_wire_bytes_of_a_compressed_body_that_decodes
 
 
 @pytest.mark.asyncio
+async def test_bounded_get_serves_a_body_the_transport_already_read(monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    card: Final = {"data": [{"id": "served", "max_model_len": 8192}]}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=card)
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response = await handler.get("https://one.test/v1/models", max_response_bytes=2 * 1024 * 1024)
+    finally:
+        await handler.close()
+    assert response.json() == card
+    assert response.headers["content-length"] == str(len(response.content))
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_bounds_an_already_read_body_on_its_decoded_length(monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document: Final = b"0" * 4096
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=gzip.compress(document), headers={"content-encoding": "gzip"})
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        served = await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document))
+        assert served.content == document
+        assert "content-encoding" not in served.headers
+        assert served.headers["content-length"] == str(len(document))
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document) - 1)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
 async def test_bounded_get_rejects_a_declared_compressed_length_over_the_wire_limit(respx_mock, monkeypatch):
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     consumed = []
