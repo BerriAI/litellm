@@ -1,7 +1,6 @@
 # What is this?
 ## Helper utilities for token counting
 import base64
-import itertools
 import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -252,7 +251,7 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
-    dimensions: Final = _header_dimensions(img_data, max_jpeg_segments=None)
+    dimensions: Final = _header_dimensions(img_data)
     if dimensions is None:
         return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
     return dimensions
@@ -260,7 +259,7 @@ def get_image_dimensions(
 
 def image_dimensions_from_bytes(img_data: bytes) -> tuple[int, int] | None:
     try:
-        return _header_dimensions(img_data, max_jpeg_segments=MAX_JPEG_HEADER_SEGMENTS)
+        return _header_dimensions(img_data)
     except struct.error:
         return None
 
@@ -270,7 +269,7 @@ def image_pixels_from_bytes(img_data: bytes) -> int | None:
     return None if dimensions is None else dimensions[0] * dimensions[1] or None
 
 
-def _header_dimensions(img_data: bytes, max_jpeg_segments: int | None) -> tuple[int, int] | None:
+def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
     img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
@@ -280,7 +279,7 @@ def _header_dimensions(img_data: bytes, max_jpeg_segments: int | None) -> tuple[
         w, h = _unpack_ints("<HH", img_data[6:10])
         return w, h
     if img_type == "jpeg":
-        return _jpeg_dimensions(img_data, max_jpeg_segments)
+        return _jpeg_dimensions(img_data)
     if img_type == "webp":
         if img_data[12:16] == b"VP8X":
             w = _unpack_ints("<I", img_data[24:27] + b"\x00")[0] + 1
@@ -298,9 +297,9 @@ def _header_dimensions(img_data: bytes, max_jpeg_segments: int | None) -> tuple[
     return None
 
 
-def _jpeg_dimensions(img_data: bytes, max_segments: int | None) -> tuple[int, int] | None:
+def _jpeg_dimensions(img_data: bytes) -> tuple[int, int] | None:
     position = 2  # rebind-ok: the scan advances one segment per iteration
-    for _ in itertools.count() if max_segments is None else range(max_segments):
+    for _ in range(MAX_JPEG_HEADER_SEGMENTS):
         marker_offset = _next_jpeg_marker_offset(img_data, position)
         marker, segment_length = _unpack_ints(">BH", img_data[marker_offset : marker_offset + 3])
         if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):

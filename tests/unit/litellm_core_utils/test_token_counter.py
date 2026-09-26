@@ -1613,12 +1613,6 @@ def test_jpeg_scan_steps_past_a_zero_segment_length_one_byte_at_a_time() -> None
     assert get_image_dimensions(data="data:image/jpeg;base64," + base64.b64encode(image).decode()) == (800, 600)
 
 
-def test_get_image_dimensions_reads_past_the_segment_limit_that_bounds_image_dimensions_from_bytes() -> None:
-    image: Final = b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * MAX_JPEG_HEADER_SEGMENTS + _jpeg_sof(800, 600)
-
-    assert get_image_dimensions(data="data:image/jpeg;base64," + base64.b64encode(image).decode()) == (800, 600)
-
-
 @pytest.mark.parametrize(
     "header",
     [
@@ -1638,6 +1632,10 @@ def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes)
     "image",
     [
         pytest.param(b"BM" + b"\x00" * 30, id="unknown-format"),
+        pytest.param(
+            b"\xff\xd8" + _EMPTY_JPEG_SEGMENT * MAX_JPEG_HEADER_SEGMENTS + _jpeg_sof(800, 600),
+            id="too-many-jpeg-segments",
+        ),
     ],
 )
 def test_get_image_dimensions_falls_back_to_the_default_size_for_a_header_it_cannot_read(image: bytes) -> None:
