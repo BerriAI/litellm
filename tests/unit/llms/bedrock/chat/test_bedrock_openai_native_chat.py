@@ -135,6 +135,21 @@ class TestRequestBody:
         assert "temperature" not in mapped
         assert mapped.get("reasoning_effort") == "low"
 
+    def test_extra_body_cannot_override_model_before_signing(self):
+        """extra_body is merged over the body before signing; the authorized model (passed to
+        sign_request) must be pinned back so a caller can't invoke a different model."""
+        cfg = _cfg()
+        request_data = {"model": "attacker.chosen.model", "messages": []}
+        cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data=request_data,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions",
+            api_key="bedrock-bearer-token",  # bearer path avoids needing AWS creds in the test
+            model=MODEL,
+        )
+        assert request_data["model"] == MODEL
+
     def test_stream_flag_is_in_the_signed_body(self):
         """Under SigV4 the body is signed before the handler's stream-add step, so ``stream``
         must already be in the transformed body (it rides ``optional_params``), otherwise the

@@ -171,6 +171,11 @@ class BedrockOpenAIChatConfig(OpenAIGPT5Config, BaseAWSLLM):
         stream: bool | None = None,
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:
+        # The model rides in the body on this surface (not the URL), and extra_body is merged
+        # over the body before signing, so extra_body={"model": ...} would otherwise invoke a
+        # model the key isn't authorized for. Pin the authorized model back before signing.
+        if model is not None:
+            request_data["model"] = model
         if resolve_bedrock_bearer_token(api_key):
             # Bedrock API keys are Bearer credentials; SigV4 on top would be wrong.
             return headers, None
