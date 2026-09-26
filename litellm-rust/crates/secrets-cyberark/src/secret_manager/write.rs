@@ -1,5 +1,8 @@
 use super::*;
 
+const POLICY_LOAD_ATTEMPTS: u32 = 5;
+const POLICY_LOAD_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
 impl CyberArkSecretManager {
     pub async fn async_write_secret(
         &self,
@@ -105,37 +108,42 @@ impl CyberArkSecretManager {
             "- !variable {}\n",
             serde_json::to_string(name).expect("serializing a string cannot fail")
         );
-        let response = with_timeout(
-            self.client
-                .post(policy_url)
-                .header("Authorization", authorization)
-                .header("Content-Type", "application/x-yaml")
-                .body(body),
-            context,
-        )
-        .send()
-        .await;
-        match response {
-            Ok(response) if response.status().is_success() => {}
-            Ok(response)
-                if matches!(
-                    response.status(),
-                    reqwest::StatusCode::CONFLICT | reqwest::StatusCode::UNPROCESSABLE_ENTITY
-                ) =>
-            {
-                litellm_tracing::debug!(
-                    "CyberArk variable policy already exists or conflicts: {}",
-                    response.status()
-                );
-            }
-            Ok(response) => {
-                litellm_tracing::warn!(
-                    "Could not ensure CyberArk variable exists: {}",
-                    response.status()
-                );
-            }
-            Err(error) => {
-                litellm_tracing::warn!("Error ensuring CyberArk variable exists: {error}");
+        for attempt in 0..POLICY_LOAD_ATTEMPTS {
+            let response = with_timeout(
+                self.client
+                    .post(policy_url.clone())
+                    .header("Authorization", authorization.clone())
+                    .header("Content-Type", "application/x-yaml")
+                    .body(body.clone()),
+                context,
+            )
+            .send()
+            .await;
+            match response {
+                Ok(response)
+                    if response.status() == reqwest::StatusCode::CONFLICT
+                        && attempt + 1 < POLICY_LOAD_ATTEMPTS =>
+                {
+                    tokio::time::sleep(POLICY_LOAD_RETRY_DELAY * 2_u32.pow(attempt)).await;
+                }
+                Ok(response) if response.status().is_success() => return,
+                Ok(response) if response.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY => {
+                    litellm_tracing::debug!(
+                        "CyberArk variable policy was rejected as unprocessable"
+                    );
+                    return;
+                }
+                Ok(response) => {
+                    litellm_tracing::warn!(
+                        "Could not ensure CyberArk variable exists: {}",
+                        response.status()
+                    );
+                    return;
+                }
+                Err(error) => {
+                    litellm_tracing::warn!("Error ensuring CyberArk variable exists: {error}");
+                    return;
+                }
             }
         }
     }

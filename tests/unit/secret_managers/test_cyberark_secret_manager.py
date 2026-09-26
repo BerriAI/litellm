@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import Final, TypedDict, cast
 
+import httpx
 import pytest
 import respx
 
@@ -105,6 +106,29 @@ async def test_async_write_matches_parity_fixture(monkeypatch: pytest.MonkeyPatc
     assert policy_route.calls.last.request.content.decode() == secret["policy_body"]
     assert policy_route.calls.last.request.headers["Content-Type"] == "application/x-yaml"
     assert value_route.calls.last.request.content == b"v"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_write_retries_policy_load_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    fixture: Final = _fixture()
+    manager: Final = _configure_manager(monkeypatch, fixture)
+    secret: Final = fixture["secrets"][0]
+    endpoint: Final = fixture["endpoint"]
+    _respond(respx.post(endpoint + fixture["authenticate_path"]), content=fixture["token_json"].encode())
+    policy_route: Final = respx.post(endpoint + fixture["policy_path"]).mock(
+        side_effect=[httpx.Response(409), httpx.Response(409), httpx.Response(201)]
+    )
+    value_route: Final = respx.post(endpoint + secret["path"]).mock(
+        side_effect=lambda _: httpx.Response(201 if policy_route.call_count == 3 else 404)
+    )
+
+    result: Final = await manager.async_write_secret(secret["name"], "v")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy secret manager API is untyped
+
+    assert policy_route.call_count == 3
+    assert value_route.call_count == 1
+    assert result["status"] == "success"
 
 
 def test_missing_credentials_raise_value_error(monkeypatch: pytest.MonkeyPatch) -> None:

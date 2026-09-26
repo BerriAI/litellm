@@ -5,6 +5,10 @@ import logging
 import os
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -206,53 +210,90 @@ def create_async_task(**completion_kwargs):
     return asyncio.create_task(litellm.acompletion(**completion_args))
 
 
+class _OtlpCapture(BaseHTTPRequestHandler):
+    exports: list[bytes] = []
+
+    def do_POST(self):
+        self.exports.append(self.rfile.read(int(self.headers.get("content-length", 0))))
+        self.send_response(200)
+        self.end_headers()
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def local_langfuse():
+    _OtlpCapture.exports = []
+    server = HTTPServer(("127.0.0.1", 0), _OtlpCapture)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", _OtlpCapture.exports
+    server.shutdown()
+
+
+def _exported_attributes(exports: list[bytes], trace_id: str) -> list[dict[str, str]]:
+    spans = [
+        span
+        for body in exports
+        for resource_spans in ExportTraceServiceRequest.FromString(body).resource_spans
+        for scope_spans in resource_spans.scope_spans
+        for span in scope_spans.spans
+    ]
+    return [
+        {attribute.key: attribute.value.string_value for attribute in span.attributes}
+        for span in spans
+        if span.trace_id.hex() == trace_id
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.flaky(retries=12, delay=2)
-async def test_langfuse_logging_without_request_response(stream, langfuse_client):
-    try:
-        from litellm._uuid import uuid
+async def test_langfuse_logging_without_request_response(stream, local_langfuse, monkeypatch):
+    from litellm._uuid import uuid
 
-        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-        litellm.set_verbose = True
-        litellm.turn_off_message_logging = True
-        litellm.success_callback = ["langfuse"]
-        response = await create_async_task(
-            model="gpt-3.5-turbo",
-            stream=stream,
-            metadata={"trace_id": _unique_trace_name},
-        )
-        print(response)
-        if stream:
-            async for chunk in response:
-                print(chunk)
+    langfuse_host, exports = local_langfuse
+    prompt = f"prompt-{uuid.uuid4()}"
+    answer = f"answer-{uuid.uuid4()}"
+    trace_name = f"litellm-test-{uuid.uuid4()}"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        mock_response=answer,
+        stream=stream,
+        metadata={"trace_id": trace_name},
+        langfuse_public_key=f"pk-lf-{trace_name}",
+        langfuse_secret_key="sk-lf-local",
+        langfuse_host=langfuse_host,
+    )
+    if stream:
+        async for _ in response:
+            pass
 
-        langfuse_client.flush()
+    generations: list[dict[str, str]] = []
+    for _ in range(60):
+        generations = [
+            attributes
+            for attributes in _exported_attributes(exports, resolve_trace_id(trace_name))
+            if attributes.get("langfuse.observation.type") == "generation"
+        ]
+        if generations:
+            break
+        await asyncio.sleep(0.5)
 
-        for _ in range(30):
-            _trace_data = langfuse_client.api.observations.get_many(
-                trace_id=resolve_trace_id(_unique_trace_name),
-                type="GENERATION",
-                fields="core,io",
-            ).data
-            if _trace_data:
-                break
-            await asyncio.sleep(3)
-
-        print(f"_trace_data: {_trace_data}")
-        assert json.loads(_trace_data[0].input) == {
-            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
-        }
-        assert json.loads(_trace_data[0].output) == {
-            "role": "assistant",
-            "content": "redacted-by-litellm",
-            "function_call": None,
-            "tool_calls": None,
-            "provider_specific_fields": None,
-        }
-
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
+    assert len(generations) == 1, generations
+    assert json.loads(generations[0]["langfuse.observation.input"]) == {
+        "messages": [{"content": "redacted-by-litellm", "role": "user"}]
+    }
+    assert json.loads(generations[0]["langfuse.observation.output"])["content"] == "redacted-by-litellm"
+    assert all(prompt.encode() not in body and answer.encode() not in body for body in exports)
 
 
 # Get the current directory of the file being run
