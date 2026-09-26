@@ -148,6 +148,8 @@ async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | 
             raise_identity_failure(AgentIdentityFailure(message="Agent no longer exists"))
         return
     if not agent.identity_managed:
+        if agent.litellm_budget_table is not None:
+            auth.billing_agent_policy = agent
         return
     if auth.jwt_claims and auth.managed_agent_context is None:
         raise_identity_failure(AgentIdentityFailure(message="A managed agent requires a matching verified identity"))
@@ -183,6 +185,24 @@ def actor_admission_failure(
     return None
 
 
+async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
+    import litellm
+    from litellm.proxy.proxy_server import get_current_spend
+
+    agent: Final = auth.billing_agent_policy
+    if agent is None or agent.litellm_budget_table is None or agent.litellm_budget_table.max_budget is None:
+        return
+    budget: Final = agent.litellm_budget_table.max_budget
+    spend: Final = await get_current_spend(
+        counter_key=agent.budget_counter_key,
+        fallback_spend=agent.spend or 0.0,
+        max_budget=budget,
+        fallback_authoritative=True,
+    )
+    if spend >= budget:
+        raise litellm.BudgetExceededError(current_cost=spend, max_budget=budget, message="Agent budget exceeded")
+
+
 _INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
@@ -215,12 +235,12 @@ async def prepare_agent_invocation(
     if target is None and registered_managed:
         raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
     effective: Final = target if target is not None else registered
-    if not effective.identity_managed and auth.managed_agent_policy is None:
+    if not effective.identity_managed and effective.litellm_budget_table is None and auth.managed_agent_policy is None:
         return
     if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
         raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))
     auth.invoked_agent_id = effective.agent_id
-    if auth.agent_id is None and effective.identity_managed:
+    if auth.agent_id is None and (effective.identity_managed or effective.litellm_budget_table is not None):
         auth.billing_agent_policy = effective
     raw_fee: Final = (effective.litellm_params or MappingProxyType({})).get("cost_per_query", 0.0) if billable else 0.0
     try:

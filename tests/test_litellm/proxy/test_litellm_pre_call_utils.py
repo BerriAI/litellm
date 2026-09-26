@@ -8470,3 +8470,21 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     for name, value in secrets.items():
         assert updated["secret_fields"]["raw_headers"][name.lower()] == value
         assert request.headers[name] == value
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_agent_budget_window_metadata_is_owned_by_authenticated_policy(bound: bool) -> None:
+    from litellm.types.agents import AgentResponse
+
+    auth: Final = UserAPIKeyAuth(agent_id="agent" if bound else None)
+    if bound:
+        auth.billing_agent_policy = AgentResponse(
+            agent_id="agent", agent_name="Agent", agent_card_params={},
+            litellm_budget_table={"budget_id": "budget", "budget_reset_at": "2026-01-02T00:00:00Z"},
+        )
+    result: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        {"metadata": {"billing_agent_counter_key": "spend:agent:victim"}}, auth, "metadata"
+    )
+    assert result["metadata"]["billing_agent_counter_key"] == (
+        "spend:agent_window:20260102T000000.000000Z:agent" if bound else None
+    )
