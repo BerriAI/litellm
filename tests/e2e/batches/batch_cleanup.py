@@ -121,7 +121,8 @@ def cleanup_batch(
         if current.status == "cancelling" and not needs_terminal_state:
             return
         assert clock() < deadline, (
-            f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s"
+            f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, "
+            f"last status {current.status}"
         )
         wait(BATCH_CANCEL_POLL_SECONDS)
 

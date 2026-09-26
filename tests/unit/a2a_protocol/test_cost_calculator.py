@@ -10,6 +10,12 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+
+async def _reset_callbacks_and_settle_pending_logs() -> None:
+    litellm.logging_callback_manager._reset_all_callbacks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
 
 def _make_send_message_request(request_id: str, user_text: str = "Hello"):
@@ -129,7 +135,7 @@ async def test_asend_message_uses_cost_per_query(monkeypatch):
     from litellm.a2a_protocol import asend_message
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     cost_logger = CostLogger()
     monkeypatch.setattr(litellm, "callbacks", [cost_logger])
 
@@ -164,7 +170,7 @@ async def test_asend_message_uses_cost_per_query_from_litellm_params_dict(monkey
     """
     from litellm.a2a_protocol import asend_message
 
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     cost_logger = CostLogger()
     monkeypatch.setattr(litellm, "callbacks", [cost_logger])
 
@@ -225,7 +231,7 @@ async def test_asend_message_uses_input_output_cost_per_token(monkeypatch):
     from litellm.a2a_protocol import asend_message
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     token_cost_logger = TokenAndCostLogger()
     monkeypatch.setattr(litellm, "callbacks", [token_cost_logger])
 
@@ -299,7 +305,7 @@ async def test_asend_message_passes_agent_id_to_callback(monkeypatch):
     from litellm.a2a_protocol import asend_message
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     agent_id_logger = AgentIdLogger()
     monkeypatch.setattr(litellm, "callbacks", [agent_id_logger])
 
@@ -359,7 +365,7 @@ async def test_asend_message_streaming_propagates_metadata():
     from litellm.a2a_protocol import asend_message_streaming
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     metadata_logger = MetadataLogger()
     litellm.logging_callback_manager.add_litellm_async_success_callback(metadata_logger)
 
@@ -406,7 +412,7 @@ async def test_asend_message_streaming_triggers_callbacks():
     from litellm.a2a_protocol import asend_message_streaming
 
     # Setup logger - must use logging_callback_manager to properly register
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     callback_logger = AgentIdLogger()
     litellm.logging_callback_manager.add_litellm_async_success_callback(callback_logger)
     litellm.logging_callback_manager.add_litellm_success_callback(callback_logger)

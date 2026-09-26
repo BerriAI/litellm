@@ -165,7 +165,9 @@ class LoggingWorker:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
 
-    async def _process_log_task(self, task: LoggingTask, sem: asyncio.Semaphore):
+    async def _process_log_task(
+        self, task: LoggingTask, sem: asyncio.Semaphore, queue: "asyncio.Queue[LoggingTask]"
+    ) -> None:
         """Runs the logging task and handles cleanup. Releases semaphore when done."""
         try:
             if self._queue is not None:
@@ -182,7 +184,7 @@ class LoggingWorker:
                     verbose_logger.exception("LoggingWorker error: %s", e)
                 finally:
                     self._untrack_dequeued(task)
-                    self._queue.task_done()
+                    queue.task_done()
         finally:
             # Always release semaphore, even if queue is None
             sem.release()
@@ -219,7 +221,8 @@ class LoggingWorker:
     async def _worker_loop(self) -> None:
         """Main worker loop that gets tasks and schedules them to run concurrently."""
         try:
-            if self._queue is None or self._sem is None:
+            queue: Final = self._queue
+            if queue is None or self._sem is None:
                 return
 
             while True:
@@ -227,10 +230,10 @@ class LoggingWorker:
                 # unbounded growth of waiting tasks
                 await self._sem.acquire()
                 try:
-                    task = await self._queue.get()
+                    task = await queue.get()
                     self._track_dequeued(task)
                     # Track each spawned coroutine so we can cancel on shutdown.
-                    processing_task = asyncio.create_task(self._process_log_task(task, self._sem))
+                    processing_task = asyncio.create_task(self._process_log_task(task, self._sem, queue))
                     self._running_tasks.add(processing_task)
                     processing_task.add_done_callback(self._running_tasks.discard)
                 except Exception:
@@ -497,7 +500,8 @@ class LoggingWorker:
         """
         Clear the queue with a maximum time limit.
         """
-        if self._queue is None:
+        queue: Final = self._queue
+        if queue is None:
             return
 
         start_time: Final = asyncio.get_event_loop().time()
@@ -509,7 +513,7 @@ class LoggingWorker:
                 break
 
             try:
-                task = self._queue.get_nowait()
+                task = queue.get_nowait()
                 # Await the coroutine to properly execute and avoid "never awaited" warnings
                 try:
                     await asyncio.wait_for(
@@ -522,7 +526,7 @@ class LoggingWorker:
                 finally:
                     # Clear reference to prevent memory leaks
                     task = None
-                self._queue.task_done()  # If you're using join() elsewhere
+                queue.task_done()
             except asyncio.QueueEmpty:
                 break
 

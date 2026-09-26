@@ -86,7 +86,8 @@ async def test_cyberark_write_secret_rejects_yaml_injection():
         "team/user@example.com",
     ],
 )
-def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(secret_name):
+@pytest.mark.asyncio
+async def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(secret_name):
     """
     Regression test: _ensure_variable_exists must escape secret_name (not just
     denylist-check it) so the policy body always parses back to exactly one
@@ -95,19 +96,21 @@ def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(secret_name
     with patch("litellm.proxy.proxy_server.premium_user", True):
         captured = {}
 
-        def _capture_post(url, headers=None, content=None):
+        async def _capture_post(url, headers=None, content=None):
             captured["content"] = content
             return create_mock_response(status_code=201, text="")
 
         mock_sync_client = MagicMock()
-        mock_sync_client.client.post.side_effect = _capture_post
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
+        mock_async_client = MagicMock()
+        mock_async_client.client.post.side_effect = _capture_post
 
         with patch(
             "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
             return_value=mock_sync_client,
         ):
             cyberark_manager = CyberArkSecretManager()
-            cyberark_manager._ensure_variable_exists(secret_name)
+            await cyberark_manager._ensure_variable_exists(secret_name, mock_async_client)
 
         policy_yaml = captured["content"]
         parsed = yaml.compose(policy_yaml)

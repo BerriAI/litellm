@@ -4,7 +4,7 @@ import os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
-from datetime import datetime
+from datetime import datetime, timezone
 
 from litellm import Router
 import pytest
@@ -971,11 +971,18 @@ def _rpm_tpm_router(model_id: str) -> Router:
     )
 
 
+@pytest.fixture
+def router_minute_pinned(monkeypatch):
+    pinned = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+
+
 def _ratelimit_headers(response: ModelResponse | CustomStreamWrapper) -> dict[str, int]:
     return {k: v for k, v in response._hidden_params["additional_headers"].items() if k.startswith("x-ratelimit-")}
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
 async def test_acompletion_headers_read_post_increment_counter_and_count_once():
     router = _rpm_tpm_router("lit-3058-async")
 
@@ -1018,6 +1025,7 @@ async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deplo
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
 async def test_acompletion_stream_counts_request_before_headers_and_tokens_once_on_completion():
     router = _rpm_tpm_router("lit-3058-stream")
 

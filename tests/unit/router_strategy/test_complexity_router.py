@@ -14120,6 +14120,7 @@ class TestContextWindowEscalation:
         assert result.routing_decision["context_escalated"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
     @pytest.mark.parametrize(
         "deployments,tiers,expected_model",
         [

@@ -3717,7 +3717,7 @@ async def test_auth_vertex_ai_route(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_db_unavailable():
+async def test_user_api_key_auth_db_unavailable(monkeypatch):
     """
     Test that user_api_key_auth handles DB connection failures appropriately when:
     1. DB connection fails during token validation
@@ -3747,7 +3747,7 @@ async def test_user_api_key_auth_db_unavailable():
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(
         litellm.proxy.proxy_server,
@@ -3777,7 +3777,7 @@ async def test_user_api_key_auth_db_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_db_unavailable_not_allowed():
+async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
     """
     Test that user_api_key_auth raises an exception when:
     This is default behavior
@@ -3808,7 +3808,7 @@ async def test_user_api_key_auth_db_unavailable_not_allowed():
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
     setattr(litellm.proxy.proxy_server, "general_settings", {})
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
 
