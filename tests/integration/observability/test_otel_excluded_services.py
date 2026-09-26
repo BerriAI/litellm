@@ -246,11 +246,12 @@ def test_bogus_excluded_service_fails_proxy_start(
     gateway: Gateway, otel_audit_config: AuditConfigWriter, tmp_path: Path
 ) -> None:
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["auth"]})
+    log_dir: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(tmp_path)))
+    before: Final = frozenset(log_dir.glob("owned-proxy-*.log"))
     with pytest.raises(AssertionError, match="readiness"):
         with owned_proxy_process(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2):
             pass
-    log_dir: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(tmp_path)))
-    logs: Final = [path.read_text() for path in log_dir.glob("owned-proxy-*.log")]
+    logs: Final = [path.read_text() for path in frozenset(log_dir.glob("owned-proxy-*.log")) - before]
     assert logs, "no owned proxy log written"
     text: Final = "\n".join(logs)
     assert "'auth' is not a datastore service" in text, text[-3000:]
