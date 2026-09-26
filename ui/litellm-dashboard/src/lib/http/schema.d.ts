@@ -24297,6 +24297,45 @@ export interface components {
             /** Uri */
             uri?: string;
         };
+        /** AgentIdentityBinding */
+        AgentIdentityBinding: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Agent Id */
+            agent_id: string;
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Revision */
+            revision: string;
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
+        };
         /**
          * AgentInterface
          * @description Declares a combination of a target URL and a transport protocol.
@@ -24452,8 +24491,30 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /**
+             * Jwt Auth Configured
+             * @default false
+             */
+            jwt_auth_configured: boolean;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
