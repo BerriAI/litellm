@@ -5349,6 +5349,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "'auto_register': auto-create a virtual key and mapping on first encounter."
         ),
     )
+    auto_register_map_existing_key: bool = Field(
+        default=False,
+        description=(
+            "Only used with unregistered_jwt_client_behavior='auto_register'. When True, the JWT claim is "
+            "mapped to a virtual key the resolved internal user already owns instead of minting a new one. "
+            "If the user owns several, the most recently created key in the JWT-resolved team (or with no "
+            "team when the JWT resolves none) that can call LLM routes is chosen: not blocked, not expired, "
+            "not an Admin UI session key, and with no route restriction other than llm_api_routes. A new key "
+            "is only minted when the user has no such key."
+        ),
+    )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",

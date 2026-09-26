@@ -2020,6 +2020,430 @@ async def test_auto_register_binds_api_key_to_token_hash():
     assert result.end_user_id == "validated-end-user"
 
 
+def _auto_register_patches(*, plaintext_key: str | None = "sk-minted-plaintext"):
+    """The two collaborators every _auto_register_jwt_mapping test patches the same
+    way: key minting (returns {"token": plaintext}) and IdentityStore.resolve."""
+    from litellm.proxy.auth.auth_method import AuthMethod
+    from litellm.proxy.auth.resolvers.models import CredentialRef
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+    from litellm.proxy.proxy_server import hash_token
+
+    resolved_key = UserAPIKeyAuth(
+        token="existing-hash" if plaintext_key is None else hash_token(plaintext_key),
+        user_id="validated-user",
+        team_id="validated-team",
+        org_id="key-own-org",
+    )
+    principal = IdentityStore._principal_from_key(
+        resolved_key,
+        auth_method=AuthMethod.API_KEY,
+        credential_ref=CredentialRef(token_id=resolved_key.token),
+    )
+    return (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": plaintext_key},
+        ),
+        patch(
+            "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+            new_callable=AsyncMock,
+            return_value=principal,
+        ),
+    )
+
+
+def _auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler, **over):
+    kwargs = {
+        "virtual_key_claim_field": "sub",
+        "claim_value": "user1",
+        "jwt_handler": jwt_handler,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "parent_otel_span": None,
+        "proxy_logging_obj": MagicMock(),
+        "cache_key": "jwt_key_mapping:sub:user1",
+        "team_id": "validated-team",
+        "user_id": "validated-user",
+        "org_id": "jwt-org",
+        "end_user_id": "validated-end-user",
+    }
+    kwargs.update(over)
+    return kwargs
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_reuses_users_latest_key():
+    """With auto_register_map_existing_key on, the mapping must point at the user's
+    most recently created non-expired, non-blocked key hash and nothing may be minted."""
+    from typing import Final
+
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(token="existing-hash")
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch as generate_key, resolve_patch:
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
+
+    generate_key.assert_not_awaited()
+
+    find_first = prisma_client.db.litellm_verificationtoken.find_first
+    find_first.assert_awaited_once()
+    where = find_first.await_args.kwargs["where"]
+    assert where["user_id"] == "validated-user"
+    expires_or: Final = next(entry["OR"] for entry in where["AND"] if any("expires" in e for e in entry["OR"]))
+    assert {"expires": None} in expires_or, f"non-expired keys must be included: {where}"
+    assert any(isinstance(entry.get("expires"), dict) and "gt" in entry["expires"] for entry in expires_or), (
+        f"future-expiring keys must be included: {where}"
+    )
+    blocked_or: Final = next(entry["OR"] for entry in where["AND"] if any("blocked" in e for e in entry["OR"]))
+    assert {"blocked": False} in blocked_or and {"blocked": None} in blocked_or, (
+        f"blocked keys must be excluded from reuse: {where}"
+    )
+    assert find_first.await_args.kwargs["order"] == {"created_at": "desc"}
+
+    create_data = prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]
+    assert create_data["token"] == "existing-hash"
+    assert create_data["created_by"] == "auto_register"
+    assert user_api_key_cache.async_set_cache.await_args.kwargs["value"] == "existing-hash"
+    assert result is not None
+    assert result.token == "existing-hash"
+    assert result.api_key == "existing-hash"
+    assert result.org_id == "key-own-org"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_skips_keys_that_cannot_call_llm_routes():
+    from typing import Final
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(token="existing-hash")
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch, resolve_patch:
+        await _auto_register_jwt_mapping(**_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler))
+
+    where = prisma_client.db.litellm_verificationtoken.find_first.await_args.kwargs["where"]
+    team_or: Final = next(entry["OR"] for entry in where["AND"] if any("team_id" in e for e in entry["OR"]))
+    assert {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}} in team_or, f"UI session keys must be excluded: {where}"
+    assert {"team_id": None} in team_or, f"keys without a team must stay eligible: {where}"
+    routes_or: Final = next(entry["OR"] for entry in where["AND"] if any("allowed_routes" in e for e in entry["OR"]))
+    assert routes_or == [
+        {"allowed_routes": {"is_empty": True}},
+        {"allowed_routes": {"has": "llm_api_routes"}},
+    ], f"only unrestricted or llm_api_routes keys may be reused: {where}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resolved_team_id", "expected_token"),
+    [("validated-team", "team-key-hash"), (None, "teamless-key-hash")],
+)
+async def test_auto_register_map_existing_key_only_reuses_keys_in_the_jwt_resolved_team(
+    resolved_team_id: str | None, expected_token: str
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    keys_by_team: dict[str | None, str] = {"validated-team": "team-key-hash", None: "teamless-key-hash"}
+
+    async def find_first(*, where: dict[str, object], order: dict[str, str]) -> SimpleNamespace | None:
+        if "team_id" not in where:
+            return SimpleNamespace(token="newest-key-in-any-team")
+        token = keys_by_team.get(where["team_id"])
+        return None if token is None else SimpleNamespace(token=token)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(side_effect=find_first)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler, team_id=resolved_team_id)
+        )
+
+    generate_key.assert_not_awaited()
+    assert prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]["token"] == expected_token
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_mints_when_user_has_no_key():
+    """The flag must not leave a keyless user unmapped: with no existing key it
+    falls back to the mint path and maps the claim to the new key's hash."""
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
+
+    generate_key.assert_awaited_once()
+    create_data = prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]
+    assert create_data["token"] == hash_token("sk-minted-plaintext")
+    assert result is not None
+    assert result.token == hash_token("sk-minted-plaintext")
+
+
+@pytest.mark.asyncio
+async def test_auto_register_default_never_looks_up_existing_keys():
+    """Without the flag the behavior is unchanged: no verification-token lookup at
+    all, a fresh key is always minted."""
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(token="existing-hash")
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_mapping_cache_ttl=300)
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(**_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler))
+
+    prisma_client.db.litellm_verificationtoken.find_first.assert_not_awaited()
+    generate_key.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_race_loser_keeps_reused_key():
+    """A reused key is not ours to delete: when the unique-constraint race is lost,
+    the pre-existing user key must survive and the winner's mapping wins."""
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(token="existing-hash")
+    )
+    prisma_client.db.litellm_verificationtoken.delete = AsyncMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=Exception("Unique constraint failed (P2002)"))
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with (
+        generate_patch,
+        resolve_patch,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_jwt_key_mapping_object",
+            new_callable=AsyncMock,
+            return_value="winner-hash",
+        ),
+    ):
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
+
+    assert result is not None
+    assert result.org_id == "key-own-org"
+    prisma_client.db.litellm_verificationtoken.delete.assert_not_awaited()
+    assert user_api_key_cache.async_set_cache.await_args.kwargs["value"] == "winner-hash"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_user_id_none_mints():
+    """With no resolved user there is no key to reuse; the flag must not skip
+    minting, and the lookup must not run."""
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(token="existing-hash")
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler, user_id=None)
+        )
+
+    prisma_client.db.litellm_verificationtoken.find_first.assert_not_awaited()
+    generate_key.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("map_existing_key", "master_key", "reused_key_models", "expect_denied"),
+    [
+        (True, "sk-master", ["some-other-model"], True),
+        (True, "sk-master", [], False),
+        (False, "sk-master", ["some-other-model"], False),
+        (True, None, ["some-other-model"], False),
+    ],
+)
+async def test_auto_register_map_existing_key_first_request_runs_key_checks(
+    map_existing_key: bool, master_key: str | None, reused_key_models: list[str], expect_denied: bool
+) -> None:
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+    user_api_key_cache = DualCache()
+    prisma_client = MagicMock()
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        virtual_key_mapping_cache_ttl=300,
+        auto_register_map_existing_key=map_existing_key,
+    )
+    reused_key = UserAPIKeyAuth(
+        token="hashed-existing-key",
+        api_key="hashed-existing-key",
+        user_id="validated-user",
+        team_id="validated-team",
+        models=reused_key_models,
+    )
+    mock_jwt_result = {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": LiteLLM_UserTable(user_id="validated-user", user_role="internal_user"),
+        "end_user_object": None,
+        "org_object": None,
+        "token": jwt_token,
+        "team_id": "validated-team",
+        "user_id": "validated-user",
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "user1"},
+    }
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", master_key),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+        ),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+            new_callable=AsyncMock,
+            return_value=_PendingAutoRegister(
+                claim_field="sub",
+                claim_value="user1",
+                cache_key="jwt_key_mapping:sub:user1",
+            ),
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
+            new_callable=AsyncMock,
+            return_value=reused_key,
+        ),
+    ):
+        call = _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-4o-mini"},
+        )
+        if expect_denied:
+            with pytest.raises(ProxyException, match="not available for this API key"):
+                await call
+            return
+        result = await call
+
+    assert result.api_key == "hashed-existing-key"
+    assert result.user_id == "validated-user"
+    assert result.team_id == "validated-team"
+    assert result.models == reused_key_models
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("active", [True, False])
 async def test_auto_register_first_request_propagates_user_email(active: bool) -> None:

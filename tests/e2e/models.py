@@ -1501,6 +1501,7 @@ class UserNewBody(BaseModel):
 
 class UserNewResponse(BaseModel):
     user_id: str
+    key: str | None = None
 
 
 class UserUpdateBody(BaseModel):
@@ -1542,6 +1543,40 @@ class UserListRow(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserListRow]
     total: int
+
+
+class UserKeyRow(BaseModel):
+    token: str
+    key_alias: str | None = None
+
+
+class UserInfoWithKeysResponse(BaseModel):
+    user_id: str | None = None
+    keys: list[UserKeyRow] = []
+
+
+class JwtKeyMappingRow(BaseModel):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    created_by: str | None = None
+
+
+class JwtKeyMappingListParams(BaseModel):
+    size: int = 100
+
+
+class JwtKeyMappingListResponse(BaseModel):
+    mappings: list[JwtKeyMappingRow]
+    total_count: int
+
+
+class JwtKeyMappingDeleteBody(BaseModel):
+    id: str
+
+
+class JwtKeyMappingDeleteResponse(BaseModel):
+    status: str
 
 
 class OrgNewBody(BaseModel):

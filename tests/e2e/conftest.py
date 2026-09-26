@@ -32,6 +32,7 @@ from e2e_config import (
     MCP_OAUTH_LIVE_OPT_IN_ENV,
     OTEL_TLS_OPT_IN_ENV,
     OTEL_V2_OPT_IN_ENV,
+    OWNED_GATEWAY_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
@@ -69,6 +70,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
+        "owned_gateway": OWNED_GATEWAY_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
@@ -165,6 +167,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "owned_gateway: boots its own proxy from source against the stack's Postgres, so it needs DATABASE_URL "
+        "on the pytest host; deselected unless E2E_OWNED_GATEWAY is set",
     )
     config.addinivalue_line(
         "markers",
