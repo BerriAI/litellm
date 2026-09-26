@@ -47,6 +47,10 @@ def test_find_canary_decodes_base64_at_every_alignment_and_gzip(prefix: str) -> 
     assert [match.slot for match in find_canary(gzip.compress(f"Basic {basic}".encode()), (marker,))] == [MARKER]
     embedded: Final = b"prefix:" + gzip.compress(f"Basic {basic}".encode()) + b":suffix"
     assert [match.slot for match in find_canary(embedded, (marker,))] == [MARKER]
+    members: Final = gzip.compress(b"first member") + gzip.compress(f"Basic {basic}".encode())
+    assert [match.slot for match in find_canary(members, (marker,))] == [MARKER]
+    binary_wrapper: Final = bytes(range(256)) + f" Basic {basic} ".encode() + bytes(range(256))
+    assert [match.slot for match in find_canary(base64.b64encode(binary_wrapper), (marker,))] == [MARKER]
     assert find_canary(f"Basic {basic}".replace(basic[10:20], "A" * 10), (marker,)) == ()
     assert find_canary(f"sk-...{marker.core[-4:]}", (marker,)) == ()
 

@@ -127,11 +127,11 @@ def _matches(blob: bytes, canaries: Sequence[Canary], encoding: str, depth: int)
 
 
 def _worth_descending(decoded: bytes) -> bool:
-    """Decode further only text or gzip; a misaligned or non-base64 run decodes to noise."""
-    if _GZIP_MAGIC in decoded:
-        return True
-    printable: Final = sum(1 for byte in decoded if 32 <= byte < 127 or byte in (9, 10, 13))
-    return printable >= 0.9 * len(decoded)
+    """Recursion can only find something through a gzip member or another base64 run.
+
+    Skipping the rest is exact, not a heuristic: the core check has already run on ``decoded``.
+    """
+    return _GZIP_MAGIC in decoded or _BASE64_RUN.search(decoded) is not None
 
 
 def find_canary(blob: bytes | str, canaries: Sequence[Canary]) -> tuple[Match, ...]:
