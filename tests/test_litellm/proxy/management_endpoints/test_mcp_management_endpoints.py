@@ -13,6 +13,7 @@ from typing import Final, List, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 from respx import MockRouter
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -8237,30 +8238,36 @@ def _lit3974_prisma_client(
         return_value=SimpleNamespace(object_permission=key_permission)
     )
 
-    def find_many_side_effect(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
-        where: Final[object | None] = kwargs.get("where")
-        if not isinstance(where, Mapping):
-            return [server]
-        if "submitted_by" in where and where["submitted_by"] != server.submitted_by:
-            return []
-        server_filter: Final = where.get("server_id")
-        if isinstance(server_filter, Mapping):
-            return [server] if server.server_id in server_filter.get("in", ()) else []
-        if isinstance(server_filter, str):
-            return [server] if server.server_id == server_filter else []
-        return [server]
+    def matches_server_filter(name: str, condition: object) -> bool:
+        if name == "submitted_by":
+            return server.submitted_by == condition
+        if name == "server_id":
+            if isinstance(condition, str):
+                return server.server_id == condition
+            if isinstance(condition, Mapping) and set(condition) == {"in"}:
+                return server.server_id in condition["in"]
+        if name == "mcp_access_groups" and isinstance(condition, Mapping) and set(condition) == {"hasSome"}:
+            return bool(set(server.mcp_access_groups).intersection(condition["hasSome"]))
+        raise AssertionError(f"Unsupported MCP fixture filter: {name}={condition!r}")
 
-    def find_unique_side_effect(**kwargs: object) -> LiteLLM_MCPServerTable | None:
-        where: Final[object | None] = kwargs.get("where")
-        return server if isinstance(where, Mapping) and where.get("server_id") == server.server_id else None
+    def find_many_side_effect(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
+        where: Final = kwargs.get("where", {})
+        assert isinstance(where, Mapping)
+        return [server] if all(matches_server_filter(name, condition) for name, condition in where.items()) else []
+
+    def unique_lookup(row: BaseModel | None, identity: str) -> AsyncMock:
+        def find_unique(**kwargs: object) -> BaseModel | None:
+            return row if row is not None and kwargs.get("where") == {identity: getattr(row, identity)} else None
+
+        return AsyncMock(side_effect=find_unique)
 
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=find_many_side_effect)
-    prisma.db.litellm_mcpservertable.find_unique = AsyncMock(side_effect=find_unique_side_effect)
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
-    prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=organization)
-    prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=access_group)
-    prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=object_permission)
+    prisma.db.litellm_mcpservertable.find_unique = unique_lookup(server, "server_id")
+    prisma.db.litellm_teamtable.find_unique = unique_lookup(team, "team_id")
+    prisma.db.litellm_usertable.find_unique = unique_lookup(user, "user_id")
+    prisma.db.litellm_organizationtable.find_unique = unique_lookup(organization, "organization_id")
+    prisma.db.litellm_accessgrouptable.find_unique = unique_lookup(access_group, "access_group_id")
+    prisma.db.litellm_objectpermissiontable.find_unique = unique_lookup(object_permission, "object_permission_id")
     return prisma
 
 
@@ -9216,6 +9223,34 @@ class TestLIT3974ResolutionCharacterization:
             access_group_ids=["lit3974_access_group"] if access_group is not None else None,
         )
         return prisma, manager, auth
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "grant_route,identity_field,foreign_identity",
+        [
+            ("org object_permission", "org_id", "lit3974_foreign_org"),
+            ("direct user object_permission", "user_id", "lit3974_foreign_user"),
+            ("access-group", "access_group_ids", ["lit3974_foreign_group"]),
+        ],
+    )
+    async def test_grants_do_not_cross_caller_identities(
+        self, grant_route: str, identity_field: str, foreign_identity: str | list[str]
+    ) -> None:
+        server_id: Final = "lit3974_identity_isolation"
+        prisma, manager, auth = await self._detail_grant_case("config", grant_route, server_id)
+        foreign_auth: Final = auth.model_copy(update={identity_field: foreign_identity})
+        with (
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            permitted: Final = await mgmt_endpoints.fetch_all_mcp_servers(auth, team_id=None)
+            denied: Final = await mgmt_endpoints.fetch_all_mcp_servers(foreign_auth, team_id=None)
+        assert server_id in {server.server_id for server in permitted}
+        assert server_id not in {server.server_id for server in denied}
 
     @staticmethod
     def _resolution_error(source: str, caller: str, server_id: str) -> tuple[int, dict[str, str]] | None:
