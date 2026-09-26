@@ -7111,6 +7111,8 @@ class MCPServerManager:
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         server_ids: list[str] | None = None,
+        *,
+        checked_server_ids: frozenset[str] = frozenset(),
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to, with health status and team information.
@@ -7135,7 +7137,7 @@ class MCPServerManager:
             # Check all accessible servers
             target_server_ids = allowed_server_ids
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks([sid for sid in target_server_ids if sid not in checked_server_ids])
 
     async def get_all_allowed_mcp_servers(
         self,

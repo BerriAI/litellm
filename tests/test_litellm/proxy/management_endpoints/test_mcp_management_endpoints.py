@@ -4313,6 +4313,84 @@ async def test_health_discovery_respects_route_restricted_key_grants(
 
 
 @pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("include_reachability", [False, True])
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        (None, ("shared", "first", "second")),
+        ((), ("shared", "first", "second")),
+        (("shared", "shared", "denied"), ("shared",)),
+        (("second", "first"), ("first", "second")),
+        (("denied",), ()),
+    ],
+)
+async def test_health_checks_probe_shared_servers_once_across_auth_contexts(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    requested: tuple[str, ...] | None,
+    expected: tuple[str, ...],
+    include_reachability: bool,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = mcp_server_manager.MCPServerManager()
+    manager.registry = {
+        server_id: MCPServer(
+            server_id=server_id,
+            name=server_id,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url=f"https://mcp.example.test/{server_id}",
+        )
+        for server_id in ("shared", "first", "second", "denied")
+    }
+    routes: Final = {
+        server_id: respx_mock.get(server.url).respond(401)
+        for server_id, server in manager.registry.items()
+    }
+    contexts: Final = [
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key=f"test-health-{index}",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"health-{index}", mcp_servers=list(grants)
+            ),
+        )
+        for index, grants in enumerate((("shared", "first"), ("shared", "second")))
+    ]
+    with (
+        patch.object(
+            mgmt_endpoints, "global_mcp_server_manager", manager
+        ),
+        patch.object(
+            mcp_server_manager, "global_mcp_server_manager", manager
+        ),
+        patch.object(
+            mgmt_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=contexts)
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "restricted"}),
+    ):
+        result: Final = await mgmt_endpoints.health_check_servers(
+            server_ids=list(requested) if requested is not None else None,
+            user_api_key_dict=contexts[0],
+            include_reachability=include_reachability,
+        )
+
+    expected_status: Final = "reachable" if include_reachability else "unknown"
+    assert sorted(result, key=lambda row: row["server_id"]) == [
+        {"server_id": server_id, "status": expected_status} for server_id in sorted(expected)
+    ]
+    if requested:
+        assert [row["server_id"] for row in result] == list(expected)
+    assert {server_id: route.call_count for server_id, route in routes.items()} == {
+        server_id: int(server_id in expected) for server_id in routes
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["restricted", "view_all"])
 @pytest.mark.parametrize("detail", [False, True])
 @pytest.mark.parametrize("flag", [None, "false", "true"])

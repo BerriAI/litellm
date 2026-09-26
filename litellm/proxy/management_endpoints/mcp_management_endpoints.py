@@ -1356,6 +1356,7 @@ if MCP_AVAILABLE:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
                 server_ids=server_ids,
+                checked_server_ids=frozenset(server_status_map),
             )
             for server in servers:
                 if server.server_id not in server_status_map:
