@@ -4,7 +4,6 @@ import json
 import logging
 import re
 
-
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -21,12 +20,11 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
+from litellm.proxy.common_utils.user_api_key_cache import project_cache_key
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
-    _SpendTableName,
-    _spend_tables_left_to_send,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
@@ -2207,7 +2205,19 @@ async def test_commit_with_redis_requeues_all_on_db_failure():
     # Both failed categories must be re-queued to Redis, nothing lost
     mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
     _, kwargs = mock_redis_update_buffer.restore_transactions_to_redis.call_args
-    assert kwargs["db_spend_update_transactions"] == db_spend
+    assert kwargs["db_spend_update_transactions"] == {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": None,
+        "key_list_transactions": {"key1": 1.5},
+        "team_list_transactions": None,
+        "team_member_list_transactions": None,
+        "org_list_transactions": None,
+        "org_member_list_transactions": None,
+        "project_list_transactions": None,
+        "tag_list_transactions": None,
+        "agent_list_transactions": None,
+        "model_access_group_list_transactions": None,
+    }
     assert kwargs["daily_spend_update_transactions"] == daily_user
     # The lock must still be released
     mock_pod_lock_manager.release_lock.assert_awaited_once()
@@ -3191,6 +3201,249 @@ async def test_failed_daily_tag_spend_commit_requeues_the_rows():
 
 
 @pytest.mark.asyncio
+async def test_failed_team_spend_commit_still_commits_org_spend_and_requeues_the_team_rows():
+    """A failed team aggregate must not block the organization aggregate, and its increment must retry next tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.spend_update_queue.add_update(
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team-1", "response_cost": 0.5}
+    )
+    await db_writer.spend_update_queue.add_update(
+        {"entity_type": Litellm_EntityType.ORGANIZATION, "entity_id": "org-1", "response_cost": 0.5}
+    )
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_teamtable.update_many.side_effect = _postgres_rejection("42P01")
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj.call_details = {}
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    mock_batcher.litellm_organizationtable.update_many.assert_called_once_with(
+        where={"organization_id": "org-1"},
+        data={"spend": {"increment": 0.5}},
+    )
+    mock_batcher.litellm_teamtable.update_many.side_effect = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert mock_batcher.litellm_teamtable.update_many.call_count == 2
+    assert mock_batcher.litellm_teamtable.update_many.call_args_list[-1] == call(
+        where={"team_id": "team-1"},
+        data={"spend": {"increment": 0.5}},
+    )
+    assert mock_batcher.litellm_organizationtable.update_many.call_count == 1
+    assert db_writer.spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_failed_team_spend_commit_that_the_database_refused_is_dropped_not_requeued():
+    """A team increment rejected by the database must be dropped while later aggregates still commit."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.spend_update_queue.add_update(
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team-1", "response_cost": 0.5}
+    )
+    await db_writer.spend_update_queue.add_update(
+        {"entity_type": Litellm_EntityType.ORGANIZATION, "entity_id": "org-1", "response_cost": 0.5}
+    )
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_teamtable.update_many.side_effect = _postgres_rejection("23502")
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj.call_details = {}
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    mock_batcher.litellm_organizationtable.update_many.assert_called_once_with(
+        where={"organization_id": "org-1"},
+        data={"spend": {"increment": 0.5}},
+    )
+    assert db_writer.spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_failed_org_spend_commit_from_redis_restores_only_the_org_rows():
+    """A failed organization aggregate from Redis must restore only organization rows after team spend commits."""
+    db_writer = DBSpendUpdateWriter()
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(
+            _empty_spend_transactions(team_list_transactions={"team-1": 0.5}, org_list_transactions={"org-1": 0.5}),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db_writer.pod_lock_manager.release_lock = AsyncMock()
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_organizationtable.update_many.side_effect = _postgres_rejection("42P01")
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj.call_details = {}
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    mock_batcher.litellm_teamtable.update_many.assert_called_once_with(
+        where={"team_id": "team-1"},
+        data={"spend": {"increment": 0.5}},
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
+    assert restored["org_list_transactions"] == {"org-1": 0.5}
+    assert restored["team_list_transactions"] is None
+    db_writer.pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_team_spend_commit_from_redis_still_commits_org_spend():
+    """A failed team aggregate from Redis must not block the organization aggregate."""
+    db_writer = DBSpendUpdateWriter()
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(
+            _empty_spend_transactions(team_list_transactions={"team-1": 0.5}, org_list_transactions={"org-1": 0.5}),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db_writer.pod_lock_manager.release_lock = AsyncMock()
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_teamtable.update_many.side_effect = _postgres_rejection("42P01")
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj.call_details = {}
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    mock_batcher.litellm_organizationtable.update_many.assert_called_once_with(
+        where={"organization_id": "org-1"},
+        data={"spend": {"increment": 0.5}},
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
+    assert restored["team_list_transactions"] == {"team-1": 0.5}
+    assert restored["org_list_transactions"] is None
+    db_writer.pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("transactions", "cache_key"),
+    [
+        pytest.param(
+            {"team_member_list_transactions": {"team_id::team-1::user_id::user-1": 0.5}},
+            "team_membership:user-1:team-1",
+            id="team membership spend landed before its cache invalidation failed",
+        ),
+        pytest.param(
+            {"project_list_transactions": {"p1": 0.5}},
+            project_cache_key("p1"),
+            id="project spend landed before its cache invalidation failed",
+        ),
+    ],
+)
+async def test_cache_invalidation_failure_after_commit_does_not_requeue_the_rows(
+    transactions: dict[str, dict[str, float]], cache_key: str
+):
+    """A cache outage after a spend commit must not retry the already committed spend."""
+    db_writer = DBSpendUpdateWriter()
+    mock_batcher = MagicMock()
+    mock_transaction = _good_tx(mock_batcher)
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=mock_transaction)
+    cache = MagicMock()
+    cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {"user_api_key_cache": cache}
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    result = await db_writer._commit_spend_updates_to_db_per_table(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+        db_spend_update_transactions=_empty_spend_transactions(**transactions),
+    )
+
+    assert result is None
+    cache.async_delete_cache.assert_awaited_once_with(key=cache_key)
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidation_failure_for_one_project_does_not_skip_remaining_projects():
+    db_writer = DBSpendUpdateWriter()
+    mock_batcher = MagicMock()
+    mock_transaction = _good_tx(mock_batcher)
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=mock_transaction)
+    cache = MagicMock()
+    cache.async_delete_cache = AsyncMock(side_effect=[RuntimeError("redis down"), None])
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {"user_api_key_cache": cache}
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    result = await db_writer._commit_spend_updates_to_db_per_table(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+        db_spend_update_transactions=_empty_spend_transactions(
+            project_list_transactions={"p1": 0.5, "p2": 0.5}
+        ),
+    )
+
+    assert result is None
+    assert cache.async_delete_cache.await_count == 2
+    assert cache.async_delete_cache.await_args_list == [
+        call(key=project_cache_key("p1")),
+        call(key=project_cache_key("p2")),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     """The Redis drain is destructive, so a failed window commit has to push
     the popped increments back exactly like the other spend categories."""
@@ -3230,7 +3483,7 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
 
 @pytest.mark.parametrize(("failure", "safe_to_resend"), _REQUEUE_SAFETY_CASES)
 @pytest.mark.asyncio
-async def test_failed_per_entity_increment_from_redis_restores_only_what_may_still_be_sent(
+async def test_failed_per_entity_increment_from_redis_commits_the_other_tables_and_restores_only_the_failed_one(
     failure: Exception, safe_to_resend: bool
 ):
     db_writer = DBSpendUpdateWriter()
@@ -3296,14 +3549,18 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
-    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs[
-        "db_spend_update_transactions"
-    ]
-    assert restored["user_list_transactions"] is None
-    assert restored["team_list_transactions"] == {"team-1": 1.5}
-    assert restored["key_list_transactions"] == ({"key-1": 1.5} if safe_to_resend else None)
     mock_batcher.litellm_usertable.update_many.assert_called_once()
+    mock_batcher.litellm_teamtable.update_many.assert_called_once()
+    if safe_to_resend:
+        mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+        restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs[
+            "db_spend_update_transactions"
+        ]
+        assert restored["key_list_transactions"] == {"key-1": 1.5}
+        assert restored["user_list_transactions"] is None
+        assert restored["team_list_transactions"] is None
+    else:
+        mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
 
 
 @pytest.mark.parametrize(("failure", "safe_to_resend"), _REQUEUE_SAFETY_CASES)
@@ -3456,83 +3713,6 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
 
 
 @pytest.mark.asyncio
-async def test_commit_spend_updates_to_db_reports_each_completed_table():
-    db_writer = DBSpendUpdateWriter()
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.call_details = {}
-    on_table_committed = MagicMock()
-
-    await db_writer._commit_spend_updates_to_db(
-        prisma_client=mock_prisma_client,
-        n_retry_times=0,
-        proxy_logging_obj=proxy_logging_obj,
-        db_spend_update_transactions=_empty_spend_transactions(
-            org_member_list_transactions={},
-            project_list_transactions={},
-            model_access_group_list_transactions={},
-        ),
-        on_table_committed=on_table_committed,
-    )
-
-    assert on_table_committed.call_args_list == [
-        call("user_list_transactions"),
-        call("end_user_list_transactions"),
-        call("key_list_transactions"),
-        call("team_list_transactions"),
-        call("team_member_list_transactions"),
-        call("org_list_transactions"),
-        call("org_member_list_transactions"),
-        call("project_list_transactions"),
-        call("tag_list_transactions"),
-        call("model_access_group_list_transactions"),
-        call("agent_list_transactions"),
-    ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "transactions, table",
-    [
-        pytest.param(
-            {"team_member_list_transactions": {"team_id::t1::user_id::u1": 0.5}},
-            "team_member_list_transactions",
-            id="team membership spend landed before its cache invalidation failed",
-        ),
-        pytest.param(
-            {"project_list_transactions": {"p1": 0.5}},
-            "project_list_transactions",
-            id="project spend landed before its cache invalidation failed",
-        ),
-    ],
-)
-async def test_commit_spend_updates_to_db_reports_table_committed_before_cache_invalidation(
-    transactions: dict[str, dict[str, float]], table: _SpendTableName
-):
-    db_writer = DBSpendUpdateWriter()
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
-    user_api_key_cache = MagicMock()
-    user_api_key_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.call_details = {"user_api_key_cache": user_api_key_cache}
-    committed = []
-
-    with pytest.raises(ConnectionError):
-        await db_writer._commit_spend_updates_to_db(
-            prisma_client=mock_prisma_client,
-            n_retry_times=0,
-            proxy_logging_obj=proxy_logging_obj,
-            db_spend_update_transactions=_empty_spend_transactions(**transactions),
-            on_table_committed=committed.append,
-        )
-
-    user_api_key_cache.async_delete_cache.assert_awaited_once()
-    assert committed[-1] == table
-    assert _spend_tables_left_to_send(_empty_spend_transactions(**transactions), committed, ConnectionError()) is None
-
-
 @pytest.mark.asyncio
 async def test_daily_transaction_internal_call_keeps_spend_but_not_request_counts():
     """Internal sub-calls (auto-router classifier, shadow eval's shadow and judge) bill
