@@ -1,0 +1,106 @@
+name: "Unit Tests: Redis Client Version Compatibility"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "litellm_**"
+    paths:
+      - "litellm/_redis.py"
+      - "litellm/_redis_credential_provider.py"
+      - "litellm/caching/redis_cache.py"
+      - "litellm/caching/evicted_client_closer.py"
+      - "tests/unit/test_redis.py"
+      - "tests/local_testing/test_caching.py"
+      - "tests/unit/caching/test_redis_connection_pool.py"
+      - "tests/unit/caching/test_redis_cluster_cache.py"
+      - "tests/unit/caching/test_evicted_client_closer.py"
+      - ".github/workflows/test-redis-compat.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  redis-compat:
+    name: "redis-py ${{ matrix.redis-version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 5.3.1 is the version pinned in uv.lock (redisvl caps it below 6); the
+        # newer legs prove the inspect.signature introspection in litellm/_redis.py
+        # keeps extracting kwargs on the redis-py releases people actually run now.
+        # Only the exact release 6.0.0 is skipped: rq (pulled by the proxy extra)
+        # specifies `redis != 6`, which excludes 6.0.0 alone, so 6.4.0 stands in
+        # for the 6.x line.
+        redis-version: ["5.3.1", "6.4.0", "7.4.1", "8.0.1"]
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra extra_proxy --extra semantic-router
+
+      - name: Pin redis-py to the matrix version
+        env:
+          REDIS_VERSION: ${{ matrix.redis-version }}
+        run: |
+          uv pip install "redis==${REDIS_VERSION:?}"
+          uv run --no-sync python -c "import redis; assert redis.__version__ == '${REDIS_VERSION:?}', redis.__version__; print('redis-py', redis.__version__)"
+
+      - name: Build Redis for cluster authentication tests
+        run: |
+          curl --fail --location --retry 3 https://download.redis.io/releases/redis-7.2.16.tar.gz -o "$RUNNER_TEMP/redis-7.2.16.tar.gz"
+          echo "960a8ec15e34ff40e57ff16837b26b33bd81f2da6d24497bb63de532a323a18e  $RUNNER_TEMP/redis-7.2.16.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/redis-7.2.16.tar.gz" -C "$RUNNER_TEMP"
+          make -C "$RUNNER_TEMP/redis-7.2.16" -j2 MALLOC=libc OPTIMIZATION=-O1 redis-server
+          echo "$RUNNER_TEMP/redis-7.2.16/src" >> "$GITHUB_PATH"
+
+      - name: Run redis unit tests
+        run: |
+          redis-server --version
+          uv run --no-sync pytest \
+            tests/unit/test_redis.py \
+            tests/unit/caching/test_redis_connection_pool.py \
+            tests/unit/caching/test_redis_cluster_cache.py \
+            tests/unit/caching/test_evicted_client_closer.py \
+            tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
+            tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_gcp_credentials \
+            --tb=short -vv \
+            --reruns 2 \
+            --reruns-delay 1 \
+            --durations=20 \
+            --cov=./litellm --cov-report=xml:coverage-redis.xml
+
+      - name: Upload Redis coverage
+        if: matrix.redis-version == '5.3.1'
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          files: coverage-redis.xml
+          flags: redis-compat
+          fail_ci_if_error: false

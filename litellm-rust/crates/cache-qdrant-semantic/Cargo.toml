@@ -1,0 +1,27 @@
+[package]
+name = "litellm-cache-qdrant-semantic"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-http.workspace = true
+futures-util.workspace = true
+litellm-cache.workspace = true
+qdrant-client = { workspace = true, features = ["serde"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+futures-executor = "0.3"
+litellm-cache-testing.workspace = true
+rstest.workspace = true
+tonic = "0.14"
+tonic-prost = "0.14"
+tokio-stream = "0.1"

@@ -3,6 +3,8 @@ import os
 import re
 import traceback
 
+import httpx
+
 import openai
 import pytest
 from dotenv import load_dotenv
@@ -13,6 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import completion, completion_cost, embedding
+from openai.types import CreateEmbeddingResponse
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
+from tests.capturing_transport import CapturingTransport
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 litellm.set_verbose = False
 
@@ -267,11 +273,14 @@ def test_openai_azure_embedding_timeouts():
 def test_openai_embedding_timeouts():
     try:
         response = embedding(
-            model="text-embedding-ada-002",
+            model="openai/slow-endpoint",
             input=["good morning from litellm"],
-            timeout=0.00001,
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            timeout=0.5,
         )
         print(response)
+        pytest.fail("Expected timeout error, the request returned instead")
     except openai.APITimeoutError:
         print("Good job got OpenAI timeout error!")
         pass
@@ -1255,56 +1264,34 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
         assert sent_data["input"] == expected_payload_input
 
 
-def test_encoding_format_defaults_to_float_for_openai_sdk(monkeypatch):
+def test_encoding_format_omitted_by_default_for_openai_sdk(monkeypatch):
     """
-    When encoding_format is not provided, LiteLLM sends `float` for OpenAI-path embeddings.
+    When encoding_format is not provided, LiteLLM leaves it out of the upstream request.
 
     Optional global override: `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT`.
     """
     monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
-        # Create a mock client instance
-        mock_client_instance = MagicMock()
-        mock_get_client.return_value = mock_client_instance
-
-        # Mock the embeddings.with_raw_response.create method
-        mock_response = MagicMock()
-        mock_response.parse.return_value = MagicMock(
-            model_dump=lambda: {
-                "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
-                "model": "text-embedding-ada-002",
-                "object": "list",
-                "usage": {"prompt_tokens": 1, "total_tokens": 1},
-            }
-        )
-        mock_response.headers = {}
-
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
-        )
-
-        # Call the embedding function without encoding_format
-        response = embedding(
+    transport = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
             model="text-embedding-ada-002",
-            input="Hello world",
+            usage=EmbeddingUsage(prompt_tokens=1, total_tokens=1),
         )
+    )
+    client = openai.OpenAI(api_key="sk-test", http_client=httpx.Client(transport=transport))
 
-        # Get the call arguments to verify what was sent to OpenAI SDK
-        call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
-        assert (
-            call_args is not None
-        ), "OpenAI SDK embeddings.create should have been called"
+    response = embedding(
+        model="text-embedding-ada-002",
+        input="Hello world",
+        api_key="sk-test",
+        client=client,
+    )
 
-        call_kwargs = call_args[1]  # Get kwargs
-
-        assert "encoding_format" in call_kwargs
-        assert (
-            call_kwargs["encoding_format"] == "float"
-        ), "encoding_format should default to float when not provided by user"
-
-        print("✅ PASS: encoding_format='float' is correctly passed to OpenAI SDK")
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert "encoding_format" not in transport.request_bodies[0], (
+        "encoding_format should be omitted from the upstream request when not provided by user"
+    )
 
 
 def test_encoding_format_explicit_value_preserved():

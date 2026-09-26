@@ -9,14 +9,42 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    AgentAccess,
     AgentRequestHandler,
     RestrictedAgentAccess,
     UnrestrictedAgentAccess,
+    accessible_agents,
 )
+from litellm.types.agents import AgentCaller
+
+
+def _registry_with(*agent_names: str) -> AgentRegistry:
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config(
+        [
+            {
+                "agent_name": name,
+                "agent_card_params": {"name": name, "url": "http://localhost", "version": "1.0.0"},
+            }
+            for name in agent_names
+        ]
+    )
+    return registry
+
+
+def _agent_id(registry: AgentRegistry, agent_name: str) -> str:
+    agent: Final = registry.get_agent_by_name(agent_name)
+    assert agent is not None
+    return agent.agent_id
+
+
+async def _single_context(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+    return [user_api_key_auth]
 
 
 @pytest.mark.asyncio
@@ -129,6 +157,130 @@ class TestAgentRequestHandler:
                         )
                         is False
                     ), agent_id
+
+    @staticmethod
+    def _ceiling_resolver(agent_ids: frozenset[str] | None) -> tuple[CeilingResolver, list[str]]:
+        """A resolver that records the agent ids it was asked about and answers with a fixed
+        ceiling, or None when the agent has no access groups attached."""
+        asked: Final[list[str]] = []
+
+        async def resolve(agent_id: str) -> AgentAccessGroupCeiling | None:
+            asked.append(agent_id)
+            if agent_ids is None:
+                return None
+            return AgentAccessGroupCeiling(
+                access_group_ids=("ag-1",), models=frozenset(), mcp_server_ids=frozenset(), agent_ids=agent_ids
+            )
+
+        return resolve, asked
+
+    @staticmethod
+    def _key_granting(agent_ids: list[str], agent_id: str | None) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id=agent_id,
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="obj-1", agents=agent_ids),
+        )
+
+    async def test_agent_access_groups_cap_an_otherwise_unrestricted_key(self):
+        """A key with no agent grant of its own may still only reach the agents its
+        agent's attached access groups name."""
+        agent_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="caller-agent")
+        resolve, asked = self._ceiling_resolver(frozenset({"agent-beta"}))
+
+        assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+            frozenset({"agent-beta"})
+        )
+        assert await AgentRequestHandler.is_agent_allowed("agent-beta", agent_key, resolve) is True
+        assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key, resolve) is False
+        assert asked == ["caller-agent"] * 3
+
+    @staticmethod
+    def _team_grants(grants: dict[str, AgentAccess]) -> AsyncMock:
+        async def by_team(user_api_key_auth: UserAPIKeyAuth | None = None) -> AgentAccess:
+            assert user_api_key_auth is not None
+            return grants.get(user_api_key_auth.team_id or "", UnrestrictedAgentAccess())
+
+        return AsyncMock(side_effect=by_team)
+
+    async def test_agent_key_acting_for_a_user_is_capped_at_the_invoking_teams_agents(self):
+        """LIT-8014: the agent's key and access groups reach alpha and beta, but the human who
+        invoked it belongs to a team granted only beta, so on their behalf the agent reaches only beta."""
+        agent_key: Final = self._key_granting(["agent-alpha", "agent-beta"], agent_id="caller-agent")
+        agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+        resolve, _ = self._ceiling_resolver(frozenset({"agent-alpha", "agent-beta", "agent-gamma"}))
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler,
+            "_get_allowed_agents_for_team",
+            self._team_grants({"callers": RestrictedAgentAccess(frozenset({"agent-beta", "agent-gamma"}))}),
+        ) as mock_team:
+            assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+                frozenset({"agent-beta"})
+            )
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key, resolve) is False
+
+        assert {call.args[0].team_id for call in mock_team.call_args_list} == {None, "callers"}
+
+    async def test_agent_key_acting_for_a_user_whose_team_grants_no_agent_reaches_none(self):
+        agent_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="caller-agent")
+        agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+        resolve, _ = self._ceiling_resolver(None)
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler,
+            "_get_allowed_agents_for_team",
+            self._team_grants({"callers": RestrictedAgentAccess(frozenset())}),
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+                frozenset()
+            )
+
+    async def test_agent_key_acting_for_an_ungranted_caller_keeps_its_own_agents(self):
+        agent_key: Final = self._key_granting(["agent-alpha"], agent_id="caller-agent")
+        agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+        resolve, _ = self._ceiling_resolver(None)
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler, "_get_allowed_agents_for_team", self._team_grants({})
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+                frozenset({"agent-alpha"})
+            )
+
+
+    async def test_agent_access_groups_intersect_with_key_grants(self):
+        agent_key: Final = self._key_granting(["agent-alpha", "agent-beta"], agent_id="caller-agent")
+        resolve, _ = self._ceiling_resolver(frozenset({"agent-beta", "agent-gamma"}))
+
+        assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+            frozenset({"agent-beta"})
+        )
+        assert await AgentRequestHandler.is_agent_allowed("agent-gamma", agent_key, resolve) is False
+
+    async def test_agent_access_groups_naming_no_agent_deny_every_agent(self):
+        agent_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="caller-agent")
+        resolve, _ = self._ceiling_resolver(frozenset())
+
+        assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(frozenset())
+        assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key, resolve) is False
+
+    async def test_agent_without_access_groups_keeps_key_grants(self):
+        agent_key: Final = self._key_granting(["agent-alpha"], agent_id="caller-agent")
+        resolve, asked = self._ceiling_resolver(None)
+
+        assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+            frozenset({"agent-alpha"})
+        )
+        assert asked == ["caller-agent"]
+
+    async def test_key_without_agent_never_consults_agent_access_groups(self):
+        plain_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        resolve, asked = self._ceiling_resolver(frozenset())
+
+        assert await AgentRequestHandler.resolve_agent_access(plain_key, resolve) == UnrestrictedAgentAccess()
+        assert asked == []
 
     async def test_empty_access_group_denies_every_agent(self):
         """LIT-5143: a key restricted to an access group that resolves to no agents is
@@ -264,6 +416,78 @@ class TestAgentRequestHandler:
                     user_api_key_auth=mock_user_auth
                 )
                 assert result == UnrestrictedAgentAccess()
+
+    async def test_accessible_agents_hides_ungranted_agents_from_non_admins(self):
+        """LIT-6862: a key with no agent grant on itself or its team must list nothing,
+        while a proxy admin with the same lack of grants still lists every agent."""
+        registry: Final = _registry_with("alpha", "beta")
+        internal_user: Final = UserAPIKeyAuth(
+            api_key="test-key", user_id="alice", team_id="team-no-perms", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        proxy_admin: Final = UserAPIKeyAuth(
+            api_key="admin-key", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        async def no_grant_anywhere(user_api_key_auth: UserAPIKeyAuth) -> AgentAccess:
+            return UnrestrictedAgentAccess()
+
+        assert (
+            await accessible_agents(internal_user, registry.get_agent_list(), no_grant_anywhere, _single_context) == ()
+        )
+        assert {
+            agent.agent_name
+            for agent in await accessible_agents(
+                proxy_admin, registry.get_agent_list(), no_grant_anywhere, _single_context
+            )
+        } == {"alpha", "beta"}
+
+    async def test_accessible_agents_lists_only_granted_agents(self):
+        """A grant for one agent lists that agent and hides the ungranted one."""
+        registry: Final = _registry_with("alpha", "beta")
+        granted_user: Final = UserAPIKeyAuth(
+            api_key="test-key", user_id="bob", team_id="team-granted", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        async def alpha_only(user_api_key_auth: UserAPIKeyAuth) -> AgentAccess:
+            return RestrictedAgentAccess(frozenset({_agent_id(registry, "alpha")}))
+
+        listed: Final = await accessible_agents(granted_user, registry.get_agent_list(), alpha_only, _single_context)
+        assert [agent.agent_name for agent in listed] == ["alpha"]
+
+    async def test_accessible_agents_resolves_dashboard_session_through_real_teams_and_user(self):
+        """LIT-6862: a dashboard session carries the shared litellm-dashboard team id, which holds no
+        grants. Listing must union the grants of the user's real teams and of the user row instead
+        of treating the session as ungranted or as unrestricted."""
+        registry: Final = _registry_with("alpha", "beta", "gamma")
+        session: Final = UserAPIKeyAuth(
+            api_key="session-key",
+            user_id="alice",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        admitted_user: Final = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+        grants: Final = {
+            "team-granted": RestrictedAgentAccess(frozenset({_agent_id(registry, "alpha")})),
+            "team-no-perms": UnrestrictedAgentAccess(),
+            UI_SESSION_TOKEN_TEAM_ID: UnrestrictedAgentAccess(),
+        }
+
+        async def effective_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+            assert user_api_key_auth is session
+            return [
+                session.model_copy(update={"team_id": "team-granted"}),
+                session.model_copy(update={"team_id": "team-no-perms"}),
+                admitted_user,
+            ]
+
+        async def resolve_access(user_api_key_auth: UserAPIKeyAuth) -> AgentAccess:
+            if user_api_key_auth is admitted_user:
+                return RestrictedAgentAccess(frozenset({_agent_id(registry, "beta")}))
+            assert user_api_key_auth.team_id is not None
+            return grants[user_api_key_auth.team_id]
+
+        listed: Final = await accessible_agents(session, registry.get_agent_list(), resolve_access, effective_contexts)
+        assert {agent.agent_name for agent in listed} == {"alpha", "beta"}
 
     async def test_get_allowed_agents_for_key_via_access_group_ids(self):
         """

@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -68,6 +69,7 @@ from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router as _Router
 
     Router = _Router
@@ -98,6 +100,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args={},
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
+        async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -106,13 +109,16 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = internal_usage_cache or DualCache()
-        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_http_handler = async_http_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
+        self._periodic_flush_task: asyncio.Task[None] | None = None
         self.hanging_request_check = AlertingHangingRequestCheck(
             slack_alerting_object=self,
         )
@@ -123,6 +129,12 @@ class SlackAlerting(CustomBatchLogger):
         self.digest_buckets: dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
+
+    def _ensure_periodic_flush_task(self) -> None:
+        if self.periodic_started and (self._periodic_flush_task is None or not self._periodic_flush_task.done()):
+            return
+        self._periodic_flush_task = asyncio.create_task(self.periodic_flush())
+        self.periodic_started = True
 
     def update_values(
         self,
@@ -136,17 +148,14 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started:
-                asyncio.create_task(self.periodic_flush())
-                self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
                 self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
@@ -545,9 +554,12 @@ class SlackAlerting(CustomBatchLogger):
         # Get the appropriate budget alert type handler
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
-        user_info_json: Final = user_info.model_dump(exclude_none=True)
         user_info_str: Final = self._get_user_info_str(user_info)
-        event_message = budget_alert_class.get_event_message()
+        event_message = (
+            "Team Member Budget: "
+            if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
+            else budget_alert_class.get_event_message()
+        )
 
         # Set default event unless we're in projected_limit_exceeded
         event: (
@@ -575,7 +587,22 @@ class SlackAlerting(CustomBatchLogger):
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
-                    **user_info_json,
+                    spend=user_info.spend,
+                    max_budget=user_info.max_budget,
+                    soft_budget=user_info.soft_budget,
+                    token=user_info.token,
+                    customer_id=user_info.customer_id,
+                    user_id=user_info.user_id,
+                    team_id=user_info.team_id,
+                    team_alias=user_info.team_alias,
+                    organization_id=user_info.organization_id,
+                    user_email=user_info.user_email,
+                    key_alias=user_info.key_alias,
+                    projected_exceeded_date=user_info.projected_exceeded_date,
+                    projected_spend=user_info.projected_spend,
+                    event_group=user_info.event_group,
+                    alert_emails=user_info.alert_emails,
+                    max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
                 await self.send_alert(
                     message=event_message + "\n\n" + user_info_str,
@@ -632,10 +659,10 @@ class SlackAlerting(CustomBatchLogger):
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
-                event_message += "5% Threshold Crossed "
+                event_message += "5% or less of budget remaining"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
-                event_message += "15% Threshold Crossed"
+                event_message += "15% or less of budget remaining"
 
         return event, event_message
 
@@ -657,8 +684,8 @@ class SlackAlerting(CustomBatchLogger):
         """
         Create a standard message for a budget alert
         """
-        _all_fields_as_dict: Final = user_info.model_dump(exclude_none=True)
-        _all_fields_as_dict.pop("token")
+        _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
+        _all_fields_as_dict.pop("token", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
@@ -1006,7 +1033,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             pass
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: Any):
+    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
         base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
         model_info = {}
         base_model = ""
@@ -1427,9 +1454,8 @@ Model Info:
             return
 
         # Start periodic flush if not already started
-        if not self.periodic_started and self.alerting is not None and len(self.alerting) > 0:
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+        if self.alerting is not None and len(self.alerting) > 0:
+            self._ensure_periodic_flush_task()
 
         if "webhook" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
             await self.send_webhook_alert(webhook_event=user_info)
@@ -1485,9 +1511,9 @@ Model Info:
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
-                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
-                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+                raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1516,10 +1542,10 @@ Model Info:
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
-            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
 
         if slack_webhook_url is None:
-            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
@@ -1568,12 +1594,12 @@ Model Info:
         if not self.log_queue:
             return
 
-        squashed_queue: Final = squash_payloads(self.log_queue)
-        tasks: Final = [
-            send_to_webhook(slackAlertingInstance=self, item=item["item"], count=item["count"])
-            for item in squashed_queue.values()
-        ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            *(
+                send_to_webhook(slackAlertingInstance=self, item=squashed.item, count=squashed.count)
+                for squashed in squash_payloads(self.log_queue)
+            )
+        )
         self.log_queue.clear()
 
     async def _flush_digest_buckets(self):
@@ -1930,6 +1956,68 @@ Model Info:
         except Exception as e:
             verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
 
+    async def send_user_spend_alerts(self, prisma_client: "PrismaClient | None" = None) -> None:
+        """Check per-user daily/monthly spend thresholds and spend anomalies, alerting once per user per period."""
+        if self.alerting is None or "slack" not in self.alerting:
+            return
+
+        thresholds_enabled: Final = AlertType.user_spend_thresholds in self.alert_types
+        anomalies_enabled: Final = AlertType.user_spend_anomalies in self.alert_types
+        if not thresholds_enabled and not anomalies_enabled:
+            return
+
+        from litellm.proxy.proxy_server import prisma_client as global_prisma_client
+
+        client: Final = prisma_client if prisma_client is not None else global_prisma_client
+        if client is None:
+            return
+
+        from litellm.integrations.SlackAlerting.user_spend_alerts import (
+            evaluate_user_spend,
+            fetch_user_spend_rows,
+        )
+
+        try:
+            today: Final = datetime.datetime.now(datetime.timezone.utc).date()
+            rows: Final = await fetch_user_spend_rows(
+                prisma_client=client,
+                today=today,
+                baseline_days=self.alerting_args.spend_anomaly_baseline_days,
+            )
+            all_events: Final = tuple(
+                event
+                for row in rows
+                for event in evaluate_user_spend(
+                    row=row,
+                    args=self.alerting_args,
+                    today=today,
+                    thresholds_enabled=thresholds_enabled,
+                    anomalies_enabled=anomalies_enabled,
+                )
+            )
+            cached_flags: Final = await asyncio.gather(
+                *(self.internal_usage_cache.async_get_cache(key=event.cache_key) for event in all_events)
+            )
+            new_events: Final = tuple(event for event, cached in zip(all_events, cached_flags) if not cached)
+            for alert_type in (AlertType.user_spend_thresholds, AlertType.user_spend_anomalies):
+                typed_events = tuple(event for event in new_events if event.alert_type == alert_type)
+                if not typed_events:
+                    continue
+                await self.send_alert(
+                    message="\n\n".join(event.message for event in typed_events),
+                    level="High",
+                    alert_type=alert_type,
+                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                )
+                for event in typed_events:
+                    await self.internal_usage_cache.async_set_cache(
+                        key=event.cache_key,
+                        value="SENT",
+                        ttl=event.cache_ttl,
+                    )
+        except Exception as e:  # noqa: BLE001  # background job must not crash the scheduler
+            verbose_proxy_logger.exception("Error sending user spend alerts: %s", e)
+
     async def send_fallback_stats_from_prometheus(self):
         """
         Helper to send fallback statistics from prometheus server -> to slack
@@ -1973,7 +2061,7 @@ Model Info:
         try:
             message = f"`{event_name}`\n"
 
-            key_event_dict: Final = key_event.model_dump()
+            key_event_dict: Final[dict[str, object]] = key_event.model_dump()
 
             # Add Created by information first
             message += "*Action Done by:*\n"

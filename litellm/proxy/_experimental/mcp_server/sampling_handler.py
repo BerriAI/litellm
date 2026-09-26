@@ -18,8 +18,7 @@ if typing.TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from fastapi import Request
-    from mcp.client.session import ClientSession
-    from mcp.shared.context import RequestContext
+    from mcp.client.session import ClientRequestContext
     from mcp.types import (
         ContentBlock,
         CreateMessageResult,
@@ -333,14 +332,14 @@ def _convert_single_content(
         return {"type": "text", "text": content.text}
     elif content_type == "image":
         image_data: Final[str] = getattr(content, "data", "")
-        image_mime_type: Final[str] = getattr(content, "mimeType", "image/png")
+        image_mime_type: Final[str] = getattr(content, "mime_type", "image/png")
         return {
             "type": "image_url",
             "image_url": {"url": f"data:{image_mime_type};base64,{image_data}"},
         }
     elif content_type == "audio":
         audio_data: Final[str] = getattr(content, "data", "")
-        audio_mime_type: Final[str] = getattr(content, "mimeType", "audio/wav")
+        audio_mime_type: Final[str] = getattr(content, "mime_type", "audio/wav")
         # Map MIME type to OpenAI audio format
         format_map: Final = {
             "audio/wav": "wav",
@@ -375,7 +374,7 @@ def _convert_single_content(
         # ToolResultContent → proper OpenAI tool-role message.
         # Marked so the message-level converter can emit it as a
         # separate ``{"role": "tool", ...}`` message.
-        tool_result_use_id: Final = getattr(content, "toolUseId", "")
+        tool_result_use_id: Final = getattr(content, "tool_use_id", "")
         nested_content: Final[Sequence[ContentBlock]] = getattr(content, "content", [])
         if isinstance(nested_content, list):
             text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
@@ -538,7 +537,7 @@ def _extract_tool_results(
     results: Final = []
     for item in items:
         if getattr(item, "type", None) == "tool_result":
-            tool_use_id = getattr(item, "toolUseId", "")
+            tool_use_id = getattr(item, "tool_use_id", "")
             # Extract text from nested content
             nested_content: Sequence[ContentBlock] = getattr(item, "content", [])
             if isinstance(nested_content, list):
@@ -573,7 +572,7 @@ def _convert_mcp_tools_to_openai(
             "function": {
                 "name": tool.name,
                 "description": tool.description or "",
-                "parameters": tool.inputSchema
+                "parameters": tool.input_schema
                 or {
                     "type": "object",
                     "properties": {},
@@ -718,7 +717,7 @@ def _convert_openai_response_to_mcp_result(
             role="assistant",
             content=content_parts,
             model=actual_model,
-            stopReason=stop_reason,
+            stop_reason=stop_reason,
         )
     # Simple text response
     text: Final = message.content or ""
@@ -726,7 +725,7 @@ def _convert_openai_response_to_mcp_result(
         role="assistant",
         content=TextContent(type="text", text=text),
         model=actual_model,
-        stopReason=stop_reason,
+        stop_reason=stop_reason,
     )
 
 
@@ -771,6 +770,7 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
 
     try:
         import litellm
+        from litellm.proxy._types import ModelAccessDeniedProxyException
         from litellm.proxy.auth.auth_checks import (
             _check_team_member_model_access,
             can_key_call_model,
@@ -884,11 +884,14 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
         )
         return None
     except Exception as access_err:
-        verbose_logger.warning(
-            "MCP sampling: model access denied for model=%s: %s",
-            model,
-            access_err,
-        )
+        if isinstance(access_err, ModelAccessDeniedProxyException):
+            verbose_logger.warning(
+                "MCP sampling: model access denied for model=%s: %s",
+                model,
+                access_err.sanitized_internal_message(),
+            )
+            return ErrorData(code=-1, message=access_err.message)
+        verbose_logger.warning("MCP sampling: model access denied for model=%s: %s", model, access_err)
         return ErrorData(
             code=-1,
             message=(f"Model access denied: the API key is not authorized to use model '{model}'. {access_err}"),
@@ -1062,21 +1065,21 @@ async def _build_completion_kwargs(
 ) -> dict[str, Any]:
     openai_messages: Final = _convert_mcp_messages_to_openai(
         messages=params.messages,
-        system_prompt=params.systemPrompt,
+        system_prompt=params.system_prompt,
     )
     completion_kwargs: Final[dict[str, object]] = {
         "model": model,
         "messages": openai_messages,
-        "max_tokens": params.maxTokens,
+        "max_tokens": params.max_tokens,
     }
     if params.temperature is not None:
         completion_kwargs["temperature"] = params.temperature
-    if params.stopSequences:
-        completion_kwargs["stop"] = params.stopSequences
+    if params.stop_sequences:
+        completion_kwargs["stop"] = params.stop_sequences
     openai_tools: Final = _convert_mcp_tools_to_openai(params.tools)
     if openai_tools:
         completion_kwargs["tools"] = openai_tools
-    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.toolChoice)
+    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.tool_choice)
     if openai_tool_choice is not None:
         completion_kwargs["tool_choice"] = openai_tool_choice
     completion_kwargs["metadata"] = {"mcp_metadata": params.metadata} if params.metadata else {}
@@ -1133,7 +1136,7 @@ async def _run_guardrails_and_call_llm(
 
 
 async def handle_sampling_create_message(
-    context: "RequestContext[ClientSession, object]",
+    context: "ClientRequestContext",
     params: "CreateMessageRequestParams",
     default_model: str | None = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
@@ -1176,13 +1179,13 @@ async def handle_sampling_create_message(
 
     try:
         model: Final = _resolve_model_from_preferences(
-            model_preferences=params.modelPreferences,
+            model_preferences=params.model_preferences,
             default_model=default_model,
         )
         verbose_logger.info(
             "MCP sampling: resolved model=%s from preferences=%s",
             model,
-            params.modelPreferences,
+            params.model_preferences,
         )
 
         access_denial: Final = await _check_model_access(model, user_api_key_auth)
@@ -1224,7 +1227,7 @@ async def handle_sampling_create_message(
         verbose_logger.info(
             "MCP sampling: completed successfully, model=%s, stopReason=%s",
             getattr(result, "model", "unknown"),
-            getattr(result, "stopReason", "unknown"),
+            getattr(result, "stop_reason", "unknown"),
         )
         return result
     except Exception as e:

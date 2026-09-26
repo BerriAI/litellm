@@ -1,13 +1,17 @@
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -19,6 +23,7 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_timeout_408,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -35,12 +40,14 @@ else:
 # Status codes a generic API call's caller-supplied resource id can trigger on its own
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
+_NO_MODEL_CALL_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
-    kwargs: Mapping[str, Any],
+    kwargs: Mapping[str, object],
     exception: Exception,
+    model_call_details: Mapping[str, object] = _NO_MODEL_CALL_DETAILS,
 ) -> None:
     """
     Trigger cooldown for a failed fallback deployment.
@@ -79,7 +86,11 @@ def _trigger_cooldown_for_failed_deployment(
         # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
         # actual health. Left unguarded, a caller could force a 408 on every deployment in
         # the fallback chain from a single request with a near-zero timeout.
-        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+        if is_caller_timeout_408(
+            model_call_details,
+            exception_status,
+            ended=datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
+        ):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "
                 "x-litellm-timeout caused this 408, not deployment health."
@@ -189,6 +200,18 @@ class AttemptedFallbackTargets:
         self.keys = self.keys | frozenset((key,))
 
 
+def has_unattempted_fallback_target(
+    fallback_model_group: Sequence[object] | None, kwargs: Mapping[str, object]
+) -> bool:
+    """Whether a resolved chain still holds an entry this request has not tried."""
+    if fallback_model_group is None:
+        return False
+    attempted: Final = kwargs.get("attempted_targets")
+    if not isinstance(attempted, AttemptedFallbackTargets):
+        return True
+    return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
@@ -214,6 +237,207 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
+    if "/" in model_group or not any(key.endswith(f"/{model_group}") for key in fallback_keys):
+        return None
+    provider: Final = inferred_provider(model_group)
+    return f"{provider}/{model_group}" if provider else None
+
+
+PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
+_ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+
+
+def record_pre_routing_selection(request_kwargs: Mapping[str, object] | None, selected_model: str) -> None:
+    """
+    Remember which model a pre-routing hook picked, so fallback lookup can key off it.
+
+    Fallback resolution runs on an outer kwargs dict that ``**kwargs`` already copied, so
+    writing the model there is invisible by the time routing picks a tier. The metadata
+    buckets are nested dicts shared by reference across those copies, which is how the
+    router already carries values back up.
+
+    The write goes through the proxy-internal bucket resolver, never into both buckets:
+    on /v1/messages the top-level ``metadata`` dict is the provider's own request field,
+    so a blanket write would forward the tier stamp upstream.
+    """
+    if request_kwargs is None:
+        return
+    bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
+    if isinstance(bucket, dict):
+        bucket[PRE_ROUTING_SELECTED_MODEL_KEY] = selected_model
+
+
+def clear_pre_routing_selection(request_kwargs: Mapping[str, object] | None) -> None:
+    """
+    Drop any selection the router did not make itself on this hop.
+
+    The buckets carry whatever the caller sent, so an inbound value is the caller
+    choosing a fallback chain rather than the router choosing a tier. A fallback hop
+    also inherits the previous hop's selection, which would key its own failure off
+    the tier that already failed. Clearing at the start of every hop leaves only a
+    value the pre-routing hook wrote while routing that hop.
+    """
+    if request_kwargs is None:
+        return
+    for bucket in (request_kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS):
+        if isinstance(bucket, dict) and PRE_ROUTING_SELECTED_MODEL_KEY in bucket:
+            del bucket[PRE_ROUTING_SELECTED_MODEL_KEY]
+
+
+def get_pre_routing_selection(kwargs: Mapping[str, object]) -> str | None:
+    """The model a pre-routing hook selected for this request, if one did."""
+    buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
+    selections: Final = (bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY) for bucket in buckets if isinstance(bucket, dict))
+    return next((selected for selected in selections if isinstance(selected, str) and selected), None)
+
+
+def carry_over_pre_routing_selection(live_kwargs: Mapping[str, object], snapshot: Mapping[str, object]) -> None:
+    """
+    Replace whatever selection the snapshot carries with the one the pre-routing hook stamped
+    into the live kwargs while routing this attempt, so a mid-stream fallback keys its lookup
+    off the tier this attempt actually routed to.
+    """
+    clear_pre_routing_selection(snapshot)
+    live_selection: Final = get_pre_routing_selection(live_kwargs)
+    if live_selection is not None:
+        record_pre_routing_selection(snapshot, live_selection)
+
+
+MID_STREAM_FALLBACK_CONTROLS_KEY: Final = "_mid_stream_fallback_controls"
+_PER_REQUEST_FALLBACK_CONTROL_KEYS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "num_retries",
+    "model_group_retry_policy",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MidStreamFallbackControls:
+    """
+    The per-request fallback and retry overrides every streaming attempt must see again.
+
+    async_function_with_retries pops them before the attempt function runs, so without this
+    carrier a fallback hop's own mid-stream re-entry would fall back to the router-level settings.
+    """
+
+    overrides: Mapping[str, object]
+
+
+_NO_FALLBACK_CONTROLS: Final = MidStreamFallbackControls(MappingProxyType({}))
+
+
+def per_request_fallback_controls(kwargs: Mapping[str, object]) -> MidStreamFallbackControls:
+    return MidStreamFallbackControls(
+        MappingProxyType({key: kwargs[key] for key in _PER_REQUEST_FALLBACK_CONTROL_KEYS if key in kwargs})
+    )
+
+
+def mid_stream_fallback_hop_kwargs(
+    model: str,
+    original_generic_function: Callable[..., object],
+    controls: object,
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+    """
+    The kwargs one streaming attempt re-enters the fallback chain with if its stream fails.
+
+    A shallow copy keeps ``attempted_targets`` shared with the outer chain, so entries this
+    request already tried are never retried; the metadata buckets are copied key by key because
+    the attempt writes deployment-specific fields into them in place.
+    """
+    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
+    copied_buckets: Final = MappingProxyType(
+        {name: safe_deep_copy(kwargs[name]) for name in _ROUTER_METADATA_BUCKETS if isinstance(kwargs.get(name), dict)}
+    )
+    return {  # mutable-ok: handed to the streaming iterator as its initial_kwargs, which it rewrites on re-entry
+        **kwargs,
+        **copied_buckets,
+        **hop_controls.overrides,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
+        "model": model,
+        "original_generic_function": original_generic_function,
+    }
+
+
+DISABLE_FALLBACKS_METADATA_KEY: Final = "_disable_fallbacks"
+
+
+def record_disable_fallbacks(request_kwargs: Mapping[str, object] | None, disabled: bool) -> None:
+    """
+    Write-or-clear the request's disable_fallbacks verdict into the router-internal metadata
+    bucket. The wrapper pops the raw kwarg before any downstream frame runs, so the refusal
+    gate (which decides whether to convert a refusal into a recoverable error) needs this
+    carrier to know recovery is impossible.
+    """
+    from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+
+    if request_kwargs is None:
+        return
+    bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
+    if not isinstance(bucket, dict):
+        return
+    if disabled:
+        bucket[DISABLE_FALLBACKS_METADATA_KEY] = True
+    else:
+        bucket.pop(DISABLE_FALLBACKS_METADATA_KEY, None)
+
+
+def fallbacks_disabled_for_request(kwargs: Mapping[str, object]) -> bool:
+    """True when this request opted out of fallbacks, read from the raw kwarg (pre-pop
+    snapshots keep it) or the router-internal bucket the wrapper stamps after popping it."""
+    if kwargs.get("disable_fallbacks") is True:
+        return True
+    buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
+    return any(isinstance(bucket, dict) and bucket.get(DISABLE_FALLBACKS_METADATA_KEY) is True for bucket in buckets)
+
+
+def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None) -> tuple[str, ...]:
+    """
+    Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
+    then the routed group, then the requested group, then the group the request was
+    originally for. The routed group differs when Claude Code session affinity remaps a
+    subagent's concrete model to its bound router. The original group differs on a fallback
+    hop that fails after `run_async_fallback` already returned its stream: the hop has no
+    chain of its own, so it resumes the original group's chain, and `attempted_targets` keeps
+    the entries already tried from being repeated.
+    """
+    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    routed_group_value: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
+    routed_group: Final = routed_group_value if isinstance(routed_group_value, str) else None
+    original_group_value: Final = metadata.get("original_model_group") if isinstance(metadata, Mapping) else None
+    original_group: Final = original_group_value if isinstance(original_group_value, str) else None
+    ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group, original_group)
+    return tuple(dict.fromkeys(group for group in ordered if group))
+
+
+def _resolved_a_specific_chain(
+    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
+) -> bool:
+    resolved, generic_idx = result
+    if resolved is None:
+        return False
+    return generic_idx is None or resolved is not fallbacks[generic_idx]["*"]
+
+
+def get_fallback_model_group_for_lookup_groups(
+    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    lookup_groups: tuple[str, ...],
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
+    """
+    First lookup group with a specifically-keyed chain wins; the generic "*" chain applies
+    only after every group missed, so a catch-all cannot shadow a later group's own chain.
+    """
+    results: Final = tuple(get_fallback_model_group(fallbacks=fallbacks, model_group=group) for group in lookup_groups)
+    specific: Final = next((result for result in results if _resolved_a_specific_chain(fallbacks, result)), None)
+    if specific is not None:
+        return specific
+    return next((result for result in results if result[0] is not None), (None, None))
+
+
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
@@ -223,22 +447,26 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     Checks:
     - exact match
     - stripped model group match
+    - provider-prefixed model group match
     - generic fallback
     """
     generic_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
     fallback_model_group: list[str] | None = None
+    fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
+    prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
-            if list(item.keys())[0] == model_group:  # check exact match
+            fallback_key = next(iter(item))
+            if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
-            elif _check_stripped_model_group(
-                model_group=model_group, fallback_key=list(item.keys())[0]
+            elif fallback_key == prefixed_model_group or _check_stripped_model_group(
+                model_group=model_group, fallback_key=fallback_key
             ):  # check generic fallback
-                stripped_model_fallback = item[list(item.keys())[0]]
-            elif list(item.keys())[0] == "*":  # check generic fallback
+                stripped_model_fallback = item[fallback_key]
+            elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx
         elif isinstance(item, str):
             fallback_model_group = [item]
@@ -282,12 +510,36 @@ async def _is_fallback_target_authorized(
 ) -> bool:
     access_check: Final = litellm_router.fallback_access_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
-    if access_check is None or target is None or target == original_model_group:
+    if (
+        access_check is None
+        or target is None
+        or target == original_model_group
+        or target == get_pre_routing_selection(kwargs)
+    ):
         return True
     if await access_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
         return True
     verbose_router_logger.info(
         "Skipping fallback to model_group = %s: caller is not authorized to call it",
+        mask_sensitive_structure(fallback_entry),
+    )
+    return False
+
+
+async def _is_fallback_target_within_budget(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+) -> bool:
+    budget_check: Final = litellm_router.fallback_budget_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if budget_check is None or target is None or target == original_model_group:
+        return True
+    if await budget_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is over budget",
         mask_sensitive_structure(fallback_entry),
     )
     return False
@@ -328,7 +580,7 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
 
 
 async def run_async_fallback(
-    *args: tuple[Any],
+    *args: object,
     litellm_router: LitellmRouter,
     fallback_model_group: list[str],
     original_model_group: str,
@@ -385,10 +637,11 @@ async def run_async_fallback(
     attempted: Final = (
         carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
     )
-    attempted.record(original_model_group)
+    failed_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
+    attempted.record(failed_model_group)
 
     for mg in fallback_model_group:
-        if mg == original_model_group:
+        if mg == failed_model_group:
             continue
         if same_model_group_only and _get_fallback_target_model_group(mg) != original_model_group:
             verbose_router_logger.info(
@@ -398,6 +651,8 @@ async def run_async_fallback(
             )
             continue
         if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
+            continue
+        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
@@ -412,6 +667,7 @@ async def run_async_fallback(
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
+            kwargs.pop("_target_order", None)
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
@@ -458,6 +714,7 @@ async def run_async_fallback(
                     litellm_router=litellm_router,
                     kwargs=kwargs,
                     exception=e,
+                    model_call_details=logging_obj.model_call_details,
                 )
     raise error_from_fallbacks
 
@@ -518,7 +775,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
             verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
-def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
+def _check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:
     """
     Checks if the fallbacks list is a list of strings or a list of dictionaries.
 
@@ -532,8 +789,9 @@ def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
         return False
     if all(isinstance(item, str) for item in fallbacks):
         return True
-    elif all(isinstance(item, dict) for item in fallbacks):
-        for item in fallbacks:
+    dict_entries: Final = tuple(item for item in fallbacks if isinstance(item, dict))
+    if len(dict_entries) == len(fallbacks):
+        for item in dict_entries:
             for key in LiteLLMParamsTypedDict.__annotations__:
                 if key in item:
                     # If the value is a list, it's likely a standard fallback model group mapping
@@ -544,5 +802,5 @@ def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
     return False
 
 
-def run_non_standard_fallback_format(fallbacks: list[str] | list[dict[str, Any]], model_group: str):
+def run_non_standard_fallback_format(fallbacks: Sequence[str] | Sequence[Mapping[str, object]], model_group: str):
     pass

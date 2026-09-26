@@ -5,7 +5,6 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _can_object_call_model, can_key_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -14,6 +13,8 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    authorize_model_for_key,
+    get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
@@ -144,11 +145,12 @@ async def _update_request_data_with_managed_file_id(
         model_used,
         original_file_id,
         credentials,
-    ) = handle_model_based_routing(
+    ) = await handle_model_based_routing(
         file_id=file_id,
         request=request,
         llm_router=llm_router,
         data=data,
+        user_api_key_dict=user_api_key_dict,
         check_file_id_encoding=True,
     )
 
@@ -210,26 +212,7 @@ async def _authorize_model_routing_hint(
 ) -> None:
     if user_api_key_dict is None:
         return
-
-    key_models: Final = getattr(user_api_key_dict, "models", None)
-    if not (isinstance(key_models, list) and "all-team-models" in key_models):
-        await can_key_call_model(
-            model=model,
-            llm_model_list=None,
-            valid_token=user_api_key_dict,
-            llm_router=llm_router,
-        )
-
-    team_models: Final = getattr(user_api_key_dict, "team_models", None)
-    if isinstance(team_models, list) and len(team_models) > 0:
-        _can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=team_models,
-            team_model_aliases=user_api_key_dict.team_model_aliases,
-            team_id=user_api_key_dict.team_id,
-            object_type="team",
-        )
+    await authorize_model_for_key(model_id=model, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
 
 
 async def _update_request_data_with_model_routing_hint(
@@ -261,25 +244,15 @@ async def _update_request_data_with_model_routing_hint(
                 model_id=model_hint, team_id=caller_team_id
             )
             should_route = credentials is not None
-    else:
-        if isinstance(model_hint, str) and should_authorize_model_hint:
+    elif isinstance(model_hint, str):
+        if should_authorize_model_hint:
             await _authorize_model_routing_hint(
                 model=model_hint,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )
-        (
-            should_route,
-            _model_used,
-            _original_file_id,
-            credentials,
-        ) = handle_model_based_routing(
-            file_id="",
-            request=request,
-            llm_router=llm_router,
-            data=data,
-            check_file_id_encoding=False,
-        )
+        credentials = get_credentials_for_model(llm_router=llm_router, model_id=model_hint)
+        should_route = True
 
     if should_route and credentials is not None:
         prepare_data_with_credentials(
@@ -553,7 +526,7 @@ async def vector_store_file_create(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -756,7 +729,7 @@ async def vector_store_file_retrieve(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -863,7 +836,7 @@ async def vector_store_file_content(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -973,7 +946,7 @@ async def vector_store_file_update(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -1080,7 +1053,7 @@ async def vector_store_file_delete(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,

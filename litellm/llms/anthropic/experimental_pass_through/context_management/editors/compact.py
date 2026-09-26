@@ -14,12 +14,13 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 
 import re
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, Union, cast
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -77,6 +78,7 @@ _PROPAGATED_METADATA_KEYS: Final = (
     "user_api_key_end_user_id",
     "user_api_end_user_max_budget",
     "user_api_key_model_max_budget",
+    "user_api_key_team_model_max_budget",
     "user_api_key_user_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
@@ -206,9 +208,12 @@ async def _check_summary_model_access(
     (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
     Unexpected errors during an access check fail closed but are logged
     separately so operators can distinguish them from a real access-denied
-    response. DB-lookup failures (object missing from cache or DB) skip the
-    corresponding scope — matching ``common_checks``, which only enforces a
-    scope when its backing object can be loaded.
+    response. User and project lookup failures (object missing from cache or
+    DB) skip the corresponding scope — matching ``common_checks``, which only
+    enforces a scope when its backing object can be loaded. A failed team
+    membership read (a database outage) fails closed instead, since a member
+    whose limits cannot be read must not have the summary model invoked with
+    those limits dropped.
     """
     if user_api_key_auth is None:
         return True
@@ -232,7 +237,7 @@ async def _check_summary_model_access(
 
     key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
     team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
-    team_model_aliases: Final = getattr(user_api_key_auth, "team_model_aliases", None)
+    team_model_aliases: Final[dict[str, str] | None] = getattr(user_api_key_auth, "team_model_aliases", None)
     team_models: Final = list(getattr(user_api_key_auth, "team_models", None) or [])
     user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None)
     project_id: Final[str | None] = getattr(user_api_key_auth, "project_id", None)
@@ -344,13 +349,12 @@ async def _check_summary_model_access(
                 proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:
-            verbose_logger.debug(
-                "compact_20260112: team membership lookup failed for "
-                "summary_model=%s access check; skipping member-level scope: %s",
+            verbose_logger.warning(
+                "compact_20260112: team membership lookup failed for summary_model=%s access check; denying access: %s",
                 summary_model,
                 e,
             )
-            team_membership = None
+            return False
         member_allowed_models: Final = (
             team_membership.litellm_budget_table.allowed_models
             if team_membership is not None and team_membership.litellm_budget_table is not None
@@ -394,9 +398,9 @@ async def _check_summary_model_budget(
     ``user_api_key_auth`` runs for the client-requested model. Returns True outside the proxy or when no
     per-model budget is configured.
 
-    All three scopes are checked because the summary's spend is charged to all
-    three: this file propagates the key, user and end-user budgets into the
-    subrequest's metadata, so enforcing only two of them would let compaction
+    Every scope is checked because the summary's spend is charged to every
+    scope: this file propagates the key, team, user and end-user budgets into the
+    subrequest's metadata, so skipping one of them would let compaction
     increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
@@ -443,7 +447,29 @@ async def _check_summary_model_budget(
             )
             return False
 
-    end_user_model_max_budget: Final = getattr(user_api_key_auth, "end_user_model_max_budget", None)
+    team_model_max_budget: Final = user_api_key_auth.team_model_max_budget
+    team_id: Final = user_api_key_auth.team_id
+    if isinstance(team_model_max_budget, dict) and team_model_max_budget and team_id is not None:
+        try:
+            await model_max_budget_limiter.is_team_within_model_budget(
+                team_id=team_id,
+                team_model_max_budget=team_model_max_budget,
+                key_model_max_budget=model_max_budget if isinstance(model_max_budget, dict) else None,
+                model=summary_model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+        except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the other scopes do
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during team model-budget check for summary_model=%s; denying: %s",
+                summary_model,
+                e,
+            )
+            return False
+
+    end_user_model_max_budget: Final[dict[str, object] | None] = getattr(
+        user_api_key_auth, "end_user_model_max_budget", None
+    )
     end_user_id: Final[str | None] = getattr(user_api_key_auth, "end_user_id", None)
     if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
@@ -741,7 +767,8 @@ def _count_effective_tokens(
             messages=cast(
                 "list[AllAnthropicPassThroughMessageValues]",
                 messages_without_compaction,
-            )
+            ),
+            preserve_midturn_system=True,
         )
     except Exception as e:
         verbose_logger.debug(
@@ -854,8 +881,8 @@ def _extract_summary_text(raw: str | None) -> str | None:
 
 
 def _system_to_openai_message(
-    system: str | list[dict[str, Any]] | None,
-) -> Mapping[str, object] | None:
+    system: str | list[dict[str, object]] | None,
+) -> dict[str, object] | None:
     """Translate Anthropic-shaped ``system`` to an OpenAI system message.
 
     Accepts a bare string or a list of Anthropic content blocks; returns
@@ -866,10 +893,10 @@ def _system_to_openai_message(
     if isinstance(system, str):
         return {"role": "system", "content": system} if system else None
     if isinstance(system, list):
-        parts: Final[tuple[str, ...]] = tuple(
+        parts: Final[list[object]] = [
             block.get("text", "") for block in system if isinstance(block, dict) and block.get("type") == "text"
-        )
-        joined: Final = "\n\n".join(part for part in parts if part)
+        ]
+        joined: Final = "\n\n".join(part for part in parts if isinstance(part, str) and part)
         return {"role": "system", "content": joined} if joined else None
     return None
 
@@ -896,7 +923,8 @@ def _build_summary_messages(
             messages=cast(
                 "list[AllAnthropicPassThroughMessageValues]",
                 stripped,
-            )
+            ),
+            preserve_midturn_system=True,
         )
     except Exception as e:
         verbose_logger.warning(
@@ -951,7 +979,7 @@ async def _call_summary_model(
     summary_model: str,
     summary_messages: Sequence[Mapping[str, object]],
     metadata: Mapping[str, object],
-    llm_router: object,
+    llm_router: Optional["Router"],
     allowed_model_region: str | None = None,
     max_tokens: int = COMPACT_SUMMARY_MAX_TOKENS,
 ) -> Union["ModelResponse", "CustomStreamWrapper"]:
@@ -1036,10 +1064,9 @@ def _extract_usage(response: object) -> tuple[int, int]:
     usage: Final[object] = getattr(response, "usage", None)
     if usage is None:
         return 0, 0
-    return (
-        int(getattr(usage, "prompt_tokens", 0) or 0),
-        int(getattr(usage, "completion_tokens", 0) or 0),
-    )
+    prompt_tokens: Final[int | None] = getattr(usage, "prompt_tokens", 0)
+    completion_tokens: Final[int | None] = getattr(usage, "completion_tokens", 0)
+    return int(prompt_tokens or 0), int(completion_tokens or 0)
 
 
 def apply_client_compaction_block_history(
@@ -1156,7 +1183,7 @@ async def apply_compact_20260112(
 
     # Phase B: threshold check.
     try:
-        current_tokens = _count_effective_tokens(
+        current_tokens = await asyncify(_count_effective_tokens)(
             model=model,
             effective_messages=effective_messages,
             # ``augmented_system`` already carries the prior compaction summary

@@ -31,11 +31,11 @@ def get_function_names_from_file(file_path):
 def get_all_functions_called_in_tests(base_dir):
     """
     Returns a set of function names that are called in test functions
-    inside 'local_testing' and 'proxy_unit_tests' directories,
+    inside 'local_testing' and 'unit/proxy' directories,
     specifically in files containing the word 'router'.
     """
     called_functions = set()
-    test_dirs = ["local_testing", "proxy_unit_tests"]
+    test_dirs = ["local_testing", "unit/proxy"]
 
     for test_dir in test_dirs:
         dir_path = os.path.join(base_dir, test_dir)

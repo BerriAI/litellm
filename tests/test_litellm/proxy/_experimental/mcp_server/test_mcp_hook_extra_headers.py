@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import CallToolResult
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import UserAPIKeyAuth
@@ -409,7 +410,7 @@ class TestCallToolFlowsHookHeaders:
                         manager,
                         "_call_openapi_tool_handler",
                         new_callable=AsyncMock,
-                        return_value=MagicMock(),
+                        return_value=CallToolResult(content=[], isError=False),
                     ):
                         import litellm.proxy._experimental.mcp_server.mcp_server_manager as mgr_mod
 
@@ -456,7 +457,7 @@ class TestCallToolFlowsHookHeaders:
                         manager,
                         "_call_openapi_tool_handler",
                         new_callable=AsyncMock,
-                        return_value=MagicMock(),
+                        return_value=CallToolResult(content=[], isError=False),
                     ):
                         proxy_logging = MagicMock(spec=ProxyLogging)
 
@@ -597,7 +598,11 @@ class TestHookHeaderMergePriority:
                             "Authorization": "Bearer oauth2-token",
                             "X-OAuth": "yes",
                         },
-                        raw_headers=None,
+                        raw_headers={
+                            "x-litellm-api-key": "Bearer sk-litellm-key",
+                            "authorization": "Bearer oauth2-token",
+                        },
+                        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
                         proxy_logging_obj=None,
                         hook_extra_headers={
                             "Authorization": "Bearer hook-jwt",
@@ -1072,9 +1077,9 @@ class TestOpenApiByokCallTool:
         user_auth = UserAPIKeyAuth(user_id="default_user_id", api_key="sk-dashboard")
         captured_auth: dict[str, Optional[str]] = {}
 
-        async def fake_openapi_handler(_server, _name, _arguments):
+        async def fake_openapi_handler(_server, _name, _arguments, _wire_compat):
             captured_auth["value"] = _request_auth_header.get()
-            return MagicMock()
+            return CallToolResult(content=[], isError=False)
 
         with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
             with patch(
@@ -1225,7 +1230,7 @@ class TestResolveByokMcpAuthHeader:
         user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            "litellm.proxy._experimental.mcp_server.operations._get_byok_credential",
             new=AsyncMock(return_value="stored-cred"),
         ):
             result = await _resolve_byok_mcp_auth_header(server, user_auth, None)
@@ -1233,18 +1238,19 @@ class TestResolveByokMcpAuthHeader:
         assert result == "stored-cred"
 
     @pytest.mark.asyncio
-    async def test_byok_server_raises_401_when_no_credential_stored(self):
+    async def test_byok_server_raises_401_when_no_credential_stored(self, monkeypatch):
         from fastapi import HTTPException
 
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             _resolve_byok_mcp_auth_header,
         )
 
+        monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
         server = self._server(is_byok=True)
         user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            "litellm.proxy._experimental.mcp_server.operations._get_byok_credential",
             new=AsyncMock(return_value=None),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -1252,6 +1258,9 @@ class TestResolveByokMcpAuthHeader:
 
         assert exc_info.value.status_code == 401
         assert exc_info.value.detail["error"] == "byok_auth_required"
+        assert exc_info.value.headers == {
+            "WWW-Authenticate": 'Bearer resource_metadata="https://gateway.example.com/proxy/v1/mcp/oauth/protected-resource"'
+        }
 
     @pytest.mark.asyncio
     async def test_byok_server_checks_credential_and_keeps_caller_header_when_supplied(self):
@@ -1264,7 +1273,7 @@ class TestResolveByokMcpAuthHeader:
         check_mock = AsyncMock(return_value=None)
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._check_byok_credential",
+            "litellm.proxy._experimental.mcp_server.operations._check_byok_credential",
             new=check_mock,
         ):
             result = await _resolve_byok_mcp_auth_header(server, user_auth, "caller-header")
@@ -1308,9 +1317,9 @@ class TestOpenApiResolvedUpstreamAuth:
         user_auth = UserAPIKeyAuth(user_id="alice", api_key="sk-user")
         captured: Dict[str, Any] = {}
 
-        async def fake_openapi_handler(_server, _name, _arguments):
+        async def fake_openapi_handler(_server, _name, _arguments, _wire_compat):
             captured["resolved"] = _request_resolved_auth_headers.get()
-            return MagicMock()
+            return CallToolResult(content=[], isError=False)
 
         with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
             with patch.object(
