@@ -79,6 +79,36 @@ class LinkedSpendResetWrites:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentSpendResetWrites:
+    table: BatchTable
+
+    def queue_window_reset(self, budget_id: str, window: datetime, rollover_cap: float | None) -> None:
+        if rollover_cap is None:
+            self.table.update_many(
+                where={"budget_id": budget_id},  # mutable-ok: Prisma only serializes dict query filters
+                data={"spend": 0.0, "spend_window": window},  # mutable-ok: Prisma only serializes dict update payloads
+            )
+            return
+        self.table.update_many(
+            where={
+                "budget_id": budget_id,
+                "spend": {"lte": rollover_cap},
+            },  # mutable-ok: Prisma only serializes dict query filters
+            data={"spend": 0.0, "spend_window": window},  # mutable-ok: Prisma only serializes dict update payloads
+        )
+        self.table.update_many(
+            where={
+                "budget_id": budget_id,
+                "spend": {"gt": rollover_cap},
+            },  # mutable-ok: Prisma only serializes dict query filters
+            data={
+                "spend": {"decrement": rollover_cap},
+                "spend_window": window,
+            },  # mutable-ok: Prisma only serializes dict update payloads
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BudgetWindowWrites:
     table: BatchTable
 
@@ -110,7 +140,7 @@ class BudgetCascadeUnitOfWork:
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
     projects: LinkedSpendResetWrites
-    agents: LinkedSpendResetWrites
+    agents: AgentSpendResetWrites
     endusers: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
@@ -138,7 +168,7 @@ async def budget_cascade_unit_of_work(
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
-        agents=LinkedSpendResetWrites(table=batch.litellm_agentstable),
+        agents=AgentSpendResetWrites(table=batch.litellm_agentstable),
         endusers=LinkedSpendResetWrites(table=batch.litellm_endusertable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )

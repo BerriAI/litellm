@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
@@ -321,6 +322,14 @@ def agent_budget_counter_key(agent_id: str, reset_at: datetime | None) -> str:
     aware: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
     window: Final = aware.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     return f"spend:agent_window:{window}:{agent_id}"
+
+
+def agent_spend_filter(counter_key: str) -> Mapping[str, object]:
+    if counter_key.startswith("spend:agent_window:"):
+        _, _, raw_window, agent_id = counter_key.split(":", 3)
+        window: Final = datetime.strptime(raw_window, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+        return MappingProxyType({"agent_id": agent_id, "spend_window": window})
+    return MappingProxyType({"agent_id": counter_key.removeprefix("spend:agent:"), "spend_window": None})
 
 
 class AgentResponse(BaseModel):

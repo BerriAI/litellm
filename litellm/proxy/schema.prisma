@@ -85,6 +85,7 @@ model LiteLLM_AgentsTable {
   identity LiteLLM_AgentIdentity?
   retired_identities LiteLLM_RetiredAgentIdentity[]
   budget_id String? @unique
+  spend_window DateTime?
   litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
   verified_subjects LiteLLM_VerifiedSubject[]
   tpm_limit  Int?

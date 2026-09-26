@@ -82,6 +82,7 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
+from litellm.types.agents import agent_spend_filter
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
@@ -1070,10 +1071,13 @@ class DBSpendUpdateWriter:
 
         _agent_id_for_spend: Final = payload_copy.get("billing_agent_id", payload_copy.get("agent_id"))
         try:
+            spend_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(payload_copy.get("metadata") or "{}")
+            captured_counter: Final = spend_metadata.get("billing_agent_counter_key")
             await self._update_agent_db(
                 response_cost=response_cost,
                 agent_id=_agent_id_for_spend,
                 prisma_client=prisma_client,
+                counter_key=captured_counter if isinstance(captured_counter, str) else None,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -1341,15 +1345,19 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         agent_id: str | None,
         prisma_client: PrismaClient | None,
+        *,
+        counter_key: str | None = None,
     ):
         try:
             if agent_id is None or prisma_client is None:
                 return
+            if counter_key is not None and agent_spend_filter(counter_key)["agent_id"] != agent_id:
+                raise ValueError("Agent spend counter does not match the billed agent")
 
             await self.spend_update_queue.add_update(
                 update=SpendUpdateQueueItem(
                     entity_type=Litellm_EntityType.AGENT,
-                    entity_id=agent_id,
+                    entity_id=counter_key or agent_id,
                     response_cost=response_cost,
                 )
             )
@@ -2331,7 +2339,15 @@ class DBSpendUpdateWriter:
                                     response_cost,
                                 )
                                 _entity_spend_table(batcher, table_accessor).update_many(
-                                    where={where_field: entity_id},
+                                    where=(
+                                        dict(
+                                            agent_spend_filter(entity_id)
+                                        )  # mutable-ok: Prisma only serializes dict query filters
+                                        if table_accessor == "litellm_agentstable"
+                                        else {
+                                            where_field: entity_id
+                                        }  # mutable-ok: Prisma only serializes dict query filters
+                                    ),
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break

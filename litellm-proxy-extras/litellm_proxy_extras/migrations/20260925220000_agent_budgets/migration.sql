@@ -11,3 +11,5 @@ BEGIN
     END IF;
 END $$;
 
+
+ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN IF NOT EXISTS "spend_window" TIMESTAMP(3);

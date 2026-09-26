@@ -91,6 +91,8 @@ class ManagedWriteFields(TypedDict, total=False):
     identity: ReadOnly[IdentityRelationWrite]
     retired_identities: ReadOnly[IdentityHistoryWrite]
     litellm_budget_table: ReadOnly[BudgetRelationWrite]
+    spend_window: ReadOnly[datetime | None]
+    spend: ReadOnly[float]
 
 
 def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403) -> NoReturn:
@@ -234,7 +236,10 @@ def _identity_write(
 def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) -> ManagedWriteFields:
     if raw is None:
         if existing and existing.budget_id:
-            disconnected: Final[ManagedWriteFields] = {"litellm_budget_table": {"disconnect": True}}
+            disconnected: Final[ManagedWriteFields] = {
+                "litellm_budget_table": {"disconnect": True},
+                "spend_window": None,
+            }
             return disconnected
         empty: Final[ManagedWriteFields] = {}
         return empty
@@ -257,9 +262,20 @@ def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) 
         ),
     }
     result: Final[ManagedWriteFields] = {
+        "spend_window": fields["budget_reset_at"],
+        **(
+            {"spend": 0.0}
+            if fields["budget_reset_at"] is not None
+            and (
+                existing is None
+                or existing.litellm_budget_table is None
+                or existing.litellm_budget_table.budget_reset_at != fields["budget_reset_at"]
+            )
+            else {}
+        ),
         "litellm_budget_table": (
             {"update": fields} if existing and existing.budget_id else {"create": {**fields, "created_by": updated_by}}
-        )
+        ),
     }
     return result
 

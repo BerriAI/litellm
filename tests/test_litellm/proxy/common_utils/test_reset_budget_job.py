@@ -3583,3 +3583,26 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:user:carol")
     counter_cache.in_memory_cache.set_cache.assert_not_called()
     counter_cache.redis_cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollover_cap", [None, 1.0])
+async def test_agent_reset_stamps_window_in_each_spend_mutation(rollover_cap):
+    from litellm.proxy.common_utils.reset_budget_job import _BudgetCascade
+
+    client = MockPrismaClient()
+    job = ResetBudgetJob(MagicMock(), client)
+    next_window = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    cascade = _BudgetCascade(
+        budget_ids=("agent-budget",),
+        budget_resets=(("agent-budget", next_window),),
+        rollover_caps={} if rollover_cap is None else {"agent-budget": rollover_cap},
+    )
+    await job._commit_budget_cascade(cascade)
+    agent_writes = [call for call in client.db.batch_calls if call["table"] == "agent"]
+    assert len(agent_writes) == (1 if rollover_cap is None else 2)
+    assert all(call["data"]["spend_window"] == next_window for call in agent_writes)
+    assert agent_writes[0]["data"]["spend"] == 0.0
+    if rollover_cap is not None:
+        assert agent_writes[1]["data"]["spend"] == {"decrement": rollover_cap}
+    assert client.db.batchers[0].committed

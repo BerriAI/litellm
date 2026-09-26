@@ -317,11 +317,15 @@ def test_budget_updates_preserve_current_window_until_duration_changes() -> None
     assert not isinstance(same, AgentIdentityFailure)
     assert same["litellm_budget_table"]["update"]["budget_reset_at"] == reset
     assert same["litellm_budget_table"]["update"]["max_budget"] == 2
+    assert same["spend_window"] == reset
+    assert "spend" not in same
     changed: Final = managed_write_fields({"budget": {"max_budget": 2, "budget_duration": "1h"}}, agent, "admin")
     assert not isinstance(changed, AgentIdentityFailure)
     assert changed["litellm_budget_table"]["update"]["budget_reset_at"] != reset
+    assert changed["spend_window"] == changed["litellm_budget_table"]["update"]["budget_reset_at"]
+    assert changed["spend"] == 0.0
     removed: Final = managed_write_fields({"budget": None}, agent, "admin")
-    assert removed == {"litellm_budget_table": {"disconnect": True}}
+    assert removed == {"litellm_budget_table": {"disconnect": True}, "spend_window": None}
     assert managed_write_fields({"budget": None}, managed_agent(), "admin") == {}
 
 
@@ -349,3 +353,10 @@ def test_directory_binding_cannot_fall_back_to_an_application_token() -> None:
     result: Final = classify_agent_subject(binding, claims(), "autonomous")
     assert isinstance(result, AgentIdentityFailure)
     assert "verified provisioned agent-user" in result.message
+
+
+def test_budget_write_stamps_the_same_window_on_the_agent_row() -> None:
+    result: Final = managed_write_fields({"budget": {"max_budget": 1.0, "budget_duration": "1d"}}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["spend_window"] == result["litellm_budget_table"]["create"]["budget_reset_at"]
+    assert result["spend"] == 0.0

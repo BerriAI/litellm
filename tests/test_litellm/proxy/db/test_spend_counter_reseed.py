@@ -495,11 +495,13 @@ async def test_agent_counter_reseed_uses_persisted_agent_spend(spend: float | No
 @pytest.mark.asyncio
 @pytest.mark.parametrize("window,expected", [("20260102T000000.000000Z", 0.3), ("20260101T000000.000000Z", 0.0)])
 async def test_agent_window_reseed_cannot_load_another_windows_spend(window: str, expected: float) -> None:
-    from litellm.types.agents import AgentResponse
+    from datetime import datetime, timezone
+    from prisma.models import LiteLLM_AgentsTable
 
-    row: Final = AgentResponse(
-        agent_id="agent:with:colons", agent_name="Agent", agent_card_params={}, spend=0.3,
-        litellm_budget_table={"budget_id": "budget", "budget_reset_at": "2026-01-02T00:00:00Z"},
+    row: Final = LiteLLM_AgentsTable.model_construct(
+        agent_id="agent:with:colons",
+        spend=0.3,
+        spend_window=datetime(2026, 1, 2, tzinfo=timezone.utc),
     )
     writer: Final = AsyncMock(return_value=row)
     replica: Final = AsyncMock(return_value=row.model_copy(update={"spend": 99.0}))
