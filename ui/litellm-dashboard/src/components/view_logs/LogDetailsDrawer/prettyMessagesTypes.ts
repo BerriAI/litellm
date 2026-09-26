@@ -31,3 +31,10 @@ export interface ParsedMessages {
   requestMessages: ParsedMessage[];
   responseMessage: ParsedMessage | null;
 }
+
+export interface ResponsesWebSocketTurn {
+  id: string;
+  status: "Completed" | "Incomplete" | "Failed" | "Error" | "No terminal event recorded";
+  message: ParsedMessage | null;
+  detail: string;
+}
