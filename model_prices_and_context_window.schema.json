@@ -60,9 +60,6 @@
         "audio_transcription_config": {
           "type": "string"
         },
-        "bedrock_chat_rejects_function_tools_while_reasoning": {
-          "type": "boolean"
-        },
         "bedrock_converse_supports_strict_tools": {
           "type": "boolean"
         },

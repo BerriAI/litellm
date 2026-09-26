@@ -1163,7 +1163,7 @@ def responses_api_bridge_check(
         and (
             foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
             if on_foundry_openai_endpoint
-            else bedrock_chat_rejects_function_tools_while_reasoning(model, litellm.model_cost)
+            else bedrock_chat_rejects_function_tools_while_reasoning(model)
             if on_bedrock_native_responses
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)

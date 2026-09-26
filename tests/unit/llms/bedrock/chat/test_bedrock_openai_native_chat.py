@@ -245,16 +245,17 @@ class TestFunctionToolsReasoningBridge:
     ]
 
     @staticmethod
-    def _register(model, rejects):
-        entry = {
-            "litellm_provider": "bedrock_converse",
-            "mode": "chat",
-            "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
-            "supports_reasoning": True,
-        }
-        if rejects:
-            entry["bedrock_chat_rejects_function_tools_while_reasoning"] = True
-        litellm.register_model({model: entry})
+    def _register(model):
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "bedrock_converse",
+                    "mode": "chat",
+                    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+                    "supports_reasoning": True,
+                }
+            }
+        )
 
     @pytest.mark.parametrize(
         "model,rejects",
@@ -265,15 +266,15 @@ class TestFunctionToolsReasoningBridge:
             ("us.openai.gpt-5.4", False),
         ],
     )
-    def test_flag_read_from_model_cost(self, model, rejects):
-        self._register(model, rejects)
-        assert bedrock_chat_rejects_function_tools_while_reasoning(model, litellm.model_cost) is rejects
+    def test_version_boundary(self, model, rejects):
+        # gpt-5.6+ reject function tools while reasoning; 5.4/5.5 don't.
+        assert bedrock_chat_rejects_function_tools_while_reasoning(model) is rejects
 
-    def test_flag_absent_defaults_false(self):
-        assert bedrock_chat_rejects_function_tools_while_reasoning("unknown.model", litellm.model_cost) is False
+    def test_empty_model_defaults_false(self):
+        assert bedrock_chat_rejects_function_tools_while_reasoning("") is False
 
-    def _bridge(self, model, rejects=True, **kw):
-        self._register(model, rejects)
+    def _bridge(self, model, **kw):
+        self._register(model)
         info, _ = responses_api_bridge_check(model=model, custom_llm_provider="bedrock", **kw)
         return info.get("mode")
 
@@ -290,11 +291,8 @@ class TestFunctionToolsReasoningBridge:
         )
 
     def test_gpt55_tools_with_reasoning_stays_chat(self):
-        # gpt-5.5 isn't flagged (serves tools with reasoning natively), so no bridge.
-        assert (
-            self._bridge("global.openai.gpt-5.5", rejects=False, tools=self.FUNCTION_TOOL, reasoning_effort="low")
-            != "responses"
-        )
+        # gpt-5.5 serves tools with reasoning natively (below the 5.6 boundary), so no bridge.
+        assert self._bridge("global.openai.gpt-5.5", tools=self.FUNCTION_TOOL, reasoning_effort="low") != "responses"
 
     def test_no_tools_stays_chat(self):
         assert self._bridge("global.openai.gpt-6-luna", reasoning_effort="low") != "responses"
@@ -303,9 +301,6 @@ class TestFunctionToolsReasoningBridge:
 class TestPredicateEdgeCases:
     def test_supports_openai_chat_none_model(self):
         assert bedrock_supports_openai_chat(None, litellm.model_cost) is False
-
-    def test_rejects_helper_empty_model(self):
-        assert bedrock_chat_rejects_function_tools_while_reasoning("", litellm.model_cost) is False
 
     def test_non_converse_route_is_not_native(self):
         # An explicit invoke route never reaches the native chat surface.
