@@ -15059,7 +15059,7 @@ def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_
 
 async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,
@@ -15080,7 +15080,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
 
     claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
 
