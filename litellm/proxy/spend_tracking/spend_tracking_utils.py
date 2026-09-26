@@ -269,6 +269,9 @@ def _get_spend_logs_metadata(
 
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
+# str(None)/str(...) from a provider returning a null id; treated as absent so it
+# never shadows the unique litellm_call_id when deriving the SpendLogs primary key.
+_STRINGIFIED_NULL_IDS: Final = frozenset(("none", "null"))
 
 
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
@@ -278,8 +281,18 @@ def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str |
         standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
         kwargs.get("litellm_call_id"),
     )
+    # A provider returning "id": null becomes the literal string "None" in the
+    # logging payload (str(None)); it would pass the truthy-string test below,
+    # shadow the unique litellm_call_id, and collide on the SpendLogs primary
+    # key so every later null-id row is dropped by skip_duplicates. Treat those
+    # stringified-null sentinels as absent so the call id is used instead.
     resolved_id: Final = next(
-        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
+        (
+            candidate
+            for candidate in candidate_ids
+            if isinstance(candidate, str) and candidate and candidate.strip().lower() not in _STRINGIFIED_NULL_IDS
+        ),
+        None,
     )
     if resolved_id is not None and call_type == CallTypes.aretrieve_batch.value:
         return f"{resolved_id}{BATCH_COST_REQUEST_ID_SUFFIX}"

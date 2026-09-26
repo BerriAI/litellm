@@ -4003,6 +4003,21 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
 
 
+@pytest.mark.parametrize("null_id", ["None", "null", "none"])
+def test_get_spend_logs_id_falls_back_to_call_id_for_stringified_null_provider_id(null_id):
+    """A provider returning "id": null becomes the literal string str(None) == "None"
+    in the logging payload. That passed the truthy-string test, shadowed the unique
+    litellm_call_id, and made every null-id row collide on the SpendLogs primary key so
+    skip_duplicates dropped all but the first. Such sentinels must fall through to the
+    per-call id, which is unique."""
+    first = get_spend_logs_id("acompletion", {"id": None}, {"standard_logging_object": {"id": null_id}, "litellm_call_id": "call-id-1"})
+    second = get_spend_logs_id("acompletion", {"id": None}, {"standard_logging_object": {"id": null_id}, "litellm_call_id": "call-id-2"})
+
+    assert first == "call-id-1"
+    assert second == "call-id-2"
+    assert first != second
+
+
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
     """End to end at the payload level: a batch retrieve and a file create whose bodies
     were both flattened to the same redaction placeholder must still produce two
