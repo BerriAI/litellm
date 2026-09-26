@@ -283,31 +283,34 @@ def _function_call_output_parts(data: Mapping[str, object]) -> tuple[Mapping[str
     )
 
 
-def _content_leaf_parts(content: object, *, include_tool_results: bool = False) -> tuple[object, ...]:
-    """Leaf content parts, optionally flattening Anthropic tool_result blocks.
+_TOOL_RESULT_SCANNABLE_PART_TYPES: Final[frozenset[str]] = frozenset({"image", "image_url"})
 
-    The scan and mask walks keep the default: a tool_result contributes no leaves,
-    matching what got sent to ApplyGuardrail before attachments were supported.
-    The refusal walk passes include_tool_results=True so a nested document or
-    image is refused exactly like a top-level part. Iterative (no recursion):
-    the code-quality check bans new recursive functions.
-    """
+
+def _content_leaf_parts(
+    content: object, *, tool_result_leaves: Literal["images", "all"] = "images"
+) -> tuple[object, ...]:
     if not isinstance(content, list):
         return ()
-    stack: Final[list[object]] = list(reversed(content))  # mutable-ok: LIFO walk keeps leaf order
+    stack: Final[list[tuple[object, bool]]] = [  # mutable-ok: LIFO walk keeps leaf order
+        (part, False) for part in reversed(content)
+    ]
     leaves: Final[list[object]] = []  # mutable-ok: accumulated in source order, returned as a tuple
     while stack:
-        part = stack.pop()
+        part, inside_tool_result = stack.pop()
         if isinstance(part, dict) and part.get("type") == "tool_result":
-            if not include_tool_results:
-                continue
             inner = part.get("content")
             if isinstance(inner, str):
-                leaves.append(inner)
+                if tool_result_leaves == "all":
+                    leaves.append(inner)
             elif isinstance(inner, list):
-                stack.extend(reversed(inner))
+                stack.extend((item, True) for item in reversed(inner))
             continue
-        leaves.append(part)
+        if (
+            not inside_tool_result
+            or tool_result_leaves == "all"
+            or (isinstance(part, dict) and str(part.get("type")) in _TOOL_RESULT_SCANNABLE_PART_TYPES)
+        ):
+            leaves.append(part)
     return tuple(leaves)
 
 
@@ -715,7 +718,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Refusals only, so image parts get the cheap checks, never the base64 decode
         """
         for message in messages:
-            for leaf in _content_leaf_parts(message.get("content"), include_tool_results=True):
+            for leaf in _content_leaf_parts(message.get("content"), tool_result_leaves="all"):
                 self._refuse_unscannable_part(part=leaf)
 
     def _build_image_content_item(self, image_url: str) -> BedrockContentItem:

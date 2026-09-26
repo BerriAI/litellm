@@ -6305,7 +6305,7 @@ class TestBedrockGuardrailImageInput:
         assert "Violated guardrail policy" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_a_tool_result_nested_base64_image_is_neither_scanned_nor_counted(self):
+    async def test_a_tool_result_nested_base64_image_is_scanned_and_counted(self):
         g = self._guardrail()
         messages = [
             {
@@ -6333,9 +6333,9 @@ class TestBedrockGuardrailImageInput:
         request = g.convert_to_bedrock_format(source="INPUT", messages=messages)
 
         kinds = [key for item in request["content"] for key in item]
-        assert "image" not in kinds
+        assert "image" in kinds
         assert "text" in kinds
-        assert BedrockGuardrail._image_count_in(messages) == 0
+        assert BedrockGuardrail._image_count_in(messages) == 1
 
     @pytest.mark.asyncio
     async def test_an_image_url_part_with_only_a_file_id_is_refused(self):
@@ -8043,3 +8043,108 @@ async def test_during_call_hook_responses_function_call_output_json_string_scans
     mock_post = await _run_responses_during_call(guardrail, output)
 
     mock_post.assert_called_once()
+
+
+_PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+_PNG_IMAGE_ITEM = {"image": {"format": "png", "source": {"bytes": _PNG_B64}}}
+_PNG_SOURCE = {"type": "base64", "media_type": "image/png", "data": _PNG_B64}
+
+
+def _sent_apply_guardrail_items(mock_post) -> list[dict[str, object]]:
+    return json.loads(mock_post.call_args.kwargs["data"])["content"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_scans_tool_result_nested_image_but_not_its_text():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-image",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {"type": "image", "source": _PNG_SOURCE},
+                        {"type": "text", "text": "my ssn is 123-45-6789"},
+                    ],
+                },
+                {"type": "text", "text": "hi"},
+            ],
+        }
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_items(mock_post) == [_PNG_IMAGE_ITEM, {"text": {"text": "hi"}}]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_tool_result_only_image_turn_still_calls_guardrail():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-image-only",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [{"type": "image", "source": _PNG_SOURCE}],
+                }
+            ],
+        }
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_items(mock_post) == [_PNG_IMAGE_ITEM]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_masked_writeback_pairs_masked_text_when_tool_result_carries_image():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-image-mask",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {"type": "image", "source": _PNG_SOURCE},
+                        {"type": "text", "text": "BLOCKME from tool"},
+                    ],
+                },
+                {"type": "text", "text": "hi"},
+            ],
+        }
+    ]
+
+    data, mock_post = await _run_anthropic_during_call(
+        guardrail,
+        messages,
+        response_json={"action": "GUARDRAIL_INTERVENED", "outputs": [{"text": "M1"}]},
+    )
+
+    assert _sent_apply_guardrail_items(mock_post) == [_PNG_IMAGE_ITEM, {"text": {"text": "hi"}}]
+    assert data["messages"][0]["content"] == [{"type": "text", "text": "M1"}]
