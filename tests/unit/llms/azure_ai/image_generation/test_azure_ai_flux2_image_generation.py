@@ -283,10 +283,21 @@ def _catalog_image_cost(model: str, megapixels: int) -> float:
     (
         pytest.param(None, None, id="catalog-prices"),
         pytest.param({"output_cost_per_image": 0.07}, lambda megapixels: 0.07, id="deployment-flat-price"),
+        pytest.param({"input_cost_per_image": 0.07}, lambda megapixels: 0.07, id="deployment-flat-input-image-price"),
+        pytest.param(
+            {"input_cost_per_image": 0.5, "output_cost_per_image": 0.07},
+            lambda megapixels: 0.07,
+            id="deployment-output-image-price-wins-as-for-every-azure-ai-image-model",
+        ),
         pytest.param(
             {"output_cost_per_image": 0.07, "input_cost_per_pixel": 1e-07},
-            lambda megapixels: 0.07,
-            id="deployment-flat-price-wins-over-its-pixel-rate",
+            lambda megapixels: 0.07 + 1e-07 * 1024 * 1024 * (megapixels - 1),
+            id="deployment-image-price-and-pixel-rate-price-like-the-catalog-row",
+        ),
+        pytest.param(
+            {"input_cost_per_image": 0.07, "input_cost_per_pixel": 1e-07},
+            lambda megapixels: 0.07 + 1e-07 * 1024 * 1024 * (megapixels - 1),
+            id="deployment-input-image-price-and-pixel-rate-price-like-the-catalog-row",
         ),
         pytest.param(
             {"input_cost_per_pixel": 1e-07},
@@ -320,10 +331,11 @@ def test_flux2_generation_bills_each_price_source_as_its_owner_set_it(
     (
         pytest.param(None, None, id="catalog-megapixel-rate"),
         pytest.param({"output_cost_per_image": 0.07}, 0.0, id="deployment-flat-price-covers-references"),
+        pytest.param({"input_cost_per_image": 0.07}, 0.0, id="deployment-flat-input-image-price-covers-references"),
         pytest.param(
             {"output_cost_per_image": 0.07, "input_cost_per_pixel": 1e-07},
-            0.0,
-            id="deployment-flat-price-covers-references-despite-its-pixel-rate",
+            1e-07 * 1024 * 1024,
+            id="deployment-pixel-rate-prices-references-next-to-an-image-price",
         ),
         pytest.param(
             {"input_cost_per_pixel": 1e-07}, 1e-07 * 1024 * 1024, id="deployment-pixel-rate-prices-references"
@@ -429,6 +441,71 @@ def test_flux2_pro_bills_mapped_dimensions_only_when_both_are_positive_integers(
     )
 
     assert cost == pytest.approx(first + additional * (megapixels - 1))
+
+
+def test_flux2_pro_reads_the_returned_size_from_the_start_of_the_image_without_decoding_the_rest() -> None:
+    first, additional = _pro_megapixel_rates()
+    png_header_of_a_multiple_of_three_bytes: Final = base64.b64decode(_png_b64(2048, 2048)) + b"\x00"
+    image_with_an_undecodable_tail: Final = base64.b64encode(png_header_of_a_multiple_of_three_bytes).decode() + (
+        "A" * 200_001
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=ImageResponse(data=[ImageObject(b64_json=image_with_an_undecodable_tail)]),
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_generation",
+    )
+
+    assert cost == pytest.approx(first + additional * 3)
+
+
+def test_flux2_pro_measures_a_returned_jpeg_whose_frame_header_sits_past_the_decoded_prefix() -> None:
+    first, additional = _pro_megapixel_rates()
+    exif_payload: Final = b"\x00" * 60_000
+    jpeg: Final = (
+        b"\xff\xd8\xff\xe1"
+        + struct.pack(">H", len(exif_payload) + 2)
+        + exif_payload
+        + b"\xff\xc0\x00\x11\x08"
+        + struct.pack(">HH", 2048, 2048)
+        + b"\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=ImageResponse(data=[ImageObject(b64_json=base64.b64encode(jpeg).decode())]),
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_generation",
+    )
+
+    assert len(base64.b64encode(jpeg)) > 64 * 1024
+    assert cost == pytest.approx(first + additional * 3)
+
+
+@pytest.mark.parametrize(
+    ("returned_image", "warns"),
+    (
+        pytest.param(ImageObject(b64_json="aW1n"), True, id="unreadable-image"),
+        pytest.param(ImageObject(b64_json=_png_b64(1024, 1024)), False, id="measured-image"),
+        pytest.param(ImageObject(url="https://example.com/image.png"), False, id="url-only-image"),
+    ),
+)
+def test_flux2_generation_warns_only_when_it_cannot_measure_a_returned_image(
+    returned_image: ImageObject, warns: bool, litellm_warnings: pytest.LogCaptureFixture
+) -> None:
+    CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=ImageResponse(data=[returned_image]),
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_generation",
+    )
+
+    assert ("Could not read the dimensions of the image" in litellm_warnings.text) is warns
+    assert "reference" not in litellm_warnings.text
 
 
 def test_flux2_pro_bills_the_requested_size_when_the_returned_image_is_not_valid_base64():

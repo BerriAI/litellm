@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -13,6 +14,7 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.image_generation.cost_calculator import base64_image_pixels, record_reference_pixels
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
 
 
 EMPTY_QUERY: Final[Mapping[str, object]] = MappingProxyType({})
+_REFERENCE_IMAGE_FIELD: Final = re.compile(r"input_image(?:_\d+)?")
 
 
 def api_version_from(litellm_params: Mapping[str, object]) -> str | None:
@@ -161,6 +164,9 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         if ocr_result is not None:
             return ocr_result
         foundry_result: Final = logged_relay_shape(FOUNDRY_RELAY_SHAPES, httpx_response, logging_obj, endpoint)
+        reference_pixels: Final = _relayed_reference_pixels(request_data)
+        if isinstance(foundry_result, ImageResponse) and reference_pixels:
+            record_reference_pixels(foundry_result, reference_pixels)
         if foundry_result is not None:
             return foundry_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))
@@ -205,3 +211,15 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
             custom_llm_provider=custom_llm_provider,
             endpoint=endpoint,
         )
+
+
+def _relayed_reference_pixels(request_data: Mapping[str, object]) -> tuple[int | None, ...]:
+    return tuple(
+        _relayed_image_pixels(value) for key, value in request_data.items() if _REFERENCE_IMAGE_FIELD.fullmatch(key)
+    )
+
+
+def _relayed_image_pixels(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    return base64_image_pixels(value.partition("base64,")[2] or value)

@@ -9,11 +9,12 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.token_counter import image_dimensions_from_bytes
+from litellm.litellm_core_utils.token_counter import get_image_type, image_dimensions_from_bytes
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.image_generation.cost_calculator import record_reference_pixels
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
@@ -27,9 +28,6 @@ from litellm.types.utils import ImageResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM: Final = "reference_image_pixels"
-UNMEASURED_REFERENCE_IMAGE_PIXELS: Final = 1024 * 1024
-
 
 class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     """
@@ -42,7 +40,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 
     def __init__(self) -> None:
         super().__init__()
-        self.reference_image_pixels: tuple[int, ...] = ()
+        self.reference_image_pixels: tuple[int | None, ...] = ()
 
     def get_supported_openai_params(self, model: str) -> list:
         return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
@@ -122,7 +120,9 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(f"{model} supports at most {max_reference_images} reference images.")
 
         reference_bytes: Final = tuple(self._read_image_bytes(reference_image) for reference_image in images)
-        self.reference_image_pixels = tuple(_pixel_count(image_bytes) for image_bytes in reference_bytes)
+        self.reference_image_pixels = tuple(
+            _pixel_count(index, image_bytes) for index, image_bytes in enumerate(reference_bytes, start=1)
+        )
         reference_images: Final[Mapping[str, str]] = MappingProxyType(
             {
                 "input_image" if index == 1 else f"input_image_{index}": base64.b64encode(image_bytes).decode("utf-8")
@@ -144,11 +144,18 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         if not callable(read):
             raise ValueError(f"Unsupported image type: {type(image)}")
         _rewind(image)
-        image_bytes: Final = read()
+        image_data: Final[object] = read()
         _rewind(image)
-        if not isinstance(image_bytes, bytes):
-            raise TypeError("FLUX.2 reference images must be opened in binary mode")
-        return image_bytes
+        match image_data:
+            case bytes() | bytearray() | memoryview() if len(image_data) > 0:
+                return bytes(image_data)
+            case bytes() | bytearray() | memoryview():
+                raise ValueError(
+                    f"FLUX.2 reference image read from {type(image).__name__} is empty. A stream that can't seek "
+                    "is consumed by the first attempt, so pass bytes or a seekable file to allow retries"
+                )
+            case _:
+                raise TypeError("FLUX.2 reference images must be opened in binary mode")
 
     def transform_image_edit_response(
         self,
@@ -157,7 +164,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
         image_response: Final = super().transform_image_edit_response(model, raw_response, logging_obj)
-        image_response._hidden_params[REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM] = self.reference_image_pixels
+        record_reference_pixels(image_response, self.reference_image_pixels)
         return image_response
 
     def get_complete_url(
@@ -202,10 +209,14 @@ def _rewind(image: object) -> None:
             seek(0)
 
 
-def _pixel_count(image_bytes: bytes) -> int:
+def _pixel_count(index: int, image_bytes: bytes) -> int | None:
     dimensions: Final = image_dimensions_from_bytes(image_bytes)
-    pixels: Final = dimensions[0] * dimensions[1] if dimensions is not None else 0
-    if pixels > 0:
-        return pixels
-    verbose_logger.warning("Could not read the dimensions of a FLUX.2 reference image, billing it as one megapixel")
-    return UNMEASURED_REFERENCE_IMAGE_PIXELS
+    pixels: Final = None if dimensions is None else dimensions[0] * dimensions[1] or None
+    if pixels is None:
+        verbose_logger.debug(
+            "FLUX.2 reference image %d (%d bytes, detected type %s) has no readable dimensions",
+            index,
+            len(image_bytes),
+            get_image_type(image_bytes),
+        )
+    return pixels

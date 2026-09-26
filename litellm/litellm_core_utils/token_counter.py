@@ -293,7 +293,7 @@ def _header_dimensions(img_data: bytes) -> tuple[int, int] | None:
 
 
 def _jpeg_dimensions(img_data: bytes) -> tuple[int, int] | None:
-    position = 2
+    position = 2  # rebind-ok: the scan advances one segment per iteration
     for _ in range(MAX_JPEG_HEADER_SEGMENTS):
         marker_offset = _next_jpeg_marker_offset(img_data, position)
         marker = ord(img_data[marker_offset : marker_offset + 1])

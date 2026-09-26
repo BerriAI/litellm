@@ -4,6 +4,7 @@ import contextlib
 import io
 import itertools
 import json
+import os
 import pathlib
 import struct
 import tempfile
@@ -16,10 +17,7 @@ import pytest
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.llms.azure_ai.image_edit.flux2_transformation import (
-    UNMEASURED_REFERENCE_IMAGE_PIXELS,
-    AzureFoundryFlux2ImageEditConfig,
-)
+from litellm.llms.azure_ai.image_edit.flux2_transformation import AzureFoundryFlux2ImageEditConfig
 from litellm.llms.azure_ai.image_edit.transformation import (
     AzureFoundryFluxImageEditConfig,
 )
@@ -267,6 +265,14 @@ class _ReadOnlyUpload:
         return self._data
 
 
+class _BytesLikeUpload:
+    def __init__(self, data: bytearray | memoryview) -> None:
+        self._data: Final = data
+
+    def read(self) -> bytearray | memoryview:
+        return self._data
+
+
 class _SeekableUploadWithoutSeekable:
     def __init__(self, data: bytes) -> None:
         self._stream: Final = io.BytesIO(data)
@@ -320,6 +326,8 @@ UPLOADS: Final[Mapping[str, Callable[[contextlib.ExitStack, pathlib.Path, bytes]
     "duck-typed-seek-without-seekable-at-eof": lambda _stack, _path, data: _SeekableUploadWithoutSeekable(data),
     "duck-typed-seek-raises": lambda _stack, _path, data: _UploadWithBrokenSeek(data),
     "non-seekable-stream": lambda _stack, _path, data: _NonSeekableUpload(data),
+    "duck-typed-bytearray-read": lambda _stack, _path, data: _BytesLikeUpload(bytearray(data)),
+    "duck-typed-memoryview-read": lambda _stack, _path, data: _BytesLikeUpload(memoryview(data)),
 }
 
 
@@ -471,9 +479,9 @@ def test_flux2_image_edit_bills_a_lone_unmeasurable_reference_as_one_megapixel(
     )
     rate: Final = _flex_megapixel_rate()
 
-    assert response._hidden_params["reference_image_pixels"] == (UNMEASURED_REFERENCE_IMAGE_PIXELS,)
+    assert response._hidden_params["reference_image_pixels"] == (None,)
     assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 + rate * 1024 * 1024)
-    assert "billing it as one megapixel" in litellm_warnings.text
+    assert "Could not read the dimensions of the azure_ai/FLUX.2-flex reference image" in litellm_warnings.text
 
 
 def test_flux2_image_edit_still_bills_every_reference_when_one_header_reports_zero_pixels():
@@ -518,6 +526,37 @@ def test_flux2_image_edit_resends_and_rebills_a_reused_stream(stream_position: s
 
     assert sent_images == [base64.b64encode(reference).decode()] * 2
     assert [response._hidden_params["reference_image_pixels"] for response in responses] == [(2048 * 1024,)] * 2
+
+
+def test_flux2_image_edit_refuses_to_resend_a_consumed_stream_that_cannot_seek(tmp_path: pathlib.Path):
+    sent_images: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_images.append(json.loads(request.content)["input_image"])
+        return _edit_ok(request)
+
+    reference: Final = _png(2048, 1024)
+    read_end, write_end = os.pipe()
+    os.write(write_end, reference)
+    os.close(write_end)
+
+    def edit(pipe: io.BufferedReader) -> ImageResponse:
+        return litellm.image_edit(
+            model="azure_ai/FLUX.2-flex",
+            image=[pipe],
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+            size="1024x1024",
+        )
+
+    with os.fdopen(read_end, "rb") as pipe:
+        edit(pipe)
+        with pytest.raises(Exception, match="is empty"):
+            edit(pipe)
+
+    assert sent_images == [base64.b64encode(reference).decode()]
 
 
 def test_flux2_pro_image_edit_bills_references_at_the_pro_megapixel_rate():
@@ -573,12 +612,17 @@ async def test_flux2_router_image_edit_bills_the_deployment_rates(monkeypatch: p
     ("deployment_prices", "expected_cost"),
     (
         ({"output_cost_per_image": 0.5}, 0.5),
+        ({"input_cost_per_image": 0.5}, 0.5),
         (
             {"input_cost_per_pixel": 1e-07},
             1e-07 * 2 * 1024 * 1024 + 1e-07 * 2 * 1024 * 1024,
         ),
+        (
+            {"output_cost_per_image": 0.5, "input_cost_per_pixel": 1e-07},
+            0.5 + 1e-07 * 1024 * 1024 + 1e-07 * 2 * 1024 * 1024,
+        ),
     ),
-    ids=("flat", "per-pixel"),
+    ids=("flat", "flat-input-image-price", "per-pixel", "image-price-and-pixel-rate"),
 )
 async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_built_before_routing(
     monkeypatch: pytest.MonkeyPatch, deployment_prices: Mapping[str, float], expected_cost: float

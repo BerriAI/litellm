@@ -3,6 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
 if TYPE_CHECKING:
@@ -61,6 +62,8 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
 )
+
+_CUSTOM_PRICING_FIELDS: Final = MappingProxyType({field: True for field in CustomPricingLiteLLMParams.model_fields})
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -884,7 +887,7 @@ def image_edit(
             optional_params=dict(image_edit_request_params),
             litellm_params={
                 **image_edit_request_params,
-                **litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True),
+                **litellm_params.model_dump(include=_CUSTOM_PRICING_FIELDS, exclude_none=True),
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
             },

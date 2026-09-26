@@ -1,4 +1,5 @@
 import base64
+import binascii
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,13 +15,15 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     resolve_image_model_info,
 )
 from litellm.litellm_core_utils.token_counter import image_dimensions_from_bytes
-from litellm.llms.azure_ai.image_edit.flux2_transformation import REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM
 from litellm.llms.azure_ai.image_generation.flux_transformation import AzureFoundryFluxImageGenerationConfig
-from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
+from litellm.types.utils import ImageResponse, ModelInfo
 
 MEGAPIXEL: Final = 1024 * 1024
 MAX_LONE_REFERENCE_MEGAPIXELS: Final = 4
-_REFERENCE_PIXELS: Final = TypeAdapter(tuple[Annotated[int, Field(strict=True, gt=0)], ...])
+IMAGE_HEADER_BASE64_PREFIX_CHARS: Final = 64 * 1024
+REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM: Final = "reference_image_pixels"
+DEPLOYMENT_PER_IMAGE_PRICE_KEYS: Final = ("output_cost_per_image", "input_cost_per_image")
+_REFERENCE_PIXELS: Final = TypeAdapter(tuple[Annotated[int, Field(strict=True, gt=0)] | None, ...])
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -40,8 +43,8 @@ def _price(resolved: ModelInfo, cost_key: str) -> float | None:
     return _get_cost_per_unit(shared_entry, cost_key, default_value=None)
 
 
-def _pixel_rate(resolved: ModelInfo, cost_key: str) -> float:
-    return _price(resolved, cost_key) or 0.0
+def _catalog_pixel_rate(resolved: ModelInfo) -> float:
+    return _price(resolved, "input_cost_per_pixel") or 0.0
 
 
 def _deployment_price(deployment: ModelInfo | None, cost_key: str) -> float | None:
@@ -51,15 +54,25 @@ def _deployment_price(deployment: ModelInfo | None, cost_key: str) -> float | No
 
 
 def _flux2_prices(resolved: ModelInfo, deployment: ModelInfo | None) -> _Flux2MegapixelPrices:
-    deployment_image_price: Final = _deployment_price(deployment, "output_cost_per_image")
-    if deployment_image_price is not None:
-        return _Flux2MegapixelPrices(first=deployment_image_price, megapixel=0.0)
+    deployment_image_price: Final = next(
+        (price for key in DEPLOYMENT_PER_IMAGE_PRICE_KEYS if (price := _deployment_price(deployment, key)) is not None),
+        None,
+    )
     deployment_pixel_rate: Final = _deployment_price(deployment, "input_cost_per_pixel")
-    if deployment_pixel_rate is not None:
-        return _Flux2MegapixelPrices(
-            first=deployment_pixel_rate * MEGAPIXEL, megapixel=deployment_pixel_rate * MEGAPIXEL
-        )
-    catalog_megapixel_rate: Final = _pixel_rate(resolved, "input_cost_per_pixel") * MEGAPIXEL
+    deployment_megapixel_rate: Final = None if deployment_pixel_rate is None else deployment_pixel_rate * MEGAPIXEL
+    match (deployment_image_price, deployment_megapixel_rate):
+        case (float() as image_price, float() as megapixel_rate):
+            return _Flux2MegapixelPrices(first=image_price, megapixel=megapixel_rate)
+        case (float() as image_price, None):
+            return _Flux2MegapixelPrices(first=image_price, megapixel=0.0)
+        case (None, float() as megapixel_rate):
+            return _Flux2MegapixelPrices(first=megapixel_rate, megapixel=megapixel_rate)
+        case _:
+            return _catalog_flux2_prices(resolved)
+
+
+def _catalog_flux2_prices(resolved: ModelInfo) -> _Flux2MegapixelPrices:
+    catalog_megapixel_rate: Final = _catalog_pixel_rate(resolved) * MEGAPIXEL
     catalog_first_megapixel: Final = _price(resolved, "output_cost_per_image")
     return _Flux2MegapixelPrices(
         first=catalog_megapixel_rate if catalog_first_megapixel is None else catalog_first_megapixel,
@@ -71,20 +84,28 @@ def _billable_megapixels(pixels: int) -> int:
     return math.ceil(pixels / MEGAPIXEL)
 
 
-def _billable_reference_megapixels(reference_pixels: tuple[int, ...]) -> int:
-    # Azure's FLUX.2 request_meta (2026-09-25) bills a lone reference at no more than 4 MP, each reference of a
-    # multi-reference edit as exactly 1 MP whatever its size, and every reference megapixel at the rate of an
-    # additional generated one
+def record_reference_pixels(image_response: ImageResponse, reference_pixels: tuple[int | None, ...]) -> None:
+    image_response._hidden_params[REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM] = reference_pixels
+
+
+def _billable_reference_megapixels(model: str, reference_pixels: tuple[int | None, ...]) -> int:
+    # Azure's FLUX.2 [pro] request_meta (2026-09-25) bills a lone reference at no more than 4 MP and each reference
+    # of a multi-reference edit as exactly 1 MP whatever its size. FLUX.2 [flex] is assumed to match
     match reference_pixels:
         case ():
             return 0
-        case (lone_reference,):
+        case (None,):
+            verbose_logger.warning(
+                "Could not read the dimensions of the %s reference image, billing it as one megapixel", model
+            )
+            return 1
+        case (int() as lone_reference,):
             return min(_billable_megapixels(lone_reference), MAX_LONE_REFERENCE_MEGAPIXELS)
         case _:
             return len(reference_pixels)
 
 
-def _reference_cost(prices: _Flux2MegapixelPrices, image_response: ImageResponse) -> float:
+def _reference_cost(model: str, prices: _Flux2MegapixelPrices, image_response: ImageResponse) -> float:
     reported_pixels: Final = image_response._hidden_params.get(REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM)
     if reported_pixels is None:
         return 0.0
@@ -93,36 +114,52 @@ def _reference_cost(prices: _Flux2MegapixelPrices, image_response: ImageResponse
     except ValidationError:
         verbose_logger.warning("Ignoring malformed FLUX.2 reference pixel counts: %r", reported_pixels)
         return 0.0
-    return prices.megapixel * _billable_reference_megapixels(reference_pixels)
+    return prices.megapixel * _billable_reference_megapixels(model, reference_pixels)
 
 
 def _flux2_generated_cost(
-    prices: _Flux2MegapixelPrices, image_response: ImageResponse, requested_pixels: int, n: int | None
+    model: str, prices: _Flux2MegapixelPrices, image_response: ImageResponse, requested_pixels: int, n: int | None
 ) -> float:
     return sum(
         prices.first + prices.megapixel * (_billable_megapixels(pixels) - 1)
-        for pixels in _generated_pixels(image_response, requested_pixels, n)
+        for pixels in _generated_pixels(model, image_response, requested_pixels, n)
     )
 
 
-def _generated_pixels(image_response: ImageResponse, requested_pixels: int, n: int | None) -> tuple[int, ...]:
+def _generated_pixels(
+    model: str, image_response: ImageResponse, requested_pixels: int, n: int | None
+) -> tuple[int, ...]:
     images: Final = image_response.data or ()
     if not images:
         return (requested_pixels,) * (n or 0)
-    return tuple(_measured_pixels(image) or requested_pixels for image in images)
+    return tuple(_returned_image_pixels(model, image.b64_json) or requested_pixels for image in images)
 
 
-def _measured_pixels(image: ImageObject) -> int | None:
-    if not image.b64_json:
+def _returned_image_pixels(model: str, b64_json: str | None) -> int | None:
+    if not b64_json:
         return None
+    pixels: Final = base64_image_pixels(b64_json)
+    if pixels is None:
+        verbose_logger.warning(
+            "Could not read the dimensions of the image %s returned, billing the requested size", model
+        )
+    return pixels
+
+
+def base64_image_pixels(encoded_image: str) -> int | None:
+    header_chars: Final = IMAGE_HEADER_BASE64_PREFIX_CHARS
+    return _decoded_image_pixels(encoded_image[:header_chars]) or (
+        _decoded_image_pixels(encoded_image) if len(encoded_image) > header_chars else None
+    )
+
+
+def _decoded_image_pixels(encoded_image: str) -> int | None:
     try:
-        image_bytes: Final = base64.b64decode(image.b64_json)
-    except ValueError:
+        image_bytes: Final = base64.b64decode(encoded_image)
+    except binascii.Error:
         return None
     dimensions: Final = image_dimensions_from_bytes(image_bytes)
-    if dimensions is None:
-        return None
-    return dimensions[0] * dimensions[1] or None
+    return None if dimensions is None else dimensions[0] * dimensions[1] or None
 
 
 def cost_calculator(
@@ -155,15 +192,15 @@ def cost_calculator(
         if AzureFoundryFluxImageGenerationConfig.is_flux2_model(model):
             prices: Final = _flux2_prices(_model_info, model_info)
             requested_pixels: Final = _size_pixels(_output_size(size, optional_params, image_response)) or MEGAPIXEL
-            return _flux2_generated_cost(prices, image_response, requested_pixels, n) + _reference_cost(
-                prices, image_response
+            return _flux2_generated_cost(model, prices, image_response, requested_pixels, n) + _reference_cost(
+                model, prices, image_response
             )
 
         num_images: Final = n if n is not None else len(image_response.data or ())
         output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
         if output_cost_per_image:
             return output_cost_per_image * num_images
-        if not _pixel_rate(_model_info, "input_cost_per_pixel"):
+        if not _catalog_pixel_rate(_model_info):
             return 0.0
 
         from litellm.cost_calculator import default_image_cost_calculator
