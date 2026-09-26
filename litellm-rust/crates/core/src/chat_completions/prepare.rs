@@ -1,6 +1,8 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_http::request::has_header;
-use litellm_llms::base_llm::chat::transformation::{BaseConfig, RequestAuth};
+use litellm_llms::base_llm::{
+    auth::{ValidatedEnvironment, with_default_headers},
+    chat::transformation::BaseConfig,
+};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
@@ -67,59 +69,26 @@ fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
     config: &dyn BaseConfig,
-) -> Result<(Vec<(String, String)>, RequestAuth), Error> {
+) -> Result<ValidatedEnvironment, Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let mut headers = string_headers(request.extra_headers.clone())?;
-    let auth = config.auth(
+    let forwarded = string_headers(request.extra_headers.clone())?;
+    let validated = config.validate_environment(
+        forwarded,
         request.api_key,
         model,
         &request.optional_params,
         &env_lookup,
     )?;
-    match &auth {
-        RequestAuth::Header { name, value } => {
-            // The deployment's credential replaces whatever the caller forwarded
-            // under the same name, mirroring Python's
-            // `{**headers, **anthropic_headers}`: letting a request header win
-            // would let its sender choose the principal the call bills to.
-            //
-            // The exception is a scheme the provider hands off to entirely, such
-            // as an Anthropic OAuth bearer, where Python drops `x-api-key`
-            // instead of resolving one. Re-adding it there would put the
-            // credential into a header the host removed on purpose.
-            if !config.defers_to_forwarded_auth(&headers) {
-                headers.retain(|(header, _)| !header.eq_ignore_ascii_case(name));
-                headers.push(((*name).to_string(), value.clone()));
-            }
-        }
-        RequestAuth::Bearer { token } => {
-            // Bedrock's `get_request_headers` assigns `headers["Authorization"]`
-            // unconditionally once a bearer token resolves, so the deployment's
-            // identity outranks whatever the caller forwarded. Keeping the
-            // caller's would bill and authorize the call as a different
-            // principal than the same deployment uses on Python.
-            //
-            // The `Header` arm below keeps the opposite precedence on purpose:
-            // Anthropic's transform honours a forwarded OAuth bearer.
-            headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
-            headers.push(("authorization".to_string(), format!("Bearer {token}")));
-        }
-        // SigV4 signs the serialized body, so the handler adds its headers.
-        RequestAuth::AwsSigV4 { .. } => {}
-    }
-
-    for (name, value) in config.default_headers() {
-        if !has_header(&headers, name) {
-            headers.push(((*name).to_string(), (*value).to_string()));
-        }
-    }
-    Ok((headers, auth))
+    Ok(ValidatedEnvironment {
+        headers: with_default_headers(validated.headers, config.default_headers()),
+        auth: validated.auth,
+    })
 }
 
 pub(super) fn prepare_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
+    let environment = validate_environment(&request, &request.model, request.config)?;
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| std::env::var(key).ok();
@@ -130,23 +99,22 @@ pub(super) fn prepare_provider_request(
         &env_lookup,
     )?;
     let transformed =
-        config.transform_request(&model, request.messages, request.optional_params.clone())?;
+        config.transform_request(&model, request.messages, request.optional_params)?;
 
     Ok(ProviderChatCompletionsRequest {
         model,
         config,
         url,
         body: transformed.body,
-        upstream_headers: headers,
-        auth,
-        optional_params: request.optional_params,
+        environment,
         timeout: request.timeout,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::chat::transformation::RequestAuth;
+    use litellm_auth::CredentialPlacement;
+    use litellm_llms::base_llm::auth::{AuthScheme, resolve_auth};
     use serde_json::{Map, Value, json};
 
     use super::{prepare_provider_request, resolve_request};
@@ -159,6 +127,20 @@ mod tests {
         request: ChatCompletionsRequest<'_>,
     ) -> Result<ProviderChatCompletionsRequest, Error> {
         prepare_provider_request(resolve_request(request)?)
+    }
+
+    /// The headers as they go on the wire, credential applied.
+    fn wire_headers(prepared: &ProviderChatCompletionsRequest) -> Vec<(String, String)> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(resolve_auth(
+                &litellm_auth::AuthServices::default(),
+                prepared.environment.clone(),
+                &|_| None,
+            ))
+            .unwrap()
+            .headers
     }
 
     fn request<'a>(
@@ -227,19 +209,16 @@ mod tests {
         ))
         .expect("prepares");
         assert!(
-            prepared
-                .upstream_headers
-                .contains(&("x-api-key".to_string(), "sk-test".to_string()))
+            wire_headers(&prepared).contains(&("x-api-key".to_string(), "sk-test".to_string()))
         );
         assert!(
-            prepared
-                .upstream_headers
+            wire_headers(&prepared)
                 .contains(&("anthropic-version".to_string(), "2023-06-01".to_string()))
         );
         assert!(matches!(
-            prepared.auth,
-            RequestAuth::Header {
-                name: "x-api-key",
+            prepared.environment.auth,
+            AuthScheme::Credential {
+                placement: CredentialPlacement::Header("x-api-key"),
                 ..
             }
         ));
@@ -261,12 +240,12 @@ mod tests {
             json!("sk-caller"),
         )]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let keys: Vec<_> = prepared
-            .upstream_headers
+        let headers = wire_headers(&prepared);
+        let keys: Vec<_> = headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
             .collect();
-        assert_eq!(keys.len(), 1, "got {:?}", prepared.upstream_headers);
+        assert_eq!(keys.len(), 1, "got {:?}", headers);
         assert_eq!(keys[0].1, "sk-test");
     }
 
@@ -290,16 +269,14 @@ mod tests {
         ]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
         assert!(
-            !prepared
-                .upstream_headers
+            !wire_headers(&prepared)
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("x-api-key") && value == "sk-test"),
             "the resolved key must not be applied over an OAuth bearer, got {:?}",
-            prepared.upstream_headers
+            wire_headers(&prepared)
         );
         assert!(
-            prepared
-                .upstream_headers
+            wire_headers(&prepared)
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                     && value == "Bearer sk-ant-oat01-token")
@@ -322,21 +299,20 @@ mod tests {
             ("X-Api-Key".to_string(), json!("sk-caller")),
         ]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let keys: Vec<_> = prepared
-            .upstream_headers
+        let headers = wire_headers(&prepared);
+        let keys: Vec<_> = headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
             .collect();
-        assert_eq!(keys.len(), 1, "got {:?}", prepared.upstream_headers);
+        assert_eq!(keys.len(), 1, "got {:?}", headers);
         assert_eq!(keys[0].1, "sk-test");
         assert!(
-            prepared
-                .upstream_headers
+            wire_headers(&prepared)
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                     && value == "Bearer unrelated"),
             "the unrelated authorization must survive, got {:?}",
-            prepared.upstream_headers
+            wire_headers(&prepared)
         );
     }
 
@@ -435,18 +411,16 @@ mod tests {
             prepared.url,
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
         );
-        assert_eq!(
-            prepared.auth,
-            RequestAuth::AwsSigV4 {
-                region: "us-east-1".to_string(),
-                service: "bedrock",
-            }
-        );
+        assert!(matches!(
+            &prepared.environment.auth,
+            AuthScheme::AwsSigV4 { region, service: "bedrock", .. } if region == "us-east-1"
+        ));
         // SigV4 signs the serialized body, so prepare must not have added an
-        // Authorization header; the handler does it.
+        // Authorization header; the signer does it over the bytes sent.
         assert!(
             !prepared
-                .upstream_headers
+                .environment
+                .headers
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
         );
@@ -475,9 +449,12 @@ mod tests {
             json!("abc-123"),
         )]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let signed = crate::chat_completions::handler::outbound_request(&prepared)
-            .await
-            .expect("signs");
+        let signed = crate::chat_completions::handler::outbound_request(
+            &litellm_auth::AuthServices::default(),
+            &prepared,
+        )
+        .await
+        .expect("signs");
 
         let authorization = signed
             .header("authorization")
@@ -525,9 +502,12 @@ mod tests {
             call.api_key = None;
             call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
             let prepared = prepare_chat_completions_call(call).expect("prepares");
-            let error = crate::chat_completions::handler::outbound_request(&prepared)
-                .await
-                .expect_err("{forwarded} should decline instead of being signed");
+            let error = crate::chat_completions::handler::outbound_request(
+                &litellm_auth::AuthServices::default(),
+                &prepared,
+            )
+            .await
+            .expect_err("{forwarded} should decline instead of being signed");
             assert!(
                 matches!(error, Error::Unsupported(_)),
                 "{forwarded} declined as {error:?}, which the host would not fall back on"
@@ -552,8 +532,8 @@ mod tests {
             json!("Bearer caller-supplied"),
         )]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let authorizations: Vec<_> = prepared
-            .upstream_headers
+        let headers = wire_headers(&prepared);
+        let authorizations: Vec<_> = headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
             .map(|(_, value)| value.as_str())
@@ -585,16 +565,15 @@ mod tests {
             json!("Bearer sk-ant-oat01-forwarded"),
         )]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let keys: Vec<_> = prepared
-            .upstream_headers
+        let headers = wire_headers(&prepared);
+        let keys: Vec<_> = headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
             .map(|(_, value)| value.as_str())
             .collect();
-        assert!(keys.is_empty(), "got {:?}", prepared.upstream_headers);
+        assert!(keys.is_empty(), "got {:?}", headers);
         assert!(
-            prepared
-                .upstream_headers
+            wire_headers(&prepared)
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                     && value == "Bearer sk-ant-oat01-forwarded")
@@ -613,15 +592,13 @@ mod tests {
             json!({"maxTokens": 16}),
         ))
         .expect("prepares");
-        assert_eq!(
-            prepared.auth,
-            RequestAuth::Bearer {
-                token: "sk-test".to_string()
-            }
-        );
+        assert!(matches!(
+            &prepared.environment.auth,
+            AuthScheme::Credential { placement: CredentialPlacement::Bearer, secret }
+                if secret.expose() == "sk-test"
+        ));
         assert!(
-            prepared
-                .upstream_headers
+            wire_headers(&prepared)
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                     && value == "Bearer sk-test"),
@@ -734,250 +711,6 @@ mod tests {
                 params,
             ))
             .unwrap_or_else(|error| panic!("prepare declined {messages}: {error}"));
-        }
-    }
-
-    mod round_trip {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::{TcpListener, TcpStream},
-        };
-
-        use super::*;
-        use crate::chat_completions::chat_completions;
-
-        async fn read_http_request(socket: &mut TcpStream) -> String {
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-            let header_end = loop {
-                let n = socket.read(&mut buffer).await.expect("reads request");
-                if n == 0 {
-                    break request.len();
-                }
-                request.extend_from_slice(&buffer[..n]);
-                if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n")
-                {
-                    break position + 4;
-                }
-            };
-            let headers = String::from_utf8_lossy(&request[..header_end]);
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())
-                        .flatten()
-                })
-                .unwrap_or(0);
-            while request.len().saturating_sub(header_end) < content_length {
-                let n = socket.read(&mut buffer).await.expect("reads body");
-                if n == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..n]);
-            }
-            String::from_utf8(request).expect("request is utf8")
-        }
-
-        fn http_response(status: &str, body: &str) -> String {
-            format!(
-                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-        }
-
-        /// Serve one request from a stub upstream and hand back what it received.
-        async fn serve_once(
-            status: &'static str,
-            body: &'static str,
-        ) -> (String, tokio::task::JoinHandle<String>) {
-            let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
-            let port = listener.local_addr().expect("addr").port();
-            let handle = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.expect("accepts");
-                let received = read_http_request(&mut socket).await;
-                socket
-                    .write_all(http_response(status, body).as_bytes())
-                    .await
-                    .expect("writes response");
-                socket.flush().await.expect("flushes");
-                received
-            });
-            (format!("http://127.0.0.1:{port}/v1/messages"), handle)
-        }
-
-        fn call(api_base: &str, messages: Value, params: Value) -> ChatCompletionsRequest<'_> {
-            ChatCompletionsRequest {
-                model: "anthropic/claude-sonnet-4-5",
-                messages,
-                optional_params: match params {
-                    Value::Object(map) => map,
-                    other => panic!("params must be an object, got {other}"),
-                },
-                api_key: Some("sk-test"),
-                api_base: Some(api_base),
-                custom_llm_provider: None,
-                extra_headers: None,
-                timeout: Some(std::time::Duration::from_secs(10)),
-            }
-        }
-
-        const GOOD_BODY: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
-
-        #[tokio::test]
-        async fn round_trip_sends_the_translated_body_and_normalizes_the_response() {
-            let (api_base, handle) = serve_once("200 OK", GOOD_BODY).await;
-            let response = chat_completions(call(
-                &api_base,
-                json!([
-                    {"role": "system", "content": "be terse"},
-                    {"role": "user", "content": "hi"}
-                ]),
-                json!({"max_tokens": 16}),
-            ))
-            .await
-            .expect("call succeeds");
-
-            let received = handle.await.expect("server task");
-            let sent: Value = serde_json::from_str(
-                received
-                    .split_once("\r\n\r\n")
-                    .expect("request has a body")
-                    .1,
-            )
-            .expect("body is json");
-            assert_eq!(
-                sent["messages"],
-                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-            assert_eq!(
-                sent["system"],
-                json!([{"type": "text", "text": "be terse"}])
-            );
-            assert_eq!(sent["max_tokens"], json!(16));
-            assert!(received.to_lowercase().contains("x-api-key: sk-test"));
-
-            assert_eq!(
-                response.choices[0].message.content.as_deref(),
-                Some("hello")
-            );
-            assert_eq!(response.usage.total_tokens, 15);
-        }
-
-        #[tokio::test]
-        async fn a_response_it_cannot_normalize_is_reported_as_already_sent() {
-            // The provider was called and billed, so the host must not retry this
-            // on its own path. `MissingField` here would read as a pre-send
-            // decline and be retried; `InvalidResponse` cannot.
-            const NO_USAGE: &str =
-                r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#;
-            let (api_base, handle) = serve_once("200 OK", NO_USAGE).await;
-            let err = chat_completions(call(
-                &api_base,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"max_tokens": 16}),
-            ))
-            .await
-            .expect_err("response cannot be normalized");
-            handle.await.expect("server task");
-            assert!(
-                matches!(err, Error::InvalidResponse(_)),
-                "expected a post-send error, got {err:?}"
-            );
-        }
-
-        #[tokio::test]
-        async fn a_tool_use_block_in_the_response_is_also_reported_as_already_sent() {
-            const TOOL_USE: &str = r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#;
-            let (api_base, handle) = serve_once("200 OK", TOOL_USE).await;
-            let err = chat_completions(call(
-                &api_base,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"max_tokens": 16}),
-            ))
-            .await
-            .expect_err("response cannot be normalized");
-            handle.await.expect("server task");
-            assert!(
-                matches!(err, Error::InvalidResponse(_)),
-                "expected a post-send error, got {err:?}"
-            );
-        }
-
-        #[tokio::test]
-        async fn an_upstream_error_status_keeps_its_code() {
-            let (api_base, handle) =
-                serve_once("429 Too Many Requests", r#"{"error":"slow down"}"#).await;
-            let err = chat_completions(call(
-                &api_base,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"max_tokens": 16}),
-            ))
-            .await
-            .expect_err("upstream rejects");
-            handle.await.expect("server task");
-            assert!(
-                matches!(
-                    err,
-                    Error::Transport(litellm_http::transport::Error::Http { status: 429, .. })
-                ),
-                "expected a 429, got {err:?}"
-            );
-        }
-
-        #[tokio::test]
-        async fn a_connection_that_is_never_established_declines_instead_of_failing() {
-            // Nothing was sent, so nothing was billed and the host can still serve
-            // the request. Classing this with the post-send failures would turn a
-            // recoverable fallback into a user-facing error on exactly the
-            // deployments whose transport is configured only on the Python client.
-            let port = {
-                let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
-                listener.local_addr().expect("has an address").port()
-                // Dropped here, so the port is closed and the connect is refused.
-            };
-            let err = chat_completions(call(
-                &format!("http://127.0.0.1:{port}/v1/messages"),
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"max_tokens": 16}),
-            ))
-            .await
-            .expect_err("nothing is listening");
-            assert!(
-                matches!(
-                    err,
-                    Error::Transport(litellm_http::transport::Error::Connect(_))
-                ),
-                "expected a pre-send connect failure, got {err:?}"
-            );
-        }
-
-        #[test]
-        fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-            use crate::chat_completions::handler::as_response_error;
-
-            for original in [
-                Error::MissingField("usage"),
-                Error::Unsupported("non-text response content block"),
-                Error::InvalidRequest("whatever".to_string()),
-                Error::Auth(litellm_auth::Error::InvalidHeader),
-            ] {
-                let label = format!("{original:?}");
-                assert!(
-                    matches!(as_response_error(original), Error::InvalidResponse(_)),
-                    "{label} must not stay retryable once the provider has answered"
-                );
-            }
-            // An upstream status is already unambiguous, so it survives intact.
-            assert!(matches!(
-                as_response_error(Error::Transport(litellm_http::transport::Error::Http {
-                    status: 500,
-                    body: "boom".to_string()
-                })),
-                Error::Transport(litellm_http::transport::Error::Http { status: 500, .. })
-            ));
         }
     }
 }

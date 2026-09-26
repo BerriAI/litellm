@@ -40,21 +40,6 @@ pub fn apply_credential(
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RequestAuth {
-    Header {
-        name: &'static str,
-        value: String,
-    },
-    Bearer {
-        token: String,
-    },
-    AwsSigV4 {
-        region: String,
-        service: &'static str,
-    },
-}
-
 #[cfg(test)]
 mod tests {
     use super::{CredentialPlacement, apply_credential};
