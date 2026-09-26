@@ -9798,6 +9798,13 @@ export interface paths {
          *                     configured (cooldown remains the sole exclusion mechanism).
          *                     Hiding is presentation-only: a hidden model can still be
          *                     called directly.
+         *
+         *     Set `general_settings.advertised_models` to add catalog-only entries, each
+         *     an `{id, owned_by}` pair, for models this proxy does not serve itself (say a
+         *     realtime endpoint clients connect to directly). They are listed for
+         *     discovery only and register no route, so a request naming one fails as an
+         *     unknown model and `GET /v1/models/{id}` reports it as not found. An entry
+         *     whose id is already listed is dropped, so a routed model is never displaced.
          */
         get: operations["model_list_models_get"];
         put?: never;
@@ -20104,6 +20111,13 @@ export interface paths {
          *                     configured (cooldown remains the sole exclusion mechanism).
          *                     Hiding is presentation-only: a hidden model can still be
          *                     called directly.
+         *
+         *     Set `general_settings.advertised_models` to add catalog-only entries, each
+         *     an `{id, owned_by}` pair, for models this proxy does not serve itself (say a
+         *     realtime endpoint clients connect to directly). They are listed for
+         *     discovery only and register no route, so a request naming one fails as an
+         *     unknown model and `GET /v1/models/{id}` reports it as not found. An entry
+         *     whose id is already listed is dropped, so a routed model is never displaced.
          */
         get: operations["model_list_v1_models_get"];
         put?: never;
@@ -24129,6 +24143,26 @@ export interface components {
             };
         };
         /**
+         * AdvertisedModel
+         * @description A catalog-only entry listed by /v1/models without a routable deployment.
+         *
+         *     Discovery only: nothing here registers a route, so a request naming this id
+         *     still fails as an unknown model. Use it to advertise something the proxy
+         *     does not serve itself, e.g. a realtime endpoint clients connect to directly.
+         */
+        AdvertisedModel: {
+            /**
+             * Id
+             * @description model id as clients see it in the listing
+             */
+            id: string;
+            /**
+             * Owned By
+             * @description owner reported for this entry, e.g. the provider name
+             */
+            owned_by: string;
+        };
+        /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
          */
@@ -28013,6 +28047,11 @@ export interface components {
              * @default 1
              */
             admission_queue_timeout_seconds: number;
+            /**
+             * Advertised Models
+             * @description catalog-only entries added to /v1/models for discovery; they register no route, so GET /v1/models/{id} still reports them as not found and a request naming one fails as an unknown model
+             */
+            advertised_models?: components["schemas"]["AdvertisedModel"][] | null;
             /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`

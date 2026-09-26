@@ -2551,6 +2551,18 @@ class PluginConfig(LiteLLMPydanticObjectBase):
     )
 
 
+class AdvertisedModel(LiteLLMPydanticObjectBase):
+    """A catalog-only entry listed by /v1/models without a routable deployment.
+
+    Discovery only: nothing here registers a route, so a request naming this id
+    still fails as an unknown model. Use it to advertise something the proxy
+    does not serve itself, e.g. a realtime endpoint clients connect to directly.
+    """
+
+    id: str = Field(description="model id as clients see it in the listing")
+    owned_by: str = Field(description="owner reported for this entry, e.g. the provider name")
+
+
 class CoordinationRedisNode(LiteLLMPydanticObjectBase):
     """A single startup node of a cluster-mode Redis used for proxy coordination."""
 
@@ -2643,6 +2655,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
+    )
+    advertised_models: list[AdvertisedModel] | None = Field(
+        None,
+        description="catalog-only entries added to /v1/models for discovery; they register no route, so "
+        "GET /v1/models/{id} still reports them as not found and a request naming one fails as an unknown model",
     )
     key_management_system: KeyManagementSystem | None = Field(
         None, description="key manager to load keys from / decrypt keys with"

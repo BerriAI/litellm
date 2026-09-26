@@ -394,6 +394,7 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
     ttft_keepalive_interval,
 )
+from litellm.proxy.common_utils.advertised_models import advertised_model_rows
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
@@ -11260,6 +11261,13 @@ async def model_list(
                     configured (cooldown remains the sole exclusion mechanism).
                     Hiding is presentation-only: a hidden model can still be
                     called directly.
+
+    Set `general_settings.advertised_models` to add catalog-only entries, each
+    an `{id, owned_by}` pair, for models this proxy does not serve itself (say a
+    realtime endpoint clients connect to directly). They are listed for
+    discovery only and register no route, so a request naming one fails as an
+    unknown model and `GET /v1/models/{id}` reports it as not found. An entry
+    whose id is already listed is dropped, so a routed model is never displaced.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
@@ -11383,6 +11391,12 @@ async def model_list(
             model_info["id"] = response_id
             model_data.append(model_info)
 
+        # Catalog-only entries are advertised to every caller: they name no deployment,
+        # so the per-caller filters above have nothing to scope them by. A listing asked
+        # for access groups alone gets none of them, since a catalog entry is not a group.
+        if not only_model_access_groups:
+            model_data.extend(advertised_model_rows(settings, tuple(row["id"] for row in model_data)))
+
         if wants_anthropic_format:
             admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
             return create_anthropic_model_list_response(
@@ -11442,6 +11456,10 @@ async def model_list(
         )
         model_info["id"] = response_id
         model_data.append(model_info)
+
+    # Same catalog merge as the scope=expand branch above.
+    if not only_model_access_groups:
+        model_data.extend(advertised_model_rows(settings, tuple(row["id"] for row in model_data)))
 
     if wants_anthropic_format:
         listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
