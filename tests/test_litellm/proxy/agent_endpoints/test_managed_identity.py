@@ -185,11 +185,26 @@ def test_enabling_unbound_or_inactive_identity_requires_rebinding(identity: Agen
     assert "Bind an identity" in result.message
 
 
-def test_delegated_identity_requires_a_scope() -> None:
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+def test_explicit_empty_scope_requirements_can_be_registered_and_preserved(mode: str) -> None:
+    from litellm.types.proxy.agent_identity import EntraIdentityConfig
+
+    configuration: Final = EntraIdentityConfig(
+        provider="microsoft_entra",
+        tenant_id=TENANT,
+        client_id=CLIENT,
+        service_principal_id=PRINCIPAL,
+        required_scopes=(),
+    )
+    created: Final = managed_write_fields(
+        {"identity": configuration.model_dump(), "execution_mode": mode}, None, "admin"
+    )
+    assert not isinstance(created, AgentIdentityFailure)
+    assert created["identity"]["create"]["required_scopes"] == ()
     agent: Final = managed_agent().model_copy(update={"identity": BINDING.model_copy(update={"required_scopes": ()})})
-    result: Final = managed_write_fields({"execution_mode": "delegated"}, agent, "admin")
-    assert isinstance(result, AgentIdentityFailure)
-    assert "delegated scope" in result.message
+    updated: Final = managed_write_fields({"execution_mode": mode}, agent, "admin")
+    assert not isinstance(updated, AgentIdentityFailure)
+    assert updated["execution_mode"] == mode
 
 
 @pytest.mark.parametrize(
@@ -215,6 +230,7 @@ def test_malformed_application_roles_are_rejected(roles: object) -> None:
 
 def test_entra_binding_normalizes_identifiers_and_rejects_invalid_configuration() -> None:
     from pydantic import ValidationError
+
     from litellm.types.proxy.agent_identity import EntraIdentityConfig
 
     identifier = "ABCDEF00-1234-4234-9234-123456789ABC"
