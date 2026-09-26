@@ -9,6 +9,7 @@ may find the B1 canary anywhere.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -33,6 +34,7 @@ def test_config_deployment_api_key_reaches_only_the_provider(
 ) -> None:
     b1: Final = rig.canaries["B1"]
     marker: Final = canary(MARKER)
+    started: Final = datetime.now(UTC)
     text: Final = f"slot B1 {marker.value}" + (f" {PROVIDER_4XX}" if outcome == "provider_4xx" else "")
     with rig.proxy.scenario() as scenario:
         caller: Final = team_caller(scenario)
@@ -57,9 +59,16 @@ def test_config_deployment_api_key_reaches_only_the_provider(
             (marker, b1),
             responses=(response,),
             sinks={name: sink.requests() for name, sink in rig.sinks.items()},
-            ids={"request_id": request_id, "team_id": caller.team_id, "model_id": CONFIG_MODEL, "model": CONFIG_MODEL},
+            ids={
+                "request_id": request_id,
+                "team_id": caller.team_id,
+                "user_id": caller.user_id,
+                "model_id": CONFIG_MODEL,
+                "model": CONFIG_MODEL,
+            },
             callers=caller.callers(rig),
             own_headers=rig.own_headers,
+            since=started,
         )
         record_route_sweep(report.routes, request.node.nodeid)
         assert_marker_seen(

@@ -10,7 +10,9 @@ API:
 - ``sweep_database(canaries, *, database_url=None) -> tuple[Hit, ...]`` (S1): every base table
   of every non-system schema from ``information_schema.tables``, read as
   ``SELECT to_jsonb(t)::text FROM "<schema>"."<table>" t``. Location is ``table.column``
-  (``schema.table.column`` outside ``public``); a table dropped mid-sweep is skipped.
+  (``schema.table.column`` outside ``public``); a table dropped mid-sweep is skipped. With
+  ``since``, the append-only log tables in ``TIME_SCOPED_TABLES`` are read from ``since`` on
+  (minus ``SCOPE_SLACK``), so the sweep stays fast on a database shared by many tests.
 - ``get_routes() -> tuple[str, ...]`` and ``sweep_routes(gateway, canaries, ids, *, callers)``
   (S2): every GET ``APIRoute`` registered on the proxy app (``app.routes``, which includes the
   routes hidden from the OpenAPI spec and every lazily registered feature router), enumerated
@@ -30,7 +32,9 @@ API:
   names exact ``(route, caller label)`` pairs allowed to return a credential by design; those
   hits land in ``RouteSweep.allowed`` instead of ``hits``, and every other caller of that route
   is still swept. ``record_route_sweep(routes, node)`` appends the report to
-  ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact).
+  ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact). With ``since``,
+  unpaginated list routes (``SCENARIO_SCOPED_LIST_ROUTES``, today ``/spend/logs``) are called
+  with this scenario's request id, user id and a summarized date window instead of unfiltered.
 - ``sweep_responses(responses, canaries) -> tuple[Hit, ...]`` (S3): body and headers of every
   client-facing response the scenario received.
 - ``sweep_sink(name, requests, canaries, *, own_header=None) -> tuple[Hit, ...]`` (S4): every
@@ -39,8 +43,8 @@ API:
   carry that one canary.
 - ``sweep_redis(canaries, *, host, port) -> tuple[Hit, ...]`` (S5): ``SCAN`` of every key, with
   strings, hashes, lists, sets and sorted sets dumped and searched along with the key name.
-- ``sweep_all(gateway, canaries, *, responses, sinks, ids, callers=None, own_headers=None)
-  -> SweepReport``: S1 to S5 in one pass for a finished scenario. Search the scenario's marker
+- ``sweep_all(gateway, canaries, *, responses, sinks, ids, callers=None, own_headers=None,
+  since=None) -> SweepReport``: S1 to S5 in one pass for a finished scenario. Search the scenario's marker
   and its credential canaries together; ``SweepReport.credential_hits()`` is every hit that is not the
   marker, and ``assert_marker_seen(report, expected)`` is the per-test sensitivity control
   (``expected`` maps a sweep id to a location substring the marker must be reported at).
@@ -56,11 +60,12 @@ import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 import psycopg
@@ -161,8 +166,14 @@ def _hits(sweep: str, location: str, blob: bytes | str, canaries: Sequence[Canar
     return tuple(Hit(sweep, location, match.slot, match.encoding) for match in find_canary(blob, canaries))
 
 
-def sweep_database(canaries: Sequence[Canary], *, database_url: str | None = None) -> tuple[Hit, ...]:
-    """S1: every row of every base table, as ``to_jsonb``, attributed to the column that holds it."""
+def sweep_database(
+    canaries: Sequence[Canary], *, database_url: str | None = None, since: datetime | None = None
+) -> tuple[Hit, ...]:
+    """S1: every row of every base table, as ``to_jsonb``, attributed to the column that holds it.
+
+    With ``since``, the append-only log tables in ``TIME_SCOPED_TABLES`` are read only for rows
+    written or changed at or after it; every other table is still read in full.
+    """
     found: Final[list[Hit]] = []  # mutable-ok: accumulated across tables
     with psycopg.connect(database_url or os.environ["DATABASE_URL"], autocommit=True) as connection:
         tables: Final = connection.execute(
@@ -174,6 +185,15 @@ def sweep_database(canaries: Sequence[Canary], *, database_url: str | None = Non
             query = sql.SQL("SELECT to_jsonb(t)::text FROM {}.{} t").format(
                 sql.Identifier(schema), sql.Identifier(table)
             )
+            scoped = TIME_SCOPED_TABLES.get(table) if since is not None else None
+            if scoped is not None:
+                query = sql.SQL("{} WHERE {}").format(
+                    query,
+                    sql.SQL(" OR ").join(
+                        sql.SQL("t.{} >= {}").format(sql.Identifier(column), sql.Literal(_naive_utc(since)))
+                        for column in scoped
+                    ),
+                )
             where = table if schema == "public" else f"{schema}.{table}"
             try:
                 rows = connection.execute(query).fetchall()
@@ -185,6 +205,50 @@ def sweep_database(canaries: Sequence[Canary], *, database_url: str | None = Non
                 for column, value in json.loads(row).items():
                     found.extend(_hits("S1", f"{where}.{column}", json.dumps(value), canaries))
     return tuple(found)
+
+
+TIME_SCOPED_TABLES: Final = MappingProxyType(
+    {
+        "LiteLLM_SpendLogs": ("startTime", "updated_at"),
+        "LiteLLM_ErrorLogs": ("startTime", "endTime"),
+        "LiteLLM_AuditLog": ("updated_at",),
+        "LiteLLM_DeletedTeamTable": ("deleted_at",),
+        "LiteLLM_DeletedVerificationToken": ("deleted_at",),
+    }
+)
+SCOPE_SLACK: Final = timedelta(seconds=5)
+
+
+def _naive_utc(moment: datetime) -> datetime:
+    """Prisma writes these columns as naive UTC; compare with a little slack for clock skew."""
+    aware: Final = moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+    return (aware - SCOPE_SLACK).astimezone(UTC).replace(tzinfo=None)
+
+
+def _route_queries(route: str, ids: Mapping[str, str], since: datetime | None) -> tuple[str, ...]:
+    """Query strings a route is called with; unbounded list routes are narrowed to this scenario."""
+    if route not in SCENARIO_SCOPED_LIST_ROUTES or since is None:
+        return ("",)
+    return tuple(
+        "?" + urlencode(query) for query in SCENARIO_SCOPED_LIST_ROUTES[route](ids, since.astimezone(UTC).date())
+    )
+
+
+def _spend_logs_queries(ids: Mapping[str, str], day: date) -> tuple[Mapping[str, str], ...]:
+    window: Final = {
+        "start_date": day.isoformat(),
+        "end_date": (datetime.now(UTC).date() + timedelta(days=1)).isoformat(),
+    }
+    return (
+        *(({"request_id": ids["request_id"]},) if "request_id" in ids else ()),
+        *(({"user_id": ids["user_id"]},) if "user_id" in ids else ()),
+        window,
+    )
+
+
+SCENARIO_SCOPED_LIST_ROUTES: Final[Mapping[str, Callable[[Mapping[str, str], date], tuple[Mapping[str, str], ...]]]] = (
+    MappingProxyType({"/spend/logs": _spend_logs_queries})
+)
 
 
 @cache
@@ -256,8 +320,14 @@ def sweep_routes(
     ids: Mapping[str, str],
     *,
     callers: Mapping[str, str] | None = None,
+    since: datetime | None = None,
 ) -> RouteSweep:
-    """S2: call every GET route as each caller (label -> bearer key; default the master key)."""
+    """S2: call every GET route as each caller (label -> bearer key; default the master key).
+
+    With ``since``, the unpaginated list routes in ``SCENARIO_SCOPED_LIST_ROUTES`` are called with
+    this scenario's filters (its request id, its user, and a summarized date window from
+    ``since``) instead of unfiltered, which on a shared database returns every row ever written.
+    """
     routes: Final = tuple(route for route in get_routes() if route_denied(route) is None)
     targets: Final = tuple(
         (route, *_filled(route, ids))
@@ -286,7 +356,12 @@ def sweep_routes(
             None,
         )
 
-    jobs: Final = tuple((route, label, key, path) for label, key in who.items() for route, path, _ in targets)
+    jobs: Final = tuple(
+        (route, label, key, path + query)
+        for label, key in who.items()
+        for route, path, _ in targets
+        for query in _route_queries(route, ids, since)
+    )
     with ThreadPoolExecutor(max_workers=8) as pool:
         results: Final = tuple(pool.map(lambda job: call(*job), jobs))
     return RouteSweep(
@@ -398,16 +473,20 @@ def sweep_all(
     ids: Mapping[str, str],
     callers: Mapping[str, str] | None = None,
     own_headers: Mapping[str, tuple[str, str]] | None = None,
+    since: datetime | None = None,
 ) -> SweepReport:
     """S1 to S5 for one finished scenario; fails if any GET route returned no response.
 
-    Redis goes first: it holds entries with a TTL, and the route walk is the slow sweep.
+    Redis goes first: it holds entries with a TTL, and the route walk is the slow sweep. Pass
+    ``since`` (taken before the scenario's first request) to scope the append-only log tables
+    and the unpaginated log list routes to this scenario; the sensitivity marker's own spend-log
+    row must then still be found, which ``assert_marker_seen`` checks.
     """
     redis: Final = sweep_redis(canaries)
-    routes: Final = sweep_routes(gateway, canaries, ids, callers=callers)
+    routes: Final = sweep_routes(gateway, canaries, ids, callers=callers, since=since)
     assert not routes.unreachable, f"GET routes returned no response, so S2 did not check them: {routes.unreachable}"
     hits: Final = (
-        *sweep_database(canaries),
+        *sweep_database(canaries, since=since),
         *routes.hits,
         *sweep_responses(responses, canaries),
         *(

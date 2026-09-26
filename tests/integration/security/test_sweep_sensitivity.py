@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import gzip
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Final
 
 import pytest
@@ -104,6 +105,7 @@ def test_sink_own_header_allows_only_that_header_and_slot() -> None:
 @pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as two callers
 def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.FixtureRequest) -> None:
     marker: Final = canary(MARKER)
+    started: Final = datetime.now(UTC)
     with rig.proxy.scenario() as scenario:
         caller: Final = team_caller(scenario)
         response: Final = rig.proxy.request(
@@ -123,9 +125,16 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
             (marker,),
             responses=(response,),
             sinks={name: sink.requests() for name, sink in rig.sinks.items()},
-            ids={"request_id": request_id, "team_id": caller.team_id, "model_id": CONFIG_MODEL, "model": CONFIG_MODEL},
+            ids={
+                "request_id": request_id,
+                "team_id": caller.team_id,
+                "user_id": caller.user_id,
+                "model_id": CONFIG_MODEL,
+                "model": CONFIG_MODEL,
+            },
             callers=caller.callers(rig),
             own_headers=rig.own_headers,
+            since=started,
         )
         record_route_sweep(report.routes, request.node.nodeid)
         assert_marker_seen(
@@ -138,6 +147,7 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
                 "S5": "redis value",
             },
         )
-        assert_marker_seen(report, {"S2": "GET /spend/logs as admin -> 200"})
+        assert_marker_seen(report, {"S2": f"GET /spend/logs?request_id={request_id} as admin -> 200"})
+        assert_marker_seen(report, {"S2": f"GET /spend/logs?user_id={caller.user_id} as admin -> 200"})
         assert_marker_seen(report, {"S2": f"GET /spend/logs/ui/{request_id} as internal_user -> 200"})
         assert report.credential_hits() == ()
