@@ -12,6 +12,7 @@ from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
 from litellm.llms.gemini.count_tokens.transformation import (
     GeminiCountTokensPayload,
     InvalidCountTokensRequest,
+    _has_anthropic_shape,
     build_count_tokens_payload,
     native_count_tokens_payload,
 )
@@ -567,6 +568,16 @@ def test_build_count_tokens_payload_wraps_responses_api_tool():
         "type": "object",
         "properties": {"city": {"type": "string"}},
     }
+
+
+@pytest.mark.parametrize(
+    "block_type",
+    ["bash_code_execution_tool_result", "text_editor_code_execution_tool_result"],
+)
+def test_anthropic_shape_detection_covers_server_tool_results(block_type):
+    messages = [{"role": "assistant", "content": [{"type": block_type, "tool_use_id": "srv_1", "content": {}}]}]
+
+    assert _has_anthropic_shape(None, None, messages) is True
 
 
 def test_build_count_tokens_payload_rejects_a_tool_result_without_its_tool_call():

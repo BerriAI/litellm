@@ -67,6 +67,8 @@ _ANTHROPIC_PART_TYPES: Final = frozenset(
         "web_search_tool_result",
         "web_fetch_tool_result",
         "code_execution_tool_result",
+        "bash_code_execution_tool_result",
+        "text_editor_code_execution_tool_result",
         "mcp_tool_use",
         "mcp_tool_result",
         "container_upload",
