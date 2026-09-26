@@ -87,6 +87,20 @@ pub fn has_header(headers: &[(String, String)], name: &str) -> bool {
         .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
 
+pub fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+pub fn without_headers(headers: Vec<(String, String)>, names: &[&str]) -> Vec<(String, String)> {
+    headers
+        .into_iter()
+        .filter(|(key, _)| !names.iter().any(|name| key.eq_ignore_ascii_case(name)))
+        .collect()
+}
+
 pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
     headers.iter().any(|(name, value)| {
         if !name.eq_ignore_ascii_case("authorization") {
@@ -195,6 +209,30 @@ mod tests {
     }
 
     #[test]
+    fn header_value_reads_the_first_match_in_any_case() {
+        let headers = vec![
+            ("X-Api-Key".to_string(), "first".to_string()),
+            ("x-api-key".to_string(), "second".to_string()),
+        ];
+        assert_eq!(header_value(&headers, "x-API-key"), Some("first"));
+        assert_eq!(header_value(&headers, "authorization"), None);
+    }
+
+    #[test]
+    fn without_headers_drops_every_casing_of_the_named_headers_and_keeps_order() {
+        let headers = vec![
+            ("X-Api-Key".to_string(), "k".to_string()),
+            ("anthropic-version".to_string(), "v".to_string()),
+            ("AUTHORIZATION".to_string(), "Bearer t".to_string()),
+            ("x-api-key".to_string(), "k2".to_string()),
+        ];
+        assert_eq!(
+            without_headers(headers, &["x-api-key", "authorization"]),
+            vec![("anthropic-version".to_string(), "v".to_string())]
+        );
+    }
+
+    #[test]
     fn auth_header_detection_is_case_insensitive() {
         let headers = vec![
             ("x-trace-id".to_string(), "trace-1".to_string()),
@@ -217,13 +255,25 @@ mod tests {
             "Authorization".to_string(),
             "Bearer abc".to_string()
         )]));
+        assert!(has_bearer_auth(&[(
+            "authorization".to_string(),
+            "bearer abc".to_string()
+        )]));
         assert!(!has_bearer_auth(&[(
             "Authorization".to_string(),
             "Bearer    ".to_string()
         )]));
         assert!(!has_bearer_auth(&[(
+            "authorization".to_string(),
+            String::new()
+        )]));
+        assert!(!has_bearer_auth(&[(
             "Authorization".to_string(),
             "Basic abc".to_string()
+        )]));
+        assert!(!has_bearer_auth(&[(
+            "x-api-key".to_string(),
+            "abc".to_string()
         )]));
     }
 }

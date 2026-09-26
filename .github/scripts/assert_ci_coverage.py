@@ -34,7 +34,6 @@ GLOB_CHARS = frozenset("*?")
 # tests has to be named by some shard or it runs nowhere. A child listed here is
 # itself decomposed one level deeper and is checked through its own entry.
 SHARDED_ROOTS: tuple[str, ...] = (
-    "tests/proxy_unit_tests",
     "tests/test_litellm",
     "tests/test_litellm/proxy",
 )
@@ -118,6 +117,13 @@ def _invoked_test_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
         if scalar.key in TEST_PATH_KEYS or TEST_RUNNER_RE.search(scalar.value)
         for match in TEST_TOKEN_RE.finditer(_uncommented(scalar.value))
     )
+
+
+def _unit_selection_tokens(repo_root: pathlib.Path = REPO_ROOT) -> frozenset[str]:
+    script: Final = repo_root / ".circleci/scripts/unit_selection.sh"
+    if not script.is_file():
+        return frozenset()
+    return frozenset(match.group(0).rstrip("/") for match in TEST_TOKEN_RE.finditer(_uncommented(script.read_text())))
 
 
 def _built_dockerfile_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
@@ -611,7 +617,10 @@ def main() -> int:
     scalars = _all_scalars()
 
     integration_paths, ownership_findings = _integration_ownership()
-    test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | integration_paths) + ownership_findings
+    test_findings = (
+        _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | _unit_selection_tokens() | integration_paths)
+        + ownership_findings
+    )
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
     stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
 

@@ -17,7 +17,7 @@ use crate::{
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
-const AZURE_AI_OCR_PATH: &str = "/providers/mistral/azure/ocr";
+pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -60,12 +60,15 @@ impl BaseOcrConfig for AzureAiOcrConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
         let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
-        self.resolve_headers(&request.connection, &config, &|name: &str| {
-            request.connection.secret(name)
-        })
+        self.resolve_headers(
+            &client.auth().azure,
+            &request.connection,
+            &config,
+            &|name: &str| request.connection.secret(name),
+        )
         .await
     }
 
@@ -139,6 +142,7 @@ impl AzureAiOcrConfig {
 
     async fn resolve_headers(
         &self,
+        auth: &litellm_auth_azure::AzureAuthService,
         connection: &OcrConnection,
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -146,7 +150,7 @@ impl AzureAiOcrConfig {
         Self::resolve_api_base(connection.api_base.as_deref(), env_lookup)?;
         if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             if config.azure_ad_token_provider.is_some() {
-                super::common_utils::resolve_entra(config, env_lookup).await?;
+                super::common_utils::resolve_entra(auth, config, env_lookup).await?;
             }
             super::common_utils::validate_destination(connection, connection.extra_headers_source)?;
             return Ok(connection.extra_headers.clone());
@@ -166,7 +170,7 @@ impl AzureAiOcrConfig {
             super::common_utils::validate_destination(connection, key.source())?;
             return Ok(bearer_headers(connection, key.value()));
         }
-        let key = super::common_utils::resolve_entra(config, env_lookup)
+        let key = super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
             .ok_or(Error::MissingAzureAiCredentials)?;
         super::common_utils::validate_destination(connection, key.source())?;
@@ -179,9 +183,8 @@ impl AzureAiOcrConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let base = Self::resolve_api_base(api_base, env_lookup)?;
-        let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
         ApiUrl::parse(&base)
-            .and_then(|url| url.complete_path(&path))
+            .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
             .map(|url| url.into_string())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
@@ -254,9 +257,12 @@ mod tests {
         };
         assert_eq!(
             AzureAiOcrConfig
-                .resolve_headers(&connection, &Default::default(), &|_| {
-                    Some("environment-key".into())
-                })
+                .resolve_headers(
+                    &Default::default(),
+                    &connection,
+                    &Default::default(),
+                    &|_| { Some("environment-key".into()) }
+                )
                 .await
                 .unwrap(),
             connection.extra_headers
@@ -268,9 +274,12 @@ mod tests {
     async fn request_key_precedes_environment_key(connection: OcrConnection) {
         assert_eq!(
             AzureAiOcrConfig
-                .resolve_headers(&connection, &Default::default(), &|_| {
-                    Some("environment-key".into())
-                })
+                .resolve_headers(
+                    &Default::default(),
+                    &connection,
+                    &Default::default(),
+                    &|_| { Some("environment-key".into()) }
+                )
                 .await
                 .unwrap()[0],
             ("Authorization".into(), "Bearer request-key".into())
@@ -286,9 +295,12 @@ mod tests {
         };
 
         let error = AzureAiOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|name| {
-                (name == AZURE_AI_API_KEY_ENV).then(|| "environment-key".into())
-            })
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|name| (name == AZURE_AI_API_KEY_ENV).then(|| "environment-key".into()),
+            )
             .await
             .unwrap_err();
 
@@ -310,7 +322,12 @@ mod tests {
         };
 
         let headers = AzureAiOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|_| None)
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|_| None,
+            )
             .await
             .unwrap();
 
@@ -330,7 +347,7 @@ mod tests {
         let connection = OcrConnection::default();
 
         let headers = AzureAiOcrConfig
-            .resolve_headers(&connection, &Default::default(), &env)
+            .resolve_headers(&Default::default(), &connection, &Default::default(), &env)
             .await
             .unwrap();
         let url = AzureAiOcrConfig.build_ocr_url(None, &env).unwrap();

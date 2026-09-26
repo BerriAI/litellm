@@ -165,7 +165,7 @@ class _ProxyDBLogger(CustomLogger):
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
-        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata["status"] = "failure"
         _error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
@@ -259,7 +259,7 @@ class _ProxyDBLogger(CustomLogger):
         )
 
         await self._spend_writer().update_database(
-            token=user_api_key_dict.api_key,
+            token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
             end_user_id=user_api_key_dict.end_user_id,
@@ -474,7 +474,9 @@ class _ProxyDBLogger(CustomLogger):
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
 
     @staticmethod
-    async def _enrich_failure_metadata_unless_db_stalled(metadata: dict, original_exception: Exception) -> dict:
+    async def _enrich_failure_metadata_unless_db_stalled(
+        metadata: dict[str, object], original_exception: Exception
+    ) -> dict[str, object]:
         if isinstance(original_exception, DBLookupDeadlineExceeded):
             return metadata
         return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)

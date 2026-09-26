@@ -1,27 +1,22 @@
 import json
-import os
 import threading
 import uuid
-from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-import psycopg
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 from integration._support.client import Gateway, eventually, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.database_relay import database_relay
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
-from psycopg import sql
 
 
 @pytest.mark.covers("quota_management.response_cache.generated_sequences_preserve_content_and_accounting")
@@ -223,17 +218,6 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
 
 
 RESET_SWEEP_QUERY: Final = b'"LiteLLM_VerificationToken"."budget_reset_at" < $'
-
-
-@contextmanager
-def scratch_database() -> Generator[str]:
-    name: Final = f"integration_{uuid.uuid4().hex}"
-    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
-        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-        try:
-            yield urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{name}"))
-        finally:
-            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
 @pytest.mark.covers("quota_management.budget.key.scheduled_reset_survives_transient_db_outage")

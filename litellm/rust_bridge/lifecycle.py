@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -17,7 +17,7 @@ class Complete:
 
 @dataclass(frozen=True, slots=True)
 class Open:
-    value: None
+    value: Mapping[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +68,7 @@ async def drive(execution: Execution) -> object:
         step: Final = await _settle(execution, execution.start())
         if isinstance(step, Open):
             handed_off = True
-            return Stream(execution)
+            return Stream(execution, step.value)
         return step.value
     finally:
         if not handed_off:
@@ -78,9 +78,10 @@ async def drive(execution: Execution) -> object:
 class Stream(AsyncIterator[object]):
     """A streamed native call: each read resumes the execution until its next chunk."""
 
-    def __init__(self, execution: Execution) -> None:
+    def __init__(self, execution: Execution, hidden_params: Mapping[str, object] | None = None) -> None:
         self._execution: Final = execution
         self._done = False
+        self._hidden_params: dict[str, object] = dict(hidden_params or {})  # mutable-ok: header writers mutate it
 
     def __aiter__(self) -> Stream:
         return self
@@ -114,9 +115,10 @@ class Stream(AsyncIterator[object]):
 class SyncStream(Iterator[object]):
     """The sync form of `Stream`; its execution never suspends on an awaitable."""
 
-    def __init__(self, execution: Execution) -> None:
+    def __init__(self, execution: Execution, hidden_params: Mapping[str, object] | None = None) -> None:
         self._execution: Final = execution
         self._done = False
+        self._hidden_params: dict[str, object] = dict(hidden_params or {})  # mutable-ok: header writers mutate it
 
     def __iter__(self) -> SyncStream:
         return self

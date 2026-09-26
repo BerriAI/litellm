@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -2057,7 +2058,7 @@ class MCPRequestHandler:
     @staticmethod
     async def _get_team_object_permission(
         user_api_key_auth: UserAPIKeyAuth | None = None,
-    ):
+    ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Get team object_permission - automatically loaded by get_team_object() in main auth flow.
 
@@ -2136,7 +2137,11 @@ class MCPRequestHandler:
         via_toolsets: Sequence[str] | None,
     ) -> Sequence[str] | None:
         """Union of one level's direct tool grants and its toolset-granted tools on one server,
-        ``None`` when neither source restricts (allow-all from this level)."""
+        ``None`` when neither source restricts (allow-all from this level). A direct grant
+        containing ``MCP_ALL_TOOLS_WILDCARD`` makes the level unrestricted, so it returns
+        ``None`` whatever the toolsets name."""
+        if direct is not None and MCP_ALL_TOOLS_WILDCARD in direct:
+            return None
         if direct is None and via_toolsets is None:
             return None
         return tuple({*(direct or ()), *(via_toolsets or ())})
@@ -2251,11 +2256,7 @@ class MCPRequestHandler:
                 else None
             )
 
-            key_tools: Final = (
-                list(set(key_direct_tools or []) | set(key_toolset_tools or []))
-                if key_direct_tools is not None or key_toolset_tools is not None
-                else None
-            )
+            key_tools: Final = _as_list(MCPRequestHandler._union_tool_grants(key_direct_tools, key_toolset_tools))
             team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
@@ -2287,6 +2288,10 @@ class MCPRequestHandler:
                 await MCPRequestHandler._apply_user_tool_ceiling(
                     allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
                 )
+            )
+
+            allowed_tools = _as_list(
+                await MCPRequestHandler._apply_agent_caller_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
             )
 
             return await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
@@ -3169,6 +3174,48 @@ class MCPRequestHandler:
         if allowed_tools is None:
             return list(user_tools)
         return list(set(allowed_tools) & set(user_tools))
+
+    @staticmethod
+    async def _apply_agent_caller_tool_ceiling(
+        allowed_tools: Sequence[str] | None,
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> Sequence[str] | None:
+        """Narrow an agent key's tools on ``server_id`` to those the invoking user and team (echoed back
+        by the agent as ``x-litellm-user-id`` / ``x-litellm-team-id``) may call: the echoed team's tool
+        grants when it names any on this server, then the echoed user's own tool entitlement. The tools
+        axis twin of ``_apply_agent_caller_ceiling``, so the headers only ever narrow. Denies every tool
+        on the server when the caller's team cannot be loaded, since a caller we cannot resolve must not
+        read as unrestricted."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return allowed_tools
+        try:
+            team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(caller_auth)
+            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(team_obj_perm, server_id)
+        except Exception as e:  # noqa: BLE001  # an unresolved caller team must deny, not widen
+            verbose_logger.warning(
+                "MCP agent caller team tool ceiling unresolvable, denying tools on %r: %s", server_id, e
+            )
+            return ()
+        team_direct_tools: Final = (
+            global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
+            if team_obj_perm
+            else None
+        )
+        team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
+        team_capped: Final = (
+            allowed_tools
+            if team_tools is None
+            else tuple(team_tools)
+            if allowed_tools is None
+            else tuple(frozenset(allowed_tools) & frozenset(team_tools))
+        )
+        return await MCPRequestHandler._apply_user_tool_ceiling(team_capped, server_id, caller_auth)
 
     @staticmethod
     async def _apply_end_user_tool_ceiling(
