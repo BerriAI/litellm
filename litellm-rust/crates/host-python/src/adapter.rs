@@ -9,6 +9,12 @@ pub fn missing_state() -> PyErr {
     PyRuntimeError::new_err("missing native call state")
 }
 
+/// The SDK's request policy, run by the driver on the keyword view `begin` returned and
+/// before the protocol host projects from it. It rewrites that view in place, so the
+/// lifecycle that returned it sees the rewrite too; a rejection fails the call as a host
+/// failure, so the lifecycle still observes it.
+pub type Preflight = fn(Python<'_>, &Bound<'_, PyDict>) -> PyResult<()>;
+
 /// What an adapter step produced: either the value the driver asked for, or a Python
 /// awaitable the driver hands back to the caller's task before asking again.
 pub enum LifecycleStep {

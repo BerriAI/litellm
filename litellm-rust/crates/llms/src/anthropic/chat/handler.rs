@@ -7,7 +7,7 @@ use litellm_types::{
 use serde_json::Value;
 
 use crate::{
-    anthropic::experimental_pass_through::messages::streaming_iterator::{
+    anthropic::messages::streaming_iterator::{
         AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
         AnthropicStreamUsage,
     },
