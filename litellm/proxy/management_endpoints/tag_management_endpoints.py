@@ -345,6 +345,8 @@ async def new_tag(
             "message": f"Tag {tag.name} created successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -478,6 +480,8 @@ async def update_tag(
             "message": f"Tag {tag.name} updated successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error updating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -544,6 +548,8 @@ async def info_tag(
             requested_tags[tag_record.tag_name] = tag_dict
 
         return requested_tags
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -715,6 +721,8 @@ async def delete_tag(
         await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
 
         return {"message": f"Tag {data.name} deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
