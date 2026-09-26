@@ -1286,6 +1286,21 @@ async def _resolve_byok_mcp_auth_header(
     return mcp_auth_header
 
 
+async def _byok_listing_auth_header(
+    mcp_server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_auth_header: str | dict[str, str] | None,
+) -> str | dict[str, str] | None:
+    """The credential a tools/list may use: a supplied header forwards unchanged, and a missing one
+    falls back to the stored credential without the tool-call path's byok_auth_required raise."""
+    if not mcp_server.is_byok or mcp_auth_header is not None:
+        return mcp_auth_header
+
+    from litellm.proxy._experimental.mcp_server.operations import _get_byok_credential
+
+    return await _get_byok_credential(mcp_server, user_api_key_auth)
+
+
 def _client_forwarded_authorization_headers(
     mcp_server: MCPServer,
     oauth2_headers: dict[str, str] | None,
@@ -4401,11 +4416,7 @@ class MCPServerManager:
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
-        resolved_mcp_auth_header: Final = (
-            mcp_auth_header
-            if not server.is_byok or isinstance(mcp_auth_header, dict)
-            else await _resolve_byok_mcp_auth_header(server, user_api_key_auth, mcp_auth_header)
-        )
+        resolved_mcp_auth_header: Final = await _byok_listing_auth_header(server, user_api_key_auth, mcp_auth_header)
         listed_caller: Final = ListedToolsCaller(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=resolved_mcp_auth_header,

@@ -7068,6 +7068,28 @@ class TestMCPServerManager:
         listed = manager.get_listed_tool(server, "turn", call_side)
         assert listed is not None and listed.description == "stored cred catalog"
 
+    @pytest.mark.asyncio
+    async def test_byok_supplied_header_lists_without_credential_validation(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="byok-catalog",
+            name="byok_catalog",
+            transport=MCPTransport.http,
+            url="http://byok-catalog",
+            is_byok=True,
+        )
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[MCPTool(name="turn", description="t", inputSchema={})])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            await manager._get_tools_from_server(
+                server=server,
+                mcp_auth_header="Bearer hdr",
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm"),
+            )
+
+        assert manager._create_mcp_client.await_args.kwargs["mcp_auth_header"] == "Bearer hdr"
+
     @pytest.mark.parametrize(
         ("signer", "static_headers", "shared"),
         [
