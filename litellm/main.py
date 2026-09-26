@@ -38,7 +38,7 @@ import dotenv
 import httpx
 import openai
 from pydantic import BaseModel
-from typing_extensions import overload
+from typing_extensions import assert_never, overload
 
 import litellm
 
@@ -62,6 +62,7 @@ if TYPE_CHECKING:
 
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
+    CONTROL_PARAMS_KEY,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     NADIR_DEFAULT_API_BASE,
@@ -83,6 +84,9 @@ from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+    InvalidControlParam,
+    control_params_from,
+    control_params_without_invalid,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -127,7 +131,7 @@ from litellm.types.completion import (
     _CompletionDispatchContext,
     _CompletionDispatchResult,
 )
-from litellm.types.litellm_params import RetryStrategy
+from litellm.types.litellm_params import LiteLLMControlParams, RetryStrategy
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -178,7 +182,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import safe_deep_copy
+from .litellm_core_utils.core_helpers import normalize_drop_params, safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -335,6 +339,21 @@ ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = str | Exception | dict | ModelResponse | ModelResponseStream
+
+
+def _control_params_or_raise(kwargs: Mapping[str, object], model: str) -> LiteLLMControlParams:
+    control_params: Final = control_params_from(kwargs)
+    match control_params:
+        case LiteLLMControlParams():
+            return control_params
+        case InvalidControlParam(param=param, message=message):
+            if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
+                return control_params_without_invalid(kwargs)
+            raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
+        case _:
+            assert_never(control_params)
+
+
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -501,6 +520,7 @@ async def acompletion(
 
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    _ = _control_params_or_raise(kwargs, model)
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -5369,8 +5389,8 @@ def completion(
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
+    control_params: Final = _control_params_or_raise(kwargs, model)
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
-    litellm_params: dict[str, object] = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
     from litellm.integrations.anthropic_cache_control_hook import (
@@ -5622,7 +5642,7 @@ def completion(
             messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
-        litellm_params = get_litellm_params(
+        requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
             api_key=api_key,
             force_timeout=force_timeout,
@@ -5670,7 +5690,7 @@ def completion(
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
-            stream_chunk_size=kwargs.get("stream_chunk_size"),
+            stream_chunk_size=control_params.stream_chunk_size,
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
@@ -5683,6 +5703,10 @@ def completion(
                 if key in kwargs
             },
         )
+        litellm_params: Final[dict[str, object]] = {
+            **requested_litellm_params,
+            CONTROL_PARAMS_KEY: control_params,
+        }
         if litellm_params.get("provider_affinity_header") is not None:
             try:
                 headers = add_provider_affinity_header(

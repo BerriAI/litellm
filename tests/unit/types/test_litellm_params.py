@@ -535,7 +535,7 @@ LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.GuardrailOptions: {"guardrails": (1,)},
     litellm_params.PromptOptions: {"prompt_id": 1},
     litellm_params.ResponseOptions: {"keepalive_seconds": "1.5"},
-    litellm_params.LiteLLMControlParams: {"stream_chunk_size": "64"},
+    litellm_params.LiteLLMControlParams: {"stream_chunk_size": "sixty-four"},
     litellm_params.MockOptions: {"mock_timeout": "true"},
     litellm_params.CallState: {"completion_call_id": 1},
     litellm_params.AgenticLoopState: {"depth": "1"},

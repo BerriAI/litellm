@@ -4,7 +4,9 @@ models and KWARG_ARTIFACTS into all_litellm_params."""
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+
+from pydantic import BeforeValidator, Field
 
 if TYPE_CHECKING:
     import httpx
@@ -237,9 +239,13 @@ class ResponseOptions:
     allow_client_keepalive_override: bool | None = None
 
 
+def _int_from_decimal_string(value: object) -> object:
+    return int(value) if isinstance(value, str) and value.isascii() and value.isdecimal() else value
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LiteLLMControlParams:
-    stream_chunk_size: int | None = None
+    stream_chunk_size: Annotated[int, BeforeValidator(_int_from_decimal_string), Field(strict=True, gt=0)] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

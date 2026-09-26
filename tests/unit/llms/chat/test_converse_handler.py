@@ -418,7 +418,7 @@ async def test_acompletion_without_stream_chunk_size_uses_default_chunking(
     assert recorder.seen[0]["stream_chunk_size"] is None
 
 
-@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), (None, None)])
+@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), ("64", 64), (None, None)])
 def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     monkeypatch: pytest.MonkeyPatch, stream_chunk_size: int | None, expected_chunk_size: int | None
 ) -> None:
@@ -455,19 +455,19 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     data: Final = client.post.call_args.kwargs["data"]
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] == stream_chunk_size
+    assert recorder.seen[0]["stream_chunk_size"] == expected_chunk_size
 
 
-def test_converse_stream_rejects_non_int_stream_chunk_size_before_calling_bedrock(monkeypatch: pytest.MonkeyPatch):
-    record_litellm_params(monkeypatch)
-    client = HTTPHandler()
-    client.post = MagicMock()
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "non_stream"])
+def test_converse_rejects_non_int_stream_chunk_size_before_calling_bedrock(stream: bool) -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
 
     with pytest.raises(litellm.BadRequestError):
         litellm.completion(
             model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "hi"}],
-            stream=True,
+            stream=stream,
             client=client,
             aws_access_key_id="fake",
             aws_secret_access_key="fake",
@@ -475,30 +475,7 @@ def test_converse_stream_rejects_non_int_stream_chunk_size_before_calling_bedroc
             stream_chunk_size="sixty-four",
         )
 
-    client.post.assert_not_called()
-
-
-def test_converse_non_stream_ignores_invalid_stream_chunk_size():
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json = MagicMock(return_value=_converse_response_body())
-    mock_response.text = json.dumps(_converse_response_body())
-    mock_response.headers = httpx.Headers()
-    client = HTTPHandler()
-    client.post = MagicMock(return_value=mock_response)
-
-    response = litellm.completion(
-        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
-        messages=[{"role": "user", "content": "hi"}],
-        client=client,
-        aws_access_key_id="fake",
-        aws_secret_access_key="fake",
-        aws_region_name="us-east-1",
-        stream_chunk_size="64",
-    )
-
-    assert response.choices[0].message.content == "hi"
-    client.post.assert_called_once()
+    send.assert_not_called()
 
 
 def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:

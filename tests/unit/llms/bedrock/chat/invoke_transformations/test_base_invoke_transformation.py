@@ -338,7 +338,7 @@ async def test_acompletion_without_stream_chunk_size_uses_default_chunking(monke
     assert recorder.seen[0]["stream_chunk_size"] is None
 
 
-@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), (None, None)])
+@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), ("64", 64), (None, None)])
 def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     monkeypatch: pytest.MonkeyPatch, stream_chunk_size, expected_chunk_size
 ):
@@ -375,16 +375,39 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     data: Final = client.post.call_args.kwargs["data"]
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
     assert len(recorder.seen) == 1
-    assert recorder.seen[0]["stream_chunk_size"] == stream_chunk_size
+    assert recorder.seen[0]["stream_chunk_size"] == expected_chunk_size
 
 
-def test_stream_wrapper_rejects_non_int_stream_chunk_size(monkeypatch: pytest.MonkeyPatch):
-    record_litellm_params(monkeypatch)
-    mock_response = MagicMock()
+def test_router_deployment_with_drop_params_streams_with_default_chunking_for_a_bad_stream_chunk_size() -> None:
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
+    client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "invoke-chunked",
+                "litellm_params": {
+                    "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                    "stream_chunk_size": "sixty-four",
+                    "drop_params": True,
+                },
+            }
+        ]
+    )
+
+    router.completion(model="invoke-chunked", messages=[{"role": "user", "content": "hi"}], stream=True, client=client)
+
+    mock_response.iter_bytes.assert_called_once_with(chunk_size=None)
+
+
+def test_invoke_stream_rejects_non_int_stream_chunk_size_before_calling_bedrock() -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
 
     with pytest.raises(litellm.BadRequestError):
         litellm.completion(
@@ -398,4 +421,34 @@ def test_stream_wrapper_rejects_non_int_stream_chunk_size(monkeypatch: pytest.Mo
             stream_chunk_size="sixty-four",
         )
 
-    client.post.assert_not_called()
+    send.assert_not_called()
+
+
+def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_before_calling_bedrock() -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "invoke-chunked",
+                "litellm_params": {
+                    "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                    "stream_chunk_size": "sixty-four",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 400
+    send.assert_not_called()
