@@ -117,7 +117,7 @@ class TestConfigBasics:
             model=MODEL,
         )
         assert request_data["model"] == MODEL  # pinned before signing
-        assert body is not None and MODEL.encode() in body  # signed body carries the pinned model
+        assert body is not None and f'"model": "{MODEL}"'.encode() in body  # signed body carries the pinned model
         assert any(name.lower() == "authorization" for name in headers)
 
 
