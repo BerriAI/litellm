@@ -178,6 +178,8 @@ __all__ = (
     "_prefetch_oauth_creds_for_user",
     "_prepare_mcp_server_headers",
     "_raise_if_initialize_grants_no_mcp_servers",
+    "_request_tags_from_raw_headers",
+    "_request_tags_header",
     "_resolve_display_name_to_original",
     "_run_post_mcp_call_guardrails",
     "_server_answers_to",
@@ -212,6 +214,34 @@ def _mcp_session_id_from_headers(
         if isinstance(key, str) and key.lower() == "mcp-session-id":
             return value or None
     return None
+
+
+def _request_tags_header(
+    raw_headers: Mapping[str, str] | None,
+) -> str | None:
+    """The caller's ``x-litellm-tags`` value, read case-insensitively like the other header
+    lookups in this module. ``None`` when the caller sent no tags."""
+    if not raw_headers:
+        return None
+    for key, value in raw_headers.items():
+        if key.lower() == "x-litellm-tags":
+            return value or None
+    return None
+
+
+def _request_tags_from_raw_headers(
+    raw_headers: Mapping[str, str] | None,
+) -> Sequence[str] | None:
+    """The caller's tags, parsed by the same helper the LLM routes use so an MCP operation and a
+    chat completion attribute an identical header identically."""
+    header_value: Final = _request_tags_header(raw_headers)
+    if header_value is None:
+        return None
+    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=None,
+        headers={"x-litellm-tags": header_value},  # mutable-ok: the shared parser reads a plain dict
+        data={},  # mutable-ok: no request body to read tags from on this path
+    )
 
 
 class ListMCPToolsRestAPIResponseObject(MCPTool):
@@ -989,6 +1019,11 @@ async def _get_tools_from_mcp_servers(
         list_tools_call_id: Final = str(uuid.uuid4())
         # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
         effective_litellm_trace_id: Final = litellm_trace_id or get_chain_id_from_headers(raw_headers)
+        # An explicit [] means the caller resolved to no tags; only fall back to the
+        # header when nothing was passed at all.
+        effective_request_tags: Final = (
+            request_tags if request_tags is not None else _request_tags_from_raw_headers(raw_headers)
+        )
         spend_logs_metadata: Final[dict[str, object]] = {
             "mcp_operation": "list_tools",
         }
@@ -1005,7 +1040,7 @@ async def _get_tools_from_mcp_servers(
             "metadata": {
                 "spend_logs_metadata": spend_logs_metadata,
                 "headers": logging_safe_mcp_headers(raw_headers),
-                **({"tags": request_tags} if request_tags else {}),
+                **({"tags": effective_request_tags} if effective_request_tags else {}),
             },
             # Provide a small input payload for standard logging
             "input": [
