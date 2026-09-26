@@ -1,9 +1,51 @@
+//! The SDK's request policy the driver runs on every route's keyword view before the host
+//! projects from it: credential-name inheritance from `litellm.credential_list`, then the
+//! budget and retry-count limits. It is the `@client` prologue after `function_setup` and the
+//! deployment hook, and belongs to no callback contract.
+
 use pyo3::{
     prelude::*,
     types::{PyDict, PyList},
 };
+use strum::{IntoStaticStr, VariantArray};
 
-use crate::python::Wrapper;
+const MODULE: &str = "litellm.rust_bridge.preflight";
+
+/// The litellm globals the preflight still reads through Python. `preflight_contract.json`
+/// pins each function's parameters on both sides.
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
+pub(crate) enum PythonPreflight {
+    #[strum(serialize = "credential_list")]
+    CredentialList,
+    #[strum(serialize = "warn_unknown_credential")]
+    WarnUnknownCredential,
+    #[strum(serialize = "check_limits")]
+    CheckLimits,
+}
+
+impl PythonPreflight {
+    fn call<'py, A>(self, py: Python<'py>, args: A) -> PyResult<Bound<'py, PyAny>>
+    where
+        A: pyo3::call::PyCallArgs<'py>,
+    {
+        py.import(MODULE)?.getattr(<&str>::from(self))?.call1(args)
+    }
+}
+
+#[cfg(test)]
+pub(crate) const PYTHON_CONTRACT: &str = include_str!("../preflight_contract.json");
+
+/// Rewrites `arguments` in place, in the order the Python wrapper runs: credentials first,
+/// so the limits see the same view the provider request is built from.
+pub(crate) fn sdk_preflight(py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<()> {
+    inherit_credentials(py, arguments, || {
+        Ok(PythonPreflight::CredentialList
+            .call(py, ())?
+            .cast_into::<PyList>()?)
+    })?;
+    PythonPreflight::CheckLimits.call(py, (arguments,))?;
+    Ok(())
+}
 
 struct CredentialEntry<'py>(Bound<'py, PyAny>);
 
@@ -15,22 +57,6 @@ impl<'py> CredentialEntry<'py> {
     fn values(&self) -> PyResult<Bound<'py, PyDict>> {
         Ok(self.0.getattr("credential_values")?.cast_into::<PyDict>()?)
     }
-}
-
-pub fn prepare<'py>(
-    py: Python<'py>,
-    kwargs: &Bound<'py, PyDict>,
-    logger: &crate::PythonLogger,
-) -> PyResult<Bound<'py, PyDict>> {
-    let arguments = kwargs.copy()?;
-    arguments.set_item("litellm_logging_obj", logger.object(py))?;
-    inherit_credentials(py, &arguments, || {
-        Ok(Wrapper::CredentialList
-            .call(py, ())?
-            .cast_into::<PyList>()?)
-    })?;
-    Wrapper::CheckLimits.call(py, (&arguments,))?;
-    Ok(arguments)
 }
 
 fn inherit_credentials<'py>(
@@ -54,7 +80,7 @@ fn inherit_credentials<'py>(
         .map(|credential| CredentialEntry(credential).name())
         .collect::<PyResult<Vec<_>>>()?;
     let Some(index) = names.iter().position(|name| *name == requested) else {
-        Wrapper::WarnUnknownCredential.call(py, (requested, names.len()))?;
+        PythonPreflight::WarnUnknownCredential.call(py, (requested, names.len()))?;
         return Ok(());
     };
     let selected = CredentialEntry(credentials.get_item(index)?);
@@ -71,7 +97,42 @@ fn inherit_credentials<'py>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+
     use super::*;
+    use strum::VariantArray;
+
+    /// Tests share one interpreter, and the stub module below is global state, so the
+    /// tests that install it run one at a time.
+    static PREFLIGHT_MODULE: Mutex<()> = Mutex::new(());
+
+    /// A fresh stand-in for `litellm.rust_bridge.preflight` that records every call, then
+    /// `script` run against it with the module bound as `preflight`.
+    fn preflight_stubs<'py>(py: Python<'py>, script: &std::ffi::CStr) -> Bound<'py, PyDict> {
+        let locals = PyDict::new(py);
+        py.run(
+            c"
+import sys
+import types
+
+for name in ('litellm', 'litellm.rust_bridge'):
+    sys.modules.setdefault(name, types.ModuleType(name))
+preflight = types.ModuleType('litellm.rust_bridge.preflight')
+preflight.warnings = []
+preflight.checked = []
+preflight.credential_list = lambda: []
+preflight.warn_unknown_credential = lambda name, loaded: preflight.warnings.append((name, loaded))
+preflight.check_limits = lambda kwargs: preflight.checked.append(kwargs)
+sys.modules['litellm.rust_bridge.preflight'] = preflight
+",
+            Some(&locals),
+            Some(&locals),
+        )
+        .unwrap();
+        py.run(script, Some(&locals), Some(&locals)).unwrap();
+        locals
+    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -311,5 +372,111 @@ arguments = {'litellm_credential_name': 'ocr-test'}
                     .unwrap();
             }
         });
+    }
+
+    #[test]
+    fn every_borrowed_function_is_in_the_python_contract() {
+        Python::initialize();
+        Python::attach(|py| {
+            let contract = litellm_host_python::json_loads(py, PYTHON_CONTRACT.as_bytes()).unwrap();
+            let declared: BTreeSet<String> = contract
+                .bind(py)
+                .cast::<PyDict>()
+                .unwrap()
+                .keys()
+                .extract()
+                .map(|names: Vec<String>| names.into_iter().collect())
+                .unwrap();
+            let called: BTreeSet<String> = PythonPreflight::VARIANTS
+                .iter()
+                .map(|&function| <&str>::from(function).to_owned())
+                .collect();
+            assert_eq!(
+                called.len(),
+                PythonPreflight::VARIANTS.len(),
+                "a function is borrowed twice"
+            );
+            assert_eq!(called, declared);
+        });
+    }
+
+    #[test]
+    fn an_unknown_name_is_reported_with_the_loaded_count_and_leaves_the_arguments_alone() {
+        let _guard = PREFLIGHT_MODULE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = preflight_stubs(
+                py,
+                c"
+class Credential:
+    credential_name = 'listed'
+    credential_values = {'api_key': 'listed-key'}
+preflight.credential_list = lambda: [Credential(), Credential()]
+arguments = {'litellm_credential_name': 'missing'}
+",
+            );
+            sdk_preflight(py, &argument_dict(&locals)).unwrap();
+            py.run(
+                c"
+assert arguments == {'litellm_credential_name': 'missing'}, arguments
+assert preflight.warnings == [('missing', 2)], preflight.warnings
+assert preflight.checked == [arguments]
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn limits_are_checked_on_the_arguments_after_credentials_are_inherited() {
+        let _guard = PREFLIGHT_MODULE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = preflight_stubs(
+                py,
+                c"
+class Credential:
+    credential_name = 'ocr-test'
+    credential_values = {'api_key': 'inherited'}
+preflight.credential_list = lambda: [Credential()]
+rejection = RuntimeError('Max retries per request hit!')
+def check_limits(arguments):
+    preflight.checked.append(dict(arguments))
+    raise rejection
+preflight.check_limits = check_limits
+arguments = {'litellm_credential_name': 'ocr-test'}
+",
+            );
+            let error = sdk_preflight(py, &argument_dict(&locals)).unwrap_err();
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("rejection").unwrap().unwrap())
+            );
+            py.run(
+                c"
+assert preflight.checked == [{'litellm_credential_name': 'ocr-test', 'api_key': 'inherited'}], preflight.checked
+assert arguments['api_key'] == 'inherited'
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    fn argument_dict<'py>(locals: &Bound<'py, PyDict>) -> Bound<'py, PyDict> {
+        locals
+            .get_item("arguments")
+            .unwrap()
+            .unwrap()
+            .cast_into::<PyDict>()
+            .unwrap()
     }
 }

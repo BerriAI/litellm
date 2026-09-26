@@ -61,7 +61,7 @@ jobs:
 
           - shard: core-utils
             artifact-name: core-utils
-            test-path: "tests/test_litellm/litellm_core_utils"
+            test-path: ""
             unit-flag: core-utils
             workers: 2
             reruns: 1

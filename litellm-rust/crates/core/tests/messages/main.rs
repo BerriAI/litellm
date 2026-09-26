@@ -2,9 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_core::messages::{
     Error,
-    route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine},
+    route::{LocalMessagesHost, MessagesCall, MessagesMachine, MessagesOutput, messages_machine},
     types::MessagesShaping,
 };
+use litellm_http::{HttpSettings, Resolution};
+use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use rstest::fixture;
 use serde_json::{Map, Value, json};
@@ -75,11 +77,16 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
     )
 }
 
+fn machine(secrets: Arc<dyn SecretSource>) -> MessagesMachine {
+    messages_machine(&http_pool(), &http_config(), secrets)
+        .expect("default HTTP settings build a client")
+}
+
 async fn run_with(
     secrets: Arc<RecordingSecrets>,
     call: MessagesCall,
 ) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(secrets), &LocalMessagesHost::new(call)).await
+    litellm_host::run::run(machine(secrets), &LocalMessagesHost::new(call)).await
 }
 
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
