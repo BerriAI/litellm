@@ -144,7 +144,7 @@ RUN for i in 1 2 3; do \
       apk upgrade --no-cache && break || sleep 5; \
     done && \
     for i in 1 2 3; do \
-      apk add --no-cache python-3.13 bash openssl tzdata libsndfile nodejs libevent && break || sleep 5; \
+      apk add --no-cache python-3.13 bash openssl tzdata libsndfile nodejs libevent libpq-18 && break || sleep 5; \
     done
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 

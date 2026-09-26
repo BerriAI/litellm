@@ -89,7 +89,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl tzdata python-3.13 nodejs libsndfile libatomic && break; \
+      apk add --no-cache bash openssl tzdata python-3.13 nodejs libsndfile libatomic libpq-18 && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done

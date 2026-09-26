@@ -604,13 +604,15 @@ class ProxyExtrasDBManager:
 
         try:
             import psycopg
-        except ImportError:
+        except ImportError as exc:
             logger.warning(
-                "psycopg is not installed; skipping the LiteLLM_SpendLogs "
-                "partition check. If this table is partitioned (see "
+                "psycopg is not installed or found no libpq (%s); skipping the "
+                "LiteLLM_SpendLogs partition check. If this table is partitioned (see "
                 "db_scripts/partition_spend_logs.sql), schema reconciliation "
                 "will try to rewrite its primary key and fail. Install the "
-                "litellm[extra_proxy] extra, which now includes psycopg."
+                "litellm[extra_proxy] extra, which includes psycopg, plus the "
+                "system libpq it loads (the litellm images ship it).",
+                exc,
             )
             return False
 
@@ -798,10 +800,11 @@ class ProxyExtrasDBManager:
         try:
             import psycopg
             from psycopg import sql
-        except ImportError:
+        except ImportError as exc:
             logger.warning(
-                "psycopg is not installed; skipping the invalid index check. "
-                "Install the litellm[extra_proxy] extra, which includes psycopg."
+                "psycopg is not installed or found no libpq (%s); skipping the invalid index check. "
+                "Install the litellm[extra_proxy] extra, which includes psycopg, plus the system libpq.",
+                exc,
             )
             return False
 
