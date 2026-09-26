@@ -74,8 +74,7 @@ _TERMINAL_ERROR_CODES: Final = frozenset(
     }
 )
 _BODY_CODED_STATUSES: Final = frozenset({400, 403})
-_RETRYABLE_STATUSES: Final = frozenset({403, 408, 429, 500, 502, 503, 504})
-_SYNC_RETRYABLE_STATUSES: Final = frozenset({403, 500, 503})
+_RETRYABLE_STATUSES: Final = frozenset({403, 500, 503})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
 
 
@@ -812,7 +811,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             for attempt in range(max_retries):
                 response = signed_put(prepared)
                 if (
-                    response.status_code in _SYNC_RETRYABLE_STATUSES
+                    response.status_code in _RETRYABLE_STATUSES
                     and not _is_terminal(response)
                     and attempt < max_retries - 1
                 ):

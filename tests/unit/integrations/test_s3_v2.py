@@ -3436,10 +3436,6 @@ def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, exp
 @pytest.mark.parametrize(
     ("status", "code"),
     [
-        pytest.param(429, "TooManyRequests", id="429"),
-        pytest.param(408, None, id="408"),
-        pytest.param(502, None, id="502"),
-        pytest.param(504, None, id="504"),
         pytest.param(503, "SlowDown", id="503"),
         pytest.param(500, "InternalError", id="500"),
         pytest.param(403, "AccessDenied", id="access-denied-403"),
@@ -3464,6 +3460,38 @@ async def test_retryable_statuses_back_off_three_attempts(status: int, code: str
 
     assert len(put.calls) == 3
     assert mock_sleep.await_args_list == [call(1), call(2)]
+    assert len(logger.log_queue) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        pytest.param(429, "TooManyRequests", id="429"),
+        pytest.param(408, None, id="408"),
+        pytest.param(502, None, id="502"),
+        pytest.param(504, None, id="504"),
+    ],
+)
+async def test_non_base_statuses_are_not_retried_in_call(status: int, code: str | None) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    put = _FailUntilClearedPut(status=status, code=code)
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"id": "req"}, "req")]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await logger.flush_queue()
+
+    assert len(put.calls) == 1
+    assert mock_sleep.await_args_list == []
     assert len(logger.log_queue) == 1
 
 
