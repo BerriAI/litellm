@@ -80,7 +80,18 @@ MARKER: Final = "M0"
 SLOTS: Final = MappingProxyType(
     {
         MARKER: Slot(MARKER, "Sensitivity marker in message content; must appear where prompts are stored"),
+        "A1": Slot("A1", "Virtual key raw value, set as a custom key through /key/generate", prefix="sk-"),
+        "A2": Slot("A2", "Proxy master key from the LITELLM_MASTER_KEY environment variable", prefix="sk-"),
         "B1": Slot("B1", "Deployment api_key declared in the proxy config.yaml model_list"),
+        "B2": Slot("B2", "Deployment api_key added through /model/new and stored encrypted"),
+        "B3": Slot("B3", "Credentials table api_key referenced by a deployment's litellm_credential_name"),
+        "B4": Slot("B4", "Deployment aws_secret_access_key added through /model/new"),
+        "B4v": Slot("B4v", "Vertex service-account JSON added through /model/new, traced by its private_key_id"),
+        "B4t": Slot("B4t", "Vertex access token the token endpoint mints for that service account"),
+        "B5": Slot("B5", "Credentials table api_key applied by a team model_config credential override"),
+        "E1": Slot("E1", "Guardrail api_key declared in the proxy config.yaml guardrails"),
+        "G1": Slot("G1", "generic_api sink bearer token from the GENERIC_LOGGER_HEADERS environment variable"),
+        "G1b": Slot("G1b", "Langfuse sink secret key from the LANGFUSE_SECRET_KEY environment variable"),
     }
 )
 
