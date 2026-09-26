@@ -903,6 +903,9 @@ class Router:
         ```
         """
 
+        _context_window_fallbacks: Final = context_window_fallbacks or litellm.context_window_fallbacks
+        self.validate_fallbacks(fallback_param=_context_window_fallbacks)
+
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.auto_router_capability_limit = auto_router_capability_limit
@@ -1104,7 +1107,7 @@ class Router:
             else:
                 self.fallbacks = [{"*": _fallbacks}]
 
-        self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
+        self.context_window_fallbacks = _context_window_fallbacks
 
         _content_policy_fallbacks: Final = content_policy_fallbacks or litellm.content_policy_fallbacks
         self.validate_fallbacks(fallback_param=_content_policy_fallbacks)
