@@ -1949,6 +1949,44 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
             expected,
         )
 
+    @parameterized.expand(
+        [
+            ("https://app.langtrace.ai/api/trace", "https://app.langtrace.ai/api/trace"),
+            ("https://app.langtrace.ai/api/trace/", "https://app.langtrace.ai/api/trace"),
+            ("http://localhost:3000/api/trace", "http://localhost:3000/api/trace"),
+        ]
+    )
+    def test_langtrace_callback_keeps_api_trace_endpoint_unchanged(self, input_url: str, expected: str) -> None:
+        """Langtrace ingests OTLP at the complete /api/trace path, so no /v1/traces is appended."""
+        otel = OpenTelemetry(callback_name="langtrace")
+        self.assertEqual(otel._normalize_otel_endpoint(input_url, "traces"), expected)
+
+    @parameterized.expand(
+        [
+            (None, "https://app.langtrace.ai/api/trace", "https://app.langtrace.ai/api/trace/v1/traces"),
+            ("otel", "https://app.langtrace.ai/api/trace", "https://app.langtrace.ai/api/trace/v1/traces"),
+            ("otel", "https://collector.example.com/api/trace", "https://collector.example.com/api/trace/v1/traces"),
+            ("langtrace", "https://app.langtrace.ai", "https://app.langtrace.ai/v1/traces"),
+        ]
+    )
+    def test_api_trace_exemption_is_scoped_to_langtrace_callback(
+        self, callback_name: str | None, input_url: str, expected: str
+    ) -> None:
+        """Any other callback, or a Langtrace host without the /api/trace path, keeps OTLP normalization."""
+        otel = OpenTelemetry(callback_name=callback_name)
+        self.assertEqual(otel._normalize_otel_endpoint(input_url, "traces"), expected)
+
+    def test_langtrace_callback_still_normalizes_logs_and_metrics(self) -> None:
+        otel = OpenTelemetry(callback_name="langtrace")
+        self.assertEqual(
+            otel._normalize_otel_endpoint("https://app.langtrace.ai/api/trace", "logs"),
+            "https://app.langtrace.ai/api/trace/v1/logs",
+        )
+        self.assertEqual(
+            otel._normalize_otel_endpoint("https://app.langtrace.ai/api/trace", "metrics"),
+            "https://app.langtrace.ai/api/trace/v1/metrics",
+        )
+
     def test_normalize_endpoint_none(self):
         """Test that None endpoint returns None"""
         otel = OpenTelemetry()
