@@ -330,3 +330,171 @@ def test_update_credential_still_accepts_a_body_without_credential_values(creden
     written = update_by_name.await_args.kwargs["data"]
     assert json.loads(written["credential_info"]) == {"custom_llm_provider": "openai"}
     assert set(json.loads(written["credential_values"])) == {"api_key"}, "stored values survive an info-only patch"
+
+
+def _stored_credential(name: str, alias: str | None = None) -> CredentialItem:
+    return CredentialItem(
+        credential_name=name,
+        credential_alias=alias,
+        credential_values={"api_key": "sk-old"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+
+
+def test_patch_with_different_credential_name_returns_400_and_writes_nothing(credential_store):
+    """The name keys every reference to a credential, so PATCH must not rename: a caller
+    that moves "cred-a" to "cred-b" would orphan every model that named cred-a. The
+    rename has to be rejected before the store is even touched."""
+    stored = _stored_credential("cred-a")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_name": "cred-b", "credential_info": {}})
+
+    assert response.status_code == 400, f"rename answered {response.status_code}: {response.text}"
+    update_by_name.assert_not_awaited()
+    names = [credential.credential_name for credential in litellm.credential_list]
+    assert names == ["cred-a"], f"the rejected rename must not touch in-memory credentials: {names}"
+
+
+def test_patch_with_same_credential_name_succeeds(credential_store):
+    """Resending the current name is the dashboard's normal PATCH shape, so it must stay a 200."""
+    stored = _stored_credential("cred-a")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_name": "cred-a", "credential_info": {"x": "y"}})
+
+    assert response.status_code == 200, response.text
+    update_by_name.assert_awaited_once()
+    assert update_by_name.await_args.args[0] == "cred-a"
+
+
+def test_patch_without_credential_name_succeeds(credential_store):
+    """The name comes from the path; a body that omits it patches in place."""
+    stored = _stored_credential("cred-a")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_info": {"x": "y"}})
+
+    assert response.status_code == 200, response.text
+    update_by_name.assert_awaited_once()
+    assert update_by_name.await_args.args[0] == "cred-a"
+
+
+def test_patch_sets_alias(credential_store):
+    stored = _stored_credential("cred-a")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_alias": "Prod", "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert update_by_name.await_args.kwargs["data"]["credential_alias"] == "Prod"
+    served = {c.credential_name: c for c in litellm.credential_list}
+    assert served["cred-a"].credential_alias == "Prod", "the alias must reach the in-memory list the GETs serve"
+
+
+def test_patch_without_alias_keeps_existing_alias(credential_store):
+    """An info-only patch must not wipe an alias the operator set earlier."""
+    stored = _stored_credential("cred-a", alias="Prod")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_info": {"x": "y"}})
+
+    assert response.status_code == 200, response.text
+    assert update_by_name.await_args.kwargs["data"]["credential_alias"] == "Prod"
+    served = {c.credential_name: c for c in litellm.credential_list}
+    assert served["cred-a"].credential_alias == "Prod"
+
+
+def test_patch_with_null_alias_clears_it(credential_store):
+    """Explicit null is the only way to drop an alias once set."""
+    stored = _stored_credential("cred-a", alias="Prod")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_alias": None, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert update_by_name.await_args.kwargs["data"]["credential_alias"] is None
+    served = {c.credential_name: c for c in litellm.credential_list}
+    assert served["cred-a"].credential_alias is None
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_patch_with_blank_alias_returns_400(credential_store, blank):
+    """A whitespace alias would render as an invisible label in every UI that shows it."""
+    stored = _stored_credential("cred-a", alias="Prod")
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(in_memory=(stored,), find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response = _patch_credential("cred-a", {"credential_alias": blank, "credential_info": {}})
+
+    assert response.status_code == 400, f"blank alias {blank!r} answered {response.status_code}: {response.text}"
+    update_by_name.assert_not_awaited()
+
+
+def test_create_with_blank_alias_returns_400(credential_store):
+    create = AsyncMock(return_value=None)
+    credential_store(create=create)
+
+    response = _create_credential(
+        {
+            "credential_name": "new",
+            "credential_alias": "",
+            "credential_values": {"api_key": "k"},
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 400, f"blank alias answered {response.status_code}: {response.text}"
+    create.assert_not_awaited()
+
+
+def test_alias_round_trips_through_create_list_and_by_name(credential_store):
+    create = AsyncMock(return_value=None)
+    credential_store(create=create)
+
+    created = _create_credential(
+        {
+            "credential_name": "new",
+            "credential_alias": "Prod",
+            "credential_values": {"api_key": "k"},
+            "credential_info": {},
+        },
+    )
+
+    assert created.status_code == 200, created.text
+    assert create.await_args.kwargs["data"]["credential_alias"] == "Prod"
+
+    listed = _list_credentials()
+    assert listed.status_code == 200, listed.text
+    entries = {entry["credential_name"]: entry for entry in listed.json()["credentials"]}
+    assert entries["new"]["credential_alias"] == "Prod", listed.json()
+
+    by_name = _call_as_admin("GET", "/credentials/by_name/new")
+    assert by_name.status_code == 200, by_name.text
+    assert by_name.json()["credential_alias"] == "Prod", by_name.json()
+
+
+def test_config_credential_list_carries_alias():
+    """A credential declared in config yaml with an alias must keep it after load."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    credentials = ProxyConfig().load_credential_list(
+        {
+            "credential_list": [
+                {
+                    "credential_name": "cfg",
+                    "credential_alias": "Cfg alias",
+                    "credential_values": {"api_key": "k"},
+                    "credential_info": {},
+                }
+            ]
+        }
+    )
+
+    assert credentials[0].credential_alias == "Cfg alias"

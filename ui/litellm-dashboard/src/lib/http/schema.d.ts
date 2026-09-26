@@ -29265,6 +29265,8 @@ export interface components {
         };
         /** CreateCredentialItem */
         CreateCredentialItem: {
+            /** Credential Alias */
+            credential_alias?: string | null;
             /** Credential Info */
             credential_info: {
                 [key: string]: unknown;
@@ -29303,6 +29305,8 @@ export interface components {
         };
         /** CredentialItem */
         CredentialItem: {
+            /** Credential Alias */
+            credential_alias?: string | null;
             /** Credential Info */
             credential_info: {
                 [key: string]: unknown;
@@ -44471,12 +44475,14 @@ export interface components {
         };
         /** UpdateCredentialItem */
         UpdateCredentialItem: {
+            /** Credential Alias */
+            credential_alias?: string | null;
             /** Credential Info */
             credential_info: {
                 [key: string]: unknown;
             };
             /** Credential Name */
-            credential_name: string;
+            credential_name?: string | null;
             /** Credential Values */
             credential_values?: {
                 [key: string]: unknown;

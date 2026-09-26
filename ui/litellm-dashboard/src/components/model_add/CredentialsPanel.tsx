@@ -20,10 +20,11 @@ import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
 
-const restrictedFields = ["credential_name", "custom_llm_provider"];
+const restrictedFields = ["credential_name", "credential_alias", "custom_llm_provider"];
 
 const buildCredential = (values: Record<string, unknown>, credentialValues: Record<string, unknown>) => ({
   credential_name: values.credential_name as string,
+  ...("credential_alias" in values ? { credential_alias: values.credential_alias as string | null } : {}),
   credential_values: credentialValues,
   credential_info: {
     custom_llm_provider: values.custom_llm_provider as string,

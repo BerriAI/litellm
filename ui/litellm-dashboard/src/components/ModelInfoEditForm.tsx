@@ -14,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -634,33 +636,15 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>Existing Credentials</FieldLabel>
               {isEditing ? (
                 <FormField control={form.control} name="litellm_credential_name">
-                  {({ id, value, onChange, onBlur }) => {
-                    const items: { value: string | null; label: string }[] = [
-                      { value: null, label: "None" },
-                      ...credentialsList.map((credential) => ({
-                        value: credential.credential_name,
-                        label: credential.credential_name,
-                      })),
-                    ];
-                    return (
-                      <Select
-                        items={items}
-                        value={(value as string | null) ?? null}
-                        onValueChange={(selected: string | null) => onChange(selected)}
-                      >
-                        <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
-                          <SelectValue placeholder="Select or search for existing credentials" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {items.map((item) => (
-                            <SelectItem key={item.value ?? "none"} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    );
-                  }}
+                  {({ id, value, onChange }) => (
+                    <SearchSelect
+                      inputId={id}
+                      placeholder="Select or search for existing credentials"
+                      options={credentialOptions(credentialsList)}
+                      value={(value as string | null) ?? ""}
+                      onValueChange={(selected) => onChange(selected === "" || selected === null ? null : selected)}
+                    />
+                  )}
                 </FormField>
               ) : (
                 <Display>{localModelData.litellm_params?.litellm_credential_name || "Manual"}</Display>

@@ -30,7 +30,14 @@ const renderForm = () =>
       onCancel={vi.fn()}
       onSuccess={onSuccess}
       accessToken="test-token"
-      credentials={[{ credential_name: "bedrock-prod", credential_info: {}, credential_values: {} }]}
+      credentials={[
+        {
+          credential_name: "bedrock-prod",
+          credential_alias: "Bedrock Prod",
+          credential_info: {},
+          credential_values: {},
+        },
+      ]}
     />,
   );
 
@@ -164,6 +171,26 @@ describe("VectorStoreForm submit payload", () => {
       api_key: "pg-key",
       api_base: "http://pg:8000",
     });
+  });
+
+  it("shows the credential alias beside the name, searches by it, and still submits the name", async () => {
+    const user = setupUser();
+    renderForm();
+
+    const picker = screen.getByPlaceholderText("Select or search for existing credentials");
+    await user.click(picker);
+
+    const option = await screen.findByRole("option", { name: /bedrock-prod/ });
+    expect(option).toHaveTextContent("bedrock-prod");
+    expect(option).toHaveTextContent("Bedrock Prod");
+
+    await user.type(picker, "bedrock prod");
+    await user.click(await screen.findByRole("option", { name: /bedrock-prod/ }));
+    await user.type(screen.getByPlaceholderText("Enter vector store ID from your provider"), "vs-alias");
+    await submit(user);
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    expect(createdPayload().litellm_credential_name).toBe("bedrock-prod");
   });
 
   it("blocks the request and reports invalid metadata JSON instead of submitting", async () => {

@@ -149,6 +149,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
   const credentials: CredentialItem[] = [
     {
       credential_name: "test-credential",
+      credential_alias: "Prod OpenAI",
       credential_values: {},
       credential_info: {
         custom_llm_provider: "openai",
@@ -297,6 +298,44 @@ describe("AddModelForm", () => {
     expect(screen.queryByText("Provider")).not.toBeInTheDocument();
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  describe("the existing-credentials picker", () => {
+    const openPicker = async () => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      renderWithProviders(<AddModelForm {...createTestProps()} />);
+      const input = await screen.findByPlaceholderText("Select or search for existing credentials");
+      await user.click(input);
+      return { user, input };
+    };
+
+    it("shows each credential's name and alias together", async () => {
+      await openPicker();
+
+      const option = await screen.findByRole("option", { name: /test-credential/ });
+      expect(option).toHaveTextContent("test-credential");
+      expect(option).toHaveTextContent("Prod OpenAI");
+    });
+
+    it("filters by the alias, not only the name", async () => {
+      const { user, input } = await openPicker();
+
+      await user.type(input, "prod open");
+
+      expect(await screen.findByRole("option", { name: /test-credential/ })).toBeInTheDocument();
+    });
+
+    it("selecting by alias sets litellm_credential_name to the credential name", async () => {
+      const { user, input } = await openPicker();
+
+      await user.type(input, "prod open");
+      await user.click(await screen.findByRole("option", { name: /test-credential/ }));
+
+      expect(input).toHaveValue("test-credential");
+      expect(screen.queryByText("OR")).not.toBeInTheDocument();
+    });
   });
 
   it("should display the provider field and the Test Connect / Add Model buttons", async () => {

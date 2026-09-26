@@ -42,6 +42,7 @@ model LiteLLM_BudgetTable {
 model LiteLLM_CredentialsTable {
   credential_id String @id @default(uuid())
   credential_name String @unique
+  credential_alias String?
   credential_values Json
   credential_info Json? 
   created_at    DateTime               @default(now()) @map("created_at")
