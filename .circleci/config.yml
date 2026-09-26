@@ -435,6 +435,18 @@ jobs:
             CHOCOLATEY_CONFIRM_ALL: "true"
       - install_windows_toolchain
       - run:
+          name: Record the Rust build environment for the release cargo cache key
+          command: |
+            & "$HOME\.cargo\bin\rustc.exe" -vV | Out-File -Encoding ascii .cargo-build-env
+      - restore_cache:
+          keys:
+            - v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+            - v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-
+      - run:
+          name: Force a rebuild of the workspace crates restored from the cargo cache
+          command: |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue litellm-rust/target/release/.fingerprint/litellm-*
+      - run:
           name: Build the release wheel and install it under a worst-case MAX_PATH prefix
           no_output_timeout: 30m
           environment:
@@ -446,6 +458,15 @@ jobs:
               exit $LASTEXITCODE
             }
             python tests/windows_tests/check_windows_wheel_install.py
+      - when:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+                paths:
+                  - ~/.cargo/registry
+                  - ~/project/litellm-rust/target/release
 
   base_sdk_install:
     docker:
