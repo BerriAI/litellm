@@ -2808,10 +2808,10 @@ async def test_apply_to_output_streaming_gemini_masked_function_call_arguments_t
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_gemini_error_frame_mid_stream_is_carried_on_the_masked_frame():
+async def test_apply_to_output_streaming_gemini_error_frame_mid_stream_keeps_its_own_terminal_frame():
     """
-    Gemini can end a stream with an error frame after content frames, and the
-    client reads the error off the last frame, so the masked re-emit keeps it.
+    Gemini can end a stream with an error frame after content frames, and a client
+    reads the failure off that terminal frame, so the masked re-emit keeps it separate.
     """
     frames = [
         _gemini_frame({"text": "The architect was John Smith."}),
@@ -2828,9 +2828,10 @@ async def test_apply_to_output_streaming_gemini_error_frame_mid_stream_is_carrie
         await _collect_masked_output(guardrail, mock_stream(), collected)
         await guardrail._close_http_session()
 
-    (frame,) = _gemini_frames(collected)
-    assert frame["candidates"][0]["content"]["parts"] == [{"text": "The architect was <PERSON>."}]
-    assert frame["error"] == {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}
+    masked, error = _gemini_frames(collected)
+    assert masked["candidates"][0]["content"]["parts"] == [{"text": "The architect was <PERSON>."}]
+    assert "error" not in masked
+    assert error == {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}
 
 
 @pytest.mark.asyncio
