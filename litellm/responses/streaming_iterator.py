@@ -902,27 +902,37 @@ class BaseResponsesAPIStreamingIterator:
             self._record_pending_logging_task(
                 _spawn_logging_task(
                     running_loop,
-                    self.logging_obj.async_failure_handler(
-                        exception=exception,
-                        traceback_exception=traceback_exception,
-                        start_time=self.start_time,
-                        end_time=end_time,
-                    ),
+                    self._run_failure_handlers_in_order(exception, traceback_exception, end_time),
                     task_name="Responses stream failure logging",
                 )
             )
-        else:
-            try:
-                run_async_function(
-                    async_function=self.logging_obj.async_failure_handler,
-                    exception=exception,
-                    traceback_exception=traceback_exception,
-                    start_time=self.start_time,
-                    end_time=end_time,
-                )
-            except Exception:
-                pass
+            return
+        try:
+            run_async_function(
+                async_function=self.logging_obj.async_failure_handler,
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=self.start_time,
+                end_time=end_time,
+            )
+        except Exception:
+            pass
+        self._submit_sync_failure_handler(exception, traceback_exception, end_time)
 
+    async def _run_failure_handlers_in_order(
+        self, exception: Exception, traceback_exception: str, end_time: datetime
+    ) -> None:
+        try:
+            await self.logging_obj.async_failure_handler(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=self.start_time,
+                end_time=end_time,
+            )
+        finally:
+            self._submit_sync_failure_handler(exception, traceback_exception, end_time)
+
+    def _submit_sync_failure_handler(self, exception: Exception, traceback_exception: str, end_time: datetime) -> None:
         try:
             executor.submit(
                 self.logging_obj.failure_handler,

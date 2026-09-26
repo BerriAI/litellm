@@ -451,6 +451,16 @@ class _SyncOnlyRecordingLogger(CustomLogger):
         self.sync_failure_finished = True
 
 
+class _OrderRecordingSyncLogger(CustomLogger):
+    def __init__(self, async_recorder: _LoopRecordingLogger) -> None:
+        super().__init__()
+        self._async_recorder: Final = async_recorder
+        self.async_failure_finished_first: bool | None = None
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.async_failure_finished_first = self._async_recorder.failure_finished
+
+
 def _real_logging_obj(
     *, call_type: str = "aresponses", litellm_params: dict[str, object] | None = None
 ) -> LiteLLMLoggingObj:
@@ -541,6 +551,29 @@ async def test_sync_stream_failure_inside_a_running_loop_still_runs_sync_only_ca
             pass
 
     await _wait_until(lambda: recorder.sync_failure_finished)
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_callbacks_run_after_async_failure_logging_finishes(monkeypatch):
+    """Both handlers read the same logging object, so the sync one must not start while the
+    async one is still running, which is the ordering the blocking dispatch used to give."""
+    async_recorder: Final = _LoopRecordingLogger()
+    sync_recorder: Final = _OrderRecordingSyncLogger(async_recorder)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [async_recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [sync_recorder])
+    iterator: Final = _make_sync_iterator(
+        sse_events=_PARTIAL_OUTPUT_EVENTS,
+        logging_obj=_real_logging_obj(call_type="responses", litellm_params={}),
+        trailing_error=httpx.ReadError("Response payload is not completed"),
+    )
+
+    with pytest.raises(httpx.ReadError):
+        for _ in iterator:
+            pass
+
+    await _wait_until(lambda: sync_recorder.async_failure_finished_first is not None)
+
+    assert sync_recorder.async_failure_finished_first is True
 
 
 @pytest.mark.asyncio
