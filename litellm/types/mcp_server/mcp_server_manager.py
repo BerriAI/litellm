@@ -294,10 +294,10 @@ class MCPServer(BaseModel):
         return self.per_server_oauth_discovery and self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
 
     @property
-    def advertises_gateway_authorization_server(self) -> bool:
-        """Whether named discovery should advertise the aggregate gateway authorization server."""
-        if self.auth_type == MCPAuth.oauth2:
-            return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
+    def keeps_caller_authorization(self) -> bool:
+        """Whether the caller's top-level ``Authorization`` stays with the gateway: the server neither relays
+        it upstream nor runs an OAuth mode that fills that slot itself, so a gateway guardrail may consume it
+        as the caller's own assertion. Forwarding a separate API-key header leaves the slot untouched."""
         if self.auth_type not in (
             None,
             MCPAuth.none,
@@ -307,11 +307,20 @@ class MCPServer(BaseModel):
             MCPAuth.authorization,
             MCPAuth.token,
             MCPAuth.aws_sigv4,
+            MCPAuth.oauth2_token_exchange,
         ):
             return False
-        return not any(
-            header.lower() in ("authorization", "x-api-key", "api-key", "apikey")
-            for header in (self.extra_headers or ())
+        return not any(header.lower() == "authorization" for header in (self.extra_headers or ()))
+
+    @property
+    def advertises_gateway_authorization_server(self) -> bool:
+        """Whether named discovery should advertise the aggregate gateway authorization server."""
+        if self.auth_type == MCPAuth.oauth2:
+            return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
+        if self.auth_type == MCPAuth.oauth2_token_exchange:
+            return False
+        return self.keeps_caller_authorization and not any(
+            header.lower() in ("x-api-key", "api-key", "apikey") for header in (self.extra_headers or ())
         )
 
     @property

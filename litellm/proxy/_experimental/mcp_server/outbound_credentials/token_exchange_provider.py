@@ -79,6 +79,11 @@ async def _post_exchange_endpoint(
         parsed: Final[object] = response.json()  # pyright: ignore
     except httpx.HTTPStatusError as status_err:
         status_code: Final = status_err.response.status_code
+        if status_code in (408, 429):
+            # Retry hints, not subject rejections: the IdP is shedding load, so a 401 would tell the
+            # caller to sign in again for nothing; surface it like a transport failure.
+            verbose_logger.warning("MCP token exchange throttled or timed out (HTTP %d)", status_code)
+            return None
         if 400 <= status_code < 500:
             oauth_error, claims = _oauth_error_fields(status_err.response)
             if oauth_error in _GATEWAY_FAULT_OAUTH_ERRORS:

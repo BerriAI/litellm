@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     _is_mcp_admitted_user_subject,
 )
+from litellm.proxy._experimental.mcp_server.caller_sign_in import caller_sign_in_for
 from litellm.proxy._experimental.mcp_server.client_allowlist import (
     MCPClientAllowlist,
     check_mcp_client_allowed,
@@ -1580,6 +1581,21 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
 
+    async def _key_granted_single_server(
+        server: MCPServer,
+        mcp_servers: Sequence[str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None,
+    ) -> bool:
+        """Sign-in challenges are issued only on a single-server connect the key's grant admits, so a key
+        without access gets the grant's 403 instead of a sign-in it could not use."""
+        if len(mcp_servers or []) != 1:
+            return False
+        allowed: Final = await operations._get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+        )
+        return any(granted.server_id == server.server_id for granted in allowed)
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -1602,7 +1618,7 @@ if MCP_AVAILABLE:
         a server it will be 403'd on immediately after authentication.
         """
         for server_name in mcp_servers or []:
-            server = operations.global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
+            server = operations.global_mcp_server_manager.get_mcp_server_answering_to(server_name, client_ip=client_ip)
             if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
                 # Caller's narrowed scope excludes this server — skip the
                 # preemptive challenge and let downstream authorization
@@ -1698,12 +1714,22 @@ if MCP_AVAILABLE:
                 # reaches the token_exchange / pass-through blocks below.
                 continue
 
-            # token_exchange (OBO): the caller supplied no subject token. Challenge at connect
-            # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata
-            # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
-            # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
-            # header lost, so the discovery flow needs this pre-emptive challenge.
-            if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
+            # Caller sign-in: challenge at connect because a tool-call-time 401 is wrapped into a
+            # JSON-RPC error and the WWW-Authenticate header is lost. Non-OBO gates fire only on a
+            # single-server connect the key's grant admits.
+            sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
+            if (
+                server
+                and sign_in is not None
+                and operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
+                    oauth2_headers, raw_headers, user_api_key_auth
+                )
+                is None
+                and (
+                    server.auth_type == MCPAuth.oauth2_token_exchange
+                    or await _key_granted_single_server(server, mcp_servers, user_api_key_auth, client_ip)
+                )
+            ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )

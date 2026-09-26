@@ -13,6 +13,14 @@ from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn, caller_sign_in_for
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    CredError,
+    ServerSpec,
+    TokenExchangeConfig,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365Guardrail,
@@ -26,9 +34,12 @@ from litellm.types.guardrails import (
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
+    AGENT_365_SCOPE_NAME,
     Agent365GuardrailConfigModel,
 )
 
@@ -44,8 +55,46 @@ def _response(status_code: int, payload: Any = None, text: str | None = None) ->
     return httpx.Response(status_code=status_code, text=text or "", request=request)
 
 
-def _token_response(access_token: str = "obo-access-token", expires_in: int = 3599) -> httpx.Response:
-    return _response(200, {"access_token": access_token, "expires_in": expires_in})
+class StubTokenExchanger:
+    """The TokenExchanger the guardrail is injected with in tests: programmed Result queue plus a
+    per-subject cache honoring ``expires_at``, so cache and evaluate-401-invalidate behavior is
+    exercised the way the real OboTokenExchanger drives it."""
+
+    def __init__(self, results: list[Result[OAuthToken, CredError] | BaseException] | None = None):
+        self._results = list(results or [])
+        self._cache: dict[str, OAuthToken] = {}
+        self.calls: list[tuple[str, ServerSpec, TokenExchangeConfig]] = []
+        self.invalidations: list[str] = []
+
+    async def exchange(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> Result[OAuthToken, CredError]:
+        cached: Final = self._cache.get(subject_token)
+        if cached is not None and (cached.expires_at is None or cached.expires_at > time.time()):
+            return Ok(cached)
+        self.calls.append((subject_token, server, config))
+        if not self._results:
+            raise AssertionError("StubTokenExchanger ran out of programmed results")
+        result = self._results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        if isinstance(result, Ok):
+            self._cache[subject_token] = result.ok
+        return result
+
+    async def invalidate(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> None:
+        self.invalidations.append(subject_token)
+        self._cache.pop(subject_token, None)
+
+
+def _ok_exchange(access_token: str = "obo-access-token", expires_in: int = 3599) -> Ok[OAuthToken, CredError]:
+    return Ok(OAuthToken(access_token=access_token, expires_at=time.time() + expires_in))
+
+
+def _obo_ok(access_token: str = "obo-access-token") -> list[Result[OAuthToken, CredError]]:
+    return [_ok_exchange(access_token)]
 
 
 def _allow_response(correlation_id: str = "corr-1") -> httpx.Response:
@@ -120,9 +169,11 @@ class FakeHandler:
 def _make_guardrail(
     handler: FakeHandler,
     *,
+    exchanger: StubTokenExchanger | None = None,
     unreachable_fallback: str = "fail_closed",
     agent_id: str | None = None,
     api_base: str = AGENT_365_PROD_API_BASE,
+    default_on: bool = True,
 ) -> Agent365Guardrail:
     return Agent365Guardrail(
         guardrail_name="agent-365-guard",
@@ -133,9 +184,22 @@ def _make_guardrail(
         agent_id=agent_id,
         unreachable_fallback=unreachable_fallback,
         async_handler=handler,
+        token_exchanger=exchanger if exchanger is not None else StubTokenExchanger(_obo_ok()),
         event_hook="pre_mcp_call",
-        default_on=True,
+        default_on=default_on,
     )
+
+
+def _server(**overrides: Any) -> MCPServer:
+    kwargs: Final[dict] = {
+        "server_id": "outlook-id",
+        "name": "outlook_mcp",
+        "server_name": "outlook_mcp",
+        "transport": MCPTransport.http,
+        "url": "https://outlook.test/mcp",
+    }
+    kwargs.update(overrides)
+    return MCPServer(**kwargs)
 
 
 def _mcp_data(**overrides: Any) -> dict:
@@ -259,7 +323,7 @@ def _guardrail_info(data: dict) -> dict:
 class TestAllowFlow:
     @pytest.mark.asyncio
     async def test_allowed_call_passes_through(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -273,25 +337,27 @@ class TestAllowFlow:
         assert info["guardrail_response"]["latency_ms"] >= 0
 
     @pytest.mark.asyncio
-    async def test_obo_exchange_form(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
+    async def test_obo_exchange_uses_the_built_entra_obo_config(self):
+        exchanger: Final = StubTokenExchanger(_obo_ok())
+        handler: Final = FakeHandler([_allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         await _run(guardrail, _mcp_data())
-        token_call: Final = handler.calls[0]
-        assert token_call.url == TOKEN_URL
-        assert token_call.data["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer"
-        assert token_call.data["requested_token_use"] == "on_behalf_of"
-        assert token_call.data["assertion"] == FAKE_ASSERTION
-        assert token_call.data["client_id"] == "client-xyz"
-        assert token_call.data["client_secret"] == "secret-123"
-        assert token_call.data["scope"] == f"{AGENT_365_PROD_RESOURCE_APP_ID}/ThreatProtection.Evaluate.All"
+        subject_token, server, config = exchanger.calls[0]
+        assert subject_token == FAKE_ASSERTION
+        assert server.server_id == "agent-365:tenant-abc"
+        assert server.resource == AGENT_365_PROD_API_BASE
+        assert config.profile == "entra_obo"
+        assert config.token_exchange_endpoint == TOKEN_URL
+        assert config.client_id == "client-xyz"
+        assert config.client_secret is not None and config.client_secret.get_secret_value() == "secret-123"
+        assert config.scopes == (f"{AGENT_365_PROD_RESOURCE_APP_ID}/{AGENT_365_SCOPE_NAME}",)
 
     @pytest.mark.asyncio
     async def test_evaluate_payload(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler, agent_id="agent-007")
         await _run(guardrail, _mcp_data())
-        evaluate_call: Final = handler.calls[1]
+        evaluate_call: Final = handler.calls[0]
         assert evaluate_call.url == EVALUATE_URL
         assert evaluate_call.headers["Authorization"] == "Bearer obo-access-token"
         assert evaluate_call.json["tool"] == {"name": "send_email"}
@@ -302,11 +368,11 @@ class TestAllowFlow:
 
     @pytest.mark.asyncio
     async def test_evaluate_payload_includes_listed_tool_metadata(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         schema: Final = {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}
         await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_tool_input_schema=schema))
-        assert handler.calls[1].json["tool"] == {
+        assert handler.calls[0].json["tool"] == {
             "name": "send_email",
             "description": "Send an email",
             "inputSchema": schema,
@@ -318,17 +384,17 @@ class TestAllowFlow:
         [(None, None), ("", None), (None, ["not", "a", "schema"]), (42, "type: object")],
     )
     async def test_evaluate_payload_omits_missing_or_malformed_tool_metadata(self, description, schema):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_tool_input_schema=schema))
-        assert handler.calls[1].json["tool"] == {"name": "send_email"}
+        assert handler.calls[0].json["tool"] == {"name": "send_email"}
 
     @pytest.mark.asyncio
     async def test_agent_id_falls_back_to_key_alias(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data())
-        assert handler.calls[1].json["agentId"] == "my-agent-key"
+        assert handler.calls[0].json["agentId"] == "my-agent-key"
 
     @pytest.mark.asyncio
     async def test_non_mcp_call_type_skipped(self):
@@ -346,26 +412,26 @@ class TestConversationId:
 
     @pytest.mark.asyncio
     async def test_two_calls_in_one_session_share_the_conversation_id(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
         for call_id in ("call-1", "call-2"):
             await _run(
                 guardrail,
                 _mcp_data(litellm_call_id=call_id, litellm_logging_obj=_logging_obj(call_id, mcp_session_id="sess-A")),
             )
-        assert [call.json["conversationId"] for call in handler.calls[1:]] == ["sess-A", "sess-A"]
+        assert [call.json["conversationId"] for call in handler.calls[:]] == ["sess-A", "sess-A"]
 
     @pytest.mark.asyncio
     async def test_server_recorded_session_beats_the_client_header(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data(litellm_logging_obj=_logging_obj("call-id-1", mcp_session_id="sess-from-logging"))
         await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "sess-from-logging"
+        assert handler.calls[0].json["conversationId"] == "sess-from-logging"
 
     @pytest.mark.asyncio
     async def test_sessionless_call_falls_back_to_the_request_call_id(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data(
             metadata={"headers": {}},
@@ -373,37 +439,37 @@ class TestConversationId:
             litellm_logging_obj=_logging_obj("call-id-from-logging"),
         )
         await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "call-id-from-data"
+        assert handler.calls[0].json["conversationId"] == "call-id-from-data"
 
     @pytest.mark.asyncio
     async def test_sessionless_call_without_request_call_id_uses_the_logging_call_id(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data(metadata={"headers": {}}, litellm_logging_obj=_logging_obj("call-id-from-logging"))
         await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "call-id-from-logging"
+        assert handler.calls[0].json["conversationId"] == "call-id-from-logging"
 
     @pytest.mark.asyncio
     async def test_session_id_header_case_insensitive(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data(metadata={"headers": {"Mcp-Session-Id": "sess-CASED"}})
         await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "sess-CASED"
+        assert handler.calls[0].json["conversationId"] == "sess-CASED"
 
     @pytest.mark.asyncio
     async def test_generates_uuid_when_no_identifier_available(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data(metadata={"headers": {}}, litellm_logging_obj=_logging_obj("")))
-        conversation_id: Final = handler.calls[1].json["conversationId"]
+        conversation_id: Final = handler.calls[0].json["conversationId"]
         assert uuid.UUID(conversation_id).version == 4
 
 
 class TestBlockFlow:
     @pytest.mark.asyncio
     async def test_blocked_call_raises_400(self):
-        handler: Final = FakeHandler([_token_response(), _block_response(message="Injection detected")])
+        handler: Final = FakeHandler([_block_response(message="Injection detected")])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -419,7 +485,7 @@ class TestBlockFlow:
 
     @pytest.mark.asyncio
     async def test_blocked_even_with_fail_open(self):
-        handler: Final = FakeHandler([_token_response(), _block_response()])
+        handler: Final = FakeHandler([_block_response()])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -428,7 +494,7 @@ class TestBlockFlow:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ["Skipped", "FailedOpen"])
     async def test_explicit_block_wins_over_non_evaluated_status(self, status):
-        handler: Final = FakeHandler([_token_response(), _block_response(status=status)])
+        handler: Final = FakeHandler([_block_response(status=status)])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -444,7 +510,7 @@ class TestDefenderNotEvaluated:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ["Skipped", "FailedOpen"])
     async def test_fail_closed_blocks_allowed_but_unevaluated_call(self, status):
-        handler: Final = FakeHandler([_token_response(), _not_evaluated_response(status)])
+        handler: Final = FakeHandler([_not_evaluated_response(status)])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_closed")
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -461,7 +527,7 @@ class TestDefenderNotEvaluated:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ["Skipped", "FailedOpen"])
     async def test_fail_open_allows_unevaluated_call_as_unscanned(self, status):
-        handler: Final = FakeHandler([_token_response(), _not_evaluated_response(status)])
+        handler: Final = FakeHandler([_not_evaluated_response(status)])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -475,7 +541,7 @@ class TestDefenderNotEvaluated:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", [{"allowed": True}, {"allowed": True, "defender": {"verdict": "Allow"}}])
     async def test_allowed_without_defender_status_is_not_an_evaluated_allow(self, payload):
-        handler: Final = FakeHandler([_token_response(), _response(200, payload)])
+        handler: Final = FakeHandler([_response(200, payload)])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_closed")
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -486,7 +552,7 @@ class TestDefenderNotEvaluated:
 
     @pytest.mark.asyncio
     async def test_http_400_always_blocks_even_fail_open(self):
-        handler: Final = FakeHandler([_token_response(), _response(400, text="Bad request: serverName missing")])
+        handler: Final = FakeHandler([_response(400, text="Bad request: serverName missing")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -498,10 +564,7 @@ class TestUnreachableFallback:
     @pytest.mark.asyncio
     async def test_evaluate_litellm_timeout_fail_closed(self):
         handler: Final = FakeHandler(
-            [
-                _token_response(),
-                LitellmTimeout(message="Connection timed out", model="default-model-name", llm_provider="httpx"),
-            ]
+            [LitellmTimeout(message="Connection timed out", model="default-model-name", llm_provider="httpx")]
         )
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
@@ -510,7 +573,7 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_evaluate_timeout_fail_closed(self):
-        handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
+        handler: Final = FakeHandler([httpx.ReadTimeout("timed out")])
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -519,7 +582,7 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_evaluate_timeout_fail_open(self):
-        handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
+        handler: Final = FakeHandler([httpx.ReadTimeout("timed out")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -530,7 +593,7 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_evaluate_5xx_fail_closed(self):
-        handler: Final = FakeHandler([_token_response(), _response(502, text="bad gateway")])
+        handler: Final = FakeHandler([_response(502, text="bad gateway")])
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -548,11 +611,13 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_non_jwt_bearer_token_fail_closed(self):
+        exchanger: Final = StubTokenExchanger()
         handler: Final = FakeHandler([])
-        guardrail: Final = _make_guardrail(handler)
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data(incoming_bearer_token="sk-litellm-virtual-key"))
         assert exc_info.value.status_code == 401
+        assert exchanger.calls == []
 
     @pytest.mark.asyncio
     async def test_missing_bearer_token_blocks_even_fail_open(self):
@@ -569,18 +634,19 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_obo_rejected_blocks_even_fail_open(self):
-        handler: Final = FakeHandler(
-            [_response(400, {"error": "invalid_grant", "error_description": "AADSTS50013: bad assertion"})]
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_unauthorized("IdP rejected the subject token (HTTP 400)", claims="invalid_grant"))]
         )
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
         assert exc_info.value.status_code == 401
-        assert "invalid_grant" in exc_info.value.detail["message"]
+        assert "On-Behalf-Of token exchange was rejected" in exc_info.value.detail["message"]
 
     @pytest.mark.asyncio
     async def test_evaluate_4xx_blocks_even_fail_open(self):
-        handler: Final = FakeHandler([_token_response(), _response(403, text="obo token lacks the scope")])
+        handler: Final = FakeHandler([_response(403, text="obo token lacks the scope")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -594,24 +660,24 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_obo_rejected_fail_closed(self):
-        handler: Final = FakeHandler(
-            [_response(400, {"error": "invalid_grant", "error_description": "AADSTS50013: bad assertion"})]
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_unauthorized("IdP rejected the subject token (HTTP 400)"))]
         )
-        guardrail: Final = _make_guardrail(handler)
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
         assert exc_info.value.status_code == 401
-        assert "invalid_grant" in exc_info.value.detail["message"]
+        assert "On-Behalf-Of token exchange was rejected" in exc_info.value.detail["message"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "error_code", ["invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"]
     )
     async def test_gateway_credential_rejection_is_unavailable_not_a_caller_401(self, error_code: str):
-        handler: Final = FakeHandler(
-            [_response(401, {"error": error_code, "error_description": "AADSTS7000215: invalid client secret"})]
-        )
-        guardrail: Final = _make_guardrail(handler)
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_misconfigured(error_code))])
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, data)
@@ -624,23 +690,12 @@ class TestUnreachableFallback:
         assert "client_secret" in info["guardrail_response"]["reason"]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("aadsts_code", [5002710, 5002723], ids=["malformed-header", "no-kid"])
-    async def test_malformed_assertion_reported_as_invalid_client_is_a_caller_401(self, aadsts_code: int):
-        """Entra answers ``invalid_client`` for a forged or garbled assertion (AADSTS50027xx) exactly as for a
-        bad gateway secret; the sub-code is what says the caller, not the gateway, has to fix it."""
-        handler: Final = FakeHandler(
-            [
-                _response(
-                    401,
-                    {
-                        "error": "invalid_client",
-                        "error_description": f"AADSTS{aadsts_code}: Invalid JWT token.",
-                        "error_codes": [aadsts_code],
-                    },
-                )
-            ]
+    async def test_caller_rejection_reason_does_not_blame_the_gateway_credentials(self):
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_unauthorized("IdP rejected the subject token (HTTP 401)"))]
         )
-        guardrail: Final = _make_guardrail(handler)
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, data)
@@ -649,10 +704,9 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_gateway_credential_rejection_follows_fail_open(self):
-        handler: Final = FakeHandler(
-            [_response(401, {"error": "invalid_client", "error_description": "AADSTS7000215: invalid client secret"})]
-        )
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_misconfigured("invalid_client"))])
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
         assert result is data
@@ -662,9 +716,42 @@ class TestUnreachableFallback:
         assert "invalid_client" in info["guardrail_response"]["reason"]
 
     @pytest.mark.asyncio
+    async def test_exchange_upstream_unavailable_is_unavailable_with_the_summary_not_a_caller_401(self):
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_upstream_unavailable("token exchange did not return a usable access token"))]
+        )
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unavailable"
+        assert (
+            info["guardrail_response"]["reason"]
+            == "the Entra token exchange failed (upstream unavailable: token exchange did not return a usable access token)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_exchange_upstream_unavailable_follows_fail_open(self):
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_upstream_unavailable("Entra throttled the exchange"))])
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        result: Final = await _run(guardrail, data)
+        assert result is data
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unscanned"
+        assert "Entra throttled the exchange" in info["guardrail_response"]["reason"]
+
+    @pytest.mark.asyncio
     async def test_obo_endpoint_5xx_fail_open(self):
-        handler: Final = FakeHandler([_response(503, text="entra down")])
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_upstream_unavailable("entra down"))])
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
         assert result is data
@@ -676,47 +763,33 @@ class TestUnreachableFallback:
 class TestOboTokenCache:
     @pytest.mark.asyncio
     async def test_same_assertion_reuses_token(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
+        exchanger: Final = StubTokenExchanger(_obo_ok())
+        handler: Final = FakeHandler([_allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         await _run(guardrail, _mcp_data())
         await _run(guardrail, _mcp_data())
-        token_calls: Final = [c for c in handler.calls if c.url == TOKEN_URL]
-        assert len(token_calls) == 1
+        assert len(exchanger.calls) == 1
 
     @pytest.mark.asyncio
     async def test_different_assertions_get_distinct_tokens(self):
         other_assertion: Final = "eyJhbGciOi.eyJvdGhlciI.b3RoZXJzaWc"
-        handler: Final = FakeHandler(
-            [
-                _token_response(access_token="token-a"),
-                _allow_response(),
-                _token_response(access_token="token-b"),
-                _allow_response(),
-            ]
-        )
-        guardrail: Final = _make_guardrail(handler)
+        exchanger: Final = StubTokenExchanger([_ok_exchange("token-a"), _ok_exchange("token-b")])
+        handler: Final = FakeHandler([_allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         await _run(guardrail, _mcp_data())
         await _run(guardrail, _mcp_data(incoming_bearer_token=other_assertion))
-        token_calls: Final = [c for c in handler.calls if c.url == TOKEN_URL]
-        assert len(token_calls) == 2
-        assert handler.calls[3].headers["Authorization"] == "Bearer token-b"
+        assert len(exchanger.calls) == 2
+        assert handler.calls[1].headers["Authorization"] == "Bearer token-b"
 
     @pytest.mark.asyncio
     async def test_expired_token_refreshed(self):
-        handler: Final = FakeHandler(
-            [
-                _token_response(access_token="short-lived", expires_in=1),
-                _allow_response(),
-                _token_response(access_token="fresh"),
-                _allow_response(),
-            ]
-        )
-        guardrail: Final = _make_guardrail(handler)
+        exchanger: Final = StubTokenExchanger([_ok_exchange("short-lived", -1), _ok_exchange("fresh")])
+        handler: Final = FakeHandler([_allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         await _run(guardrail, _mcp_data())
         await _run(guardrail, _mcp_data())
-        token_calls: Final = [c for c in handler.calls if c.url == TOKEN_URL]
-        assert len(token_calls) == 2
-        assert handler.calls[3].headers["Authorization"] == "Bearer fresh"
+        assert len(exchanger.calls) == 2
+        assert handler.calls[1].headers["Authorization"] == "Bearer fresh"
 
 
 class TestEarlyPhasePassthrough:
@@ -749,34 +822,27 @@ class TestRegistryDiscovery:
 
 class TestMalformedResponses:
     @pytest.mark.asyncio
-    async def test_obo_html_body_fail_open(self):
-        handler: Final = FakeHandler([_response(200, text="<html>blocked by egress proxy</html>")])
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+    async def test_obo_upstream_unavailable_fail_open(self):
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_upstream_unavailable("entra returned no token"))])
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
         assert result is data
         assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Unscanned"
 
     @pytest.mark.asyncio
-    async def test_obo_html_body_fail_closed(self):
-        handler: Final = FakeHandler([_response(200, text="<html>outage</html>")])
-        guardrail: Final = _make_guardrail(handler)
-        with pytest.raises(HTTPException) as exc_info:
-            await _run(guardrail, _mcp_data())
-        assert exc_info.value.status_code == 503
-        assert "non-JSON" in exc_info.value.detail["message"]
-
-    @pytest.mark.asyncio
-    async def test_obo_non_object_json_fail_closed(self):
-        handler: Final = FakeHandler([_response(200, ["not", "a", "dict"])])
-        guardrail: Final = _make_guardrail(handler)
+    async def test_obo_upstream_unavailable_fail_closed(self):
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_upstream_unavailable("entra returned no token"))])
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
     async def test_evaluate_html_body_fail_open(self):
-        handler: Final = FakeHandler([_token_response(), _response(200, text="<html>waf page</html>")])
+        handler: Final = FakeHandler([_response(200, text="<html>waf page</html>")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -785,7 +851,7 @@ class TestMalformedResponses:
 
     @pytest.mark.asyncio
     async def test_evaluate_html_body_fail_closed(self):
-        handler: Final = FakeHandler([_token_response(), _response(200, text="<html>waf page</html>")])
+        handler: Final = FakeHandler([_response(200, text="<html>waf page</html>")])
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -793,7 +859,7 @@ class TestMalformedResponses:
 
     @pytest.mark.asyncio
     async def test_evaluate_non_object_json_fail_closed(self):
-        handler: Final = FakeHandler([_token_response(), _response(200, "allowed")])
+        handler: Final = FakeHandler([_response(200, "allowed")])
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -806,7 +872,7 @@ class TestMalformedResponses:
         ids=["missing", "null", "string-true", "int-one", "string-false"],
     )
     async def test_evaluate_non_boolean_allowed_fail_closed(self, verdict: dict):
-        handler: Final = FakeHandler([_token_response(), _response(200, verdict)])
+        handler: Final = FakeHandler([_response(200, verdict)])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -822,7 +888,7 @@ class TestMalformedResponses:
         ids=["missing", "null", "string-true", "int-one", "string-false"],
     )
     async def test_evaluate_non_boolean_allowed_fail_open(self, verdict: dict):
-        handler: Final = FakeHandler([_token_response(), _response(200, verdict)])
+        handler: Final = FakeHandler([_response(200, verdict)])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -831,21 +897,21 @@ class TestMalformedResponses:
         assert _guardrail_info(data)["guardrail_status"] == "guardrail_failed_to_respond"
 
     @pytest.mark.asyncio
-    async def test_bad_expires_in_still_allows(self):
-        handler: Final = FakeHandler(
-            [_response(200, {"access_token": "tok-1", "expires_in": "soon"}), _allow_response()]
-        )
-        guardrail: Final = _make_guardrail(handler)
+    async def test_obo_token_without_expiry_still_allows(self):
+        exchanger: Final = StubTokenExchanger([Ok(OAuthToken(access_token="tok-1", expires_at=None))])
+        handler: Final = FakeHandler([_allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
         assert result is data
 
     @pytest.mark.asyncio
     async def test_obo_litellm_timeout_fail_open(self):
-        handler: Final = FakeHandler(
+        exchanger: Final = StubTokenExchanger(
             [LitellmTimeout(message="Connection timed out", model="default-model-name", llm_provider="httpx")]
         )
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
         assert result is data
@@ -854,28 +920,18 @@ class TestMalformedResponses:
 
 class TestDeltaHardening:
     @pytest.mark.asyncio
-    async def test_non_string_access_token_fail_closed(self):
-        handler: Final = FakeHandler([_response(200, {"access_token": None, "expires_in": 3599})])
-        guardrail: Final = _make_guardrail(handler)
-        with pytest.raises(HTTPException) as exc_info:
-            await _run(guardrail, _mcp_data())
-        assert exc_info.value.status_code == 503
-        assert "access_token" in exc_info.value.detail["message"]
-
-    @pytest.mark.asyncio
-    async def test_numeric_string_expires_in_honored(self):
-        handler: Final = FakeHandler(
-            [_response(200, {"access_token": "tok-9", "expires_in": "120"}), _allow_response()]
-        )
-        guardrail: Final = _make_guardrail(handler)
+    async def test_unexpired_exchange_result_is_reused(self):
+        exchanger: Final = StubTokenExchanger([_ok_exchange("tok-9", 120)])
+        handler: Final = FakeHandler([_allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         await _run(guardrail, _mcp_data())
-        entries: Final = list(guardrail._obo_token_cache.values())
-        assert len(entries) == 1
-        assert entries[0][1] - time.time() < 200
+        await _run(guardrail, _mcp_data())
+        assert len(exchanger.calls) == 1
+        assert handler.calls[1].headers["Authorization"] == "Bearer tok-9"
 
     @pytest.mark.asyncio
     async def test_evaluate_400_records_intervention(self):
-        handler: Final = FakeHandler([_token_response(), _response(400, text="bad request shape")])
+        handler: Final = FakeHandler([_response(400, text="bad request shape")])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -889,25 +945,19 @@ class TestDeltaHardening:
 class TestVeriaHardening:
     @pytest.mark.asyncio
     async def test_evaluate_401_evicts_cached_obo_token(self):
-        handler: Final = FakeHandler(
-            [
-                _token_response(),
-                _response(401, text="token expired"),
-                _token_response(access_token="tok-2"),
-                _allow_response(),
-            ]
-        )
-        guardrail: Final = _make_guardrail(handler)
+        exchanger: Final = StubTokenExchanger(_obo_ok() + _obo_ok("tok-2"))
+        handler: Final = FakeHandler([_response(401, text="token expired"), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
         with pytest.raises(HTTPException):
             await _run(guardrail, _mcp_data())
         result: Final = await _run(guardrail, _mcp_data())
         assert result is not None
-        token_calls: Final = [c for c in handler.calls if c.url == TOKEN_URL]
-        assert len(token_calls) == 2
+        assert exchanger.invalidations == [FAKE_ASSERTION]
+        assert len(exchanger.calls) == 2
 
     @pytest.mark.asyncio
     async def test_evaluate_429_blocks_even_fail_open_as_throttled(self):
-        handler: Final = FakeHandler([_token_response(), _response(429, text="slow down")])
+        handler: Final = FakeHandler([_response(429, text="slow down")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
@@ -920,7 +970,7 @@ class TestVeriaHardening:
 
     @pytest.mark.asyncio
     async def test_evaluate_500_is_unavailable(self):
-        handler: Final = FakeHandler([_token_response(), _response(500, text="oops")])
+        handler: Final = FakeHandler([_response(500, text="oops")])
         guardrail: Final = _make_guardrail(handler)
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -928,51 +978,23 @@ class TestVeriaHardening:
         assert "500" in exc_info.value.detail["message"]
 
     @pytest.mark.asyncio
-    async def test_token_endpoint_429_blocks_even_fail_open_as_throttled(self):
-        handler: Final = FakeHandler(
-            [_response(429, {"error": "temporarily_throttled", "error_description": "AADSTS90056"})]
+    async def test_token_endpoint_unauthorized_is_a_caller_401_even_fail_open(self):
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_unauthorized("IdP rejected the subject token (HTTP 429)"))]
         )
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, data)
-        assert exc_info.value.status_code == 503
-        assert "429" in exc_info.value.detail["message"]
+        assert exc_info.value.status_code == 401
         info: Final = _guardrail_info(data)
-        assert info["guardrail_status"] == "guardrail_failed_to_respond"
-        assert info["guardrail_response"]["verdict"] == "Throttled"
-
-    @pytest.mark.asyncio
-    async def test_token_endpoint_408_non_json_blocks_as_throttled(self):
-        handler: Final = FakeHandler([_response(408, text="Request Timeout")])
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
-        data: Final = _mcp_data()
-        with pytest.raises(HTTPException) as exc_info:
-            await _run(guardrail, data)
-        assert exc_info.value.status_code == 503
-        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Throttled"
-
-    @pytest.mark.asyncio
-    async def test_token_endpoint_4xx_html_stays_infra_fail_open(self):
-        handler: Final = FakeHandler([_response(403, text="<html>waf block page</html>")])
-        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
-        data: Final = _mcp_data()
-        result: Final = await _run(guardrail, data)
-        assert result is data
-        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Unscanned"
-
-    @pytest.mark.asyncio
-    async def test_entra_200_missing_access_token_is_malformed(self):
-        handler: Final = FakeHandler([_response(200, {"token_type": "Bearer"})])
-        guardrail: Final = _make_guardrail(handler)
-        with pytest.raises(HTTPException) as exc_info:
-            await _run(guardrail, _mcp_data())
-        assert exc_info.value.status_code == 503
-        assert "access_token" in exc_info.value.detail["message"]
+        assert info["guardrail_status"] == "guardrail_intervened"
+        assert info["guardrail_response"]["verdict"] == "Rejected"
 
     @pytest.mark.asyncio
     async def test_evaluate_5xx_fail_open_allows_unscanned_once(self):
-        handler: Final = FakeHandler([_token_response(), _response(502, text='{"error": "bad gateway"}')])
+        handler: Final = FakeHandler([_response(502, text='{"error": "bad gateway"}')])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -1013,7 +1035,7 @@ class TestFinalArgumentsEvaluated:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("agent_365_first", [True, False], ids=["agent_365_then_masker", "masker_then_agent_365"])
     async def test_agent_365_receives_the_arguments_sent_upstream(self, agent_365_first: bool):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         masker: Final = _ArgumentMasker("arg-rewrite")
         registered: Final = (guardrail, masker) if agent_365_first else (masker, guardrail)
@@ -1030,4 +1052,61 @@ class TestFinalArgumentsEvaluated:
                     litellm.callbacks, callback, require_self=False
                 )
         assert result["modified_arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
-        assert handler.calls[1].json["arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
+        assert handler.calls[0].json["arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
+
+
+class TestCallerSignIn:
+    """The guardrail is a CallerSignInProvider: it tells the MCP connect path which issuer and scope
+    the caller must sign in for before the first tool call, and only for servers that keep the
+    caller's Authorization with the gateway."""
+
+    def test_gated_server_advertises_entra_issuer_and_gateway_scope(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        sign_in: Final = guardrail.caller_sign_in(_server(), None)
+        assert sign_in == CallerSignIn(
+            issuers=("https://login.microsoftonline.com/tenant-abc/v2.0",),
+            scopes=("api://client-xyz/access_as_user",),
+        )
+
+    def test_default_off_guardrail_does_not_gate(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]), default_on=False)
+        assert guardrail.caller_sign_in(_server(), None) is None
+
+    def test_server_that_fills_authorization_itself_is_not_gated(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        assert guardrail.caller_sign_in(_server(auth_type=MCPAuth.oauth2), None) is None
+        assert guardrail.caller_sign_in(_server(extra_headers=["authorization"]), None) is None
+
+    def test_opted_out_key_does_not_gate(self):
+        class _OptedOut(Agent365Guardrail):
+            def should_run_guardrail(self, data, event_type) -> bool:
+                return False
+
+        guardrail: Final = _OptedOut(
+            guardrail_name="a365-off",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            token_exchanger=StubTokenExchanger(),
+            default_on=True,
+        )
+        assert guardrail.caller_sign_in(_server(), UserAPIKeyAuth(api_key="k", user_id="u-1")) is None
+        assert guardrail.caller_sign_in(_server(), None) is not None
+
+    def test_obo_server_with_provider_advertises_both_issuers_and_scopes(self, monkeypatch):
+        monkeypatch.setenv("JWT_ISSUER", "https://jwt-idp.test")
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            server: Final = _server(auth_type=MCPAuth.oauth2_token_exchange, scopes=["read"])
+            sign_in: Final = caller_sign_in_for(server, None)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+        assert sign_in is not None
+        assert sign_in.issuers == (
+            "https://jwt-idp.test",
+            "https://login.microsoftonline.com/tenant-abc/v2.0",
+        )
+        assert sign_in.scopes == ("read", "api://client-xyz/access_as_user")

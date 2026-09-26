@@ -1455,6 +1455,19 @@ class TestMCPServerManager:
         assert server.advertises_gateway_authorization_server is False
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_advertise_gateway_as_for_token_exchange(self):
+        # keeps_caller_authorization includes oauth2_token_exchange so a sign-in provider may gate it,
+        # but named discovery must still fall to the server's own PRM rather than the aggregate AS.
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._client_forwarded_config(MCPAuth.oauth2_token_exchange))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.keeps_caller_authorization is True
+        assert server.advertises_gateway_authorization_server is False
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "config",
         [

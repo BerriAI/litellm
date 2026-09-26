@@ -118,6 +118,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     logging_safe_mcp_headers,
     match_known_tool_name,
     normalize_server_name,
+    server_answers_to_name,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
@@ -494,8 +495,7 @@ def _http_detail_message(detail: object) -> str:
 
 
 def _server_answers_to(server: MCPServer, name: str) -> bool:
-    requested: Final = name.lower()
-    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+    return server_answers_to_name(server, name)
 
 
 async def raise_denied_scoped_mcp_access(
@@ -1763,7 +1763,11 @@ def _challenge_missing_token_exchange_subject(
     warm path already raises. Gated to servers the key may reach so an unauthorized caller
     learns nothing about the catalog.
     """
-    if server is None or server.auth_type != MCPAuth.oauth2_token_exchange:
+    from litellm.proxy._experimental.mcp_server.caller_sign_in import (
+        caller_sign_in_for,  # noqa: PLC0415  # lazy: caller_sign_in pulls the proxy graph
+    )
+
+    if server is None or caller_sign_in_for(server, user_api_key_auth) is None:
         return
     if requested_server is not None and requested_server.server_id != server.server_id:
         return
