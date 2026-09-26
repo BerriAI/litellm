@@ -68,6 +68,16 @@ jobs:
             timeout-minutes: 20
             job-timeout-minutes: 60
 
+          - shard: response-replay
+            artifact-name: response-replay
+            test-path: >-
+              tests/unit/litellm_core_utils/llm_response_utils/test_convert_dict_to_response.py
+              tests/unit/litellm_core_utils/llm_response_utils/test_convert_to_streaming_response.py
+            workers: 0
+            reruns: 0
+            timeout-minutes: 10
+            job-timeout-minutes: 60
+
           - shard: enterprise-routing
             artifact-name: enterprise-routing
             test-path: ""
