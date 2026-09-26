@@ -117,8 +117,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     _flush_retries: int = 0
     _requeued_count: int = 0
     _upload_limiter: asyncio.Semaphore | AdaptiveConcurrencyLimiter | None = None
-    s3_drop_on_terminal_error: bool = False
-    s3_max_retry_age_seconds: int | None = None
+    s3_drop_on_terminal_error: bool = True
+    s3_max_retry_age_seconds: int | None = 3600
 
     def __init__(
         self,
@@ -149,8 +149,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_log_prompts_only: bool | None = None,
         s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         s3_max_queue_size: int | None = None,
-        s3_max_retry_age_seconds: int | None = None,
-        s3_drop_on_terminal_error: bool = False,
+        s3_max_retry_age_seconds: int | None = 3600,
+        s3_drop_on_terminal_error: bool = True,
         s3_adaptive_concurrency: bool = False,
         s3_max_adaptive_concurrency: int | None = None,
         s3_batch_file_upload: bool = False,
@@ -273,8 +273,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_log_prompts_only: bool | None = None,
         s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         s3_max_queue_size: int | None = None,
-        s3_max_retry_age_seconds: int | None = None,
-        s3_drop_on_terminal_error: bool = False,
+        s3_max_retry_age_seconds: int | None = 3600,
+        s3_drop_on_terminal_error: bool = True,
         s3_adaptive_concurrency: bool = False,
         s3_max_adaptive_concurrency: int | None = None,
         s3_batch_file_upload: bool = False,
@@ -356,8 +356,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             else resolve_s3_max_retry_age_seconds(configured_retry_age)
         )
 
-        self.s3_drop_on_terminal_error = s3_drop_on_terminal_error or resolve_s3_drop_on_terminal_error(
-            params.get("s3_drop_on_terminal_error")
+        configured_drop: Final = params.get("s3_drop_on_terminal_error")
+        self.s3_drop_on_terminal_error = resolve_s3_drop_on_terminal_error(
+            configured_drop if configured_drop is not None else s3_drop_on_terminal_error
         )
 
         self.s3_adaptive_concurrency = s3_adaptive_concurrency or resolve_s3_adaptive_concurrency(

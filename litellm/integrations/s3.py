@@ -93,15 +93,15 @@ def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> in
 
 def resolve_s3_drop_on_terminal_error(configured: object) -> bool:
     if configured is None or configured == "":
-        return False
+        return True
     try:
         return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
     except ValidationError:
         verbose_logger.warning(
-            "s3 logging: s3_drop_on_terminal_error=%r is not a boolean, keeping all failed uploads queued",
+            "s3 logging: s3_drop_on_terminal_error=%r is not a boolean, dropping terminal-failed uploads",
             configured,
         )
-        return False
+        return True
 
 
 def resolve_s3_adaptive_concurrency(configured: object) -> bool:

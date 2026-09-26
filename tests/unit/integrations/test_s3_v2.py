@@ -3148,6 +3148,7 @@ async def test_terminal_object_is_requeued_when_opted_out() -> None:
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
+        s3_drop_on_terminal_error=False,
     )
 
     put = _FailOnSuffixCodedPut(("test-1.json",), 400, "EntityTooLarge")
@@ -3265,12 +3266,39 @@ async def test_overflow_after_a_failed_flush_trims_failed_first_and_counts_uploa
 
 
 @pytest.mark.asyncio
-async def test_default_logger_never_ages_out_long_retrying_elements(caplog) -> None:
+async def test_default_logger_ages_out_elements_retrying_longer_than_an_hour(caplog) -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
+    )
+
+    elements = [
+        _element({"i": index}, f"{index}").model_copy(update={"retrying_since": time.monotonic() - 7200})
+        for index in range(3)
+    ]
+    put = _FailOnSuffixPut(("test-1.json", "test-2.json"))
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = list(elements)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert "uploads dropped" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_opted_out_logger_never_ages_out_long_retrying_elements(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_retry_age_seconds=0,
     )
 
     elements = [
@@ -3732,6 +3760,7 @@ async def test_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() ->
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
+        s3_drop_on_terminal_error=False,
     )
     put = _StatusPut([_coded_failure_response(403, "InvalidRequest"), _ok_response()])
     logger.async_httpx_client = AsyncMock()
@@ -3750,7 +3779,6 @@ async def test_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() ->
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
-        s3_drop_on_terminal_error=True,
     )
     put.calls = 0
     dropping.async_httpx_client = AsyncMock()
@@ -3768,6 +3796,7 @@ def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> 
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
+        s3_drop_on_terminal_error=False,
     )
     mock_sync_client = MagicMock()
     mock_sync_client.put = MagicMock(side_effect=[_coded_failure_response(403, "InvalidRequest"), _ok_response()])
@@ -3788,7 +3817,6 @@ def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> 
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
-        s3_drop_on_terminal_error=True,
     )
     mock_sync_client.put = MagicMock(side_effect=[_coded_failure_response(403, "InvalidRequest"), _ok_response()])
 
@@ -4433,7 +4461,7 @@ def test_retry_age_resolution_accepts_a_positive_int() -> None:
     assert resolve_s3_max_retry_age_seconds(30) == 30
 
 
-def test_default_logger_disables_the_retry_age_budget() -> None:
+def test_default_logger_sets_a_one_hour_retry_age_budget() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -4441,7 +4469,7 @@ def test_default_logger_disables_the_retry_age_budget() -> None:
         s3_region_name="us-east-1",
     )
 
-    assert logger.s3_max_retry_age_seconds is None
+    assert logger.s3_max_retry_age_seconds == 3600
 
 
 def test_constructor_zero_disables_the_retry_age_budget() -> None:

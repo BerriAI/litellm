@@ -413,13 +413,11 @@ def test_s3_v2_object_rejected_with_a_bucket_wide_code_is_delivered_once_the_fau
     assert sink.landed_ids() == {f"{marker}-denied", f"{marker}-first-flush"}
 
 
-def test_s3_v2_terminal_object_is_put_once_and_dropped_only_when_opted_in(gateway: Gateway, tmp_path: Path) -> None:
+def test_s3_v2_terminal_object_is_put_once_and_dropped_by_default(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3toolarge" + uuid.uuid4().hex[:8]
     sink: Final = RejectingS3Sink(reject_marker=f"{marker}-huge", reject_status=400, reject_code="EntityTooLarge")
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
-        config: Final = _s3_config(
-            tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_drop_on_terminal_error": True}
-        )
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
         with (
             owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
             candidate.scenario() as scenario,
@@ -433,15 +431,17 @@ def test_s3_v2_terminal_object_is_put_once_and_dropped_only_when_opted_in(gatewa
     assert sum(1 for r in provider.drain() if r.method == "POST") == 4
     assert sink.rejected_attempts == 1, (
         f"an EntityTooLarge object was PUT {sink.rejected_attempts} times next to delivered siblings; "
-        "with s3_drop_on_terminal_error it must be attempted once and dropped"
+        "with the default s3_drop_on_terminal_error it must be attempted once and dropped"
     )
 
 
-def test_s3_v2_terminal_object_keeps_retrying_by_default(gateway: Gateway, tmp_path: Path) -> None:
+def test_s3_v2_terminal_object_keeps_retrying_when_opted_out(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3keep" + uuid.uuid4().hex[:8]
     sink: Final = RejectingS3Sink(reject_marker=f"{marker}-huge", reject_status=400, reject_code="EntityTooLarge")
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
-        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        config: Final = _s3_config(
+            tmp_path, bucket.url, {"s3_batch_file_upload": False, "s3_drop_on_terminal_error": False}
+        )
         with (
             owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
             candidate.scenario() as scenario,
