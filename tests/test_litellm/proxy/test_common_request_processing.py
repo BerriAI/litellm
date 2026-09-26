@@ -2069,11 +2069,11 @@ class TestCommonRequestProcessingHelpers:
             ),  # Invalid string code
             (
                 'data: {"error": {"code": 99, "message": "too low"}}',
-                None,
+                502,
             ),  # Integer code too low
             (
                 'data: {"error": {"code": 600, "message": "too high"}}',
-                None,
+                502,
             ),  # Integer code too high
             (
                 'data: {"id": "123", "content": "hello"}',

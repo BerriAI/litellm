@@ -758,6 +758,12 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
+                elif error_code is not None:
+                    verbose_proxy_logger.warning(
+                        "Error code is outside the HTTP status range; mapping to 502: %s",
+                        error_code,
+                    )
+                    return status.HTTP_502_BAD_GATEWAY
                 elif error_code_raw is not None:  # Log if original code was present but not valid
                     verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code_raw)
         except (orjson.JSONDecodeError, json.JSONDecodeError):
