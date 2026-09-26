@@ -7777,17 +7777,31 @@ def _get_valid_models_from_provider_api(
     custom_llm_provider: str,
     litellm_params: LiteLLM_Params | None = None,
 ) -> list[str]:
+    from litellm.types.router import LiteLLM_Params
+
     try:
-        cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
+        cache_params: Final = (
+            (litellm_params or LiteLLM_Params(model="")).model_copy(
+                update=MappingProxyType(
+                    {
+                        "api_key": provider_config.get_api_key(litellm_params.api_key if litellm_params else None),
+                        "api_base": provider_config.get_api_base(litellm_params.api_base if litellm_params else None),
+                    }
+                )
+            )
+            if custom_llm_provider == LlmProviders.NANOGPT.value
+            else litellm_params
+        )
+        cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, cache_params)
 
         if cached_result is not None:
             return cached_result
         models: Final = provider_config.get_models(
-            api_key=litellm_params.api_key if litellm_params is not None else None,
-            api_base=litellm_params.api_base if litellm_params is not None else None,
+            api_key=cache_params.api_key if cache_params is not None else None,
+            api_base=cache_params.api_base if cache_params is not None else None,
         )
 
-        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+        _model_cache.set_cached_model_info(custom_llm_provider, cache_params, models)
         return models
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
@@ -9227,6 +9241,10 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
+        if provider == LlmProviders.NANOGPT:
+            from litellm.llms.nano_gpt.common_utils import NanoGPTModelInfo
+
+            return NanoGPTModelInfo()
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
         elif LlmProviders.OPENAI == provider:
