@@ -8499,11 +8499,32 @@ async def test_upstream_error_body_for_log_masks_a_pem_after_a_json_escaped_newl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"error":{"message":"-----BEGIN PRIVATE KEY----- header is missing from the uploaded credentials file please re-upload it"}}',
+        "Invalid JWT Signature. The private_key field must start with -----BEGIN PRIVATE KEY----- and contain the PEM encoded key from your service account JSON file",
+        "-----BEGIN RSA PRIVATE KEY----- block could not be parsed",
+        "No key could be detected. Expected -----BEGIN PRIVATE KEY----- header in the service account JSON field private_key",
+        "private_key must start with -----BEGIN PRIVATE KEY----- and end with -----END PRIVATE KEY-----",
+    ],
+    ids=["missing-header", "jwt-signature", "rsa-parse", "expected-header", "must-start-with"],
+)
+async def test_upstream_error_body_for_log_keeps_prose_mentioning_a_pem_header(body: str):
+    """Error prose that mentions a PEM header without key material must reach the
+    log exactly as the base pipeline's redaction produced it: the dangling mask
+    adds nothing."""
+    output: Final = _upstream_error_body_for_log(body.encode(), "utf-8", redact_secrets)
+    expected: Final = redact_secrets(_sanitize_upstream_error_body(body))
+    assert output == expected, output
+
+
+@pytest.mark.asyncio
 async def test_upstream_error_body_for_log_masks_a_pem_header_at_the_preview_cut():
     """A header so close to the head cut that fewer than 32 key chars fit must
     still be masked instead of leaking the partial key."""
-    prefix: Final = "x" * (PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS - len("-----BEGIN PRIVATE KEY-----") - 11)
-    sanitized: Final = prefix + " -----BEGIN PRIVATE KEY----- MIIEvQIBAD" + "y" * 300
+    prefix: Final = "x" * (PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS - len("-----BEGIN PRIVATE KEY-----") - 22)
+    sanitized: Final = prefix + " -----BEGIN PRIVATE KEY----- MIIEvQIBADANBgkqhkiG" + "y" * 300
     key_start: Final = sanitized.index("MIIEvQIBAD")
     assert key_start < PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS
     assert PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS - key_start < 32
