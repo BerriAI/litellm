@@ -35,12 +35,16 @@ Example: block when response rejects the user (input_type response only):
 """
 
 import asyncio
+import functools
+import inspect
 import threading
 import time
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
+from pydantic import Field
 from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -53,10 +57,18 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
+from .bounded_execution import (
+    ExecutionTimeoutError,
+    await_with_timeout,
+    call_off_loop_with_timeout,
+    call_with_timeout,
+)
 from .sandbox import build_sandbox_globals, compile_sandboxed
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+DEFAULT_EXECUTION_TIMEOUT_SECONDS: Final = 30.0
 
 
 def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
@@ -72,8 +84,9 @@ class CustomCodeGuardrailError(Exception):
         self.details: Mapping[str, object] = details or {}
 
 
-class CustomCodeCompilationError(CustomCodeGuardrailError):
-    """Raised when custom code fails to compile."""
+class CustomCodeCompilationError(CustomCodeGuardrailError, ValueError):
+    """Raised when custom code fails to compile; a ValueError so the guardrail endpoints treat it as a
+    configuration error and roll the write back."""
 
 
 class CustomCodeExecutionError(CustomCodeGuardrailError):
@@ -89,6 +102,15 @@ class CustomCodeGuardrailConfigModel(GuardrailConfigModel):
 
     custom_code: str
     """The Python-like code containing the apply_guardrail function."""
+
+    timeout: float | None = Field(
+        default=DEFAULT_EXECUTION_TIMEOUT_SECONDS,
+        gt=0.0,
+        description=(
+            "Wall-clock limit in seconds for one run of apply_guardrail, module-level code included. "
+            "A run that exceeds it fails the request instead of stalling the proxy."
+        ),
+    )
 
 
 class CustomCodeGuardrail(CustomGuardrail):
@@ -119,6 +141,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         self,
         custom_code: str,
         guardrail_name: str | None = "custom_code",
+        execution_timeout: float | None = None,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         """
@@ -127,9 +150,15 @@ class CustomCodeGuardrail(CustomGuardrail):
         Args:
             custom_code: The source code containing apply_guardrail function
             guardrail_name: Name of this guardrail instance
+            execution_timeout: Wall-clock budget in seconds for one run of the code
             **kwargs: Additional arguments passed to CustomGuardrail
         """
+        if execution_timeout is not None and not execution_timeout > 0:
+            raise ValueError(f"execution_timeout must be positive, got {execution_timeout}")
         self.custom_code: str = custom_code
+        self.execution_timeout: float = (
+            DEFAULT_EXECUTION_TIMEOUT_SECONDS if execution_timeout is None else execution_timeout
+        )
         self._compiled_function: Callable[..., object] | None = None
         self._compile_lock = threading.Lock()
         self._compile_error: str | None = None
@@ -163,7 +192,11 @@ class CustomCodeGuardrail(CustomGuardrail):
         """Internal compilation method without lock. Expected to run inside _compile_lock."""
         exec_globals: Final = build_sandbox_globals()
         compiled: Final = compile_sandboxed(self.custom_code)
-        exec(compiled, exec_globals)  # noqa: S102
+
+        def load_module() -> None:
+            exec(compiled, exec_globals)  # noqa: S102
+
+        call_with_timeout(load_module, self.execution_timeout, label=f"{self.guardrail_name}:load")
 
         if "apply_guardrail" not in exec_globals:
             raise CustomCodeCompilationError(
@@ -241,18 +274,10 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         start_time: Final = time.time()
         try:
-            # Prepare inputs dict for the function
-
-            # Prepare request_data with safe subset of information
             safe_request_data: Final = self._prepare_safe_request_data(request_data)
-
-            # Execute the custom function - handle both sync and async functions
-            raw_result: Final = self._compiled_function(inputs, safe_request_data, input_type)
-
-            # If the function is async (returns a coroutine), await it
-            resolved_result: Final[object] = await raw_result if asyncio.iscoroutine(raw_result) else raw_result
-
-            # Process the result
+            resolved_result: Final = await self._call_compiled(
+                self._compiled_function, inputs, safe_request_data, input_type
+            )
             return self._process_result(
                 result=resolved_result,
                 inputs=inputs,
@@ -267,6 +292,19 @@ class CustomCodeGuardrail(CustomGuardrail):
         except ModifyResponseException:
             # Pre-call block uses passthrough; must not wrap as execution error (500)
             raise
+        except ExecutionTimeoutError:
+            verbose_proxy_logger.error(
+                "Custom code guardrail '%s' exceeded its %gs execution timeout",
+                self.guardrail_name,
+                self.execution_timeout,
+            )
+            raise CustomCodeExecutionError(
+                f"Custom code guardrail '{self.guardrail_name}' exceeded its "
+                f"{self.execution_timeout:g}s execution timeout",
+                details=MappingProxyType(
+                    {"guardrail_name": self.guardrail_name, "input_type": input_type, "timeout": self.execution_timeout}
+                ),
+            ) from None
         except Exception as e:
             verbose_proxy_logger.error("Custom code guardrail '%s' execution error: %s", self.guardrail_name, e)
             raise CustomCodeExecutionError(
@@ -276,6 +314,31 @@ class CustomCodeGuardrail(CustomGuardrail):
                     "input_type": input_type,
                 },
             ) from e
+
+    async def _call_compiled(
+        self,
+        compiled_function: Callable[..., object],
+        inputs: GenericGuardrailAPIInputs,
+        safe_request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+    ) -> object:
+        """Run the user's function under the execution budget.
+
+        A coroutine function is awaited on the event loop, so the budget bounds it at its
+        await points and it is given up at the deadline even if it swallows cancellation. A
+        plain function runs on a worker thread, which keeps a busy loop from stalling every
+        other request and lets the runner interrupt it at the deadline.
+        """
+        label: Final = str(self.guardrail_name)
+        if inspect.iscoroutinefunction(compiled_function):
+            pending: Final = compiled_function(inputs, safe_request_data, input_type)
+            return await await_with_timeout(pending, self.execution_timeout, label)
+        call: Final = functools.partial(compiled_function, inputs, safe_request_data, input_type)
+        deadline: Final = time.monotonic() + self.execution_timeout
+        raw_result: Final = await call_off_loop_with_timeout(call, self.execution_timeout, label)
+        if not asyncio.iscoroutine(raw_result):
+            return raw_result
+        return await await_with_timeout(raw_result, max(deadline - time.monotonic(), 0.0), label)
 
     def _prepare_safe_request_data(self, request_data: Mapping[str, object]) -> dict[str, object]:
         """
