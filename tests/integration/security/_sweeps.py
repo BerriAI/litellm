@@ -14,7 +14,7 @@ API:
   ``since``, the append-only log tables in ``TIME_SCOPED_TABLES`` are read from ``since`` on
   (minus ``SCOPE_SLACK``), so the sweep stays fast on a database shared by many tests.
 - ``get_routes() -> tuple[str, ...]`` and ``sweep_routes(gateway, canaries, ids, *, callers)``
-  (S2): every GET ``APIRoute`` registered on the proxy app (``app.routes``, which includes the
+  (S2): every GET route registered on the proxy app (``app.routes``, which includes the
   routes hidden from the OpenAPI spec and every lazily registered feature router), enumerated
   once per session by importing the app in a child interpreter. Path parameters are filled from
   ``ids`` (parameter name -> value), then from ``DEFAULT_IDS``; any other parameter gets
@@ -34,7 +34,8 @@ API:
   is still swept. ``record_route_sweep(routes, node)`` appends the report to
   ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact). With ``since``,
   unpaginated list routes (``SCENARIO_SCOPED_LIST_ROUTES``, today ``/spend/logs``) are called
-  with this scenario's request id, user id and a summarized date window instead of unfiltered.
+  with this scenario's request id, user id and a date window (row by row and summarized) instead
+  of unfiltered.
 - ``sweep_responses(responses, canaries) -> tuple[Hit, ...]`` (S3): body and headers of every
   client-facing response the scenario received.
 - ``sweep_sink(name, requests, canaries, *, own_header=None) -> tuple[Hit, ...]`` (S4): every
@@ -242,6 +243,7 @@ def _spend_logs_queries(ids: Mapping[str, str], day: date) -> tuple[Mapping[str,
     return (
         *(({"request_id": ids["request_id"]},) if "request_id" in ids else ()),
         *(({"user_id": ids["user_id"]},) if "user_id" in ids else ()),
+        {"summarize": "false", **window},
         window,
     )
 
@@ -253,17 +255,16 @@ SCENARIO_SCOPED_LIST_ROUTES: Final[Mapping[str, Callable[[Mapping[str, str], dat
 
 @cache
 def get_routes() -> tuple[str, ...]:
-    """Every GET APIRoute path on the proxy app, including routes hidden from the OpenAPI spec.
+    """Every GET route path on the proxy app, including routes hidden from the OpenAPI spec.
 
     The child imports the same source tree the owned proxy runs from (``INTEGRATION_PROXY_ROOT``
     or this checkout), without reading the database. Lazily registered feature routers
     (``LAZY_FEATURES``) are loaded first, so their GET routes are enumerated too; on the running
     proxy the first request to such a path registers the router before it is served. Mounted
-    ASGI sub-apps (the MCP server) are not ``APIRoute`` entries and are out of scope for S2.
+    ASGI sub-apps (the MCP server) have no methods and are out of scope for S2.
     """
     script: Final = (
         "import asyncio, json\n"
-        "from fastapi.routing import APIRoute\n"
         "from litellm.proxy._lazy_features import LAZY_FEATURES, _force_load\n"
         "from litellm.proxy.proxy_server import app\n"
         "async def load():\n"
@@ -274,7 +275,7 @@ def get_routes() -> tuple[str, ...]:
         "missing = sorted(f.name for f in LAZY_FEATURES if not any(f.matches(p) for p in paths))\n"
         "print('MISSING=' + json.dumps(missing))\n"
         "print('ROUTES=' + json.dumps(sorted({r.path for r in app.routes "
-        "if isinstance(r, APIRoute) and 'GET' in r.methods})))\n"
+        "if 'GET' in (getattr(r, 'methods', None) or ())})))\n"
     )
     root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     inherited: Final = {name: value for name, value in os.environ.items() if name != "DATABASE_URL"}
@@ -325,8 +326,8 @@ def sweep_routes(
     """S2: call every GET route as each caller (label -> bearer key; default the master key).
 
     With ``since``, the unpaginated list routes in ``SCENARIO_SCOPED_LIST_ROUTES`` are called with
-    this scenario's filters (its request id, its user, and a summarized date window from
-    ``since``) instead of unfiltered, which on a shared database returns every row ever written.
+    this scenario's filters (its request id, its user, and a date window from ``since``, row by
+    row and summarized) instead of unfiltered, which on a shared database returns every row ever written.
     """
     routes: Final = tuple(route for route in get_routes() if route_denied(route) is None)
     targets: Final = tuple(

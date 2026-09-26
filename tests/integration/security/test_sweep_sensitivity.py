@@ -150,4 +150,5 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
         assert_marker_seen(report, {"S2": f"GET /spend/logs?request_id={request_id} as admin -> 200"})
         assert_marker_seen(report, {"S2": f"GET /spend/logs?user_id={caller.user_id} as admin -> 200"})
         assert_marker_seen(report, {"S2": f"GET /spend/logs/ui/{request_id} as internal_user -> 200"})
+        assert_marker_seen(report, {"S2": "GET /spend/logs?summarize=false&start_date="})
         assert report.credential_hits() == ()
